@@ -15,7 +15,7 @@ import {
   session,
   type WebContents,
 } from 'electron';
-import type { DropTarget, LocalServer, PaletteMode, PeekState, TabInfo, UiState } from '../shared/types';
+import type { DetectedBrowser, DropTarget, LocalServer, PaletteMode, PeekState, TabInfo, UiState } from '../shared/types';
 import { Store } from './store';
 import { arcSidebarPath, readArcSidebar } from './arcImport';
 import { resolveInput, searchEngine } from './url';
@@ -193,6 +193,9 @@ class Browser implements TabHost {
   openSettings?: () => void;
   /** Set right after startup; fetches icons for saved tabs that were never opened. */
   favicons?: Favicons;
+  /** Other browsers to import from, looked for at startup since the app menu is built synchronously. */
+  otherBrowsers: DetectedBrowser[] = [];
+  private importing = false;
 
   /** A boost file changed: restyle matching pages in place, or reload them for scripts. */
   boostChanged({ host, kind }: { host: string; kind: BoostKind }) {
@@ -985,6 +988,47 @@ class Browser implements TabHost {
     Menu.buildFromTemplate(items).popup({ window: this.win });
   }
 
+  /** One item per browser found, for both the File menu and the command bar's chooser. */
+  importItems(): MenuItemConstructorOptions[] {
+    if (!this.otherBrowsers.length) return [{ label: 'No Other Browsers Found', enabled: false }];
+    return [
+      ...this.otherBrowsers.map(
+        (b): MenuItemConstructorOptions => ({
+          label: `${b.name}…`,
+          sublabel: [b.hasBookmarks && (b.id === 'arc' ? 'Spaces' : 'Bookmarks'), b.hasHistory && 'history'].filter(Boolean).join(' and '),
+          click: () => void this.importFrom(b),
+        }),
+      ),
+      { type: 'separator' },
+      { label: 'Passwords and cookies stay in the other browser', enabled: false },
+    ];
+  }
+
+  /** Brings bookmarks and history over, then says what came across and what didn't. */
+  async importFrom(source: DetectedBrowser) {
+    if (this.importing) return;
+    this.importing = true;
+    try {
+      const result = await importBrowser(source.id, this.store, this.history);
+      const lines = [
+        result.spaces && `${plural(result.spaces, 'new Space')} with ${plural(result.bookmarks, 'pinned tab')}`,
+        result.history && `${plural(result.history, 'page')} of history`,
+      ].filter(Boolean);
+      dialog.showMessageBox(this.win, {
+        type: result.warnings.length ? 'warning' : 'info',
+        message: lines.length ? `Imported from ${source.name}` : `Nothing was imported from ${source.name}`,
+        detail: [
+          ...lines,
+          ...(result.warnings.length ? ['', ...result.warnings] : []),
+          '',
+          `Passwords and cookies stay in ${source.name}. To bring passwords along, use a password manager.`,
+        ].join('\n'),
+      });
+    } finally {
+      this.importing = false;
+    }
+  }
+
   async importArc() {
     let file = arcSidebarPath();
     try {
@@ -1045,6 +1089,10 @@ function snapshotHistory(wc: WebContents): TabInfo['history'] {
     entries: entries.slice(start, start + SAVED_HISTORY).map(({ url, title, pageState }) => ({ url, title, pageState })),
     index: index - start,
   };
+}
+
+function plural(n: number, word: string) {
+  return `${n.toLocaleString()} ${word}${n === 1 ? '' : 's'}`;
 }
 
 function countTabs(nodes: Array<{ kind: string; children?: any[] }>): number {
@@ -1123,7 +1171,7 @@ function buildMenu(browser: Browser, store: Store, settings: Settings) {
         },
         { label: 'Print…', accelerator: 'CmdOrCtrl+P', click: () => active()?.print() },
         { type: 'separator' },
-        { label: 'Import from Arc…', click: () => browser.importArc() },
+        { label: 'Import Browser Data', submenu: browser.importItems() },
       ],
     },
     {
@@ -1429,6 +1477,10 @@ app.whenReady().then(async () => {
   buildMenu(browser, store, settings);
   browser.openSettings = () => settings.open();
   const rebuildMenu = () => buildMenu(browser!, store, settings);
+  void detectBrowsers().then((found) => {
+    browser!.otherBrowsers = found;
+    rebuildMenu();
+  });
   // The Spaces, Tabs and Archive menus show live state; rebuild only when what they show changes.
   let menuSignature = '';
   store.onChange(() => {
