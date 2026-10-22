@@ -14,22 +14,18 @@
     <aside id="sidebar">
       <div class="toolbar">
         <div class="traffic-lights"></div>
-        <button id="btn-sidebar" class="icon" title="Hide sidebar (⌘S)">
-          <svg viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="2" /><path d="M6 2.5v11" /></svg>
-        </button>
+        <button id="btn-sidebar" class="icon-button" title="Hide sidebar (⌘S)"><i data-icon="sidebar"></i></button>
         <span class="spacer"></span>
-        <button id="btn-back" class="icon" title="Back (⌘[)">
-          <svg viewBox="0 0 16 16"><path d="M10 3 5 8l5 5" /></svg>
-        </button>
-        <button id="btn-forward" class="icon" title="Forward (⌘])">
-          <svg viewBox="0 0 16 16"><path d="m6 3 5 5-5 5" /></svg>
-        </button>
-        <button id="btn-reload" class="icon" title="Reload (⌘R)">
-          <svg viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.5M13 2.5v3h-3" /></svg>
-        </button>
+        <button id="btn-back" class="icon-button" title="Back (⌘[)"><i data-icon="arrowLeft"></i></button>
+        <button id="btn-forward" class="icon-button" title="Forward (⌘])"><i data-icon="arrowRight"></i></button>
+        <button id="btn-reload" class="icon-button" title="Reload (⌘R)"><i data-icon="reload"></i></button>
       </div>
 
-      <button id="urlbar" title="Open location (⌘L)"></button>
+      <button id="urlbar" title="Open location (⌘L)">
+        <span id="urlbar-icon"></span>
+        <span id="urlbar-env"></span>
+        <span id="urlbar-text"></span>
+      </button>
 
       <browser-action-list id="extensions"></browser-action-list>
 
@@ -40,69 +36,67 @@
 
       <div id="favorites"></div>
 
-      <div id="local-servers" hidden>
-        <div class="section-label">Running locally</div>
+      <section id="local-servers" class="group" hidden>
+        <header class="group-header"><span>Running locally</span></header>
         <div id="local-server-list"></div>
-      </div>
+      </section>
 
-      <div id="space-header">
+      <header id="space-header">
+        <span id="space-emoji"></span>
         <span id="space-title"></span>
-        <span id="space-isolated" title="This Space has its own cookies and logins" hidden>
-          <svg viewBox="0 0 16 16"><rect x="3.5" y="7" width="9" height="6.5" rx="1.5" /><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" /></svg>
-        </span>
-      </div>
+        <span id="space-isolated" title="This Space has its own cookies and logins" hidden><i data-icon="lock"></i></span>
+      </header>
 
       <div id="scroll">
         <div id="pinned" class="drop-zone"></div>
-        <div class="today-divider">
-          <span></span>
-          <button id="btn-clear" title="Archive today's tabs (⇧⌘K)">Clear</button>
-        </div>
-        <button id="btn-newtab" class="row new-tab"><span class="plus">+</span> New Tab</button>
+        <header class="group-header today-header">
+          <span>Today</span>
+          <button id="btn-clear" class="text-button" title="Archive today's tabs (⇧⌘K)">Clear</button>
+        </header>
+        <button id="btn-newtab" class="row new-tab"><span class="row-icon"><i data-icon="plus"></i></span><span class="title">New Tab</span><kbd>⌘T</kbd></button>
         <div id="today" class="drop-zone"></div>
       </div>
 
-      <div id="downloads-panel" hidden>
-        <div class="downloads-header">
+      <div id="downloads-panel" class="popover" hidden>
+        <header class="popover-header">
           <span>Downloads</span>
-          <button id="btn-clear-downloads">Clear</button>
-        </div>
+          <button id="btn-clear-downloads" class="text-button">Clear</button>
+        </header>
         <ul id="downloads-list"></ul>
       </div>
 
       <footer>
-        <button id="btn-downloads" class="icon" title="Downloads">
-          <svg viewBox="0 0 16 16"><path d="M8 2v8m-3-3 3 3 3-3M3 13h10" /></svg>
+        <button id="btn-downloads" class="icon-button" title="Downloads">
+          <i data-icon="download"></i>
           <span id="downloads-badge" hidden></span>
         </button>
-        <button id="btn-import" class="icon" title="Import from Arc">
-          <svg viewBox="0 0 16 16"><path d="M5 3 2 6l3 3M2 6h9M11 7l3 3-3 3M14 10H5" /></svg>
-        </button>
         <div id="spaces"></div>
-        <button id="btn-newspace" class="icon" title="New space">
-          <svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10" /></svg>
-        </button>
+        <button id="btn-newspace" class="icon-button" title="New Space (⌃⇧N)"><i data-icon="plus"></i></button>
       </footer>
     </aside>
 
     <div id="peek" hidden>
       <div class="peek-bar">
         <span class="peek-title"></span>
-        <button id="peek-open" title="Open as a tab">
-          <svg viewBox="0 0 16 16"><path d="M6 3H3v10h10v-3M9 3h4v4M13 3 7 9" /></svg>
-          Open
-        </button>
-        <button id="peek-close" class="icon" title="Close (Esc)">
-          <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" /></svg>
-        </button>
+        <button id="peek-open" class="pill-button" title="Open as a tab"><i data-icon="external"></i>Open as Tab</button>
+        <button id="peek-close" class="icon-button" title="Close (Esc)"><i data-icon="close"></i></button>
       </div>
     </div>
 
     <div id="palette" hidden>
       <div class="palette-box">
-        <input id="palette-input" spellcheck="false" autocomplete="off" placeholder="Search or enter URL…" />
+        <div class="palette-field">
+          <i data-icon="search"></i>
+          <input id="palette-input" spellcheck="false" autocomplete="off" placeholder="Search tabs, history, or type a URL" />
+          <span id="palette-mode"></span>
+        </div>
         <ul id="palette-results"></ul>
         <pre id="palette-detail" hidden></pre>
+        <footer class="palette-footer">
+          <span><kbd>↑</kbd><kbd>↓</kbd> Navigate</span>
+          <span><kbd>↵</kbd> Open</span>
+          <span><kbd>esc</kbd> Close</span>
+        </footer>
       </div>
     </div>
 

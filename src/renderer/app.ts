@@ -1,4 +1,5 @@
 import { devSuggestions } from './devCommands.js';
+import { ICONS, type IconName } from './icons.js';
 import type { DownloadInfo, DropTarget, FlechaApi, HistoryEntry, PaletteMode, PeekState, PinnedNode, Space, TabInfo, UiState } from '../shared/types';
 
 declare global {
@@ -36,6 +37,13 @@ function svg(path: string) {
   return el;
 }
 
+function icon(name: IconName) {
+  return svg(ICONS[name]);
+}
+
+// Static markup marks icons as <i data-icon="name">; swap them for the shared SVGs.
+for (const el of document.querySelectorAll<HTMLElement>('i[data-icon]')) el.replaceWith(icon(el.dataset.icon as IconName));
+
 function host(url: string) {
   try {
     return new URL(url).host.replace(/^www\./, '');
@@ -44,8 +52,17 @@ function host(url: string) {
   }
 }
 
+/** A stable colour per site, so placeholder icons are told apart at a glance. */
+function hueFor(text: string) {
+  let hash = 0;
+  for (const char of text) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  return hash % 360;
+}
+
 function favicon(tab: TabInfo) {
-  const letter = () => h('span', { class: 'favicon letter' }, (host(tab.url)[0] ?? '?').toUpperCase());
+  const site = host(tab.url);
+  const letter = () =>
+    h('span', { class: 'favicon letter', style: `--hue: ${hueFor(site)}` }, (site.replace(/^[^a-z0-9]+/i, '')[0] ?? '•').toUpperCase());
   if (!tab.favicon) return letter();
   const img = h('img', { class: 'favicon', src: tab.favicon, draggable: 'false' }) as HTMLImageElement;
   img.onerror = () => img.replaceWith(letter());
@@ -63,12 +80,7 @@ function render(s: UiState) {
   ($('btn-back') as HTMLButtonElement).disabled = !s.nav.canGoBack;
   ($('btn-forward') as HTMLButtonElement).disabled = !s.nav.canGoForward;
 
-  const urlbar = $('urlbar');
-  urlbar.replaceChildren(active && active.url !== 'about:blank' ? host(active.url) : 'Search or enter URL…');
-  if (s.environment) {
-    urlbar.prepend(h('span', { class: `env-badge ${s.environment.tone}`, title: `${s.environment.name} · ⌥⌘E to switch` }, s.environment.label));
-  }
-  urlbar.classList.toggle('has-url', !!active);
+  renderUrlbar(s, active);
 
   $('favorites').replaceChildren(
     ...s.favorites
@@ -85,7 +97,9 @@ function render(s: UiState) {
   renderAgent(s);
 
   const title = $('space-title');
-  if (title.contentEditable !== 'true') title.textContent = `${space.emoji ? space.emoji + '  ' : ''}${space.name}`;
+  if (title.contentEditable !== 'true') title.textContent = space.name;
+  $('space-emoji').textContent = space.emoji ?? '';
+  $('space-emoji').hidden = !space.emoji;
   title.dataset.spaceId = space.id;
   $('space-isolated').hidden = !space.isolated;
 
@@ -107,12 +121,26 @@ function render(s: UiState) {
             api.spaceMenu(sp.id);
           },
         },
-        sp.emoji || sp.name[0]?.toUpperCase() || '•',
+        sp.emoji ? h('span', { class: 'space-emoji' }, sp.emoji) : h('span', { class: 'space-initial' }, sp.name[0]?.toUpperCase() ?? '•'),
       ),
     ),
   );
 
   if (!palette.hidden) updatePalette();
+}
+
+/** Host, a padlock or code icon for the kind of connection, and the environment badge. */
+function renderUrlbar(s: UiState, active: TabInfo | undefined) {
+  const url = active && active.url !== 'about:blank' ? active.url : undefined;
+  let kind: IconName = 'search';
+  if (url) kind = isDevUrl(url) ? 'code' : url.startsWith('https:') ? 'lock' : url.startsWith('http:') ? 'unlocked' : 'globe';
+  $('urlbar-icon').replaceChildren(icon(kind));
+  $('urlbar-icon').className = url?.startsWith('http:') && !isDevUrl(url) ? 'insecure' : '';
+  $('urlbar-text').textContent = url ? host(url) : 'Search or enter URL';
+  $('urlbar').classList.toggle('empty', !url);
+  $('urlbar-env').replaceChildren(
+    ...(s.environment ? [h('span', { class: `env-badge ${s.environment.tone}`, title: `${s.environment.name} · ⌥⌘E to switch` }, s.environment.label)] : []),
+  );
 }
 
 /** Shows when a coding agent is connected and what it is doing right now. */
@@ -169,8 +197,9 @@ function renderNode(node: PinnedNode, space: Space, folderId: string | undefined
         editInline(name, node.name, (value) => api.renameFolder(node.id, value));
       },
     },
-    h('span', { class: 'chevron' }, svg('m6 4 4 4-4 4')),
+    h('span', { class: 'row-icon folder-icon' }, icon(node.open ? 'folderOpen' : 'folder')),
     name,
+    h('span', { class: 'chevron' }, icon('chevron')),
   );
   acceptDrops(header, { zone: 'pinned', folderId: node.id });
   return h(
@@ -192,7 +221,7 @@ function tabRow(tab: TabInfo, space: Space, target: DropTarget) {
         api.close(tab.id);
       },
     },
-    svg('M4 4l8 8M12 4l-8 8'),
+    icon('close'),
   );
   const inSplit = !!space.split?.includes(tab.id) && !!space.activeTabId && space.split.includes(space.activeTabId);
   const row = h(
@@ -206,10 +235,10 @@ function tabRow(tab: TabInfo, space: Space, target: DropTarget) {
     favicon(tab),
     h('span', { class: 'title' }, tab.title || host(tab.url)),
     errorBadge(tab),
-    isBoosted(tab.url) ? h('span', { class: 'boost-mark', title: 'Boosted: a script or styles from ~/.flecha/boosts run here' }, '⚡') : null,
+    isBoosted(tab.url) ? h('span', { class: 'boost-mark', title: 'Boosted: a script or styles from ~/.flecha/boosts run here' }, icon('zap')) : null,
     tab.device === 'mobile'
-      ? h('span', { class: 'device-badge', title: 'Phone-sized mirror' }, svg('M5 1.5h6a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-11a1 1 0 0 1 1-1zM7 12.5h2'))
-      : h('span', { class: 'split-badge', title: 'In split view' }, svg('M2.5 3.5h11v9h-11zM8 3.5v9')),
+      ? h('span', { class: 'device-badge', title: 'Phone-sized mirror' }, icon('phone'))
+      : h('span', { class: 'split-badge', title: 'In split view' }, icon('columns')),
     close,
   );
   wireTab(row, tab, target);
@@ -557,7 +586,7 @@ function renderDownloads(items: DownloadInfo[], started?: DownloadInfo) {
         h(
           'button',
           {
-            class: 'icon',
+            class: 'icon-button',
             title: d.state === 'progressing' ? 'Cancel' : 'Show in Finder',
             onclick: (e: Event) => {
               e.stopPropagation();
@@ -565,7 +594,7 @@ function renderDownloads(items: DownloadInfo[], started?: DownloadInfo) {
               else api.revealDownload(d.id);
             },
           },
-          d.state === 'progressing' ? svg('M4 4l8 8M12 4l-8 8') : svg('M2 4h4l1.5 2H14v6.5H2z'),
+          d.state === 'progressing' ? icon('close') : icon('folder'),
         ),
       );
     }),
@@ -592,7 +621,6 @@ $('urlbar').onclick = () => api.openPalette('navigate');
 $('btn-newtab').onclick = () => api.openPalette('new-tab');
 $('btn-clear').onclick = () => api.clearToday();
 $('btn-newspace').onclick = () => api.newSpace();
-$('btn-import').onclick = () => api.importArc();
 $('space-title').ondblclick = () => state && renameSpace(state.activeSpaceId);
 $('space-header').oncontextmenu = (e) => {
   e.preventDefault();
