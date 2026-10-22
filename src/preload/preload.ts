@@ -19,6 +19,8 @@ const api: FlechaApi = {
   topSites: () => ipcRenderer.invoke('top-sites'),
   appIcon: (name) => ipcRenderer.invoke('app-icon', name),
   onTourKey: (cb) => void ipcRenderer.on('tour-key', (_e, command) => cb(command)),
+  detectBrowsers: () => ipcRenderer.invoke('import:detect'),
+  importBrowser: (id) => ipcRenderer.invoke('import:run', id),
   newTab: cmd('newTab'),
   navigate: cmd('navigate'),
   activate: cmd('activate'),
@@ -37,7 +39,7 @@ const api: FlechaApi = {
   renameFolder: cmd('renameFolder'),
   moveTab: cmd('moveTab'),
   clearToday: cmd('clearToday'),
-  importArc: cmd('importArc'),
+  importMenu: cmd('importMenu'),
   openPalette: cmd('openPalette'),
   closePalette: cmd('closePalette'),
   toggleSidebar: cmd('toggleSidebar'),
@@ -69,8 +71,6 @@ const api: FlechaApi = {
   finishOnboarding: cmd('finishOnboarding'),
   setPreferences: cmd('setPreferences'),
   makeDefaultBrowser: cmd('makeDefaultBrowser'),
-  detectBrowsers: () => ipcRenderer.invoke('import:detect'),
-  importBrowser: (id) => ipcRenderer.invoke('import:run', id),
   newFlechinha: cmd('newFlechinha'),
 };
 

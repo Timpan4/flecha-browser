@@ -711,7 +711,12 @@ const ACTIONS: Array<{ label: string; keywords: string; icon: IconName; shortcut
   { label: 'Toggle Sidebar', keywords: 'sidebar hide show', icon: 'sidebar', shortcut: 'toggleSidebar', run: () => api.toggleSidebar() },
   { label: 'Clear Today Tabs', keywords: 'clear archive today close', icon: 'archive', shortcut: 'clearToday', run: () => api.clearToday() },
   { label: 'Show Downloads', keywords: 'downloads files', icon: 'download', run: () => (downloadsPanel.hidden = false) },
-  { label: 'Import from Arc', keywords: 'import arc migrate', icon: 'import', run: () => api.importArc() },
+  {
+    label: 'Import from another browser',
+    keywords: 'import migrate bookmarks history arc chrome safari firefox brave edge vivaldi opera',
+    icon: 'import',
+    run: () => api.importMenu(),
+  },
   { label: 'Open Boosts Folder', keywords: 'boosts folder scripts css', icon: 'zap', run: () => api.openBoostsFolder() },
 ];
 

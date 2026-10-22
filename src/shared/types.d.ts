@@ -61,6 +61,23 @@ export interface HistoryEntry {
   lastVisit: number;
 }
 
+/** Another browser on this Mac with data Flecha can bring over. */
+export interface DetectedBrowser {
+  id: string;
+  name: string;
+  profiles: number;
+  hasBookmarks: boolean;
+  hasHistory: boolean;
+}
+
+/** What one import brought over. Problems that didn't stop it are listed in `warnings`. */
+export interface ImportResult {
+  spaces: number;
+  bookmarks: number;
+  history: number;
+  warnings: string[];
+}
+
 export interface DownloadInfo {
   id: string;
   filename: string;
@@ -317,6 +334,10 @@ export interface FlechaApi {
   appIcon(name: string): Promise<string | undefined>;
   /** During the welcome tour, shortcuts you press are reported here instead of acting. */
   onTourKey(cb: (command: string) => void): void;
+  /** Other browsers with bookmarks or history to import. */
+  detectBrowsers(): Promise<DetectedBrowser[]>;
+  /** Imports one of the browsers `detectBrowsers` found, by id. */
+  importBrowser(id: string): Promise<ImportResult>;
   newTab(input: string): void;
   navigate(input: string): void;
   activate(tabId: string): void;
@@ -335,7 +356,8 @@ export interface FlechaApi {
   renameFolder(folderId: string, name: string): void;
   moveTab(tabId: string, target: DropTarget): void;
   clearToday(): void;
-  importArc(): void;
+  /** Pops up a menu of the other browsers to import from. */
+  importMenu(): void;
   openPalette(mode: PaletteMode): void;
   closePalette(): void;
   toggleSidebar(): void;
@@ -370,9 +392,6 @@ export interface FlechaApi {
   finishOnboarding(): void;
   setPreferences(prefs: { theme?: 'system' | 'light' | 'dark'; searchEngine?: SearchEngineId; adBlock?: boolean }): void;
   makeDefaultBrowser(): void;
-  /** Other browsers on this Mac with data Flecha can import. */
-  detectBrowsers(): Promise<Array<{ id: string; name: string; profiles: number; hasBookmarks: boolean; hasHistory: boolean }>>;
-  importBrowser(id: string): Promise<{ spaces: number; bookmarks: number; history: number; warnings: string[] }>;
   /** An empty Flechinha, for a quick lookup. */
   newFlechinha(): void;
 }
