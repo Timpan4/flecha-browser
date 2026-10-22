@@ -17,6 +17,8 @@ const api: FlechaApi = {
   ready: cmd('ready'),
   searchHistory: (query) => ipcRenderer.invoke('search-history', query),
   topSites: () => ipcRenderer.invoke('top-sites'),
+  appIcon: (name) => ipcRenderer.invoke('app-icon', name),
+  onTourKey: (cb) => void ipcRenderer.on('tour-key', (_e, command) => cb(command)),
   newTab: cmd('newTab'),
   navigate: cmd('navigate'),
   activate: cmd('activate'),

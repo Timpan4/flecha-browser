@@ -272,6 +272,10 @@ export interface FlechaApi {
   searchHistory(query: string): Promise<HistoryEntry[]>;
   /** Most visited sites, one per host. */
   topSites(): Promise<HistoryEntry[]>;
+  /** An installed app's icon as a data URL, by its name in /Applications. */
+  appIcon(name: string): Promise<string | undefined>;
+  /** During the welcome tour, shortcuts you press are reported here instead of acting. */
+  onTourKey(cb: (command: string) => void): void;
   newTab(input: string): void;
   navigate(input: string): void;
   activate(tabId: string): void;
@@ -306,7 +310,7 @@ export interface FlechaApi {
   openDevTools(): void;
   /** A short confirmation shown in the address bar ("Link copied"). */
   onFlash(cb: (message: string) => void): void;
-  openSettings(): void;
+  openSettings(pane?: string): void;
   toggleResponsive(): void;
   showConsole(tabId: string): void;
   editBoost(kind: 'script' | 'styles'): void;

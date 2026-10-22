@@ -190,7 +190,7 @@ class Browser implements TabHost {
   }
   private boostedHosts: string[] = [];
   /** Set right after startup, once the settings window exists. */
-  openSettings?: () => void;
+  openSettings?: (pane?: string) => void;
   /** Set right after startup; fetches icons for saved tabs that were never opened. */
   favicons?: Favicons;
 
@@ -547,7 +547,15 @@ class Browser implements TabHost {
     this.sendState();
   }
 
+  /** During the tour, a shortcut is reported to it instead of acting. Returns whether it was. */
+  private tourKey(command: string) {
+    if (this.store.state.onboarded) return false;
+    this.ui.webContents.send('tour-key', command);
+    return true;
+  }
+
   toggleSidebar() {
+    if (this.tourKey('toggleSidebar')) return;
     this.sidebarPeek = false;
     this.store.setSidebarVisible(!this.store.state.sidebarVisible);
   }
@@ -660,6 +668,8 @@ class Browser implements TabHost {
   // ---- layout & state -----------------------------------------------------
 
   setPaletteOpen(open: boolean, mode: PaletteMode = 'new-tab') {
+    // The welcome tour asks you to try the real shortcuts and shows what they do.
+    if (open && this.tourKey({ 'new-tab': 'newTab', navigate: 'openLocation', split: 'splitNew' }[mode])) return;
     this.paletteOpen = open;
     this.layout();
     if (open) {
@@ -1319,6 +1329,12 @@ function registerIpc(browser: Browser, store: Store, history: History, downloads
   ipcMain.handle('search-history', (event, query: string) =>
     event.sender === browser.uiContents ? history.search(String(query)) : [],
   );
+  // Real app icons for the import step: /Applications/<name>.app.
+  ipcMain.handle('app-icon', async (event, name: string) => {
+    if (event.sender !== browser.uiContents || !/^[\w .-]+$/.test(String(name))) return undefined;
+    const icon = await app.getFileIcon(`/Applications/${name}.app`, { size: 'large' }).catch(() => undefined);
+    return icon && !icon.isEmpty() ? icon.toDataURL() : undefined;
+  });
   ipcMain.handle('top-sites', (event) => {
     if (event.sender !== browser.uiContents) return [];
     const sites = history.top();
@@ -1365,7 +1381,7 @@ function registerIpc(browser: Browser, store: Store, history: History, downloads
       store.setSitePermission(String(origin), String(permission), decision === 'allow' || decision === 'block' ? decision : undefined),
     zoom: (step: number) => browser.zoom(step > 0 ? 1 : step < 0 ? -1 : 0),
     openDevTools: () => browser.activeContents()?.openDevTools({ mode: 'detach' }),
-    openSettings: () => browser.openSettings?.(),
+    openSettings: (pane?: string) => browser.openSettings?.(typeof pane === 'string' ? pane : undefined),
     toggleResponsive: () => browser.toggleResponsive(),
     showConsole: (id: string) => browser.showConsole(id),
     editBoost: (kind: BoostKind) => browser.editBoost(kind === 'styles' ? 'styles' : 'script'),
@@ -1444,7 +1460,7 @@ app.whenReady().then(async () => {
     endpoint: () => (bridge.port ? `http://127.0.0.1:${bridge.port}/mcp` : undefined),
   }, () => browser!.openBoostsFolder());
   buildMenu(browser, store, settings);
-  browser.openSettings = () => settings.open();
+  browser.openSettings = (pane) => settings.open(pane);
   const rebuildMenu = () => buildMenu(browser!, store, settings);
   // The Spaces, Tabs and Archive menus show live state; rebuild only when what they show changes.
   let menuSignature = '';
