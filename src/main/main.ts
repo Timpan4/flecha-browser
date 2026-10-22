@@ -1079,7 +1079,7 @@ function countTabs(nodes: Array<{ kind: string; children?: any[] }>): number {
 
 // ---- app wiring ------------------------------------------------------------
 
-function buildMenu(browser: Browser, store: Store, settings: Settings) {
+function buildMenu(browser: Browser, store: Store, settings: Settings, flechinhas: Flechinhas) {
   const active = () => browser.activeContents();
   const tab = () => store.activeTab;
   const space = store.activeSpace;
@@ -1117,6 +1117,7 @@ function buildMenu(browser: Browser, store: Store, settings: Settings) {
         { label: 'New Tab', accelerator: 'CmdOrCtrl+T', click: () => browser.setPaletteOpen(true, 'new-tab') },
         { label: 'Open Location…', accelerator: 'CmdOrCtrl+L', click: () => browser.setPaletteOpen(true, 'navigate') },
         { label: 'New Space', accelerator: 'Ctrl+Shift+N', click: () => browser.newSpace() },
+        { label: 'New Flechinha Window', accelerator: 'Alt+CmdOrCtrl+N', click: () => flechinhas.create() },
         { type: 'separator' },
         {
           label: 'Close Tab',
@@ -1448,9 +1449,23 @@ app.whenReady().then(async () => {
     setEnabled: (enabled) => (enabled ? bridge.start() : bridge.stop()),
     endpoint: () => (bridge.port ? `http://127.0.0.1:${bridge.port}/mcp` : undefined),
   }, () => browser!.openBoostsFolder());
-  buildMenu(browser, store, settings);
+  const flechinhas = new Flechinhas({
+    resolve: (input) => resolveInput(input, store.state.searchEngine),
+    searchEngineName: () => searchEngine(store.state.searchEngine).name,
+    tint: () => spaceTint(store.activeSpace.color),
+    space: () => ({ name: store.activeSpace.name, emoji: store.activeSpace.emoji }),
+    openTab: (url, background) => {
+      browser!.openTab(url, { activate: !background });
+      if (!background) browser!.focus();
+    },
+    adopt: (view, favicon) => browser!.adoptPage(view, favicon),
+    record: (url, title) => history.record(url, title),
+    updateTitle: (url, title) => history.updateTitle(url, title),
+  });
+  store.onChange(() => flechinhas.refresh());
+  buildMenu(browser, store, settings, flechinhas);
   browser.openSettings = () => settings.open();
-  const rebuildMenu = () => buildMenu(browser!, store, settings);
+  const rebuildMenu = () => buildMenu(browser!, store, settings, flechinhas);
   // The Spaces, Tabs and Archive menus show live state; rebuild only when what they show changes.
   let menuSignature = '';
   store.onChange(() => {
@@ -1488,20 +1503,6 @@ app.whenReady().then(async () => {
   wantFavicons();
   store.onChange(wantFavicons);
   browser.watchLocalServers();
-  const flechinhas = new Flechinhas({
-    resolve: (input) => resolveInput(input, store.state.searchEngine),
-    searchEngineName: () => searchEngine(store.state.searchEngine).name,
-    tint: () => spaceTint(store.activeSpace.color),
-    space: () => ({ name: store.activeSpace.name, emoji: store.activeSpace.emoji }),
-    openTab: (url, background) => {
-      browser!.openTab(url, { activate: !background });
-      if (!background) browser!.focus();
-    },
-    adopt: (view, favicon) => browser!.adoptPage(view, favicon),
-    record: (url, title) => history.record(url, title),
-    updateTitle: (url, title) => history.updateTitle(url, title),
-  });
-  store.onChange(() => flechinhas.refresh());
   // Links from other apps get a Flechinha of their own, unless that's turned off in Settings.
   deliverLinksTo((url) => {
     if (store.state.openLinksInFlechinha !== false) return void flechinhas.create(url);
