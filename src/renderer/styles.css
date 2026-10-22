@@ -1653,7 +1653,10 @@ body[data-sidebar='floating'] #sidebar {
 
 /* ---- site panel --------------------------------------------------------- */
 
+/* One 12px inset for every section; controls on the right share one 76px column. */
 .site-panel {
+  --inset: 12px;
+  --control: 76px;
   top: 92px;
   bottom: auto;
   max-height: none;
@@ -1664,13 +1667,13 @@ body[data-sidebar='floating'] #sidebar {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 14px 14px 10px;
+  padding: var(--inset) var(--inset) 10px;
 }
 
 .site-header .favicon {
-  width: 22px;
-  height: 22px;
-  border-radius: 5px;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
 }
 
 .site-title {
@@ -1697,23 +1700,36 @@ body[data-sidebar='floating'] #sidebar {
 
 .site-actions {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: 1fr 1fr;
   gap: 6px;
-  padding: 0 12px 8px;
+  padding: 0 var(--inset) var(--inset);
+  border-bottom: 0.5px solid var(--surface-line);
 }
 
 .site-action {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: 4px;
-  padding: 8px 0 6px;
+  gap: 8px;
+  height: 32px;
+  min-width: 0;
+  padding: 0 10px;
   border-radius: var(--radius-md);
   background: var(--surface-2);
-  font-size: 10px;
+  font-size: var(--text-sm);
   font-weight: 500;
   color: var(--text-2);
-  transition: background var(--fast) var(--ease);
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+
+.site-action span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.site-action svg {
+  width: 14px;
+  height: 14px;
 }
 
 .site-action:hover:not(:disabled) {
@@ -1727,18 +1743,25 @@ body[data-sidebar='floating'] #sidebar {
 }
 
 .site-label {
-  padding: 4px 14px 0;
+  margin: 0;
+  padding: 10px var(--inset) 2px;
 }
 
 .site-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   height: 32px;
-  padding: 0 10px 0 14px;
+  padding: 0 var(--inset);
+}
+
+.site-row > span:first-child {
+  color: var(--text);
 }
 
 .mini-select {
+  width: var(--control);
   height: 24px;
   padding: 0 6px;
   border: 0;
@@ -1749,37 +1772,44 @@ body[data-sidebar='floating'] #sidebar {
 }
 
 .zoom-control {
-  display: flex;
-  align-items: center;
-  gap: 2px;
+  display: grid;
+  grid-template-columns: 22px 1fr 22px;
+  width: var(--control);
+  height: 24px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
 }
 
 .zoom-control .icon-button {
-  width: 24px;
+  width: 22px;
   height: 24px;
 }
 
 .zoom-control .icon-button svg {
-  width: 13px;
-  height: 13px;
+  width: 12px;
+  height: 12px;
 }
 
 .zoom-value {
-  min-width: 44px;
   height: 24px;
-  border-radius: var(--radius-sm);
   font: 500 var(--text-xs) var(--mono);
   color: var(--text-2);
 }
 
 .zoom-value:hover {
-  background: var(--surface-2);
+  color: var(--text);
+}
+
+.site-panel .popover-footer {
+  margin-top: 6px;
+  padding: 8px var(--inset) 10px;
 }
 
 .site-panel .popover-footer .text-button {
   display: flex;
   align-items: center;
   gap: 6px;
+  margin-left: -6px;
 }
 
 .site-panel .popover-footer svg {
