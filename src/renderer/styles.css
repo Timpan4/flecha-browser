@@ -727,3 +727,12 @@ footer {
   width: 13px;
   height: 13px;
 }
+
+.row .device-badge {
+  display: grid;
+  color: var(--muted);
+}
+
+.row:hover .device-badge {
+  display: none;
+}

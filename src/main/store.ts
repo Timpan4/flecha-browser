@@ -148,10 +148,29 @@ export class Store {
     this.changed();
   }
 
-  unsplit() {
-    if (!this.activeSpace.split) return;
-    delete this.activeSpace.split;
+  /** Opens the active page again as a phone-sized mirror, side by side. Returns the mirror's id. */
+  openResponsive(): string | undefined {
+    const space = this.activeSpace;
+    const source = this.activeTab;
+    if (!source) return undefined;
+    const mirror = this.addTab(source.url, { activate: false, afterTabId: space.today.includes(source.id) ? source.id : undefined });
+    mirror.device = 'mobile';
+    mirror.title = source.title;
+    space.split = [source.id, mirror.id];
+    space.splitMode = 'responsive';
     this.changed();
+    return mirror.id;
+  }
+
+  /** Ends the split. A responsive mirror has no life of its own, so its id is returned for closing. */
+  unsplit(): string | undefined {
+    const space = this.activeSpace;
+    if (!space.split) return undefined;
+    const mirror = space.splitMode === 'responsive' ? space.split[1] : undefined;
+    delete space.split;
+    delete space.splitMode;
+    this.changed();
+    return mirror;
   }
 
   /** The tabs on screen right now: the active tab, or both halves of its split. */
@@ -357,7 +376,10 @@ export class Store {
   private changed() {
     for (const space of this.state.spaces) {
       // A split ends as soon as either half leaves the space.
-      if (space.split && !space.split.every((id) => this.allTabIds(space).includes(id))) delete space.split;
+      if (space.split && !space.split.every((id) => this.allTabIds(space).includes(id))) {
+        delete space.split;
+        delete space.splitMode;
+      }
     }
     this.scheduleSave();
     for (const fn of this.listeners) fn();

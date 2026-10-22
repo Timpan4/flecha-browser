@@ -32,6 +32,9 @@ const GAP = 8;
 const ARCHIVE_AFTER_MS = 12 * 60 * 60 * 1000;
 /** Back/forward entries kept per tab across restarts. */
 const SAVED_HISTORY = 25;
+/** The responsive split's phone: an iPhone-15-wide viewport with a mobile Chrome user agent. */
+const PHONE = { width: 393 };
+const PHONE_USER_AGENT = `Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${process.versions.chrome} Mobile Safari/537.36`;
 
 app.setName('Flecha');
 // Lets development runs use a throwaway profile: FLECHA_USER_DATA=/tmp/flecha npm start
@@ -204,8 +207,14 @@ class Browser implements TabHost {
     wc.on('did-navigate', (_e, url) => {
       update({ url, history: snapshotHistory(wc) });
       this.history.record(url, wc.getTitle());
+      this.followInResponsiveSplit(tabId, url);
     });
-    wc.on('did-navigate-in-page', (_e, url, isMainFrame) => isMainFrame && update({ url, history: snapshotHistory(wc) }));
+    wc.on('did-navigate-in-page', (_e, url, isMainFrame) => {
+      if (!isMainFrame) return;
+      update({ url, history: snapshotHistory(wc) });
+      this.followInResponsiveSplit(tabId, url);
+    });
+    if (this.store.state.tabs[tabId]?.device === 'mobile') emulatePhone(wc);
     wc.on('did-start-loading', () => update({ loading: true }));
     wc.on('did-stop-loading', () => {
       update({ loading: false });
@@ -299,6 +308,27 @@ class Browser implements TabHost {
     const env = tab && describeEnvironment(tab.url, this.store.state.environments);
     if (!tab || !env?.switches.length) return;
     this.viewFor(tab.id).webContents.loadURL(env.switches[0].url);
+  }
+
+  toggleResponsive() {
+    if (this.store.activeSpace.splitMode === 'responsive') return this.exitSplit();
+    this.store.openResponsive();
+  }
+
+  exitSplit() {
+    const mirror = this.store.unsplit();
+    if (mirror) this.closeTab(mirror);
+  }
+
+  /**
+   * In a responsive split the phone follows the desktop side. Only that direction: sites
+   * often redirect phones to an m. domain, which must not drag the desktop side along.
+   */
+  private followInResponsiveSplit(tabId: string, url: string) {
+    const space = this.store.locate(tabId)?.space;
+    if (space?.splitMode !== 'responsive' || space.split?.[0] !== tabId) return;
+    const view = this.views.get(space.split[1]);
+    if (view && view.webContents.getURL() !== url) view.webContents.loadURL(url);
   }
 
   get findOpen() {
@@ -425,7 +455,10 @@ class Browser implements TabHost {
 
     const area = this.contentRect();
     const [left, right] = this.shown;
-    if (right) {
+    if (right && this.store.activeSpace.splitMode === 'responsive') {
+      left.setBounds({ ...area, width: area.width - PHONE.width - GAP });
+      right.setBounds({ ...area, x: area.x + area.width - PHONE.width, width: PHONE.width });
+    } else if (right) {
       const half = Math.floor((area.width - GAP) / 2);
       left.setBounds({ ...area, width: half });
       right.setBounds({ ...area, x: area.x + half + GAP, width: area.width - half - GAP });
@@ -486,7 +519,7 @@ class Browser implements TabHost {
     if (!tab || !zone) return;
     const space = this.store.activeSpace;
     const splitItems: MenuItemConstructorOptions[] = [];
-    if (space.split?.includes(tabId)) splitItems.push({ label: 'Exit Split View', click: () => this.store.unsplit() });
+    if (space.split?.includes(tabId)) splitItems.push({ label: 'Exit Split View', click: () => this.exitSplit() });
     else if (space.activeTabId && space.activeTabId !== tabId) {
       splitItems.push({ label: 'Open in Split View', click: () => this.store.splitWith(tabId) });
     }
@@ -608,6 +641,25 @@ class Browser implements TabHost {
   }
 }
 
+/**
+ * Phone emulation through the DevTools protocol, the same mechanism as Chrome's device
+ * mode: a mobile viewport (so `width=device-width` works), touch input and a mobile user
+ * agent. Electron's own enableDeviceEmulation leaves the layout viewport at 980px.
+ */
+function emulatePhone(wc: WebContents) {
+  wc.setUserAgent(PHONE_USER_AGENT);
+  try {
+    wc.debugger.attach('1.3');
+  } catch {
+    // Already attached (DevTools open); the commands still go through.
+  }
+  const send = (method: string, params: object) => wc.debugger.sendCommand(method, params).catch(() => {});
+  // Height 0 keeps the pane's real height.
+  send('Emulation.setDeviceMetricsOverride', { width: PHONE.width, height: 0, deviceScaleFactor: 3, mobile: true });
+  send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+  send('Emulation.setEmitTouchEventsForMouse', { enabled: true, configuration: 'mobile' });
+}
+
 function snapshotHistory(wc: WebContents): TabInfo['history'] {
   const entries = wc.navigationHistory.getAllEntries();
   const index = wc.navigationHistory.getActiveIndex();
@@ -692,7 +744,8 @@ function buildMenu(browser: Browser, store: Store, settings: Settings) {
         { label: 'Toggle Sidebar', accelerator: 'CmdOrCtrl+S', click: () => store.setSidebarVisible(!store.state.sidebarVisible) },
         { type: 'separator' },
         { label: 'Split View with New Tab', accelerator: 'Ctrl+Shift+=', click: () => browser.setPaletteOpen(true, 'split') },
-        { label: 'Exit Split View', accelerator: 'Ctrl+Shift+-', click: () => store.unsplit() },
+        { label: 'Exit Split View', accelerator: 'Ctrl+Shift+-', click: () => browser.exitSplit() },
+        { label: 'Responsive View', accelerator: 'Alt+CmdOrCtrl+M', click: () => browser.toggleResponsive() },
         { type: 'separator' },
         { label: 'Reload', accelerator: 'CmdOrCtrl+R', click: () => active()?.reload() },
         { label: 'Hard Reload', accelerator: 'CmdOrCtrl+Shift+R', click: () => active()?.reloadIgnoringCache() },

@@ -3,6 +3,8 @@ export interface TabInfo {
   url: string;
   title: string;
   favicon?: string;
+  /** A phone-sized mirror opened by the responsive split. */
+  device?: 'mobile';
   /** Pinned and favorite tabs remember where they started, like Arc. */
   homeUrl?: string;
   loading?: boolean;
@@ -35,6 +37,8 @@ export interface Space {
   isolated?: boolean;
   /** Two tabs shown side by side (left, right) whenever either one is active. */
   split?: [string, string];
+  /** `responsive`: the right side is a phone-sized mirror that follows the left side's navigation. */
+  splitMode?: 'responsive';
 }
 
 export interface ArchivedTab {

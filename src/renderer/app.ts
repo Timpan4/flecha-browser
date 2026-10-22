@@ -162,7 +162,9 @@ function tabRow(tab: TabInfo, space: Space, target: DropTarget) {
     },
     favicon(tab),
     h('span', { class: 'title' }, tab.title || host(tab.url)),
-    h('span', { class: 'split-badge', title: 'In split view' }, svg('M2.5 3.5h11v9h-11zM8 3.5v9')),
+    tab.device === 'mobile'
+      ? h('span', { class: 'device-badge', title: 'Phone-sized mirror' }, svg('M5 1.5h6a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-11a1 1 0 0 1 1-1zM7 12.5h2'))
+      : h('span', { class: 'split-badge', title: 'In split view' }, svg('M2.5 3.5h11v9h-11zM8 3.5v9')),
     close,
   );
   wireTab(row, tab, target);
