@@ -386,6 +386,18 @@ class Browser implements TabHost {
     // Favorites belong to no Space, so they always use the shared session.
     const ses = sessionForSpace(this.store.locate(tabId)?.space);
     const view = new WebContentsView({ webPreferences: { session: ses, sandbox: true, contextIsolation: true } });
+    followGoogleSignIn(view.webContents);
+    this.wireView(tabId, view);
+    const wc = view.webContents;
+    const tab = this.store.state.tabs[tabId];
+    const url = tab?.url ?? 'about:blank';
+    if (tab?.history?.entries.length) wc.navigationHistory.restore(tab.history).catch(() => wc.loadURL(url));
+    else wc.loadURL(url);
+    return view;
+  }
+
+  /** Makes a page view the given tab's: keeps the sidebar in step with it and routes its links. */
+  private wireView(tabId: string, view: WebContentsView) {
     view.setBorderRadius(10);
     const wc = view.webContents;
     const update = (patch: Parameters<Store['updateTab']>[1]) => this.store.updateTab(tabId, patch);
@@ -420,7 +432,6 @@ class Browser implements TabHost {
     });
     if (this.store.state.tabs[tabId]?.device === 'mobile') emulatePhone(wc);
     if (this.store.state.tabs[tabId]?.muted) wc.setAudioMuted(true);
-    followGoogleSignIn(wc);
     // Sign-in popups (OAuth) open as their own windows.
     wc.on('did-create-window', (popup) => followGoogleSignIn(popup.webContents));
     wc.on('did-start-loading', () => update({ loading: true }));
@@ -454,11 +465,6 @@ class Browser implements TabHost {
 
     this.views.set(tabId, view);
     if (wc.session === session.defaultSession) this.extensions.addTab(wc, this.win);
-    const tab = this.store.state.tabs[tabId];
-    const url = tab?.url ?? 'about:blank';
-    if (tab?.history?.entries.length) wc.navigationHistory.restore(tab.history).catch(() => wc.loadURL(url));
-    else wc.loadURL(url);
-    return view;
   }
 
   // ---- peek -----------------------------------------------------------------
