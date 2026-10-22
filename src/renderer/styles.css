@@ -680,3 +680,30 @@ footer {
 #palette-detail[hidden] {
   display: none;
 }
+
+/* ---- environments ------------------------------------------------------- */
+
+.env-badge {
+  display: inline-block;
+  margin-right: 8px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  vertical-align: 1px;
+  color: #fff;
+}
+
+.env-badge.local {
+  background: #2e9d5b;
+}
+
+.env-badge.staging {
+  background: #d98a12;
+}
+
+.env-badge.production {
+  background: #d93f3f;
+}

@@ -64,7 +64,10 @@ function render(s: UiState) {
   ($('btn-forward') as HTMLButtonElement).disabled = !s.nav.canGoForward;
 
   const urlbar = $('urlbar');
-  urlbar.textContent = active && active.url !== 'about:blank' ? host(active.url) : 'Search or enter URL…';
+  urlbar.replaceChildren(active && active.url !== 'about:blank' ? host(active.url) : 'Search or enter URL…');
+  if (s.environment) {
+    urlbar.prepend(h('span', { class: `env-badge ${s.environment.tone}`, title: `${s.environment.name} · ⌥⌘E to switch` }, s.environment.label));
+  }
   urlbar.classList.toggle('has-url', !!active);
 
   $('favorites').replaceChildren(
@@ -280,6 +283,12 @@ function updatePalette() {
   const activeId = state.spaces.find((s) => s.id === state!.activeSpaceId)?.activeTabId;
   if (q) {
     const open = { navigate: api.navigate, 'new-tab': api.newTab, split: api.splitNew }[paletteMode];
+    // `env` lists the current page on the project's other environments.
+    if (/^env\b/i.test(q) && state.environment) {
+      for (const target of state.environment.switches) {
+        items.push({ label: `Switch to ${target.label}`, sub: `${state.environment.name} · ${host(target.url)}`, run: () => api.navigate(target.url) });
+      }
+    }
     for (const dev of devSuggestions(q, activeId ? state.tabs[activeId]?.url : undefined)) {
       items.push({
         label: dev.label,

@@ -5,6 +5,7 @@ import type { SettingsPatch, SettingsView } from '../shared/types';
 import type { Store } from './store';
 import { setAdBlocking } from './adblock';
 import { SEARCH_ENGINES } from './url';
+import { sanitize as sanitizeEnvironments } from './environments';
 import { canSetDefaultBrowser, isDefaultBrowser, makeDefaultBrowser } from './defaultBrowser';
 
 /** The ⌘, window: a small page of its own, talking to the main process over `settings:*` IPC. */
@@ -30,7 +31,7 @@ export class Settings {
     if (this.win && !this.win.isDestroyed()) return this.win.focus();
     this.win = new BrowserWindow({
       width: 560,
-      height: 520,
+      height: 640,
       resizable: false,
       fullscreenable: false,
       title: 'Settings',
@@ -54,6 +55,11 @@ export class Settings {
       downloadsFolder: tildify(this.store.state.downloadsFolder ?? app.getPath('downloads')),
       askWhereToSave: !!this.store.state.askWhereToSave,
       defaultBrowser: { isDefault: isDefaultBrowser(), canSet: canSetDefaultBrowser() },
+      environments: (this.store.state.environments ?? []).map((e) => ({
+        id: e.id,
+        name: e.name,
+        targetsText: e.targets.map((t) => `${t.label} ${t.origin}`).join('\n'),
+      })),
       searchEngines: Object.entries(SEARCH_ENGINES).map(([id, e]) => ({ id: id as keyof typeof SEARCH_ENGINES, name: e.name })),
     };
   }
@@ -73,6 +79,7 @@ export class Settings {
     if (patch.searchEngine && patch.searchEngine in SEARCH_ENGINES) {
       this.store.setSearchEngine(patch.searchEngine);
     }
+    if (patch.environments !== undefined) this.store.setEnvironments(sanitizeEnvironments(patch.environments));
     if (patch.askWhereToSave !== undefined) this.store.setDownloads({ askWhereToSave: patch.askWhereToSave });
     if (patch.adBlock !== undefined) {
       this.store.setAdBlock(patch.adBlock);

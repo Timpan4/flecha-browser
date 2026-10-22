@@ -59,6 +59,26 @@ export interface DownloadInfo {
   startedAt: number;
 }
 
+export interface EnvironmentTarget {
+  label: string;
+  origin: string;
+}
+
+/** One project's origins, e.g. local → staging → production. */
+export interface Environment {
+  id: string;
+  name: string;
+  targets: EnvironmentTarget[];
+}
+
+export interface ActiveEnvironment {
+  name: string;
+  label: string;
+  tone: 'local' | 'staging' | 'production';
+  /** The same page on the project's other environments. */
+  switches: Array<{ label: string; tone: ActiveEnvironment['tone']; url: string }>;
+}
+
 export type SearchEngineId = 'google' | 'duckduckgo' | 'bing' | 'brave' | 'kagi' | 'ecosia';
 
 export interface BrowserState {
@@ -73,6 +93,7 @@ export interface BrowserState {
   /** Where downloads go; the system Downloads folder when unset. */
   downloadsFolder?: string;
   askWhereToSave?: boolean;
+  environments?: Environment[];
   /** Built-in ad and tracker blocking; on unless turned off. */
   adBlock?: boolean;
 }
@@ -80,6 +101,8 @@ export interface BrowserState {
 export interface UiState extends BrowserState {
   nav: { canGoBack: boolean; canGoForward: boolean };
   searchEngineName: string;
+  /** Set when the active tab is on one of the configured environments. */
+  environment?: ActiveEnvironment;
 }
 
 export type PaletteMode = 'new-tab' | 'navigate' | 'split';
@@ -119,6 +142,8 @@ export interface SettingsView {
   downloadsFolder: string;
   askWhereToSave: boolean;
   defaultBrowser: { isDefault: boolean; canSet: boolean };
+  /** Edited as text: one `label origin` per line. */
+  environments: Array<{ id: string; name: string; targetsText: string }>;
 }
 
 /** The downloads folder is only changed through the folder picker, never set directly. */

@@ -16,6 +16,7 @@ import type { DropTarget, PaletteMode, PeekState, TabInfo, UiState } from '../sh
 import { Store } from './store';
 import { arcSidebarPath, readArcSidebar } from './arcImport';
 import { resolveInput, searchEngine } from './url';
+import { describe as describeEnvironment } from './environments';
 import { setAdBlocking } from './adblock';
 import { History } from './history';
 import { Downloads } from './downloads';
@@ -289,6 +290,14 @@ class Browser implements TabHost {
     target.findInPage(text, { forward, findNext: newSearch });
   }
 
+  /** Moves the active tab to the same page on the project's next environment. */
+  nextEnvironment() {
+    const tab = this.store.activeTab;
+    const env = tab && describeEnvironment(tab.url, this.store.state.environments);
+    if (!tab || !env?.switches.length) return;
+    this.viewFor(tab.id).webContents.loadURL(env.switches[0].url);
+  }
+
   get findOpen() {
     return !!this.findTarget;
   }
@@ -457,6 +466,7 @@ class Browser implements TabHost {
       ...this.store.state,
       tabs,
       searchEngineName: searchEngine(this.store.state.searchEngine).name,
+      environment: this.store.activeTab ? describeEnvironment(this.store.activeTab.url, this.store.state.environments) : undefined,
       nav: {
         canGoBack: wc?.navigationHistory.canGoBack() ?? false,
         canGoForward: wc?.navigationHistory.canGoForward() ?? false,
@@ -654,6 +664,7 @@ function buildMenu(browser: Browser, store: Store, settings: Settings) {
         { type: 'separator' },
         { label: 'Reload', accelerator: 'CmdOrCtrl+R', click: () => active()?.reload() },
         { label: 'Hard Reload', accelerator: 'CmdOrCtrl+Shift+R', click: () => active()?.reloadIgnoringCache() },
+        { label: 'Next Environment', accelerator: 'Alt+CmdOrCtrl+E', click: () => browser.nextEnvironment() },
         { label: 'Back', accelerator: 'CmdOrCtrl+[', click: () => active()?.navigationHistory.goBack() },
         { label: 'Forward', accelerator: 'CmdOrCtrl+]', click: () => active()?.navigationHistory.goForward() },
         { type: 'separator' },
