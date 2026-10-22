@@ -2,6 +2,7 @@ import path from 'node:path';
 import {
   app,
   BaseWindow,
+  nativeImage,
   nativeTheme,
   screen,
   WebContentsView,
@@ -1406,7 +1407,8 @@ function registerIpc(browser: Browser, store: Store, history: History, downloads
   // Real app icons for the import step: /Applications/<name>.app.
   ipcMain.handle('app-icon', async (event, name: string) => {
     if (event.sender !== browser.uiContents || !/^[\w .-]+$/.test(String(name))) return undefined;
-    const icon = await app.getFileIcon(`/Applications/${name}.app`, { size: 'large' }).catch(() => undefined);
+    // app.getFileIcon crashes Electron 45 on macOS; Quick Look's thumbnail of an app is its icon.
+    const icon = await nativeImage.createThumbnailFromPath(`/Applications/${name}.app`, { width: 72, height: 72 }).catch(() => undefined);
     return icon && !icon.isEmpty() ? icon.toDataURL() : undefined;
   });
   ipcMain.handle('import:detect', (event) => (event.sender === browser.uiContents ? detectBrowsers() : []));
