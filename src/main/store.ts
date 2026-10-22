@@ -310,6 +310,22 @@ export class Store {
     return removed;
   }
 
+  /** Moves a folder within the pinned tabs of any Space; never into itself. Returns whether it moved. */
+  moveFolder(folderId: string, to: { spaceId: string; folderId?: string; beforeId?: string }): boolean {
+    const found = this.findFolder(folderId);
+    const space = this.state.spaces.find((s) => s.id === to.spaceId);
+    if (!found || !space || to.beforeId === folderId) return false;
+    if (to.folderId && (to.folderId === folderId || findFolder(found.folder.children, to.folderId))) return false;
+    const list = to.folderId ? findFolder(space.pinned, to.folderId)?.children : space.pinned;
+    if (!list) return false;
+    found.parent.splice(found.parent.indexOf(found.folder), 1);
+    const i = to.beforeId ? list.findIndex((n) => nodeId(n) === to.beforeId) : -1;
+    list.splice(i < 0 ? list.length : i, 0, found.folder);
+    this.forgetMissingActive();
+    this.changed();
+    return true;
+  }
+
   newSpace(): Space {
     const n = this.state.spaces.length;
     const space: Space = {
