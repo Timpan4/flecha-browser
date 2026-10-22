@@ -18,7 +18,10 @@ function linksIn(argv: string[]) {
   return argv.filter((arg) => /^https?:\/\//i.test(arg));
 }
 
-/** Call before `ready`: macOS sends `open-url` very early when Flecha is launched by a link. */
+/**
+ * Call before `ready`: macOS sends `open-url` very early when Flecha is launched by a link.
+ * `onSecondLaunch` runs when Flecha is launched again without a link.
+ */
 export function listenForExternalLinks(onSecondLaunch: () => void) {
   app.on('open-url', (event, url) => {
     event.preventDefault();
@@ -29,8 +32,10 @@ export function listenForExternalLinks(onSecondLaunch: () => void) {
     receive(pathToFileURL(file).href);
   });
   app.on('second-instance', (_event, argv) => {
-    linksIn(argv).forEach(receive);
-    onSecondLaunch();
+    const links = linksIn(argv);
+    // A launch with links leaves showing them to whoever receives them (a Flechinha may be in front).
+    if (!links.length) return onSecondLaunch();
+    links.forEach(receive);
   });
   linksIn(process.argv).forEach(receive);
 }
