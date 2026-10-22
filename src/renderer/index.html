@@ -57,6 +57,28 @@
         <div id="today" class="drop-zone"></div>
       </div>
 
+      <div id="space-editor" class="popover space-editor" hidden>
+        <header class="popover-header"><span>Edit Space</span></header>
+        <div class="editor-body">
+          <input id="space-name" class="text-field" maxlength="40" placeholder="Space name" spellcheck="false" />
+          <div class="field-label">Icon</div>
+          <div id="space-emojis" class="emoji-grid"></div>
+          <div class="field-label">Colour</div>
+          <div id="space-colors" class="swatches"></div>
+          <label class="toggle-row">
+            <span>
+              <strong>Separate cookies and logins</strong>
+              <small>Sign in as someone else in this Space.</small>
+            </span>
+            <input type="checkbox" id="space-isolated-toggle" class="switch" />
+          </label>
+        </div>
+        <footer class="popover-footer">
+          <button id="space-delete" class="text-button danger">Delete Space</button>
+          <button id="space-done" class="primary-button">Done</button>
+        </footer>
+      </div>
+
       <div id="downloads-panel" class="popover" hidden>
         <header class="popover-header">
           <span>Downloads</span>

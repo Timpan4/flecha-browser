@@ -191,7 +191,8 @@ export interface SettingsApi {
 export interface FlechaApi {
   onState(cb: (state: UiState) => void): void;
   onPalette(cb: (mode: PaletteMode) => void): void;
-  onRenameSpace(cb: (spaceId: string) => void): void;
+  /** Main asks the sidebar to open the Space editor (new Space, menu, shortcut). */
+  onEditSpace(cb: (spaceId: string) => void): void;
   onPeek(cb: (peek: PeekState | null) => void): void;
   /** `started` is set when this update is a new download beginning. */
   onDownloads(cb: (items: DownloadInfo[], started?: DownloadInfo) => void): void;
@@ -206,7 +207,9 @@ export interface FlechaApi {
   reload(): void;
   switchSpace(spaceId: string): void;
   newSpace(): void;
-  renameSpace(spaceId: string, name: string): void;
+  updateSpace(spaceId: string, patch: { name?: string; emoji?: string; color?: string }): void;
+  setSpaceIsolated(spaceId: string, isolated: boolean): void;
+  deleteSpace(spaceId: string): void;
   tabMenu(tabId: string): void;
   spaceMenu(spaceId: string): void;
   toggleFolder(folderId: string): void;

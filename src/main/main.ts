@@ -723,35 +723,49 @@ class Browser implements TabHost {
   spaceMenu(spaceId: string) {
     const space = this.store.state.spaces.find((s) => s.id === spaceId);
     Menu.buildFromTemplate([
-      { label: 'Rename Space', click: () => this.ui.webContents.send('rename-space', spaceId) },
+      { label: 'Edit Space…', click: () => this.editSpace(spaceId) },
       { label: 'New Folder', click: () => this.store.newFolder() },
       { type: 'separator' },
       {
         label: 'Separate Cookies and Logins',
         type: 'checkbox',
         checked: !!space?.isolated,
-        click: () => {
-          for (const id of this.store.setIsolated(spaceId, !space?.isolated)) this.destroyView(id);
-        },
+        click: () => this.setSpaceIsolated(spaceId, !space?.isolated),
       },
       ...(space?.isolated
         ? [{ label: 'Clear Cookies and Site Data…', click: () => this.clearSpaceData(spaceId) }]
         : []),
       { type: 'separator' },
-      {
-        label: 'Delete Space…',
-        enabled: this.store.state.spaces.length > 1,
-        click: async () => {
-          const { response } = await dialog.showMessageBox(this.win, {
-            message: 'Delete this space and all of its tabs?',
-            buttons: ['Delete', 'Cancel'],
-            defaultId: 1,
-            cancelId: 1,
-          });
-          if (response === 0) for (const id of this.store.deleteSpace(spaceId)) this.destroyView(id);
-        },
-      },
+      { label: 'Delete Space…', enabled: this.store.state.spaces.length > 1, click: () => this.deleteSpace(spaceId) },
     ]).popup({ window: this.win });
+  }
+
+  /** Opens the sidebar's Space editor (name, emoji, colour, cookies). */
+  editSpace(spaceId: string) {
+    if (this.store.state.activeSpaceId !== spaceId) this.store.switchSpace(spaceId);
+    this.ui.webContents.send('edit-space', spaceId);
+  }
+
+  newSpace() {
+    this.editSpace(this.store.newSpace().id);
+  }
+
+  setSpaceIsolated(spaceId: string, isolated: boolean) {
+    // Pages must reopen in the other session.
+    for (const id of this.store.setIsolated(spaceId, isolated)) this.destroyView(id);
+  }
+
+  async deleteSpace(spaceId: string) {
+    const space = this.store.state.spaces.find((s) => s.id === spaceId);
+    if (!space || this.store.state.spaces.length < 2) return;
+    const { response } = await dialog.showMessageBox(this.win, {
+      message: `Delete “${space.name}”?`,
+      detail: 'Its pinned and today tabs are closed. This can’t be undone.',
+      buttons: ['Delete Space', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1,
+    });
+    if (response === 0) for (const id of this.store.deleteSpace(spaceId)) this.destroyView(id);
   }
 
   private pageMenu(wc: WebContents, params: Electron.ContextMenuParams) {
@@ -875,7 +889,7 @@ function buildMenu(browser: Browser, store: Store, settings: Settings) {
       submenu: [
         { label: 'New Tab', accelerator: 'CmdOrCtrl+T', click: () => browser.setPaletteOpen(true, 'new-tab') },
         { label: 'Open Location', accelerator: 'CmdOrCtrl+L', click: () => browser.setPaletteOpen(true, 'navigate') },
-        { label: 'New Space', accelerator: 'Ctrl+Shift+N', click: () => store.newSpace() },
+        { label: 'New Space', accelerator: 'Ctrl+Shift+N', click: () => browser.newSpace() },
         {
           label: 'Close Tab',
           accelerator: 'CmdOrCtrl+W',
@@ -1034,8 +1048,10 @@ function registerIpc(browser: Browser, store: Store, history: History, downloads
     forward: () => browser.activeContents()?.navigationHistory.goForward(),
     reload: () => browser.activeContents()?.reload(),
     switchSpace: (id: string) => store.switchSpace(id),
-    newSpace: () => store.newSpace(),
-    renameSpace: (id: string, name: string) => store.renameSpace(id, name),
+    newSpace: () => browser.newSpace(),
+    updateSpace: (id: string, patch: { name?: string; emoji?: string; color?: string }) => store.updateSpace(id, patch ?? {}),
+    setSpaceIsolated: (id: string, isolated: boolean) => browser.setSpaceIsolated(id, !!isolated),
+    deleteSpace: (id: string) => void browser.deleteSpace(id),
     tabMenu: (id: string) => browser.tabMenu(id),
     spaceMenu: (id: string) => browser.spaceMenu(id),
     toggleFolder: (id: string) => store.toggleFolder(id),

@@ -135,6 +135,7 @@ function render(s: UiState) {
   );
 
   if (!palette.hidden) updatePalette();
+  if (!spaceEditor.hidden) renderSpaceEditor();
 }
 
 /** Host, a padlock or code icon for the kind of connection, and the environment badge. */
@@ -346,12 +347,72 @@ function editInline(el: HTMLElement, current: string, commit: (value: string) =>
   el.addEventListener('blur', onBlur);
 }
 
-function renameSpace(spaceId: string) {
-  const space = state?.spaces.find((s) => s.id === spaceId);
-  if (!space) return;
-  if (state!.activeSpaceId !== spaceId) api.switchSpace(spaceId);
-  editInline($('space-title'), space.name, (name) => api.renameSpace(spaceId, name));
+// ---- Space editor -------------------------------------------------------------------
+
+const SPACE_EMOJIS = ['🏠', '💼', '🚀', '🧪', '🛠️', '🎨', '📚', '🧠', '💡', '🎮', '🎧', '🎬', '✈️', '🌱', '☕️', '🔥', '⭐️', '🌙', '🌊', '🐙', '🦊', '🐳', '⚡️', '🎯', '📈', '💬', '📝', '🗂️', '🛒', '❤️'];
+const SPACE_COLORS = ['#cdd9f7', '#c9e3f5', '#cfe8ec', '#d3ecd5', '#d9e8c6', '#f5e7c4', '#f7dcc0', '#f6d6cc', '#f4cfdc', '#e8d6f3', '#d6d3f5', '#dfe3e8'];
+
+const spaceEditor = $('space-editor');
+const spaceName = $<HTMLInputElement>('space-name');
+let editingSpace: string | undefined;
+
+function openSpaceEditor(spaceId: string) {
+  editingSpace = spaceId;
+  downloadsPanel.hidden = true;
+  spaceEditor.hidden = false;
+  renderSpaceEditor();
+  spaceName.focus();
+  spaceName.select();
 }
+
+function closeSpaceEditor() {
+  editingSpace = undefined;
+  spaceEditor.hidden = true;
+}
+
+function renderSpaceEditor() {
+  const space = state?.spaces.find((s) => s.id === editingSpace);
+  if (!space) return closeSpaceEditor();
+  if (document.activeElement !== spaceName) spaceName.value = space.name;
+  $('space-emojis').replaceChildren(
+    h('button', { class: `emoji${space.emoji ? '' : ' selected'}`, title: 'No icon', onclick: () => api.updateSpace(space.id, { emoji: '' }) }, icon('close')),
+    ...SPACE_EMOJIS.map((emoji) =>
+      h('button', { class: `emoji${space.emoji === emoji ? ' selected' : ''}`, onclick: () => api.updateSpace(space.id, { emoji }) }, emoji),
+    ),
+  );
+  const custom = h('input', { type: 'color', value: space.color, title: 'Custom colour' }) as HTMLInputElement;
+  custom.addEventListener('input', () => api.updateSpace(space.id, { color: custom.value }));
+  $('space-colors').replaceChildren(
+    ...SPACE_COLORS.map((color) =>
+      h('button', {
+        class: `swatch${space.color === color ? ' selected' : ''}`,
+        style: `--swatch: ${color}`,
+        title: color,
+        onclick: () => api.updateSpace(space.id, { color }),
+      }),
+    ),
+    h('label', { class: `swatch custom${SPACE_COLORS.includes(space.color) ? '' : ' selected'}`, style: `--swatch: ${space.color}`, title: 'Custom colour' }, custom),
+  );
+  $<HTMLInputElement>('space-isolated-toggle').checked = !!space.isolated;
+  $<HTMLButtonElement>('space-delete').disabled = state!.spaces.length < 2;
+}
+
+spaceName.addEventListener('input', () => editingSpace && spaceName.value.trim() && api.updateSpace(editingSpace, { name: spaceName.value }));
+spaceName.addEventListener('keydown', (e) => (e.key === 'Enter' || e.key === 'Escape') && closeSpaceEditor());
+$('space-isolated-toggle').addEventListener('change', (e) => {
+  if (editingSpace) api.setSpaceIsolated(editingSpace, (e.target as HTMLInputElement).checked);
+});
+$('space-delete').onclick = () => {
+  if (!editingSpace) return;
+  api.deleteSpace(editingSpace);
+  closeSpaceEditor();
+};
+$('space-done').onclick = closeSpaceEditor;
+document.addEventListener('mousedown', (e) => {
+  const target = e.target as Node;
+  if (!spaceEditor.hidden && !spaceEditor.contains(target) && !$('space-header').contains(target)) closeSpaceEditor();
+});
+document.addEventListener('keydown', (e) => e.key === 'Escape' && !spaceEditor.hidden && closeSpaceEditor());
 
 // ---- command bar ----------------------------------------------------------------
 
@@ -629,7 +690,7 @@ $('urlbar').onclick = () => api.openPalette('navigate');
 $('btn-newtab').onclick = () => api.openPalette('new-tab');
 $('btn-clear').onclick = () => api.clearToday();
 $('btn-newspace').onclick = () => api.newSpace();
-$('space-title').ondblclick = () => state && renameSpace(state.activeSpaceId);
+$('space-header').ondblclick = () => state && openSpaceEditor(state.activeSpaceId);
 $('space-header').oncontextmenu = (e) => {
   e.preventDefault();
   if (state) api.spaceMenu(state.activeSpaceId);
@@ -642,7 +703,7 @@ acceptDrops($('btn-newtab'), { zone: 'today' });
 
 api.onState(render);
 api.onPalette(openPalette);
-api.onRenameSpace(renameSpace);
+api.onEditSpace(openSpaceEditor);
 api.onPeek(renderPeek);
 api.onDownloads(renderDownloads);
 api.ready();

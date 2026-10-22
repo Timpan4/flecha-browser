@@ -1063,3 +1063,213 @@ footer {
 .palette-footer kbd {
   margin-right: 2px;
 }
+
+/* ---- Space editor ------------------------------------------------------- */
+
+.space-editor {
+  top: 128px;
+  bottom: auto;
+  max-height: none;
+  z-index: 2;
+}
+
+.editor-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: 4px 14px 12px;
+}
+
+.text-field {
+  height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 0.5px var(--surface-line);
+  color: var(--text);
+  font: 500 var(--text-md) var(--font);
+  outline: none;
+}
+
+.text-field:focus {
+  box-shadow: inset 0 0 0 0.5px var(--surface-line), 0 0 0 3px var(--focus);
+}
+
+.field-label {
+  margin-top: 4px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--text-3);
+}
+
+.emoji-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 2px;
+}
+
+.emoji {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  border-radius: var(--radius-sm);
+  font-size: 15px;
+  /* Opaque on purpose: Chromium applies a translucent text colour to emoji glyphs too. */
+  color: var(--text);
+}
+
+.emoji svg {
+  color: var(--text-3);
+}
+
+.emoji:hover {
+  background: var(--surface-2);
+}
+
+.emoji.selected {
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1.5px var(--selection);
+}
+
+.emoji svg {
+  width: 12px;
+  height: 12px;
+}
+
+.swatches {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+}
+
+.swatch {
+  position: relative;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: var(--swatch);
+  box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.12);
+  transition: transform var(--fast) var(--ease);
+}
+
+.swatch:hover {
+  transform: scale(1.08);
+}
+
+.swatch.selected {
+  box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.12), 0 0 0 2px var(--surface), 0 0 0 3.5px var(--selection);
+}
+
+/* The custom swatch is a rainbow ring around the current colour, with the native picker inside. */
+.swatch.custom {
+  background:
+    radial-gradient(circle, var(--swatch) 52%, transparent 54%),
+    conic-gradient(#f87171, #fbbf24, #34d399, #60a5fa, #a78bfa, #f472b6, #f87171);
+  overflow: hidden;
+}
+
+.swatch.custom input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+}
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-top: 6px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+}
+
+.toggle-row strong {
+  display: block;
+  font-weight: 500;
+}
+
+.toggle-row small {
+  display: block;
+  margin-top: 1px;
+  font-size: var(--text-xs);
+  color: var(--text-3);
+}
+
+.switch {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  flex: none;
+  width: 32px;
+  height: 19px;
+  margin: 0;
+  border-radius: 10px;
+  background: var(--surface-line);
+  box-shadow: inset 0 0 0 0.5px var(--surface-line);
+  transition: background var(--fast) var(--ease);
+}
+
+.switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  transition: transform var(--fast) var(--ease);
+}
+
+.switch:checked {
+  background: var(--selection);
+}
+
+.switch:checked::after {
+  transform: translateX(13px);
+}
+
+.popover-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px 12px;
+  border-top: 0.5px solid var(--surface-line);
+}
+
+.text-button.danger {
+  color: var(--red);
+  font-size: var(--text-sm);
+}
+
+.text-button.danger:disabled {
+  opacity: 0.4;
+}
+
+.primary-button {
+  height: 28px;
+  padding: 0 14px;
+  border-radius: var(--radius-sm);
+  background: var(--ink);
+  color: var(--paper);
+  font-weight: 600;
+  transition: filter var(--fast) var(--ease);
+}
+
+.primary-button:hover {
+  filter: brightness(1.2);
+}
+
+@media (prefers-color-scheme: dark) {
+  .primary-button {
+    background: var(--paper);
+    color: var(--ink);
+  }
+
+  .primary-button:hover {
+    filter: brightness(0.92);
+  }
+}

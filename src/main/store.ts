@@ -226,10 +226,14 @@ export class Store {
     return space;
   }
 
-  renameSpace(spaceId: string, name: string) {
+  /** Name, emoji and colour. Invalid values are ignored rather than stored. */
+  updateSpace(spaceId: string, patch: { name?: string; emoji?: string; color?: string }) {
     const space = this.state.spaces.find((s) => s.id === spaceId);
-    if (!space || !name.trim()) return;
-    space.name = name.trim();
+    if (!space) return;
+    const name = typeof patch.name === 'string' ? patch.name.trim().slice(0, 40) : '';
+    if (name) space.name = name;
+    if (typeof patch.emoji === 'string') space.emoji = [...patch.emoji.trim()].slice(0, 2).join('') || undefined;
+    if (typeof patch.color === 'string' && /^#[0-9a-f]{6}$/i.test(patch.color)) space.color = patch.color.toLowerCase();
     this.changed();
   }
 
