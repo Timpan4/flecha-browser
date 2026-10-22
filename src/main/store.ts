@@ -368,6 +368,12 @@ export class Store {
     this.changed();
   }
 
+  setPreferences(prefs: { theme?: 'system' | 'light' | 'dark'; peekPinnedLinks?: boolean }) {
+    if (prefs.theme && ['system', 'light', 'dark'].includes(prefs.theme)) this.state.theme = prefs.theme;
+    if (typeof prefs.peekPinnedLinks === 'boolean') this.state.peekPinnedLinks = prefs.peekPinnedLinks;
+    this.changed();
+  }
+
   setArchiveAfter(hours: number) {
     this.state.archiveAfterHours = Math.max(0, hours);
     this.changed();

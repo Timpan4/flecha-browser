@@ -417,7 +417,7 @@ class Browser implements TabHost {
       if (disposition === 'new-window') return { action: 'allow', overrideBrowserWindowOptions: { width: 520, height: 720 } };
       // Like Arc, links leaving a pinned tab or favorite open in Peek instead of a new tab.
       const zone = this.store.locate(tabId)?.zone;
-      if (disposition === 'foreground-tab' && zone && zone !== 'today') {
+      if (disposition === 'foreground-tab' && zone && zone !== 'today' && this.store.state.peekPinnedLinks !== false) {
         this.openPeek(url, wc.session);
         return { action: 'deny' };
       }
@@ -1375,6 +1375,7 @@ app.whenReady().then(async () => {
     },
     () => store.state.agent?.token ?? '',
   );
+  nativeTheme.themeSource = store.state.theme ?? 'system';
   if (store.state.agent?.enabled) await bridge.start().catch((err) => console.error('Agent bridge failed', err));
   const settings = new Settings(store, () => browser!.sendState(), {
     setEnabled: (enabled) => (enabled ? bridge.start() : bridge.stop()),

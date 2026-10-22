@@ -11,12 +11,16 @@
     <nav id="nav">
       <div class="nav-titlebar"></div>
       <button class="nav-item" data-pane="general"><span class="nav-icon gray"><i data-icon="settings"></i></span>General</button>
+      <button class="nav-item" data-pane="appearance"><span class="nav-icon pink"><i data-icon="palette"></i></span>Appearance</button>
+      <button class="nav-item" data-pane="tabs"><span class="nav-icon teal"><i data-icon="tab"></i></span>Tabs</button>
       <button class="nav-item" data-pane="privacy"><span class="nav-icon blue"><i data-icon="lock"></i></span>Privacy</button>
       <button class="nav-item" data-pane="downloads"><span class="nav-icon green"><i data-icon="download"></i></span>Downloads</button>
       <div class="nav-label">Developer</div>
       <button class="nav-item" data-pane="environments"><span class="nav-icon amber"><i data-icon="code"></i></span>Environments</button>
       <button class="nav-item" data-pane="boosts"><span class="nav-icon orange"><i data-icon="zap"></i></span>Boosts</button>
       <button class="nav-item" data-pane="agents"><span class="nav-icon purple"><i data-icon="sparkle"></i></span>Coding Agents</button>
+      <div class="nav-label">Help</div>
+      <button class="nav-item" data-pane="shortcuts"><span class="nav-icon gray"><i data-icon="keyboard"></i></span>Keyboard Shortcuts</button>
     </nav>
 
     <main>
@@ -37,6 +41,49 @@
               <small>Used when what you type in the command bar isn't a web address.</small>
             </div>
             <select id="searchEngine" class="select"></select>
+          </label>
+        </div>
+      </section>
+
+      <section class="pane" data-pane="appearance">
+        <div class="theme-cards" role="radiogroup" aria-label="Theme">
+          <button class="theme-card" data-theme="system" role="radio">
+            <span class="theme-preview system"><span></span><span></span></span>
+            <span>System</span>
+          </button>
+          <button class="theme-card" data-theme="light" role="radio">
+            <span class="theme-preview light"><span></span><span></span></span>
+            <span>Light</span>
+          </button>
+          <button class="theme-card" data-theme="dark" role="radio">
+            <span class="theme-preview dark"><span></span><span></span></span>
+            <span>Dark</span>
+          </button>
+        </div>
+        <p class="footnote">Each Space keeps its own colour; in dark mode it becomes a deep tint of that colour.</p>
+      </section>
+
+      <section class="pane" data-pane="tabs">
+        <div class="card">
+          <label class="row">
+            <div class="row-text">
+              <strong>Archive Today tabs after</strong>
+              <small>Tabs you haven't looked at in a while tidy themselves away. Find them again in the command bar or the Archive menu.</small>
+            </div>
+            <select id="archiveAfter" class="select">
+              <option value="12">12 hours</option>
+              <option value="24">1 day</option>
+              <option value="168">7 days</option>
+              <option value="720">30 days</option>
+              <option value="0">Never</option>
+            </select>
+          </label>
+          <label class="row">
+            <div class="row-text">
+              <strong>Open links from pinned tabs in Peek</strong>
+              <small>Links that leave a pinned tab or favorite preview over the page instead of adding a tab.</small>
+            </div>
+            <input type="checkbox" id="peekPinnedLinks" class="switch" />
           </label>
         </div>
       </section>
@@ -141,6 +188,9 @@
             <button id="newAgentToken" class="button">New Token</button>
           </div>
         </div>
+      </section>
+      <section class="pane" data-pane="shortcuts">
+        <div id="shortcut-groups"></div>
       </section>
     </main>
     <script type="module" src="settings.js"></script>

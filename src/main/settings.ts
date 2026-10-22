@@ -1,7 +1,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { BrowserWindow, app, clipboard, dialog, ipcMain } from 'electron';
+import { BrowserWindow, app, clipboard, dialog, ipcMain, nativeTheme } from 'electron';
 import type { SettingsPatch, SettingsView } from '../shared/types';
 import type { Store } from './store';
 import { setAdBlocking } from './adblock';
@@ -79,6 +79,9 @@ export class Settings {
       downloadsFolder: tildify(this.store.state.downloadsFolder ?? app.getPath('downloads')),
       askWhereToSave: !!this.store.state.askWhereToSave,
       defaultBrowser: { isDefault: isDefaultBrowser(), canSet: canSetDefaultBrowser() },
+      theme: this.store.state.theme ?? 'system',
+      archiveAfterHours: this.store.state.archiveAfterHours ?? 12,
+      peekPinnedLinks: this.store.state.peekPinnedLinks !== false,
       agent: {
         enabled: !!this.store.state.agent?.enabled,
         endpoint: this.agent.endpoint(),
@@ -110,6 +113,11 @@ export class Settings {
     }
     if (patch.environments !== undefined) this.store.setEnvironments(sanitizeEnvironments(patch.environments));
     if (patch.askWhereToSave !== undefined) this.store.setDownloads({ askWhereToSave: patch.askWhereToSave });
+    if (patch.theme || patch.peekPinnedLinks !== undefined) {
+      this.store.setPreferences({ theme: patch.theme, peekPinnedLinks: patch.peekPinnedLinks });
+      nativeTheme.themeSource = this.store.state.theme ?? 'system';
+    }
+    if (typeof patch.archiveAfterHours === 'number') this.store.setArchiveAfter(patch.archiveAfterHours);
     if (patch.agentEnabled !== undefined) {
       this.store.setAgent({ enabled: patch.agentEnabled, token: this.store.state.agent?.token || newToken() });
       await this.agent.setEnabled(patch.agentEnabled).catch((err) => console.error('Agent bridge failed', err));

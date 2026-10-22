@@ -102,6 +102,46 @@ document.getElementById('addEnvironment')!.addEventListener('click', () => {
   environmentList.querySelector<HTMLInputElement>('.env-card:last-child .env-name')?.focus();
 });
 
+// ---- appearance & tabs -------------------------------------------------------------
+
+const archiveAfter = document.getElementById('archiveAfter') as HTMLSelectElement;
+const peekPinnedLinks = document.getElementById('peekPinnedLinks') as HTMLInputElement;
+
+for (const card of document.querySelectorAll<HTMLElement>('.theme-card')) {
+  card.addEventListener('click', async () => render(await api.set({ theme: card.dataset.theme as SettingsView['theme'] })));
+}
+archiveAfter.addEventListener('change', async () => render(await api.set({ archiveAfterHours: Number(archiveAfter.value) })));
+peekPinnedLinks.addEventListener('change', async () => render(await api.set({ peekPinnedLinks: peekPinnedLinks.checked })));
+
+// ---- keyboard shortcuts -------------------------------------------------------------
+
+const SHORTCUTS: Array<[string, Array<[string, string]>]> = [
+  ['Getting around', [['⌘T', 'New tab (command bar)'], ['⌘L', 'Open location'], ['⌘[  ⌘]', 'Back · Forward'], ['⌘R', 'Reload'], ['⌘F', 'Find in page'], ['⌘S', 'Show or hide the sidebar']]],
+  ['Tabs', [['⌘1 … ⌘9', 'Go to tab · last tab'], ['⌃Tab', 'Next tab'], ['⌘W', 'Close tab'], ['⇧⌘T', 'Reopen closed tab'], ['⌘D', 'Pin or unpin'], ['⇧⌘K', 'Clear Today'], ['⇧⌘C', 'Copy link'], ['⌥⌘C', 'Copy as Markdown link']]],
+  ['Spaces', [['⌃1 … ⌃9', 'Go to Space'], ['⌥⌘→  ⌥⌘←', 'Next · previous Space'], ['⌃⇧N', 'New Space']]],
+  ['Split & Peek', [['⌃⇧=', 'Split with a new tab'], ['⌃⇧−', 'Exit split view'], ['Esc', 'Close Peek']]],
+  ['Developer', [['⌥⌘I', 'Developer Tools'], ['⌥⌘M', 'Responsive view'], ['⌥⌘E', 'Next environment'], ['⌥⌘B', 'Edit boost for this site'], ['⌥⌘U', 'View source']]],
+];
+
+document.getElementById('shortcut-groups')!.replaceChildren(
+  ...SHORTCUTS.map(([title, items]) => {
+    const group = document.createElement('div');
+    group.className = 'shortcut-group';
+    const heading = Object.assign(document.createElement('h2'), { textContent: title });
+    const card = document.createElement('div');
+    card.className = 'card';
+    for (const [keys, label] of items) {
+      const row = document.createElement('div');
+      row.className = 'row shortcut-row';
+      const kbd = Object.assign(document.createElement('kbd'), { textContent: keys });
+      row.append(Object.assign(document.createElement('span'), { textContent: label }), kbd);
+      card.append(row);
+    }
+    group.append(heading, card);
+    return group;
+  }),
+);
+
 const agentEnabled = document.getElementById('agentEnabled') as HTMLInputElement;
 let agent: SettingsView['agent'] = { enabled: false };
 
@@ -138,6 +178,12 @@ function render(view: SettingsView) {
   downloadsFolder.textContent = view.downloadsFolder;
   downloadsFolder.title = view.downloadsFolder;
   askWhereToSave.checked = view.askWhereToSave;
+  for (const card of document.querySelectorAll<HTMLElement>('.theme-card')) {
+    card.classList.toggle('selected', card.dataset.theme === view.theme);
+    card.setAttribute('aria-checked', String(card.dataset.theme === view.theme));
+  }
+  archiveAfter.value = String(view.archiveAfterHours);
+  peekPinnedLinks.checked = view.peekPinnedLinks;
   agent = view.agent;
   agentEnabled.checked = agent.enabled;
   for (const row of document.querySelectorAll<HTMLElement>('[data-agent-only]')) row.hidden = !agent.enabled;

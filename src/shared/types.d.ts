@@ -110,6 +110,9 @@ export interface BrowserState {
   archive: ArchivedTab[];
   sidebarVisible: boolean;
   window?: WindowBounds;
+  theme?: 'system' | 'light' | 'dark';
+  /** Links that leave a pinned tab or favorite open in Peek. Default on. */
+  peekPinnedLinks?: boolean;
   /** Today tabs untouched this long are archived; 0 keeps them forever. Default 12. */
   archiveAfterHours?: number;
   /** Remembered answers to site permission prompts, by origin then permission. */
@@ -185,6 +188,9 @@ export interface SettingsView {
   /** Edited as text: one `label origin` per line. */
   environments: Array<{ id: string; name: string; targetsText: string }>;
   agent: { enabled: boolean; endpoint?: string; token?: string };
+  theme: 'system' | 'light' | 'dark';
+  archiveAfterHours: number;
+  peekPinnedLinks: boolean;
 }
 
 /** The downloads folder is only changed through the folder picker, never set directly. */
