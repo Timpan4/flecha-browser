@@ -272,7 +272,8 @@ export interface FlechaApi {
   renameFolder(folderId: string, name: string): void;
   moveTab(tabId: string, target: DropTarget): void;
   clearToday(): void;
-  importArc(): void;
+  /** Pops up a menu of the other browsers to import from. */
+  importMenu(): void;
   openPalette(mode: PaletteMode): void;
   closePalette(): void;
   toggleSidebar(): void;

@@ -37,7 +37,7 @@ const api: FlechaApi = {
   renameFolder: cmd('renameFolder'),
   moveTab: cmd('moveTab'),
   clearToday: cmd('clearToday'),
-  importArc: cmd('importArc'),
+  importMenu: cmd('importMenu'),
   openPalette: cmd('openPalette'),
   closePalette: cmd('closePalette'),
   toggleSidebar: cmd('toggleSidebar'),
