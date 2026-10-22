@@ -36,6 +36,7 @@ const api: FlechaApi = {
   closePalette: cmd('closePalette'),
   toggleSidebar: cmd('toggleSidebar'),
   copyText: cmd('copyText'),
+  showConsole: cmd('showConsole'),
   splitWith: cmd('splitWith'),
   splitNew: cmd('splitNew'),
   closePeek: cmd('closePeek'),

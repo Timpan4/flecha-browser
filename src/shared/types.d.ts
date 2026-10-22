@@ -118,6 +118,8 @@ export interface UiState extends BrowserState {
   /** Set when the active tab is on one of the configured environments. */
   environment?: ActiveEnvironment;
   localServers: LocalServer[];
+  /** Console errors since each tab's last page load (only tabs that have some). */
+  consoleErrors: Record<string, number>;
 }
 
 export type PaletteMode = 'new-tab' | 'navigate' | 'split';
@@ -201,6 +203,7 @@ export interface FlechaApi {
   closePalette(): void;
   toggleSidebar(): void;
   copyText(text: string): void;
+  showConsole(tabId: string): void;
   splitWith(tabId: string): void;
   splitNew(input: string): void;
   closePeek(): void;

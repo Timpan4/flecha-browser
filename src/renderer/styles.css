@@ -772,3 +772,21 @@ footer {
 .local-server.open .title {
   font-weight: 500;
 }
+
+.error-badge {
+  flex: none;
+  min-width: 18px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: #d93f3f;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+}
+
+.error-badge:hover {
+  background: #b92f2f;
+}

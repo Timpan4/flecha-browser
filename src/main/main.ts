@@ -107,6 +107,28 @@ class Browser implements TabHost {
   }
 
   private localServers: LocalServer[] = [];
+  private consoleErrors = new Map<string, number>();
+  private stateTimer?: NodeJS.Timeout;
+
+  /** For noisy sources (console errors): one sidebar update per burst. */
+  private sendStateSoon() {
+    this.stateTimer ??= setTimeout(() => {
+      this.stateTimer = undefined;
+      this.sendState();
+    }, 300);
+  }
+
+  /** Opens DevTools on the Console for the tab whose error badge was clicked. */
+  showConsole(tabId: string) {
+    const wc = this.views.get(tabId)?.webContents;
+    if (!wc) return;
+    const showPanel = () => wc.devToolsWebContents?.executeJavaScript(`DevToolsAPI.showPanel('console')`).catch(() => {});
+    if (wc.isDevToolsOpened()) showPanel();
+    else {
+      wc.once('devtools-opened', () => setTimeout(showPanel, 300));
+      wc.openDevTools({ mode: 'detach' });
+    }
+  }
 
   /** Looks for dev servers every few seconds while Flecha is in front, and rarely otherwise. */
   watchLocalServers() {
@@ -205,6 +227,7 @@ class Browser implements TabHost {
       this.shown = this.shown.filter((v) => v !== view);
     }
     this.views.delete(tabId);
+    this.consoleErrors.delete(tabId);
     view.webContents.close();
     this.sync();
   }
@@ -226,6 +249,14 @@ class Browser implements TabHost {
       this.history.updateTitle(wc.getURL(), title);
     });
     wc.on('page-favicon-updated', (_e, favicons) => update({ favicon: favicons[0] }));
+    wc.on('console-message', (event) => {
+      if (event.level !== 'error') return;
+      this.consoleErrors.set(tabId, (this.consoleErrors.get(tabId) ?? 0) + 1);
+      this.sendStateSoon();
+    });
+    wc.on('did-start-navigation', (details) => {
+      if (details.isMainFrame && !details.isSameDocument && this.consoleErrors.delete(tabId)) this.sendStateSoon();
+    });
     wc.on('did-navigate', (_e, url) => {
       update({ url, history: snapshotHistory(wc) });
       this.history.record(url, wc.getTitle());
@@ -526,6 +557,7 @@ class Browser implements TabHost {
       searchEngineName: searchEngine(this.store.state.searchEngine).name,
       environment: this.store.activeTab ? describeEnvironment(this.store.activeTab.url, this.store.state.environments) : undefined,
       localServers: this.localServers,
+      consoleErrors: Object.fromEntries(this.consoleErrors),
       nav: {
         canGoBack: wc?.navigationHistory.canGoBack() ?? false,
         canGoForward: wc?.navigationHistory.canGoForward() ?? false,
@@ -886,6 +918,7 @@ function registerIpc(browser: Browser, store: Store, history: History, downloads
     closePalette: () => browser.setPaletteOpen(false),
     toggleSidebar: () => store.setSidebarVisible(!store.state.sidebarVisible),
     copyText: (text: string) => clipboard.writeText(String(text)),
+    showConsole: (id: string) => browser.showConsole(id),
     splitWith: (id: string) => store.splitWith(id),
     splitNew: (input: string) => browser.splitNew(input),
     closePeek: () => browser.closePeek(),

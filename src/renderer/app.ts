@@ -194,6 +194,7 @@ function tabRow(tab: TabInfo, space: Space, target: DropTarget) {
     },
     favicon(tab),
     h('span', { class: 'title' }, tab.title || host(tab.url)),
+    errorBadge(tab),
     tab.device === 'mobile'
       ? h('span', { class: 'device-badge', title: 'Phone-sized mirror' }, svg('M5 1.5h6a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-11a1 1 0 0 1 1-1zM7 12.5h2'))
       : h('span', { class: 'split-badge', title: 'In split view' }, svg('M2.5 3.5h11v9h-11zM8 3.5v9')),
@@ -201,6 +202,33 @@ function tabRow(tab: TabInfo, space: Space, target: DropTarget) {
   );
   wireTab(row, tab, target);
   return row;
+}
+
+/** Red count of console errors, only on pages you're developing (local URLs). */
+function errorBadge(tab: TabInfo) {
+  const count = state?.consoleErrors[tab.id];
+  if (!count || !isDevUrl(tab.url)) return null;
+  return h(
+    'span',
+    {
+      class: 'error-badge',
+      title: `${count} console error${count === 1 ? '' : 's'} · click to open the Console`,
+      onclick: (e: Event) => {
+        e.stopPropagation();
+        api.showConsole(tab.id);
+      },
+    },
+    count > 99 ? '99+' : String(count),
+  );
+}
+
+function isDevUrl(url: string) {
+  try {
+    const { hostname } = new URL(url);
+    return /^(localhost|127\.0\.0\.1|\[::1\])$|\.(localhost|local|test)$/.test(hostname);
+  } catch {
+    return false;
+  }
 }
 
 function wireTab(el: HTMLElement, tab: TabInfo, target: DropTarget) {
