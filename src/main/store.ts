@@ -228,14 +228,14 @@ export class Store {
   }
 
   toggleFolder(folderId: string) {
-    const folder = findFolder(this.activeSpace.pinned, folderId);
+    const folder = this.findFolder(folderId)?.folder;
     if (!folder) return;
     folder.open = !folder.open;
     this.changed();
   }
 
   renameFolder(folderId: string, name: string) {
-    const folder = findFolder(this.activeSpace.pinned, folderId);
+    const folder = this.findFolder(folderId)?.folder;
     if (!folder || !name.trim()) return;
     folder.name = name.trim();
     this.changed();
@@ -485,6 +485,15 @@ export class Store {
     this.saveTimer = setTimeout(() => this.saveNow(), 500);
   }
 
+  /** A folder in any Space, with the list it sits in. */
+  private findFolder(folderId: string) {
+    for (const space of this.state.spaces) {
+      const folder = findFolder(space.pinned, folderId);
+      if (folder) return { space, folder, parent: findParentList(space.pinned, folderId)! };
+    }
+    return undefined;
+  }
+
   private detach(tabId: string, space: Space) {
     this.state.favorites = this.state.favorites.filter((id) => id !== tabId);
     space.today = space.today.filter((id) => id !== tabId);
@@ -549,15 +558,20 @@ function findFolder(nodes: PinnedNode[], id: string): Extract<PinnedNode, { kind
   return undefined;
 }
 
-function findParentList(nodes: PinnedNode[], tabId: string): PinnedNode[] | undefined {
+/** The list holding the tab or folder with this id. */
+function findParentList(nodes: PinnedNode[], id: string): PinnedNode[] | undefined {
   for (const n of nodes) {
-    if (n.kind === 'tab' && n.tabId === tabId) return nodes;
+    if (nodeId(n) === id) return nodes;
     if (n.kind === 'folder') {
-      const inner = findParentList(n.children, tabId);
+      const inner = findParentList(n.children, id);
       if (inner) return inner;
     }
   }
   return undefined;
+}
+
+function nodeId(node: PinnedNode) {
+  return node.kind === 'tab' ? node.tabId : node.id;
 }
 
 function removePinned(nodes: PinnedNode[], tabId: string) {
