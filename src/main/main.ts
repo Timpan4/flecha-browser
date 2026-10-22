@@ -24,6 +24,7 @@ import { onEachSession, sessionForSpace } from './sessions';
 import { findLocalServers } from './localServers';
 import { Boosts, type BoostKind } from './boosts';
 import { Favicons, registerFaviconScheme } from './favicons';
+import { registerPermissions } from './permissions';
 import { AgentBridge, type AgentTab, type ConsoleEntry } from './agentBridge';
 import { History } from './history';
 import { Downloads } from './downloads';
@@ -1114,30 +1115,6 @@ function registerIpc(browser: Browser, store: Store, history: History, downloads
   });
 }
 
-function registerPermissions(browser: Browser, ses: Electron.Session) {
-  const silent = new Set(['fullscreen', 'clipboard-sanitized-write', 'pointerLock']);
-  const asked = new Set(['media', 'geolocation', 'notifications', 'display-capture', 'midi', 'clipboard-read']);
-  ses.setPermissionRequestHandler(async (wc, permission, callback, details) => {
-    if (wc === browser.uiContents || !asked.has(permission)) return callback(silent.has(permission));
-    const host = safeHost(details.requestingUrl);
-    const { response } = await dialog.showMessageBox(browser.win, {
-      message: `${host} wants to use ${permission.replace('-', ' ')}`,
-      buttons: ['Allow', 'Block'],
-      defaultId: 1,
-      cancelId: 1,
-    });
-    callback(response === 0);
-  });
-}
-
-function safeHost(url: string) {
-  try {
-    return new URL(url).host || url;
-  } catch {
-    return url;
-  }
-}
-
 app.whenReady().then(async () => {
   if (!isPrimaryInstance) return;
   const store = new Store(app.getPath('userData'));
@@ -1192,7 +1169,7 @@ app.whenReady().then(async () => {
   onEachSession((ses) => {
     addAdBlockSession(ses);
     downloads.attach(ses);
-    registerPermissions(browser!, ses);
+    registerPermissions(ses, store, browser!.win, (wc) => wc === browser!.uiContents);
   });
   focusBrowser = () => browser!.focus();
   browser.favicons = favicons;

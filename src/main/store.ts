@@ -323,6 +323,20 @@ export class Store {
     this.changed();
   }
 
+  sitePermission(origin: string, permission: string) {
+    return this.state.sitePermissions?.[origin]?.[permission];
+  }
+
+  /** `undefined` forgets the decision, so the site asks again next time. */
+  setSitePermission(origin: string, permission: string, decision: 'allow' | 'block' | undefined) {
+    const all = (this.state.sitePermissions ??= {});
+    const site = (all[origin] ??= {});
+    if (decision) site[permission] = decision;
+    else delete site[permission];
+    if (!Object.keys(site).length) delete all[origin];
+    this.changed();
+  }
+
   setAdBlock(enabled: boolean) {
     this.state.adBlock = enabled;
     this.changed();

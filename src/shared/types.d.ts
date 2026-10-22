@@ -103,6 +103,8 @@ export interface BrowserState {
   archive: ArchivedTab[];
   sidebarVisible: boolean;
   window?: WindowBounds;
+  /** Remembered answers to site permission prompts, by origin then permission. */
+  sitePermissions?: Record<string, Record<string, 'allow' | 'block'>>;
   searchEngine?: SearchEngineId;
   /** Where downloads go; the system Downloads folder when unset. */
   downloadsFolder?: string;
