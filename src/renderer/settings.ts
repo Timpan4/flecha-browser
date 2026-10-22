@@ -284,6 +284,7 @@ makeDefault.addEventListener('click', async () => render(await api.makeDefaultBr
 window.addEventListener('focus', async () => render(await api.get()));
 
 document.getElementById('openBoosts')!.addEventListener('click', () => api.openBoosts());
+document.getElementById('showTour')!.addEventListener('click', () => api.showTour());
 document.getElementById('chooseFolder')!.addEventListener('click', async () => render(await api.chooseDownloadsFolder()));
 askWhereToSave.addEventListener('change', async () => render(await api.set({ askWhereToSave: askWhereToSave.checked })));
 

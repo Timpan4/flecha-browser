@@ -24,6 +24,7 @@ export class Settings {
     private onChanged: () => void,
     private agent: { setEnabled(enabled: boolean): Promise<void>; endpoint(): string | undefined },
     openBoosts: () => void,
+    showTour: () => void,
   ) {
     const fromSettings = (event: Electron.IpcMainInvokeEvent) => !!this.win && event.sender === this.win.webContents;
     ipcMain.handle('settings:get', (event) => (fromSettings(event) ? this.view() : undefined));
@@ -44,6 +45,12 @@ export class Settings {
       if (!fromSettings(event)) return undefined;
       makeDefaultBrowser();
       return this.view();
+    });
+    ipcMain.handle('settings:show-tour', (event) => {
+      if (!fromSettings(event)) return;
+      // The tour plays in the browser window; Settings steps out of its way.
+      this.win?.close();
+      showTour();
     });
     ipcMain.handle('settings:record-shortcut', (event, recording: boolean) => {
       if (fromSettings(event)) this.recording = !!recording;

@@ -242,6 +242,8 @@ export interface SettingsApi {
   newAgentToken(): Promise<SettingsView>;
   copy(text: string): Promise<void>;
   openBoosts(): Promise<void>;
+  /** Plays the welcome tour again in the browser window. */
+  showTour(): Promise<void>;
   onPane(cb: (pane: string) => void): void;
   /** While recording, every key goes to `onKey` instead of the page or the menus. */
   recordShortcut(recording: boolean): Promise<void>;
