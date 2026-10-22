@@ -70,7 +70,9 @@ export class Settings {
     this.win = new BrowserWindow({
       width: 780,
       height: 580,
-      resizable: false,
+      // Taller and wider for long lists of tabs in Tabs & Spaces; never smaller than the panes need.
+      minWidth: 780,
+      minHeight: 580,
       fullscreenable: false,
       minimizable: false,
       title: 'Settings',
