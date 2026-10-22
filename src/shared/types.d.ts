@@ -250,6 +250,10 @@ export interface FlechaApi {
   searchHistory(query: string): Promise<HistoryEntry[]>;
   /** Most visited sites, one per host. */
   topSites(): Promise<HistoryEntry[]>;
+  /** Other browsers with bookmarks or history to import. */
+  detectBrowsers(): Promise<DetectedBrowser[]>;
+  /** Imports one of the browsers `detectBrowsers` found, by id. */
+  importBrowser(id: string): Promise<ImportResult>;
   newTab(input: string): void;
   navigate(input: string): void;
   activate(tabId: string): void;
