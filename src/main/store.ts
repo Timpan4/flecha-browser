@@ -154,6 +154,17 @@ export class Store {
     return true;
   }
 
+  /** A new pinned tab, favorite or Today tab that isn't opened yet. */
+  createTab(url: string, title: string, to: TabPlacement): TabInfo | undefined {
+    if (!this.placementExists(to)) return undefined;
+    const tab: TabInfo = { id: randomUUID(), url, title: title || url, lastActive: Date.now() };
+    if (to.zone !== 'today') tab.homeUrl = url;
+    this.state.tabs[tab.id] = tab;
+    this.insert(tab.id, to);
+    this.changed();
+    return tab;
+  }
+
   /** Puts `tabId` next to the active tab, on the right unless `side` says otherwise. */
   splitWith(tabId: string, side: 'left' | 'right' = 'right') {
     const space = this.activeSpace;
