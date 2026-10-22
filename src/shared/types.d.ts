@@ -193,6 +193,7 @@ export interface SettingsView {
   theme: 'system' | 'light' | 'dark';
   archiveAfterHours: number;
   peekPinnedLinks: boolean;
+  openLinksInFlechinha: boolean;
 }
 
 /** The downloads folder is only changed through the folder picker, never set directly. */
