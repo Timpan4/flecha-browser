@@ -111,6 +111,8 @@ class Browser implements TabHost {
 
     if (onScreen && saved.maximized) this.win.maximize();
     this.win.on('resize', () => this.layout());
+    // A drag that never got its mouse-up (e.g. the window lost focus) must not leave the divider covering the pages.
+    this.win.on('blur', () => this.draggingDivider && this.dragDivider('end'));
     nativeTheme.on('updated', () => {
       this.win.setBackgroundColor(spaceTint(this.store.activeSpace.color));
       this.sendState();
