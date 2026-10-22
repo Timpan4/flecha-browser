@@ -232,10 +232,14 @@ function renderNode(node: PinnedNode, space: Space, folderId: string | undefined
 function todayRows(s: UiState, space: Space): HTMLElement[] {
   const pair = space.split && space.split.every((id) => space.today.includes(id) && s.tabs[id]) ? space.split : undefined;
   const rows: HTMLElement[] = [];
+  let pairDrawn = false;
   for (const id of space.today) {
     const tab = s.tabs[id];
-    if (!tab || (pair && id === pair[1] && rows.some((r) => r.classList.contains('split-row')))) continue;
+    if (!tab) continue;
+    // The row sits where whichever half comes first in the list is; the other half is skipped.
     if (pair && pair.includes(id)) {
+      if (pairDrawn) continue;
+      pairDrawn = true;
       const [left, right] = pair.map((pid) => s.tabs[pid]);
       const showing = !!space.activeTabId && pair.includes(space.activeTabId);
       rows.push(
