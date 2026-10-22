@@ -64,6 +64,11 @@ const api: FlechaApi = {
   cancelDownload: cmd('cancelDownload'),
   clearDownloads: cmd('clearDownloads'),
   promotePeek: cmd('promotePeek'),
+  finishOnboarding: cmd('finishOnboarding'),
+  setPreferences: cmd('setPreferences'),
+  makeDefaultBrowser: cmd('makeDefaultBrowser'),
+  detectBrowsers: () => ipcRenderer.invoke('import:detect'),
+  importBrowser: (id) => ipcRenderer.invoke('import:run', id),
 };
 
 contextBridge.exposeInMainWorld('flecha', api);

@@ -15,10 +15,10 @@ import {
   session,
   type WebContents,
 } from 'electron';
-import type { DropTarget, LocalServer, PaletteMode, PeekState, TabInfo, UiState } from '../shared/types';
+import type { DropTarget, LocalServer, PaletteMode, PeekState, SearchEngineId, TabInfo, UiState } from '../shared/types';
 import { Store } from './store';
 import { arcSidebarPath, readArcSidebar } from './arcImport';
-import { resolveInput, searchEngine } from './url';
+import { SEARCH_ENGINES, resolveInput, searchEngine } from './url';
 import { describe as describeEnvironment } from './environments';
 import { addAdBlockSession, setAdBlocking } from './adblock';
 import { onEachSession, sessionForSpace } from './sessions';
@@ -735,7 +735,7 @@ class Browser implements TabHost {
   private layout() {
     const { width, height } = this.win.getContentBounds();
     // The sidebar UI covers the whole window while it draws an overlay (command bar, peek backdrop).
-    const overlay = this.paletteOpen || !!this.peek || this.tabDragging;
+    const overlay = this.paletteOpen || !!this.peek || this.tabDragging || !this.store.state.onboarded;
     // With no page on screen the sidebar UI also draws the empty state where the page would be.
     const fullWidth = overlay || !this.shown.length;
     const sidebarWidth = this.store.state.sidebarVisible
@@ -811,6 +811,7 @@ class Browser implements TabHost {
       boostedHosts: this.boostedHosts,
       faviconHosts: this.favicons?.hosts() ?? [],
       shortcuts: shortcutHints(this.store.state),
+      defaultBrowser: { isDefault: isDefaultBrowser(), canSet: canSetDefaultBrowser() },
       agent: this.agentActivity && {
         connected: Date.now() - this.agentActivity.at < 60_000,
         busy: Date.now() - this.agentActivity.at < 3_500,
@@ -1279,6 +1280,7 @@ function buildMenu(browser: Browser, store: Store, settings: Settings) {
     {
       role: 'help',
       submenu: [
+        { label: 'Welcome to Flecha…', click: () => store.setOnboarded(false) },
         { label: 'Keyboard Shortcuts', accelerator: k('shortcuts'), click: () => settings.open('shortcuts') },
         { label: 'Flecha Website', click: () => browser.openTab('https://flecha.oprimo.dev') },
       ],
@@ -1378,6 +1380,23 @@ function registerIpc(browser: Browser, store: Store, history: History, downloads
     cancelDownload: (id: string) => downloads.cancel(id),
     clearDownloads: () => downloads.clear(),
     promotePeek: () => browser.promotePeek(),
+    finishOnboarding: () => store.setOnboarded(true),
+    setPreferences: async (prefs: { theme?: string; searchEngine?: string; adBlock?: boolean }) => {
+      if (prefs?.theme === 'system' || prefs?.theme === 'light' || prefs?.theme === 'dark') {
+        store.setPreferences({ theme: prefs.theme });
+        nativeTheme.themeSource = prefs.theme;
+      }
+      if (prefs?.searchEngine && prefs.searchEngine in SEARCH_ENGINES) store.setSearchEngine(prefs.searchEngine as SearchEngineId);
+      if (typeof prefs?.adBlock === 'boolean') {
+        store.setAdBlock(prefs.adBlock);
+        await setAdBlocking(prefs.adBlock).catch((err) => console.error('Ad blocker failed', err));
+      }
+    },
+    makeDefaultBrowser: () => {
+      makeDefaultBrowser();
+      // macOS confirms in its own dialog; check again once Flecha is back in front.
+      browser.win.once('focus', () => browser.sendState());
+    },
   };
   ipcMain.on('cmd', (event, name: string, ...args: unknown[]) => {
     if (event.sender !== browser.uiContents) return;

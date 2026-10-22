@@ -376,6 +376,11 @@ export class Store {
     this.changed();
   }
 
+  setOnboarded(done: boolean) {
+    this.state.onboarded = done;
+    this.changed();
+  }
+
   setArchiveAfter(hours: number) {
     this.state.archiveAfterHours = Math.max(0, hours);
     this.changed();

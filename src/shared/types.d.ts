@@ -126,6 +126,8 @@ export interface BrowserState {
   adBlock?: boolean;
   /** The MCP bridge for coding agents: off unless turned on in Settings. */
   agent?: { enabled: boolean; token: string };
+  /** The welcome tour has been finished (or skipped). */
+  onboarded?: boolean;
   /** Your own keyboard shortcuts by command id (Electron accelerators); null removes a shortcut. */
   keybindings?: Record<string, string | null>;
 }
@@ -163,6 +165,7 @@ export interface UiState extends BrowserState {
   agent?: { connected: boolean; tabId?: string; action?: string; busy: boolean };
   /** Current shortcut per command, for display ("⌘T"); empty when removed. */
   shortcuts: Record<string, string>;
+  defaultBrowser: { isDefault: boolean; canSet: boolean };
 }
 
 export type PaletteMode = 'new-tab' | 'navigate' | 'split';
@@ -319,4 +322,10 @@ export interface FlechaApi {
   cancelDownload(id: string): void;
   clearDownloads(): void;
   promotePeek(): void;
+  finishOnboarding(): void;
+  setPreferences(prefs: { theme?: 'system' | 'light' | 'dark'; searchEngine?: SearchEngineId; adBlock?: boolean }): void;
+  makeDefaultBrowser(): void;
+  /** Other browsers on this Mac with data Flecha can import. */
+  detectBrowsers(): Promise<Array<{ id: string; name: string; profiles: number; hasBookmarks: boolean; hasHistory: boolean }>>;
+  importBrowser(id: string): Promise<{ spaces: number; bookmarks: number; history: number; warnings: string[] }>;
 }
