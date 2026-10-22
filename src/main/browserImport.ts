@@ -197,10 +197,142 @@ function firefoxBookmarks(rows: FirefoxBookmark[]): ImportNode[] {
   ];
 }
 
+// ---- Safari ----------------------------------------------------------------
+
+const FULL_DISK_ACCESS =
+  'macOS only lets apps read Safari’s data with Full Disk Access. Turn it on for Flecha in System Settings › Privacy & Security › Full Disk Access, then import again.';
+
+function safariSource(): BrowserSource {
+  const root = path.join(os.homedir(), 'Library', 'Safari');
+  const bookmarks = path.join(root, 'Bookmarks.plist');
+  const history = path.join(root, 'History.db');
+  return {
+    id: 'safari',
+    name: 'Safari',
+    profiles: () => {
+      // Without Full Disk Access the files can't even be looked at; list Safari anyway so the
+      // import can explain what's needed.
+      const profile: Profile = {
+        name: 'Safari',
+        bookmarkFiles: mayExist(bookmarks) ? [bookmarks] : [],
+        historyFile: mayExist(history) ? history : undefined,
+      };
+      return profile.bookmarkFiles.length || profile.historyFile ? [profile] : [];
+    },
+    readBookmarks: (profile) => needsFullDiskAccess(async () => safariBookmarks(await readPlist(profile.bookmarkFiles[0]))),
+    readHistory: (profile) =>
+      needsFullDiskAccess(() =>
+        // Safari counts in seconds since 2001; each visit has its own row and title.
+        querySqlite<HistoryEntry>(
+          profile.historyFile!,
+          `SELECT i.url AS url, v.title AS title, i.visit_count AS visits,
+             CAST((MAX(v.visit_time) + 978307200) * 1000 AS INTEGER) AS lastVisit
+           FROM history_items i JOIN history_visits v ON v.history_item = i.id
+           GROUP BY i.id ORDER BY lastVisit DESC LIMIT ${HISTORY_ROWS}`,
+        ),
+      ),
+  };
+}
+
+const SAFARI_FOLDERS: Record<string, string> = { BookmarksMenu: 'Bookmarks Menu', 'com.apple.ReadingList': 'Reading List' };
+
+/** The Favourites bar becomes the top level; the menu, Reading List and other folders stay folders. */
+function safariBookmarks(plist: any): ImportNode[] {
+  const top: any[] = Array.isArray(plist?.Children) ? plist.Children : [];
+  return top.flatMap((item): ImportNode[] => (item?.Title === 'BookmarksBar' ? safariNodes(item.Children) : safariNodes([item])));
+}
+
+function safariNodes(items: unknown): ImportNode[] {
+  if (!Array.isArray(items)) return [];
+  return items.flatMap((item): ImportNode[] => {
+    if (item?.WebBookmarkType === 'WebBookmarkTypeLeaf' && typeof item.URLString === 'string') {
+      return [{ kind: 'tab', url: item.URLString, title: String(item.URIDictionary?.title || item.URLString) }];
+    }
+    if (item?.WebBookmarkType === 'WebBookmarkTypeList') {
+      const title = String(item.Title || 'Untitled folder');
+      return [folder(SAFARI_FOLDERS[title] ?? title, safariNodes(item.Children))];
+    }
+    // The "History" proxy entry and anything else that isn't a bookmark.
+    return [];
+  });
+}
+
+/** Turns macOS's "operation not permitted" into instructions. */
+async function needsFullDiskAccess<T>(read: () => Promise<T>): Promise<T> {
+  try {
+    return await read();
+  } catch (err) {
+    if (isPermissionError(err)) throw new Error(FULL_DISK_ACCESS);
+    throw err;
+  }
+}
+
+/**
+ * Binary property lists can hold dates and data, which `plutil` refuses to turn into JSON,
+ * so they go through XML and a small parser instead.
+ */
+async function readPlist(file: string): Promise<unknown> {
+  const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'flecha-import-'));
+  try {
+    const copy = path.join(dir, path.basename(file));
+    await fs.promises.copyFile(file, copy);
+    const { stdout } = await run('/usr/bin/plutil', ['-convert', 'xml1', '-o', '-', copy], { maxBuffer: 64 * 1024 * 1024 });
+    return parseXmlPlist(stdout);
+  } finally {
+    await fs.promises.rm(dir, { recursive: true, force: true });
+  }
+}
+
+/** Just enough of the XML property list format: dates, data and numbers stay strings. */
+function parseXmlPlist(xml: string): unknown {
+  const tag = /<(\/?)(dict|array|key|string|integer|real|true|false|date|data)\s*(\/?)>/g;
+  const next = () => {
+    const m = tag.exec(xml);
+    if (!m) throw new Error('The property list ended unexpectedly.');
+    return { closing: !!m[1], name: m[2], empty: !!m[3], end: tag.lastIndex };
+  };
+  const text = (name: string, from: number) => {
+    const close = xml.indexOf(`</${name}>`, from);
+    if (close < 0) throw new Error(`Unclosed <${name}> in the property list.`);
+    tag.lastIndex = close + name.length + 3;
+    return decodeXml(xml.slice(from, close));
+  };
+  const value = (t: ReturnType<typeof next>): unknown => {
+    if (t.name === 'true' || t.name === 'false') {
+      if (!t.empty) next();
+      return t.name === 'true';
+    }
+    if (t.name === 'dict') {
+      const dict: Record<string, unknown> = {};
+      if (t.empty) return dict;
+      for (let k = next(); !k.closing; k = next()) {
+        const key = k.name === 'key' ? text('key', k.end) : '';
+        dict[key] = value(next());
+      }
+      return dict;
+    }
+    if (t.name === 'array') {
+      const list: unknown[] = [];
+      if (t.empty) return list;
+      for (let v = next(); !v.closing; v = next()) list.push(value(v));
+      return list;
+    }
+    return t.empty ? '' : text(t.name, t.end);
+  };
+  return value(next());
+}
+
+function decodeXml(s: string) {
+  return s.replace(/&(#x[0-9a-f]+|#\d+|lt|gt|amp|quot|apos);/gi, (_, e: string) => {
+    if (e[0] === '#') return String.fromCodePoint(parseInt(e[1].toLowerCase() === 'x' ? e.slice(2) : e.slice(1), e[1].toLowerCase() === 'x' ? 16 : 10));
+    return ({ lt: '<', gt: '>', amp: '&', quot: '"', apos: "'" } as Record<string, string>)[e.toLowerCase()];
+  });
+}
+
 // ---- detecting and importing -------------------------------------------------
 
 function sources(): BrowserSource[] {
-  return [...CHROMIUM.map(([id, name, dir]) => chromiumSource(id, name, appSupport(dir))), firefoxSource()];
+  return [...CHROMIUM.map(([id, name, dir]) => chromiumSource(id, name, appSupport(dir))), firefoxSource(), safariSource()];
 }
 
 /** Browsers on this Mac that have bookmarks or history to bring over. Only checks which files exist. */
@@ -368,6 +500,20 @@ function isFile(file: string) {
   } catch {
     return false;
   }
+}
+
+/** A file that exists, or one macOS won't let us look at (which usually means it exists). */
+function mayExist(file: string) {
+  try {
+    return fs.statSync(file).isFile();
+  } catch (err) {
+    return isPermissionError(err);
+  }
+}
+
+function isPermissionError(err: unknown) {
+  const code = (err as NodeJS.ErrnoException)?.code;
+  return code === 'EPERM' || code === 'EACCES' || /operation not permitted|authorization denied/i.test(reason(err));
 }
 
 function reason(err: unknown) {
