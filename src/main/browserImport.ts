@@ -7,7 +7,7 @@ import { app } from 'electron';
 import type { HistoryEntry } from '../shared/types';
 import type { History } from './history';
 import type { Store } from './store';
-import type { ImportNode } from './arcImport';
+import { arcSidebarPath, readArcSidebar, type ImportNode } from './arcImport';
 
 /**
  * Brings bookmarks and history over from the other browsers on this Mac. Their files are
@@ -52,6 +52,8 @@ interface BrowserSource {
   profiles(): Profile[];
   readBookmarks(profile: Profile): Promise<ImportNode[]>;
   readHistory(profile: Profile): Promise<HistoryEntry[]>;
+  /** For browsers whose sidebar says more than bookmarks do (Arc): imports it in their place. */
+  sidebar?: { exists(): boolean; import(store: Store): { spaces: number; bookmarks: number } };
 }
 
 const appSupport = (...parts: string[]) => path.join(app.getPath('appData'), ...parts);
@@ -130,6 +132,26 @@ function chromiumNode(node: any): ImportNode[] {
   if (node?.type === 'url' && typeof node.url === 'string') return [{ kind: 'tab', url: node.url, title: String(node.name || node.url) }];
   if (node?.type === 'folder') return [folder(String(node.name || 'Untitled folder'), chromiumChildren(node))];
   return [];
+}
+
+/** Arc is Chromium underneath, but its Spaces and pinned tabs live in its own sidebar file. */
+function arcSource(): BrowserSource {
+  return {
+    ...chromiumSource('arc', 'Arc', appSupport('Arc', 'User Data')),
+    sidebar: {
+      exists: () => isFile(arcSidebarPath()),
+      import: (store) => {
+        const data = readArcSidebar();
+        store.importArc(data);
+        const tabs = data.spaces.reduce((n, s) => n + countNodes(s.pinned) + s.today.length, data.favorites.length);
+        return { spaces: data.spaces.length, bookmarks: tabs };
+      },
+    },
+  };
+}
+
+function countNodes(nodes: ImportNode[]): number {
+  return nodes.reduce((n, node) => n + (node.kind === 'tab' ? 1 : countNodes(node.children)), 0);
 }
 
 // ---- Firefox ---------------------------------------------------------------
@@ -332,7 +354,12 @@ function decodeXml(s: string) {
 // ---- detecting and importing -------------------------------------------------
 
 function sources(): BrowserSource[] {
-  return [...CHROMIUM.map(([id, name, dir]) => chromiumSource(id, name, appSupport(dir))), firefoxSource(), safariSource()];
+  return [
+    ...CHROMIUM.map(([id, name, dir]) => chromiumSource(id, name, appSupport(dir))),
+    arcSource(),
+    firefoxSource(),
+    safariSource(),
+  ];
 }
 
 /** Browsers on this Mac that have bookmarks or history to bring over. Only checks which files exist. */
@@ -340,13 +367,14 @@ export async function detectBrowsers(): Promise<DetectedBrowser[]> {
   return sources().flatMap((source) => {
     try {
       const profiles = source.profiles();
-      if (!profiles.length) return [];
+      const sidebar = !!source.sidebar?.exists();
+      if (!profiles.length && !sidebar) return [];
       return [
         {
           id: source.id,
           name: source.name,
-          profiles: profiles.length,
-          hasBookmarks: profiles.some((p) => p.bookmarkFiles.length > 0),
+          profiles: Math.max(profiles.length, 1),
+          hasBookmarks: sidebar || profiles.some((p) => p.bookmarkFiles.length > 0),
           hasHistory: profiles.some((p) => !!p.historyFile),
         },
       ];
@@ -377,11 +405,19 @@ export async function importBrowser(id: string, store: Store, history: History):
   }
   const label = (p: Profile) => (profiles.length > 1 ? `${source.name} (${p.name})` : source.name);
 
+  if (source.sidebar) {
+    try {
+      Object.assign(result, source.sidebar.import(store));
+    } catch (err) {
+      result.warnings.push(`Couldn’t read ${source.name}’s sidebar: ${reason(err)}`);
+    }
+  }
+
   const tidy = newTidy();
   const perProfile: Array<{ profile: Profile; nodes: ImportNode[] }> = [];
   const visits: HistoryEntry[] = [];
   for (const profile of profiles) {
-    if (profile.bookmarkFiles.length) {
+    if (profile.bookmarkFiles.length && !source.sidebar) {
       try {
         const nodes = tidy.run(await source.readBookmarks(profile));
         if (nodes.length) perProfile.push({ profile, nodes });
