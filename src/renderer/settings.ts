@@ -1,5 +1,6 @@
 import type { RecordedKey, SettingsApi, SettingsView } from '../shared/types';
 import { ICONS, type IconName } from './icons.js';
+import { setupTabsPane } from './tabsPane.js';
 
 declare global {
   interface Window {
@@ -15,6 +16,8 @@ function icon(name: IconName) {
   el.innerHTML = `<path d="${ICONS[name]}"/>`;
   return el;
 }
+
+setupTabsPane(icon);
 
 for (const el of document.querySelectorAll<HTMLElement>('i[data-icon]')) el.replaceWith(icon(el.dataset.icon as IconName));
 
