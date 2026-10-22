@@ -102,7 +102,7 @@ function render(s: UiState) {
       .map((id) => s.tabs[id])
       .filter(Boolean)
       .map((tab) => {
-        const el = h('button', { class: `fav${tab.id === space.activeTabId ? ' active' : ''}`, title: tab.title }, favicon(tab));
+        const el = h('button', { class: `fav${tab.id === space.activeTabId ? ' active' : ''}`, title: tabTitle(tab) }, favicon(tab));
         wireTab(el, tab, { zone: 'favorites', beforeTabId: tab.id });
         return el;
       }),
@@ -118,8 +118,11 @@ function render(s: UiState) {
   title.dataset.spaceId = space.id;
   $('space-isolated').hidden = !space.isolated;
 
-  $('pinned').replaceChildren(...space.pinned.map((node) => renderNode(node, space, undefined)));
-  $('today').replaceChildren(...todayRows(s, space));
+  // Re-rendering would throw away a tab or folder name being typed in place.
+  if (!document.querySelector('#scroll [contenteditable="true"]')) {
+    $('pinned').replaceChildren(...space.pinned.map((node) => renderNode(node, space, undefined)));
+    $('today').replaceChildren(...todayRows(s, space));
+  }
 
   $('spaces').replaceChildren(
     ...s.spaces.map((sp) =>
@@ -272,7 +275,21 @@ function tabRow(tab: TabInfo, space: Space, target: DropTarget) {
       }`,
     },
     favicon(tab),
-    h('span', { class: 'title' }, tab.title || host(tab.url)),
+    h('span', { class: 'title' }, tabTitle(tab)),
+    tab.audible || tab.muted
+      ? h(
+          'span',
+          {
+            class: `audio-mark${tab.muted ? ' muted' : ''}`,
+            title: tab.muted ? 'Unmute' : 'Mute',
+            onclick: (e: Event) => {
+              e.stopPropagation();
+              api.toggleMute(tab.id);
+            },
+          },
+          icon(tab.muted ? 'muted' : 'volume'),
+        )
+      : null,
     errorBadge(tab),
     isBoosted(tab.url) ? h('span', { class: 'boost-mark', title: 'Boosted: a script or styles from ~/.flecha/boosts run here' }, icon('zap')) : null,
     tab.device === 'mobile'
@@ -320,7 +337,20 @@ function isDevUrl(url: string) {
   }
 }
 
+function tabTitle(tab: TabInfo) {
+  return tab.customTitle || tab.title || host(tab.url);
+}
+
+/** Inline rename of a tab row, started from the tab's context menu. */
+function renameTab(tabId: string) {
+  const row = document.querySelector<HTMLElement>(`.row[data-tab-id="${CSS.escape(tabId)}"] .title`);
+  const tab = state?.tabs[tabId];
+  if (!row || !tab) return;
+  editInline(row, tabTitle(tab), (title) => api.renameTab(tabId, title));
+}
+
 function wireTab(el: HTMLElement, tab: TabInfo, target: DropTarget) {
+  el.dataset.tabId = tab.id;
   el.draggable = true;
   el.addEventListener('click', () => api.activate(tab.id));
   el.addEventListener('auxclick', (e) => e.button === 1 && api.close(tab.id));
@@ -687,7 +717,7 @@ function updatePalette() {
     items.push({
       group: 'Tabs',
       icon: tab,
-      label: tab.title || tab.url,
+      label: tabTitle(tab),
       sub: host(tab.url),
       run: paletteMode === 'split' ? () => api.splitWith(tab.id) : () => api.activate(tab.id),
     });
@@ -961,6 +991,7 @@ acceptDrops($('btn-newtab'), { zone: 'today' });
 api.onState(render);
 api.onPalette(openPalette);
 api.onEditSpace(openSpaceEditor);
+api.onRenameTab(renameTab);
 api.onPeek(renderPeek);
 api.onDownloads(renderDownloads);
 api.ready();

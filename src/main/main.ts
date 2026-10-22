@@ -354,6 +354,7 @@ class Browser implements TabHost {
     const wc = view.webContents;
     const update = (patch: Parameters<Store['updateTab']>[1]) => this.store.updateTab(tabId, patch);
 
+    wc.on('audio-state-changed', (event) => update({ audible: event.audible }));
     wc.on('page-title-updated', (_e, title) => {
       update({ title });
       this.history.updateTitle(wc.getURL(), title);
@@ -382,6 +383,7 @@ class Browser implements TabHost {
       this.followInResponsiveSplit(tabId, url);
     });
     if (this.store.state.tabs[tabId]?.device === 'mobile') emulatePhone(wc);
+    if (this.store.state.tabs[tabId]?.muted) wc.setAudioMuted(true);
     wc.on('did-start-loading', () => update({ loading: true }));
     wc.on('did-stop-loading', () => {
       update({ loading: false });
@@ -790,20 +792,60 @@ class Browser implements TabHost {
     else if (space.activeTabId && space.activeTabId !== tabId) {
       splitItems.push({ label: 'Open in Split View', click: () => this.store.splitWith(tabId) });
     }
+    const name = tab.customTitle ?? tab.title;
+    const otherSpaces = this.store.state.spaces.filter((s) => s.id !== this.store.locate(tabId)?.space?.id);
+    const copy = (text: string, message: string) => {
+      clipboard.writeText(text);
+      this.flash(message);
+    };
+    const closeMany = (which: 'below' | 'others') => {
+      for (const id of this.store.closeTodayTabs(tabId, which)) this.destroyView(id);
+    };
     Menu.buildFromTemplate([
       ...splitItems,
       ...(splitItems.length ? [{ type: 'separator' as const }] : []),
+      { label: 'Copy Link', click: () => copy(tab.url, 'Link copied') },
+      { label: 'Copy as Markdown Link', click: () => copy(`[${name}](${tab.url})`, 'Markdown link copied') },
+      { label: 'Rename…', click: () => this.ui.webContents.send('rename-tab', tabId) },
+      { label: 'Duplicate', click: () => this.openTab(tab.url) },
+      { type: 'separator' },
       { label: zone === 'today' ? 'Pin Tab' : 'Unpin Tab', click: () => this.store.togglePin(tabId) },
       { label: zone === 'favorites' ? 'Remove from Favorites' : 'Add to Favorites', click: () => this.store.toggleFavorite(tabId) },
+      {
+        label: 'Move to Space',
+        enabled: zone !== 'favorites' && otherSpaces.length > 0,
+        submenu: otherSpaces.map((s) => ({
+          label: `${s.emoji ? s.emoji + '  ' : ''}${s.name}`,
+          click: () => {
+            // A Space with its own cookies needs the page reopened in its session.
+            this.destroyView(tabId);
+            this.store.moveToSpace(tabId, s.id);
+          },
+        })),
+      },
       { type: 'separator' },
-      { label: 'Copy URL', click: () => clipboard.writeText(tab.url) },
-      { label: 'Duplicate', click: () => this.openTab(tab.url) },
+      { label: 'Reload', enabled: this.views.has(tabId), click: () => this.views.get(tabId)?.webContents.reload() },
+      { label: tab.muted ? 'Unmute Tab' : 'Mute Tab', click: () => this.toggleMute(tabId) },
       ...(tab.homeUrl && tab.homeUrl !== tab.url
         ? [{ label: 'Go Back to Pinned URL', click: () => this.viewFor(tabId).webContents.loadURL(tab.homeUrl!) }]
         : []),
       { type: 'separator' },
       { label: zone === 'today' ? 'Close Tab' : 'Unload Tab', click: () => this.closeTab(tabId) },
+      ...(zone === 'today'
+        ? [
+            { label: 'Close Tabs Below', click: () => closeMany('below') },
+            { label: 'Close Other Tabs', click: () => closeMany('others') },
+          ]
+        : []),
     ]).popup({ window: this.win });
+  }
+
+  toggleMute(tabId: string) {
+    const tab = this.store.state.tabs[tabId];
+    const wc = this.views.get(tabId)?.webContents;
+    if (!tab) return;
+    wc?.setAudioMuted(!tab.muted);
+    this.store.updateTab(tabId, { muted: !tab.muted });
   }
 
   private async clearSpaceData(spaceId: string) {
@@ -1170,6 +1212,8 @@ function registerIpc(browser: Browser, store: Store, history: History, downloads
     closePalette: () => browser.setPaletteOpen(false),
     toggleSidebar: () => browser.toggleSidebar(),
     setSidebarPeek: (peek: boolean) => browser.setSidebarPeek(!!peek),
+    renameTab: (id: string, title: string) => store.updateTab(id, { customTitle: String(title).trim() || undefined }),
+    toggleMute: (id: string) => browser.toggleMute(id),
     copyText: (text: string) => {
       clipboard.writeText(String(text));
       browser.flash('Link copied');

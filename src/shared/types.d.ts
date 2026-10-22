@@ -3,6 +3,11 @@ export interface TabInfo {
   url: string;
   title: string;
   favicon?: string;
+  /** A name the user gave the tab; page titles no longer replace it. */
+  customTitle?: string;
+  /** Playing sound right now (not persisted). */
+  audible?: boolean;
+  muted?: boolean;
   /** A phone-sized mirror opened by the responsive split. */
   device?: 'mobile';
   /** Pinned and favorite tabs remember where they started, like Arc. */
@@ -210,6 +215,8 @@ export interface FlechaApi {
   onPalette(cb: (mode: PaletteMode) => void): void;
   /** Main asks the sidebar to open the Space editor (new Space, menu, shortcut). */
   onEditSpace(cb: (spaceId: string) => void): void;
+  /** Main asks the sidebar to start renaming a tab in place. */
+  onRenameTab(cb: (tabId: string) => void): void;
   onPeek(cb: (peek: PeekState | null) => void): void;
   /** `started` is set when this update is a new download beginning. */
   onDownloads(cb: (items: DownloadInfo[], started?: DownloadInfo) => void): void;
@@ -239,6 +246,8 @@ export interface FlechaApi {
   toggleSidebar(): void;
   setSidebarPeek(peek: boolean): void;
   copyText(text: string): void;
+  renameTab(tabId: string, title: string): void;
+  toggleMute(tabId: string): void;
   /** Screenshot of the active page, to the clipboard. */
   capturePage(): void;
   clearSiteData(origin: string): void;

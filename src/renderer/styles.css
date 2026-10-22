@@ -1674,3 +1674,40 @@ body[data-sidebar='floating'] #sidebar {
   width: 13px;
   height: 13px;
 }
+
+/* ---- audio -------------------------------------------------------------- */
+
+.audio-mark {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-sm);
+  color: var(--text-2);
+}
+
+.audio-mark:hover {
+  background: var(--fill-hover);
+  color: var(--text);
+}
+
+.audio-mark.muted {
+  color: var(--text-3);
+}
+
+.audio-mark svg {
+  width: 14px;
+  height: 14px;
+}
+
+.folder-name[contenteditable='true'],
+.row .title[contenteditable='true'] {
+  outline: none;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--fill-active);
+  box-shadow: 0 0 0 2px var(--focus);
+  text-overflow: clip;
+  user-select: text;
+  -webkit-user-select: text;
+}

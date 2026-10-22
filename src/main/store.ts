@@ -188,6 +188,28 @@ export class Store {
     return space.split?.includes(active) ? [...space.split] : [active];
   }
 
+  /** Moves a tab into another Space's today list (pinned tabs keep being pinned there). */
+  moveToSpace(tabId: string, spaceId: string) {
+    const from = this.locate(tabId);
+    const to = this.state.spaces.find((s) => s.id === spaceId);
+    if (!from?.space || !to || from.space === to) return;
+    this.detach(tabId, from.space);
+    if (from.zone === 'pinned') to.pinned.push({ kind: 'tab', tabId });
+    else to.today.unshift(tabId);
+    if (from.space.activeTabId === tabId) from.space.activeTabId = from.space.today[0];
+    this.changed();
+  }
+
+  /** Closes the today tabs after `tabId`, or all others when `others` is set. Returns their ids. */
+  closeTodayTabs(tabId: string, which: 'below' | 'others'): string[] {
+    const space = this.locate(tabId)?.space;
+    if (!space) return [];
+    const index = space.today.indexOf(tabId);
+    const ids = space.today.filter((id, i) => (which === 'below' ? i > index : id !== tabId));
+    for (const id of ids) this.closeTab(id);
+    return ids;
+  }
+
   togglePin(tabId: string) {
     const loc = this.locate(tabId);
     this.moveTab(tabId, { zone: loc?.zone === 'today' ? 'pinned' : 'today' });
@@ -397,7 +419,7 @@ export class Store {
   saveNow() {
     clearTimeout(this.saveTimer);
     const tabs = Object.fromEntries(
-      Object.entries(this.state.tabs).map(([id, { loading, ...tab }]) => [id, tab]),
+      Object.entries(this.state.tabs).map(([id, { loading, audible, ...tab }]) => [id, tab]),
     );
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
     fs.writeFileSync(this.file, JSON.stringify({ ...this.state, tabs }, null, 2));
