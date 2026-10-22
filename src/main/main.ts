@@ -1004,6 +1004,12 @@ class Browser implements TabHost {
     ];
   }
 
+  /** The command bar's "Import from another browser": looks again, then offers what it found. */
+  async importMenu() {
+    this.otherBrowsers = await detectBrowsers();
+    Menu.buildFromTemplate(this.importItems()).popup({ window: this.win });
+  }
+
   /** Brings bookmarks and history over, then says what came across and what didn't. */
   async importFrom(source: DetectedBrowser) {
     if (this.importing) return;
@@ -1397,6 +1403,7 @@ function registerIpc(browser: Browser, store: Store, history: History, downloads
     moveTab: (id: string, target: DropTarget) => store.moveTab(id, target),
     clearToday: () => clearToday(browser, store),
     importArc: () => browser.importArc(),
+    importMenu: () => void browser.importMenu(),
     openPalette: (mode: PaletteMode) => browser.setPaletteOpen(true, mode),
     closePalette: () => browser.setPaletteOpen(false),
     toggleSidebar: () => browser.toggleSidebar(),
