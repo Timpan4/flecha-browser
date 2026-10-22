@@ -19,6 +19,8 @@ export class Settings {
   private win?: BrowserWindow;
   /** Settings is recording a shortcut: keys go to it, not to the page or the menus. */
   private recording = false;
+  /** Settings → Tabs & Spaces. */
+  readonly tabs: TabManager;
 
   constructor(
     private store: Store,
@@ -28,7 +30,7 @@ export class Settings {
     showTour: () => void,
     tabs: TabManagerHost,
   ) {
-    new TabManager(store, tabs, () => this.win);
+    this.tabs = new TabManager(store, tabs, () => this.win);
     const fromSettings = (event: Electron.IpcMainInvokeEvent) => !!this.win && event.sender === this.win.webContents;
     ipcMain.handle('settings:get', (event) => (fromSettings(event) ? this.view() : undefined));
     ipcMain.handle('settings:set', (event, patch: SettingsPatch) => (fromSettings(event) ? this.apply(patch) : undefined));

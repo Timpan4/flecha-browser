@@ -1512,6 +1512,7 @@ app.whenReady().then(async () => {
   const history = new History(app.getPath('userData'));
   store.archiveStale();
   let browser: Browser | undefined;
+  let settings: Settings | undefined;
   // Extensions and the ad blocker load first so they reach the very first tabs.
   const [extensions] = await Promise.all([
     setupExtensions(() => browser),
@@ -1524,6 +1525,7 @@ app.whenReady().then(async () => {
     faviconTimer ??= setTimeout(() => {
       faviconTimer = undefined;
       browser?.sendState();
+      settings?.tabs.refresh();
     }, 400);
   });
   browser = new Browser(store, history, boosts, extensions);
@@ -1541,7 +1543,7 @@ app.whenReady().then(async () => {
   );
   nativeTheme.themeSource = store.state.theme ?? 'system';
   if (store.state.agent?.enabled) await bridge.start().catch((err) => console.error('Agent bridge failed', err));
-  const settings = new Settings(store, () => browser!.sendState(), {
+  settings = new Settings(store, () => browser!.sendState(), {
     setEnabled: (enabled) => (enabled ? bridge.start() : bridge.stop()),
     endpoint: () => (bridge.port ? `http://127.0.0.1:${bridge.port}/mcp` : undefined),
   }, () => browser!.openBoostsFolder(), () => {

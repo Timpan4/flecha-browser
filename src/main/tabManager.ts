@@ -43,10 +43,13 @@ export class TabManager {
       if (fromSettings(event)) app.showEmojiPanel();
     });
     // Titles and icons change while pages load; one redraw per burst is plenty.
-    store.onChange(() => {
-      clearTimeout(this.pushTimer);
-      this.pushTimer = setTimeout(() => this.push(), 120);
-    });
+    store.onChange(() => this.refresh());
+  }
+
+  /** Sends the pane a fresh view soon; also for changes outside the Store, like newly fetched icons. */
+  refresh() {
+    clearTimeout(this.pushTimer);
+    this.pushTimer = setTimeout(() => this.push(), 120);
   }
 
   view(): TabsView {
