@@ -50,6 +50,8 @@ export function setupOnboarding(api: FlechaApi, h: H, icon: (name: IconName) => 
   const importing = new Set<string>();
   const tried = new Set<string>();
   let drawn = '';
+  /** The step the last draw showed; its entrance animation only plays when the step changes. */
+  let shownStep: Step | undefined;
 
   // ---- the live miniature -----------------------------------------------------------
 
@@ -93,6 +95,10 @@ export function setupOnboarding(api: FlechaApi, h: H, icon: (name: IconName) => 
       h('div', { class: 'mock-results' }, h('b', { class: 'on' }), h('b'), h('b')),
     ),
   );
+
+  const left = h('section', { class: 'tour-left' });
+  const progress = h('i');
+  const progressBar = h('div', { class: 'tour-progress' }, progress);
 
   let typingTimer: number | undefined;
   /** Plays what a shortcut does in the miniature. */
@@ -334,34 +340,30 @@ export function setupOnboarding(api: FlechaApi, h: H, icon: (name: IconName) => 
 
   function draw() {
     const body = { welcome, space: spaceStep, import: importStep, try: tryStep, dev: devStep, done: doneStep }[step]();
+    body.classList.toggle('enter', shownStep !== step);
+    shownStep = step;
     const index = STEPS.indexOf(step);
     const focused = document.activeElement as HTMLElement | null;
     const keepCaret = focused?.classList.contains('tour-input') ? (focused as HTMLInputElement).selectionStart : null;
     const brand = h('div', { class: 'tour-brand' }, h('span', { class: 'tour-mark' }), h('span', {}, 'Flecha'));
     brand.firstElementChild!.innerHTML = MARK;
-    root.replaceChildren(
-      h('div', { class: 'tour-grid' }),
+    // The frame (grid, miniature, progress bar) is built once so its animations run on;
+    // only the step's own content is redrawn.
+    if (!root.firstChild) root.append(h('div', { class: 'tour-grid' }), h('div', { class: 'tour' }, left, h('section', { class: 'tour-stage' }, mock)));
+    progress.style.width = `${((index + 1) / STEPS.length) * 100}%`;
+    left.replaceChildren(
+      h('div', { class: 'tour-top' }, brand, step === 'done' ? null : h('button', { class: 'tour-skip', onclick: finish }, 'Skip tour')),
+      body,
       h(
-        'div',
-        { class: 'tour' },
+        'footer',
+        { class: 'tour-footer' },
+        progressBar,
         h(
-          'section',
-          { class: 'tour-left' },
-          h('div', { class: 'tour-top' }, brand, step === 'done' ? null : h('button', { class: 'tour-skip', onclick: finish }, 'Skip tour')),
-          body,
-          h(
-            'footer',
-            { class: 'tour-footer' },
-            h('div', { class: 'tour-progress' }, h('i', { style: `width:${((index + 1) / STEPS.length) * 100}%` })),
-            h(
-              'div',
-              { class: 'tour-buttons' },
-              index ? h('button', { class: 'tour-back', onclick: back }, 'Back') : h('span'),
-              h('button', { class: 'tour-primary', onclick: step === 'done' ? finish : next }, primaryLabel(), h('kbd', {}, '↩')),
-            ),
-          ),
+          'div',
+          { class: 'tour-buttons' },
+          index ? h('button', { class: 'tour-back', onclick: back }, 'Back') : h('span'),
+          h('button', { class: 'tour-primary', onclick: step === 'done' ? finish : next }, primaryLabel(), h('kbd', {}, '↩')),
         ),
-        h('section', { class: 'tour-stage' }, mock),
       ),
     );
     updateMock();
@@ -401,7 +403,8 @@ export function setupOnboarding(api: FlechaApi, h: H, icon: (name: IconName) => 
     if (!show) return;
     // Only what the steps show; other updates (pages loading) would restart the animations.
     const sp = s.spaces.find((x) => x.id === s.activeSpaceId);
-    const key = JSON.stringify([s.theme, sp?.name, sp?.emoji, sp?.color, s.defaultBrowser, s.shortcuts, s.localServers.length]);
+    // The name isn't in it: the field already shows what you type, and the miniature follows below.
+    const key = JSON.stringify([s.theme, sp?.emoji, sp?.color, s.defaultBrowser, s.shortcuts, s.localServers.length]);
     if (key !== drawn || !root.firstChild) draw();
     else updateMock();
     drawn = key;

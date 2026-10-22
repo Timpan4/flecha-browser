@@ -119,6 +119,9 @@
   justify-content: center;
   gap: 14px;
   min-height: 0;
+}
+
+.tour-step.enter {
   animation: tour-in 420ms var(--ease) both;
 }
 
