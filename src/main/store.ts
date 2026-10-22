@@ -342,6 +342,17 @@ export class Store {
     return space;
   }
 
+  /** Reorders the Spaces: `spaceId` goes before `beforeSpaceId`, or last. */
+  moveSpace(spaceId: string, beforeSpaceId?: string) {
+    const space = this.state.spaces.find((s) => s.id === spaceId);
+    if (!space || beforeSpaceId === spaceId) return;
+    const spaces = this.state.spaces.filter((s) => s !== space);
+    const i = beforeSpaceId ? spaces.findIndex((s) => s.id === beforeSpaceId) : -1;
+    spaces.splice(i < 0 ? spaces.length : i, 0, space);
+    this.state.spaces = spaces;
+    this.changed();
+  }
+
   /** Name, emoji and colour. Invalid values are ignored rather than stored. */
   updateSpace(spaceId: string, patch: { name?: string; emoji?: string; color?: string }) {
     const space = this.state.spaces.find((s) => s.id === spaceId);
