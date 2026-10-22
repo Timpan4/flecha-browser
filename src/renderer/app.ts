@@ -89,6 +89,8 @@ function render(s: UiState) {
   ($('btn-forward') as HTMLButtonElement).disabled = !s.nav.canGoForward;
 
   renderUrlbar(s, active);
+  $('empty-state').hidden = !!active;
+  $('empty-title').textContent = `Nothing open in ${space.name}`;
 
   $('favorites').replaceChildren(
     ...s.favorites
@@ -753,6 +755,7 @@ $('urlbar').onclick = () => api.openPalette('navigate');
 $('btn-newtab').onclick = () => api.openPalette('new-tab');
 $('btn-clear').onclick = () => api.clearToday();
 $('btn-newspace').onclick = () => api.newSpace();
+$('empty-new-tab').onclick = () => api.openPalette('new-tab');
 $('space-header').ondblclick = () => state && openSpaceEditor(state.activeSpaceId);
 $('space-header').oncontextmenu = (e) => {
   e.preventDefault();

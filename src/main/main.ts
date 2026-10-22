@@ -608,7 +608,9 @@ class Browser implements TabHost {
     const { width, height } = this.win.getContentBounds();
     // The sidebar UI covers the whole window while it draws an overlay (command bar, peek backdrop).
     const overlay = this.paletteOpen || !!this.peek;
-    this.ui.setBounds({ x: 0, y: 0, width: overlay ? width : this.store.state.sidebarVisible ? SIDEBAR_WIDTH : 0, height });
+    // With no page on screen the sidebar UI also draws the empty state where the page would be.
+    const fullWidth = overlay || !this.shown.length;
+    this.ui.setBounds({ x: 0, y: 0, width: fullWidth ? width : this.store.state.sidebarVisible ? SIDEBAR_WIDTH : 0, height });
 
     const area = this.contentRect();
     const [left, right] = this.shown;
