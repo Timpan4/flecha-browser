@@ -46,8 +46,19 @@ body {
   -webkit-app-region: no-drag;
 }
 
+/* Toolbar controls sit level with the traffic lights and are a size up from row icons. */
+.toolbar .icon-button {
+  width: 30px;
+  height: 30px;
+}
+
+.toolbar .icon-button svg {
+  width: 18px;
+  height: 18px;
+}
+
 .traffic-lights {
-  width: 64px;
+  width: 70px;
 }
 
 .spacer {
@@ -1373,4 +1384,41 @@ footer {
 .empty-hints dt,
 .empty-hints dd {
   margin: 0;
+}
+
+/* ---- tooltips ----------------------------------------------------------- */
+
+#tooltip {
+  position: fixed;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 240px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  background: rgba(11, 23, 40, 0.94);
+  color: #f2f5f9;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  white-space: nowrap;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2);
+  pointer-events: none;
+  animation: fade var(--fast) var(--ease);
+}
+
+#tooltip[hidden],
+#tooltip kbd[hidden] {
+  display: none;
+}
+
+#tooltip-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#tooltip kbd {
+  background: rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.8);
+  box-shadow: none;
 }

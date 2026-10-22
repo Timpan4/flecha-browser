@@ -14,14 +14,14 @@
     <aside id="sidebar">
       <div class="toolbar">
         <div class="traffic-lights"></div>
-        <button id="btn-sidebar" class="icon-button" title="Hide sidebar (⌘S)"><i data-icon="sidebar"></i></button>
+        <button id="btn-sidebar" class="icon-button" data-tip="Hide sidebar" data-kbd="⌘S"><i data-icon="sidebar"></i></button>
         <span class="spacer"></span>
-        <button id="btn-back" class="icon-button" title="Back (⌘[)"><i data-icon="arrowLeft"></i></button>
-        <button id="btn-forward" class="icon-button" title="Forward (⌘])"><i data-icon="arrowRight"></i></button>
-        <button id="btn-reload" class="icon-button" title="Reload (⌘R)"><i data-icon="reload"></i></button>
+        <button id="btn-back" class="icon-button" data-tip="Back" data-kbd="⌘["><i data-icon="arrowLeft"></i></button>
+        <button id="btn-forward" class="icon-button" data-tip="Forward" data-kbd="⌘]"><i data-icon="arrowRight"></i></button>
+        <button id="btn-reload" class="icon-button" data-tip="Reload" data-kbd="⌘R"><i data-icon="reload"></i></button>
       </div>
 
-      <button id="urlbar" title="Open location (⌘L)">
+      <button id="urlbar" data-tip="Open location" data-kbd="⌘L">
         <span id="urlbar-icon"></span>
         <span id="urlbar-env"></span>
         <span id="urlbar-text"></span>
@@ -44,14 +44,14 @@
       <header id="space-header">
         <span id="space-emoji"></span>
         <span id="space-title"></span>
-        <span id="space-isolated" title="This Space has its own cookies and logins" hidden><i data-icon="lock"></i></span>
+        <span id="space-isolated" data-tip="This Space has its own cookies and logins" hidden><i data-icon="lock"></i></span>
       </header>
 
       <div id="scroll">
         <div id="pinned" class="drop-zone"></div>
         <header class="group-header today-header">
           <span>Today</span>
-          <button id="btn-clear" class="text-button" title="Archive today's tabs (⇧⌘K)">Clear</button>
+          <button id="btn-clear" class="text-button" data-tip="Archive today's tabs" data-kbd="⇧⌘K">Clear</button>
         </header>
         <button id="btn-newtab" class="row new-tab"><span class="row-icon"><i data-icon="plus"></i></span><span class="title">New Tab</span><kbd>⌘T</kbd></button>
         <div id="today" class="drop-zone"></div>
@@ -88,14 +88,16 @@
       </div>
 
       <footer>
-        <button id="btn-downloads" class="icon-button" title="Downloads">
+        <button id="btn-downloads" class="icon-button" data-tip="Downloads">
           <i data-icon="download"></i>
           <span id="downloads-badge" hidden></span>
         </button>
         <div id="spaces"></div>
-        <button id="btn-newspace" class="icon-button" title="New Space (⌃⇧N)"><i data-icon="plus"></i></button>
+        <button id="btn-newspace" class="icon-button" data-tip="New Space" data-kbd="⌃⇧N"><i data-icon="plus"></i></button>
       </footer>
     </aside>
+
+    <div id="tooltip" role="tooltip" hidden><span id="tooltip-text"></span><kbd id="tooltip-kbd"></kbd></div>
 
     <div id="empty-state" hidden>
       <div class="empty-mark"><i data-icon="search"></i></div>
@@ -113,8 +115,8 @@
     <div id="peek" hidden>
       <div class="peek-bar">
         <span class="peek-title"></span>
-        <button id="peek-open" class="pill-button" title="Open as a tab"><i data-icon="external"></i>Open as Tab</button>
-        <button id="peek-close" class="icon-button" title="Close (Esc)"><i data-icon="close"></i></button>
+        <button id="peek-open" class="pill-button" data-tip="Open as a tab"><i data-icon="external"></i>Open as Tab</button>
+        <button id="peek-close" class="icon-button" data-tip="Close" data-kbd="Esc"><i data-icon="close"></i></button>
       </div>
     </div>
 

@@ -22,6 +22,8 @@ function h(tag: string, props: Props = {}, ...children: Array<Node | string | nu
   for (const [key, value] of Object.entries(props)) {
     if (value === undefined || value === false) continue;
     if (key === 'class') el.className = String(value);
+    // Native tooltips look out of place; `title` feeds Flecha's own tooltip instead.
+    else if (key === 'title') el.dataset.tip = String(value);
     else if (key.startsWith('on')) el.addEventListener(key.slice(2).toLowerCase(), value as EventListener);
     else if (key === 'dataset') Object.assign(el.dataset, value);
     else el.setAttribute(key, value === true ? '' : String(value));
@@ -241,7 +243,6 @@ function tabRow(tab: TabInfo, space: Space, target: DropTarget) {
       class: `row${tab.id === space.activeTabId ? ' active' : ''}${inSplit ? ' in-split' : ''}${tab.loading ? ' loading' : ''}${
         state?.agent?.busy && state.agent.tabId === tab.id ? ' agent-driving' : ''
       }`,
-      title: tab.url,
     },
     favicon(tab),
     h('span', { class: 'title' }, tab.title || host(tab.url)),
@@ -744,6 +745,48 @@ document.addEventListener('mousedown', (e) => {
     downloadsPanel.hidden = true;
   }
 });
+
+// ---- tooltips ---------------------------------------------------------------------
+
+const tooltip = $('tooltip');
+let tipTimer: number | undefined;
+let tipTarget: HTMLElement | undefined;
+
+function showTip(target: HTMLElement) {
+  $('tooltip-text').textContent = target.dataset.tip ?? '';
+  const kbd = $('tooltip-kbd');
+  kbd.textContent = target.dataset.kbd ?? '';
+  kbd.hidden = !target.dataset.kbd;
+  tooltip.hidden = false;
+  const r = target.getBoundingClientRect();
+  const t = tooltip.getBoundingClientRect();
+  const below = r.bottom + 6 + t.height < window.innerHeight - 8;
+  const left = Math.min(Math.max(r.left + r.width / 2 - t.width / 2, 6), window.innerWidth - t.width - 6);
+  tooltip.style.left = `${left}px`;
+  tooltip.style.top = `${below ? r.bottom + 6 : r.top - t.height - 6}px`;
+}
+
+let tipHiddenAt = 0;
+
+function hideTip() {
+  clearTimeout(tipTimer);
+  tipTarget = undefined;
+  if (!tooltip.hidden) tipHiddenAt = Date.now();
+  tooltip.hidden = true;
+}
+
+document.addEventListener('pointerover', (e) => {
+  const target = (e.target as Element).closest<HTMLElement>('[data-tip]');
+  if (target === tipTarget) return;
+  hideTip();
+  if (!target || !target.dataset.tip) return;
+  tipTarget = target;
+  // Once one tooltip is showing, moving to the next button shows its tooltip right away.
+  tipTimer = window.setTimeout(() => showTip(target), Date.now() - tipHiddenAt < 400 ? 0 : 550);
+});
+document.addEventListener('pointerdown', hideTip, true);
+document.addEventListener('scroll', hideTip, true);
+window.addEventListener('blur', hideTip);
 
 // ---- wiring ---------------------------------------------------------------------
 
