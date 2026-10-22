@@ -20,12 +20,16 @@ for (const el of document.querySelectorAll<HTMLElement>('i[data-icon]')) el.repl
 
 // ---- navigation: one pane at a time, like System Settings ----------------------
 
+let lastShown = 'general';
+
 function showPane(name: string) {
+  closeSearch();
   const item = document.querySelector<HTMLElement>(`.nav-item[data-pane="${name}"]`) ?? document.querySelector<HTMLElement>('.nav-item')!;
   for (const el of document.querySelectorAll<HTMLElement>('.nav-item')) el.classList.toggle('selected', el === item);
   for (const pane of document.querySelectorAll<HTMLElement>('.pane')) pane.hidden = pane.dataset.pane !== item.dataset.pane;
   document.getElementById('pane-title')!.textContent = item.textContent!.trim();
   try {
+    lastShown = item.dataset.pane!;
     localStorage.setItem('pane', item.dataset.pane!);
   } catch {
     // Remembering the pane is a nicety.
@@ -42,6 +46,109 @@ try {
 // A pane asked for by the menu (Help → Keyboard Shortcuts) wins over the last one used.
 showPane(location.hash.slice(1) || lastPane);
 api.onPane(showPane);
+
+// ---- search: every setting, shortcut and pane, found by any word -------------------------
+
+const search = document.getElementById('search') as HTMLInputElement;
+const results = document.getElementById('search-results')!;
+
+interface SearchHit {
+  pane: HTMLElement;
+  /** The row to scroll to and highlight; the pane itself when the pane's name matched. */
+  target?: HTMLElement;
+  title: string;
+  detail: string;
+}
+
+/** Read from the page each time, so settings drawn later (shortcuts, projects) are found too. */
+function searchIndex(): SearchHit[] {
+  const hits: SearchHit[] = [];
+  for (const pane of document.querySelectorAll<HTMLElement>('.pane[data-pane]')) {
+    const item = document.querySelector<HTMLElement>(`.nav-item[data-pane="${pane.dataset.pane}"]`);
+    if (!item) continue;
+    const about = [...pane.querySelectorAll('.lead, .footnote')].map((p) => p.textContent!.trim().replace(/\s+/g, ' ')).join(' ');
+    hits.push({ pane: item, title: item.textContent!.trim(), detail: about });
+    for (const row of pane.querySelectorAll<HTMLElement>('.row, .theme-card')) {
+      const title = row.querySelector('strong, .shortcut-label')?.textContent?.trim() ?? row.textContent!.trim();
+      const detail = row.querySelector('small')?.textContent?.trim() ?? row.querySelector('kbd, .keycap')?.textContent?.trim() ?? '';
+      if (title) hits.push({ pane: item, target: row, title, detail });
+    }
+  }
+  return hits;
+}
+
+function runSearch() {
+  const words = search.value.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return closeSearch();
+  // Settings whose name matches come first, then those whose description does, then whole panes.
+  const rank = (hit: SearchHit) => (words.every((w) => hit.title.toLowerCase().includes(w)) ? 0 : hit.target ? 1 : 2);
+  const matches = searchIndex()
+    .filter((hit) => {
+      const text = `${hit.title} ${hit.detail} ${hit.pane.textContent}`.toLowerCase();
+      return words.every((w) => text.includes(w));
+    })
+    .sort((a, b) => rank(a) - rank(b));
+  // Panes without a match fade, like System Settings.
+  for (const item of document.querySelectorAll<HTMLElement>('.nav-item')) {
+    item.classList.toggle('no-match', !matches.some((m) => m.pane === item));
+    item.classList.remove('selected');
+  }
+  for (const pane of document.querySelectorAll<HTMLElement>('.pane')) pane.hidden = pane !== results;
+  document.getElementById('pane-title')!.textContent = 'Search';
+  results.replaceChildren(
+    ...(matches.length
+      ? matches.slice(0, 40).map((hit, i) => {
+          const row = document.createElement('button');
+          row.className = `result${i === 0 ? ' first' : ''}`;
+          const icon = hit.pane.querySelector('.nav-icon')!.cloneNode(true);
+          const text = document.createElement('span');
+          text.className = 'result-text';
+          const title = Object.assign(document.createElement('strong'), { textContent: hit.title });
+          const where = Object.assign(document.createElement('small'), {
+            textContent: hit.target ? `${hit.pane.textContent!.trim()}${hit.detail ? ` · ${hit.detail}` : ''}` : `${hit.title} pane${hit.detail ? ` · ${hit.detail}` : ''}`,
+          });
+          text.append(title, where);
+          row.append(icon, text);
+          row.addEventListener('click', () => reveal(hit));
+          return row;
+        })
+      : [Object.assign(document.createElement('p'), { className: 'no-results', textContent: `No settings match “${search.value.trim()}”.` })]),
+  );
+  results.hidden = false;
+}
+
+function closeSearch() {
+  // Runs from showPane at startup too, before `results` above is set.
+  const results = document.getElementById('search-results')!;
+  if (results.hidden) return;
+  results.hidden = true;
+  for (const item of document.querySelectorAll<HTMLElement>('.nav-item')) item.classList.remove('no-match');
+}
+
+/** Goes to the setting and points it out for a moment. */
+function reveal(hit: SearchHit) {
+  showPane(hit.pane.dataset.pane!);
+  if (!hit.target) return;
+  hit.target.scrollIntoView({ block: 'center' });
+  hit.target.classList.remove('found');
+  void hit.target.offsetWidth;
+  hit.target.classList.add('found');
+}
+
+search.addEventListener('input', runSearch);
+search.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') results.querySelector<HTMLButtonElement>('.result')?.click();
+  if (e.key === 'Escape') {
+    search.value = '';
+    closeSearch();
+    showPane(lastShown);
+  }
+});
+// ⌘F, as in System Settings (the app menu's Find sends it here while Settings is in front).
+api.onFind(() => {
+  search.focus();
+  search.select();
+});
 const adBlock = document.getElementById('adBlock') as HTMLInputElement;
 const searchEngine = document.getElementById('searchEngine') as HTMLSelectElement;
 const downloadsFolder = document.getElementById('downloadsFolder')!;

@@ -10,6 +10,10 @@
   <body>
     <nav id="nav">
       <div class="nav-titlebar"></div>
+      <label class="nav-search">
+        <i data-icon="search"></i>
+        <input id="search" type="search" placeholder="Search" spellcheck="false" autocomplete="off" />
+      </label>
       <button class="nav-item" data-pane="general"><span class="nav-icon gray"><i data-icon="settings"></i></span>General</button>
       <button class="nav-item" data-pane="appearance"><span class="nav-icon pink"><i data-icon="palette"></i></span>Appearance</button>
       <button class="nav-item" data-pane="tabs"><span class="nav-icon teal"><i data-icon="tab"></i></span>Tabs</button>
@@ -25,6 +29,8 @@
 
     <main>
       <header class="pane-titlebar"><h1 id="pane-title"></h1></header>
+
+      <section id="search-results" class="pane" hidden></section>
 
       <section class="pane" data-pane="general">
         <div class="card">
