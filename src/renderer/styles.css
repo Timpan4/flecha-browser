@@ -790,3 +790,9 @@ footer {
 .error-badge:hover {
   background: #b92f2f;
 }
+
+.boost-mark {
+  flex: none;
+  font-size: 11px;
+  opacity: 0.7;
+}

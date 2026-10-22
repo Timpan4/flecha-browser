@@ -9,6 +9,7 @@ import {
   clipboard,
   dialog,
   ipcMain,
+  shell,
   session,
   type WebContents,
 } from 'electron';
@@ -20,6 +21,7 @@ import { describe as describeEnvironment } from './environments';
 import { addAdBlockSession, setAdBlocking } from './adblock';
 import { onEachSession, sessionForSpace } from './sessions';
 import { findLocalServers } from './localServers';
+import { Boosts, type BoostKind } from './boosts';
 import { History } from './history';
 import { Downloads } from './downloads';
 import { Settings } from './settings';
@@ -65,8 +67,10 @@ class Browser implements TabHost {
   constructor(
     private store: Store,
     private history: History,
+    private boosts: Boosts,
     private extensions: ElectronChromeExtensions,
   ) {
+    this.boostedHosts = boosts.hosts();
     const saved = store.state.window;
     // Only reuse the old position if it is still on a connected display.
     const onScreen =
@@ -107,6 +111,38 @@ class Browser implements TabHost {
   }
 
   private localServers: LocalServer[] = [];
+  private boostedHosts: string[] = [];
+
+  /** A boost file changed: restyle matching pages in place, or reload them for scripts. */
+  boostChanged({ host, kind }: { host: string; kind: BoostKind }) {
+    for (const view of this.views.values()) {
+      const wc = view.webContents;
+      if (!this.boosts.matches(wc.getURL(), host)) continue;
+      if (kind === 'styles') void this.boosts.refreshStyles(wc);
+      else wc.reload();
+    }
+    this.boostedHosts = this.boosts.hosts();
+    this.sendState();
+  }
+
+  /** Opens (creating from a template if needed) the active site's boost in your editor. */
+  editBoost(kind: BoostKind) {
+    const url = this.store.activeTab?.url;
+    let host: string | undefined;
+    try {
+      host = url ? new URL(url).hostname.replace(/^www\./, '') : undefined;
+    } catch {
+      host = undefined;
+    }
+    if (!host) return void shell.openPath(this.boosts.dir);
+    void shell.openPath(this.boosts.fileFor(host, kind));
+    this.boostedHosts = this.boosts.hosts();
+    this.sendState();
+  }
+
+  openBoostsFolder() {
+    void shell.openPath(this.boosts.dir);
+  }
   private consoleErrors = new Map<string, number>();
   private stateTimer?: NodeJS.Timeout;
 
@@ -249,6 +285,7 @@ class Browser implements TabHost {
       this.history.updateTitle(wc.getURL(), title);
     });
     wc.on('page-favicon-updated', (_e, favicons) => update({ favicon: favicons[0] }));
+    wc.on('dom-ready', () => void this.boosts.apply(wc));
     wc.on('console-message', (event) => {
       if (event.level !== 'error') return;
       this.consoleErrors.set(tabId, (this.consoleErrors.get(tabId) ?? 0) + 1);
@@ -558,6 +595,7 @@ class Browser implements TabHost {
       environment: this.store.activeTab ? describeEnvironment(this.store.activeTab.url, this.store.state.environments) : undefined,
       localServers: this.localServers,
       consoleErrors: Object.fromEntries(this.consoleErrors),
+      boostedHosts: this.boostedHosts,
       nav: {
         canGoBack: wc?.navigationHistory.canGoBack() ?? false,
         canGoForward: wc?.navigationHistory.canGoForward() ?? false,
@@ -843,6 +881,15 @@ function buildMenu(browser: Browser, store: Store, settings: Settings) {
       label: 'Extensions',
       submenu: [
         { label: 'Chrome Web Store', click: () => browser.openTab(WEB_STORE_URL) },
+        {
+          label: 'Boosts',
+          submenu: [
+            { label: 'Edit Script for This Site', accelerator: 'Alt+CmdOrCtrl+B', click: () => browser.editBoost('script') },
+            { label: 'Edit Styles for This Site', click: () => browser.editBoost('styles') },
+            { type: 'separator' },
+            { label: 'Open Boosts Folder', click: () => browser.openBoostsFolder() },
+          ],
+        },
         { type: 'separator' },
         ...installedExtensions().map(
           (ext): MenuItemConstructorOptions => ({
@@ -919,6 +966,8 @@ function registerIpc(browser: Browser, store: Store, history: History, downloads
     toggleSidebar: () => store.setSidebarVisible(!store.state.sidebarVisible),
     copyText: (text: string) => clipboard.writeText(String(text)),
     showConsole: (id: string) => browser.showConsole(id),
+    editBoost: (kind: BoostKind) => browser.editBoost(kind === 'styles' ? 'styles' : 'script'),
+    openBoostsFolder: () => browser.openBoostsFolder(),
     splitWith: (id: string) => store.splitWith(id),
     splitNew: (input: string) => browser.splitNew(input),
     closePeek: () => browser.closePeek(),
@@ -969,7 +1018,8 @@ app.whenReady().then(async () => {
     setupExtensions(() => browser),
     setAdBlocking(store.state.adBlock !== false).catch((err) => console.error('Ad blocker failed', err)),
   ]);
-  browser = new Browser(store, history, extensions);
+  const boosts = new Boosts((file) => browser?.boostChanged(file));
+  browser = new Browser(store, history, boosts, extensions);
   const settings = new Settings(store, () => browser!.sendState());
   buildMenu(browser, store, settings);
   const rebuildMenu = () => buildMenu(browser!, store, settings);

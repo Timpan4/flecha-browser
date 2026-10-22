@@ -120,6 +120,8 @@ export interface UiState extends BrowserState {
   localServers: LocalServer[];
   /** Console errors since each tab's last page load (only tabs that have some). */
   consoleErrors: Record<string, number>;
+  /** Hosts that have a boost (script or styles), for the sidebar's ⚡ marker. */
+  boostedHosts: string[];
 }
 
 export type PaletteMode = 'new-tab' | 'navigate' | 'split';
@@ -204,6 +206,8 @@ export interface FlechaApi {
   toggleSidebar(): void;
   copyText(text: string): void;
   showConsole(tabId: string): void;
+  editBoost(kind: 'script' | 'styles'): void;
+  openBoostsFolder(): void;
   splitWith(tabId: string): void;
   splitNew(input: string): void;
   closePeek(): void;

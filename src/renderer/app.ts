@@ -195,6 +195,7 @@ function tabRow(tab: TabInfo, space: Space, target: DropTarget) {
     favicon(tab),
     h('span', { class: 'title' }, tab.title || host(tab.url)),
     errorBadge(tab),
+    isBoosted(tab.url) ? h('span', { class: 'boost-mark', title: 'Boosted: a script or styles from ~/.flecha/boosts run here' }, '⚡') : null,
     tab.device === 'mobile'
       ? h('span', { class: 'device-badge', title: 'Phone-sized mirror' }, svg('M5 1.5h6a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-11a1 1 0 0 1 1-1zM7 12.5h2'))
       : h('span', { class: 'split-badge', title: 'In split view' }, svg('M2.5 3.5h11v9h-11zM8 3.5v9')),
@@ -220,6 +221,15 @@ function errorBadge(tab: TabInfo) {
     },
     count > 99 ? '99+' : String(count),
   );
+}
+
+function isBoosted(url: string) {
+  try {
+    const { hostname } = new URL(url);
+    return !!state?.boostedHosts.some((h) => h !== 'all' && (hostname === h || hostname.endsWith(`.${h}`)));
+  } catch {
+    return false;
+  }
 }
 
 function isDevUrl(url: string) {
@@ -351,6 +361,15 @@ function updatePalette() {
       for (const target of state.environment.switches) {
         items.push({ label: `Switch to ${target.label}`, sub: `${state.environment.name} · ${host(target.url)}`, run: () => api.navigate(target.url) });
       }
+    }
+    // `boost` edits this site's boost files.
+    if (/^boost/i.test(q)) {
+      const site = activeId ? host(state.tabs[activeId]?.url ?? '') : '';
+      if (site) {
+        items.push({ label: `Edit boost script for ${site}`, sub: 'TypeScript · runs on every page of the site', run: () => api.editBoost('script') });
+        items.push({ label: `Edit boost styles for ${site}`, sub: 'CSS · applies live as you save', run: () => api.editBoost('styles') });
+      }
+      items.push({ label: 'Open boosts folder', sub: '~/.flecha/boosts · keep it in git', run: () => api.openBoostsFolder() });
     }
     for (const dev of devSuggestions(q, activeId ? state.tabs[activeId]?.url : undefined)) {
       items.push({
