@@ -162,6 +162,13 @@ export class Store {
     return mirror.id;
   }
 
+  setSplitRatio(ratio: number) {
+    const space = this.activeSpace;
+    if (!space.split) return;
+    space.splitRatio = Math.min(0.8, Math.max(0.2, ratio));
+    this.changed();
+  }
+
   /** Ends the split. A responsive mirror has no life of its own, so its id is returned for closing. */
   unsplit(): string | undefined {
     const space = this.activeSpace;

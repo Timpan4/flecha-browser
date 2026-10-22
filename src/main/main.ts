@@ -71,6 +71,8 @@ class Browser implements TabHost {
   /** The hidden sidebar is showing temporarily, floating over the page. */
   private sidebarPeek = false;
   private findView?: WebContentsView;
+  private divider?: WebContentsView;
+  private draggingDivider = false;
   /** The page being searched; find closes when a different tab comes on screen. */
   private findTarget?: WebContents;
   private lastSelected?: WebContents;
@@ -617,6 +619,41 @@ class Browser implements TabHost {
     this.sendState();
   }
 
+  /** The draggable strip in the gap between split panes (not for the fixed-width phone). */
+  private placeDivider(area: ReturnType<Browser['contentRect']> | undefined, leftWidth: number) {
+    const show = !!area && this.store.activeSpace.splitMode !== 'responsive';
+    if (!show) {
+      if (this.divider && this.win.contentView.children.includes(this.divider)) this.win.contentView.removeChildView(this.divider);
+      return;
+    }
+    if (!this.divider) {
+      this.divider = new WebContentsView({
+        webPreferences: { preload: path.join(__dirname, '../preload/divider-preload.js'), sandbox: true, contextIsolation: true },
+      });
+      this.divider.setBackgroundColor('#00000000');
+      this.divider.webContents.loadFile(path.join(__dirname, '../renderer/divider.html'));
+    }
+    if (!this.win.contentView.children.includes(this.divider)) this.win.contentView.addChildView(this.divider, this.shown.length);
+    // While dragging it covers both panes, so the pages can't take the mouse away.
+    this.divider.setBounds(this.draggingDivider ? area! : { x: area!.x + leftWidth, y: area!.y, width: GAP, height: area!.height });
+  }
+
+  get dividerContents() {
+    return this.divider?.webContents;
+  }
+
+  dragDivider(phase: 'start' | 'end' | 'reset' | number) {
+    if (phase === 'start' || phase === 'end') this.draggingDivider = phase === 'start';
+    else if (phase === 'reset') this.store.setSplitRatio(0.5);
+    else if (this.divider) {
+      // The view may still be the thin strip or already cover the panes; its x says which.
+      const area = this.contentRect();
+      const x = this.divider.getBounds().x - area.x + phase;
+      this.store.setSplitRatio((x - GAP / 2) / (area.width - GAP));
+    }
+    this.layout();
+  }
+
   private contentRect() {
     const { width, height } = this.win.getContentBounds();
     const left = this.store.state.sidebarVisible ? SIDEBAR_WIDTH : GAP;
@@ -643,11 +680,14 @@ class Browser implements TabHost {
     if (right && this.store.activeSpace.splitMode === 'responsive') {
       left.setBounds({ ...area, width: area.width - PHONE.width - GAP });
       right.setBounds({ ...area, x: area.x + area.width - PHONE.width, width: PHONE.width });
+      this.placeDivider(area, area.width - PHONE.width - GAP);
     } else if (right) {
-      const half = Math.floor((area.width - GAP) / 2);
-      left.setBounds({ ...area, width: half });
-      right.setBounds({ ...area, x: area.x + half + GAP, width: area.width - half - GAP });
+      const leftWidth = Math.round((area.width - GAP) * (this.store.activeSpace.splitRatio ?? 0.5));
+      left.setBounds({ ...area, width: leftWidth });
+      right.setBounds({ ...area, x: area.x + leftWidth + GAP, width: area.width - leftWidth - GAP });
+      this.placeDivider(area, leftWidth);
     } else {
+      this.placeDivider(undefined, 0);
       left?.setBounds(area);
     }
 
@@ -1059,6 +1099,12 @@ function registerIpc(browser: Browser, store: Store, history: History, downloads
     if (event.sender !== browser.findViewContents) return;
     lastFind = String(text);
     browser.find(lastFind, !!forward, !!newSearch);
+  });
+  for (const phase of ['start', 'end', 'reset'] as const) {
+    ipcMain.on(`divider:${phase}`, (event) => event.sender === browser.dividerContents && browser.dragDivider(phase));
+  }
+  ipcMain.on('divider:drag', (event, clientX: number) => {
+    if (event.sender === browser.dividerContents && Number.isFinite(clientX)) browser.dragDivider(clientX);
   });
   ipcMain.on('find:close', (event) => {
     if (event.sender === browser.findViewContents) browser.closeFind();

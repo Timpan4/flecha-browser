@@ -39,6 +39,8 @@ export interface Space {
   split?: [string, string];
   /** `responsive`: the right side is a phone-sized mirror that follows the left side's navigation. */
   splitMode?: 'responsive';
+  /** Share of the width the left pane takes, 0.2–0.8. Half and half when unset. */
+  splitRatio?: number;
 }
 
 export interface ArchivedTab {
@@ -191,6 +193,16 @@ export interface SettingsApi {
   newAgentToken(): Promise<SettingsView>;
   copy(text: string): Promise<void>;
   openBoosts(): Promise<void>;
+}
+
+/** The split divider's bridge; it lives in its own thin view between the panes. */
+export interface DividerApi {
+  start(): void;
+  /** The pointer's x inside the divider view, which grows to cover both panes while dragging. */
+  drag(clientX: number): void;
+  end(): void;
+  /** Double-click: back to half and half. */
+  reset(): void;
 }
 
 export interface FlechaApi {

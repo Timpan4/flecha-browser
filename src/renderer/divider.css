@@ -1,0 +1,33 @@
+/* The strip between two split panes. While dragging, the view covers both panes (so the
+   pages can't steal the mouse) and only the cursor shows. */
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+  cursor: col-resize;
+}
+
+#handle {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 4px;
+  height: 36px;
+  border-radius: 2px;
+  background: var(--text-3);
+  opacity: 0;
+  transform: translate(-50%, -50%);
+  transition: opacity var(--fast) var(--ease), height var(--fast) var(--ease);
+}
+
+body:hover #handle {
+  opacity: 1;
+  height: 52px;
+}
+
+body.dragging #handle {
+  display: none;
+}
