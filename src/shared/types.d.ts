@@ -160,6 +160,7 @@ export interface FlechaApi {
   openPalette(mode: PaletteMode): void;
   closePalette(): void;
   toggleSidebar(): void;
+  copyText(text: string): void;
   splitWith(tabId: string): void;
   splitNew(input: string): void;
   closePeek(): void;

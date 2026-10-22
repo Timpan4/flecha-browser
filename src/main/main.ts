@@ -766,6 +766,7 @@ function registerIpc(browser: Browser, store: Store, history: History, downloads
     openPalette: (mode: PaletteMode) => browser.setPaletteOpen(true, mode),
     closePalette: () => browser.setPaletteOpen(false),
     toggleSidebar: () => store.setSidebarVisible(!store.state.sidebarVisible),
+    copyText: (text: string) => clipboard.writeText(String(text)),
     splitWith: (id: string) => store.splitWith(id),
     splitNew: (input: string) => browser.splitNew(input),
     closePeek: () => browser.closePeek(),

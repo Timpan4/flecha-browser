@@ -1,3 +1,4 @@
+import { devSuggestions } from './devCommands.js';
 import type { DownloadInfo, DropTarget, FlechaApi, HistoryEntry, PaletteMode, PeekState, PinnedNode, Space, TabInfo, UiState } from '../shared/types';
 
 declare global {
@@ -234,6 +235,8 @@ interface PaletteItem {
   label: string;
   sub: string;
   run: () => void;
+  /** Shown under the results while this item is selected, e.g. a decoded JWT. */
+  detail?: string;
 }
 
 const palette = $('palette');
@@ -274,13 +277,21 @@ function updatePalette() {
   const matches = (title: string, url: string) => !lower || title.toLowerCase().includes(lower) || url.toLowerCase().includes(lower);
   const items: PaletteItem[] = [];
 
+  const activeId = state.spaces.find((s) => s.id === state!.activeSpaceId)?.activeTabId;
   if (q) {
     const open = { navigate: api.navigate, 'new-tab': api.newTab, split: api.splitNew }[paletteMode];
+    for (const dev of devSuggestions(q, activeId ? state.tabs[activeId]?.url : undefined)) {
+      items.push({
+        label: dev.label,
+        sub: dev.sub,
+        detail: dev.copy,
+        run: () => (dev.url ? open(dev.url) : api.copyText(dev.copy ?? '')),
+      });
+    }
     const verb = looksLikeUrl(q) ? 'Open' : `Search ${state.searchEngineName}`;
     items.push({ label: q, sub: paletteMode === 'split' ? `${verb} in split view` : verb, run: () => open(q) });
   }
 
-  const activeId = state.spaces.find((s) => s.id === state!.activeSpaceId)?.activeTabId;
   const openTabs = Object.values(state.tabs)
     .filter((t) => matches(t.title, t.url) && !(paletteMode === 'split' && t.id === activeId))
     .sort((a, b) => b.lastActive - a.lastActive)
@@ -329,6 +340,9 @@ function updatePalette() {
     ),
   );
   paletteList.children[selected]?.scrollIntoView({ block: 'nearest' });
+  const detail = $('palette-detail');
+  detail.hidden = !items[selected]?.detail;
+  detail.textContent = items[selected]?.detail ?? '';
 }
 
 function runItem(i: number) {
