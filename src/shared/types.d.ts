@@ -126,6 +126,8 @@ export interface UiState extends BrowserState {
   consoleErrors: Record<string, number>;
   /** Hosts that have a boost (script or styles), for the sidebar's ⚡ marker. */
   boostedHosts: string[];
+  /** Hosts whose icon is cached and served as `favicon://<host>`. */
+  faviconHosts: string[];
   /** What a coding agent is doing, for the sidebar. */
   agent?: { connected: boolean; tabId?: string; action?: string; busy: boolean };
 }

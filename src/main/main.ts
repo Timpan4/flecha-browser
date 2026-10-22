@@ -23,6 +23,7 @@ import { addAdBlockSession, setAdBlocking } from './adblock';
 import { onEachSession, sessionForSpace } from './sessions';
 import { findLocalServers } from './localServers';
 import { Boosts, type BoostKind } from './boosts';
+import { Favicons, registerFaviconScheme } from './favicons';
 import { AgentBridge, type AgentTab, type ConsoleEntry } from './agentBridge';
 import { History } from './history';
 import { Downloads } from './downloads';
@@ -50,6 +51,7 @@ const isPrimaryInstance = app.requestSingleInstanceLock();
 if (!isPrimaryInstance) app.quit();
 let focusBrowser = () => {};
 listenForExternalLinks(() => focusBrowser());
+registerFaviconScheme();
 
 app.userAgentFallback = app.userAgentFallback.replace(/ Electron\/\S+/, '').replace(/ Flecha\/\S+/i, '');
 
@@ -169,6 +171,8 @@ class Browser implements TabHost {
     this.agentIdleTimer = setTimeout(() => this.sendState(), 4000);
   }
   private boostedHosts: string[] = [];
+  /** Set right after startup; fetches icons for saved tabs that were never opened. */
+  favicons?: Favicons;
 
   /** A boost file changed: restyle matching pages in place, or reload them for scripts. */
   boostChanged({ host, kind }: { host: string; kind: BoostKind }) {
@@ -658,6 +662,7 @@ class Browser implements TabHost {
       localServers: this.localServers,
       consoleErrors: Object.fromEntries(this.consoleErrors),
       boostedHosts: this.boostedHosts,
+      faviconHosts: this.favicons?.hosts() ?? [],
       agent: this.agentActivity && {
         connected: Date.now() - this.agentActivity.at < 60_000,
         busy: Date.now() - this.agentActivity.at < 3_500,
@@ -1096,6 +1101,14 @@ app.whenReady().then(async () => {
     setAdBlocking(store.state.adBlock !== false).catch((err) => console.error('Ad blocker failed', err)),
   ]);
   const boosts = new Boosts((file) => browser?.boostChanged(file));
+  // Icons arrive in bursts while saved sites are fetched; one sidebar update per burst is enough.
+  let faviconTimer: NodeJS.Timeout | undefined;
+  const favicons = new Favicons(() => {
+    faviconTimer ??= setTimeout(() => {
+      faviconTimer = undefined;
+      browser?.sendState();
+    }, 400);
+  });
   browser = new Browser(store, history, boosts, extensions);
   const bridge = new AgentBridge(
     {
@@ -1132,6 +1145,10 @@ app.whenReady().then(async () => {
     registerPermissions(browser!, ses);
   });
   focusBrowser = () => browser!.focus();
+  browser.favicons = favicons;
+  const wantFavicons = () => favicons.want(Object.values(store.state.tabs).filter((t) => !t.favicon).map((t) => t.url));
+  wantFavicons();
+  store.onChange(wantFavicons);
   browser.watchLocalServers();
   deliverLinksTo((url) => {
     browser!.openTab(url);

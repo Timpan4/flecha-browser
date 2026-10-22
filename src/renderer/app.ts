@@ -63,8 +63,16 @@ function favicon(tab: TabInfo) {
   const site = host(tab.url);
   const letter = () =>
     h('span', { class: 'favicon letter', style: `--hue: ${hueFor(site)}` }, (site.replace(/^[^a-z0-9]+/i, '')[0] ?? '•').toUpperCase());
-  if (!tab.favicon) return letter();
-  const img = h('img', { class: 'favicon', src: tab.favicon, draggable: 'false' }) as HTMLImageElement;
+  let hostname = '';
+  try {
+    hostname = new URL(tab.url).hostname;
+  } catch {
+    // Not a web page.
+  }
+  // The page's own icon once it has loaded, else the icon Flecha fetched for the site.
+  const src = tab.favicon || (state?.faviconHosts.includes(hostname) ? `favicon://${hostname}` : undefined);
+  if (!src) return letter();
+  const img = h('img', { class: 'favicon', src, draggable: 'false' }) as HTMLImageElement;
   img.onerror = () => img.replaceWith(letter());
   return img;
 }
