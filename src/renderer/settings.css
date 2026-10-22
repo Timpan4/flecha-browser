@@ -51,17 +51,16 @@ h2 {
   border-bottom: 0.5px solid var(--line);
 }
 
-section > .row:first-of-type {
-  border-radius: 10px 10px 0 0;
+/* Rows in a section read as one rounded card (the h2 is the section's first child). */
+section > h2 + .row {
+  border-top-left-radius: 10px;
+  border-top-right-radius: 10px;
 }
 
-section > .row:last-of-type {
-  border-radius: 0 0 10px 10px;
+section > .row:last-child {
+  border-bottom-left-radius: 10px;
+  border-bottom-right-radius: 10px;
   border-bottom: 0;
-}
-
-section > .row:only-of-type {
-  border-radius: 10px;
 }
 
 .row strong {
