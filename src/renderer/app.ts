@@ -694,6 +694,7 @@ type PaletteGroup = '' | 'Developer' | 'Actions' | 'Tabs' | 'History' | 'Archive
 const ACTIONS: Array<{ label: string; keywords: string; icon: IconName; hint?: string; run: () => void }> = [
   { label: 'New Space', keywords: 'space create add', icon: 'space', hint: '⌃⇧N', run: () => api.newSpace() },
   { label: 'Edit Space', keywords: 'space rename emoji colour color icon', icon: 'space', run: () => state && openSpaceEditor(state.activeSpaceId) },
+  { label: 'New Flechinha Window', keywords: 'flechinha little mini small window quick lookup', icon: 'miniWindow', hint: '⌥⌘N', run: () => api.newFlechinha() },
   { label: 'Settings', keywords: 'preferences settings config options', icon: 'settings', hint: '⌘,', run: () => api.openSettings() },
   { label: 'Responsive View', keywords: 'mobile phone responsive device split', icon: 'phone', hint: '⌥⌘M', run: () => api.toggleResponsive() },
   { label: 'Toggle Sidebar', keywords: 'sidebar hide show', icon: 'sidebar', hint: '⌘S', run: () => api.toggleSidebar() },

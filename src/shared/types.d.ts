@@ -322,4 +322,6 @@ export interface FlechaApi {
   cancelDownload(id: string): void;
   clearDownloads(): void;
   promotePeek(): void;
+  /** An empty Flechinha, for a quick lookup. */
+  newFlechinha(): void;
 }

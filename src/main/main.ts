@@ -1343,7 +1343,7 @@ function findAgain(browser: Browser, forward: boolean) {
   else browser.openFind();
 }
 
-function registerIpc(browser: Browser, store: Store, history: History, downloads: Downloads) {
+function registerIpc(browser: Browser, store: Store, history: History, downloads: Downloads, flechinhas: Flechinhas) {
   ipcMain.on('find:query', (event, text: string, forward: boolean, newSearch: boolean) => {
     if (event.sender !== browser.findViewContents) return;
     lastFind = String(text);
@@ -1422,6 +1422,7 @@ function registerIpc(browser: Browser, store: Store, history: History, downloads
     cancelDownload: (id: string) => downloads.cancel(id),
     clearDownloads: () => downloads.clear(),
     promotePeek: () => browser.promotePeek(),
+    newFlechinha: () => flechinhas.create(),
   };
   ipcMain.on('cmd', (event, name: string, ...args: unknown[]) => {
     if (event.sender !== browser.uiContents) return;
@@ -1509,7 +1510,7 @@ app.whenReady().then(async () => {
   const downloads = new Downloads(downloadOptions, (items, started) =>
     browser!.uiContents.send('downloads', items, started),
   );
-  registerIpc(browser, store, history, downloads);
+  registerIpc(browser, store, history, downloads, flechinhas);
   onEachSession((ses) => {
     addAdBlockSession(ses);
     fixGoogleSignIn(ses);

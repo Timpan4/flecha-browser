@@ -64,6 +64,7 @@ const api: FlechaApi = {
   cancelDownload: cmd('cancelDownload'),
   clearDownloads: cmd('clearDownloads'),
   promotePeek: cmd('promotePeek'),
+  newFlechinha: cmd('newFlechinha'),
 };
 
 contextBridge.exposeInMainWorld('flecha', api);
