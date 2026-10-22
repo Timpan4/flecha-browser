@@ -1547,6 +1547,14 @@ app.whenReady().then(async () => {
   }, () => browser!.openBoostsFolder(), () => {
     store.setOnboarded(false);
     browser!.focus();
+  }, {
+    loadedContents: (id) => browser!.loadedContents(id),
+    destroyView: (id) => browser!.destroyView(id),
+    show: (id) => {
+      store.activate(id);
+      browser!.focus();
+    },
+    faviconHosts: () => favicons.hosts(),
   });
   const flechinhas = new Flechinhas({
     resolve: (input) => resolveInput(input, store.state.searchEngine),

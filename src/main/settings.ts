@@ -9,6 +9,7 @@ import { SEARCH_ENGINES } from './url';
 import { sanitize as sanitizeEnvironments } from './environments';
 import { canSetDefaultBrowser, isDefaultBrowser, makeDefaultBrowser } from './defaultBrowser';
 import { SHORTCUTS, displayKeys, isShortcutId, keysFor, sameKeys, shortcutList } from './shortcuts';
+import { TabManager, type TabManagerHost } from './tabManager';
 
 /** A modifier and a key, or a function key alone: "Alt+Cmd+K", "F5". */
 const ACCELERATOR = /^((Ctrl|Alt|Shift|Cmd)\+){1,4}[^+]+$|^F\d{1,2}$/;
@@ -25,7 +26,9 @@ export class Settings {
     private agent: { setEnabled(enabled: boolean): Promise<void>; endpoint(): string | undefined },
     openBoosts: () => void,
     showTour: () => void,
+    tabs: TabManagerHost,
   ) {
+    new TabManager(store, tabs, () => this.win);
     const fromSettings = (event: Electron.IpcMainInvokeEvent) => !!this.win && event.sender === this.win.webContents;
     ipcMain.handle('settings:get', (event) => (fromSettings(event) ? this.view() : undefined));
     ipcMain.handle('settings:set', (event, patch: SettingsPatch) => (fromSettings(event) ? this.apply(patch) : undefined));
