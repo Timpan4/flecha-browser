@@ -1,4 +1,4 @@
-import type { SettingsApi, SettingsView } from '../shared/types';
+import type { RecordedKey, SettingsApi, SettingsView } from '../shared/types';
 import { ICONS, type IconName } from './icons.js';
 
 declare global {
@@ -113,34 +113,106 @@ for (const card of document.querySelectorAll<HTMLElement>('.theme-card')) {
 archiveAfter.addEventListener('change', async () => render(await api.set({ archiveAfterHours: Number(archiveAfter.value) })));
 peekPinnedLinks.addEventListener('change', async () => render(await api.set({ peekPinnedLinks: peekPinnedLinks.checked })));
 
-// ---- keyboard shortcuts -------------------------------------------------------------
+// ---- keyboard shortcuts: click a key cap, press the new keys --------------------------
 
-const SHORTCUTS: Array<[string, Array<[string, string]>]> = [
-  ['Getting around', [['⌘T', 'New tab (command bar)'], ['⌘L', 'Open location'], ['⌘[  ⌘]', 'Back · Forward'], ['⌘R', 'Reload'], ['⌘F', 'Find in page'], ['⌘S', 'Show or hide the sidebar']]],
-  ['Tabs', [['⌘1 … ⌘9', 'Go to tab · last tab'], ['⌃Tab', 'Next tab'], ['⌘W', 'Close tab'], ['⇧⌘T', 'Reopen closed tab'], ['⌘D', 'Pin or unpin'], ['⇧⌘K', 'Clear Today'], ['⇧⌘C', 'Copy link'], ['⌥⌘C', 'Copy as Markdown link']]],
-  ['Spaces', [['⌃1 … ⌃9', 'Go to Space'], ['⌥⌘→  ⌥⌘←', 'Next · previous Space'], ['⌃⇧N', 'New Space']]],
-  ['Split & Peek', [['⌃⇧=', 'Split with a new tab'], ['⌃⇧−', 'Exit split view'], ['Esc', 'Close Peek']]],
-  ['Developer', [['⌥⌘I', 'Developer Tools'], ['⌥⌘M', 'Responsive view'], ['⌥⌘E', 'Next environment'], ['⌥⌘B', 'Edit boost for this site'], ['⌥⌘U', 'View source']]],
-];
+const shortcutGroups = document.getElementById('shortcut-groups')!;
+const shortcutNotice = document.getElementById('shortcut-notice')!;
+let shortcuts: SettingsView['shortcuts'] = [];
+let recordingId: string | undefined;
 
-document.getElementById('shortcut-groups')!.replaceChildren(
-  ...SHORTCUTS.map(([title, items]) => {
-    const group = document.createElement('div');
-    group.className = 'shortcut-group';
-    const heading = Object.assign(document.createElement('h2'), { textContent: title });
-    const card = document.createElement('div');
-    card.className = 'card';
-    for (const [keys, label] of items) {
-      const row = document.createElement('div');
-      row.className = 'row shortcut-row';
-      const kbd = Object.assign(document.createElement('kbd'), { textContent: keys });
-      row.append(Object.assign(document.createElement('span'), { textContent: label }), kbd);
-      card.append(row);
-    }
-    group.append(heading, card);
-    return group;
-  }),
-);
+/** e.code names the physical key, so ⌥ combinations don't turn into "å" or "∂". */
+const CODE_KEYS: Record<string, string> = {
+  BracketLeft: '[', BracketRight: ']', Comma: ',', Period: '.', Slash: '/', Backslash: '\\', Semicolon: ';', Quote: "'",
+  Backquote: '`', Minus: '-', Equal: '=', ArrowLeft: 'Left', ArrowRight: 'Right', ArrowUp: 'Up', ArrowDown: 'Down',
+  Enter: 'Return', Tab: 'Tab', Space: 'Space', Backspace: 'Backspace', Delete: 'Delete',
+};
+
+function acceleratorFor(key: RecordedKey): string | undefined {
+  const base = /^Key([A-Z])$/.exec(key.code)?.[1] ?? /^Digit(\d)$/.exec(key.code)?.[1] ?? /^(F\d{1,2})$/.exec(key.code)?.[1] ?? CODE_KEYS[key.code];
+  if (!base) return undefined;
+  const mods = [key.control && 'Ctrl', key.alt && 'Alt', key.shift && 'Shift', key.meta && 'Cmd'].filter(Boolean);
+  // Plain keys belong to the page you're typing in; only function keys work alone.
+  if (!mods.length && !/^F\d/.test(base)) return undefined;
+  return [...mods, base].join('+');
+}
+
+function renderShortcuts() {
+  const groups = [...new Set(shortcuts.map((s) => s.group))];
+  shortcutGroups.replaceChildren(
+    ...groups.map((title) => {
+      const group = document.createElement('div');
+      group.className = 'shortcut-group';
+      const card = document.createElement('div');
+      card.className = 'card';
+      for (const item of shortcuts.filter((s) => s.group === title)) {
+        const row = document.createElement('div');
+        row.className = `row shortcut-row${item.changed ? ' changed' : ''}`;
+        const label = Object.assign(document.createElement('span'), { className: 'shortcut-label', textContent: item.label });
+        const actions = document.createElement('span');
+        actions.className = 'shortcut-actions';
+        if (item.changed) {
+          const reset = Object.assign(document.createElement('button'), { className: 'shortcut-reset', title: 'Back to the default' });
+          reset.append(icon('reload'));
+          reset.addEventListener('click', async () => applyShortcuts(await api.set({ shortcut: { id: item.id, keys: 'default' } })));
+          actions.append(reset);
+        }
+        if (item.fixed) {
+          actions.append(Object.assign(document.createElement('kbd'), { textContent: item.keys }));
+        } else {
+          const cap = Object.assign(document.createElement('button'), { className: 'keycap' });
+          const recording = recordingId === item.id;
+          cap.classList.toggle('recording', recording);
+          cap.classList.toggle('empty', !item.keys);
+          cap.textContent = recording ? 'Press keys…' : item.keys || 'None';
+          cap.title = recording ? 'Esc cancels · ⌫ removes the shortcut' : 'Click to record a new shortcut';
+          cap.addEventListener('click', () => void startRecording(recording ? undefined : item.id));
+          actions.append(cap);
+        }
+        row.append(label, actions);
+        card.append(row);
+      }
+      group.append(Object.assign(document.createElement('h2'), { textContent: title }), card);
+      return group;
+    }),
+  );
+}
+
+async function startRecording(id: string | undefined) {
+  recordingId = id;
+  await api.recordShortcut(!!id);
+  renderShortcuts();
+}
+
+api.onKey(async (key) => {
+  if (!recordingId) return;
+  if (['Shift', 'Control', 'Alt', 'Meta'].includes(key.key)) return;
+  const id = recordingId;
+  if (key.code === 'Escape' && !key.shift && !key.control && !key.alt && !key.meta) return startRecording(undefined);
+  const removing = (key.code === 'Backspace' || key.code === 'Delete') && !key.shift && !key.control && !key.alt && !key.meta;
+  const keys = removing ? null : acceleratorFor(key);
+  if (keys === undefined) return showNotice('Use at least one of ⌘ ⌃ ⌥ with a key, or a function key.');
+  await startRecording(undefined);
+  applyShortcuts(await api.set({ shortcut: { id, keys } }));
+});
+
+function applyShortcuts(view: SettingsView) {
+  shortcuts = view.shortcuts;
+  renderShortcuts();
+  showNotice(view.notice);
+}
+
+let noticeTimer: number | undefined;
+function showNotice(text: string | undefined) {
+  shortcutNotice.textContent = text ?? '';
+  shortcutNotice.hidden = !text;
+  clearTimeout(noticeTimer);
+  if (text) noticeTimer = window.setTimeout(() => (shortcutNotice.hidden = true), 5000);
+}
+
+document.getElementById('resetShortcuts')!.addEventListener('click', async () => applyShortcuts(await api.set({ resetShortcuts: true })));
+// Leaving the pane or the window ends recording.
+window.addEventListener('blur', () => recordingId && void startRecording(undefined));
+for (const item of document.querySelectorAll<HTMLElement>('.nav-item')) item.addEventListener('click', () => recordingId && void startRecording(undefined));
 
 const agentEnabled = document.getElementById('agentEnabled') as HTMLInputElement;
 let agent: SettingsView['agent'] = { enabled: false };
@@ -184,6 +256,10 @@ function render(view: SettingsView) {
   }
   archiveAfter.value = String(view.archiveAfterHours);
   peekPinnedLinks.checked = view.peekPinnedLinks;
+  if (!recordingId) {
+    shortcuts = view.shortcuts;
+    renderShortcuts();
+  }
   agent = view.agent;
   agentEnabled.checked = agent.enabled;
   for (const row of document.querySelectorAll<HTMLElement>('[data-agent-only]')) row.hidden = !agent.enabled;

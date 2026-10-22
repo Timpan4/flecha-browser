@@ -510,3 +510,103 @@ code {
 .shortcut-row kbd {
   font-size: var(--text-xs);
 }
+
+.shortcuts-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.shortcuts-head .lead {
+  flex: 1;
+}
+
+.notice {
+  margin: -4px 0 14px;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--amber) 14%, transparent);
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+
+.notice[hidden] {
+  display: none;
+}
+
+.shortcut-label {
+  flex: 1;
+}
+
+.shortcut-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.shortcut-row.changed .shortcut-label::after {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 8px;
+  border-radius: 50%;
+  background: var(--blue);
+  vertical-align: middle;
+}
+
+.keycap {
+  min-width: 64px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  background: var(--fill-subtle);
+  box-shadow: inset 0 0 0 0.5px var(--surface-line), 0 1px 0 var(--surface-line);
+  font: 500 var(--text-sm) / 26px var(--mono);
+  color: var(--text);
+  text-align: center;
+  transition: background var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
+}
+
+.keycap:hover {
+  background: var(--fill-hover);
+}
+
+.keycap.empty {
+  font-family: var(--font);
+  color: var(--text-3);
+}
+
+.keycap.recording {
+  min-width: 110px;
+  background: color-mix(in srgb, var(--blue) 14%, transparent);
+  box-shadow: inset 0 0 0 1.5px var(--blue);
+  font-family: var(--font);
+  color: var(--blue);
+  animation: recording 1.2s ease-in-out infinite alternate;
+}
+
+@keyframes recording {
+  to {
+    box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--blue) 40%, transparent);
+  }
+}
+
+.shortcut-reset {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  color: var(--text-3);
+}
+
+.shortcut-reset:hover {
+  background: var(--fill-hover);
+  color: var(--text);
+}
+
+.shortcut-reset svg {
+  width: 13px;
+  height: 13px;
+}

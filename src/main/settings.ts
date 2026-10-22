@@ -8,10 +8,16 @@ import { setAdBlocking } from './adblock';
 import { SEARCH_ENGINES } from './url';
 import { sanitize as sanitizeEnvironments } from './environments';
 import { canSetDefaultBrowser, isDefaultBrowser, makeDefaultBrowser } from './defaultBrowser';
+import { SHORTCUTS, displayKeys, isShortcutId, keysFor, sameKeys, shortcutList } from './shortcuts';
+
+/** A modifier and a key, or a function key alone: "Alt+Cmd+K", "F5". */
+const ACCELERATOR = /^((Ctrl|Alt|Shift|Cmd)\+){1,4}[^+]+$|^F\d{1,2}$/;
 
 /** The ⌘, window: a small page of its own, talking to the main process over `settings:*` IPC. */
 export class Settings {
   private win?: BrowserWindow;
+  /** Settings is recording a shortcut: keys go to it, not to the page or the menus. */
+  private recording = false;
 
   constructor(
     private store: Store,
@@ -38,6 +44,9 @@ export class Settings {
       if (!fromSettings(event)) return undefined;
       makeDefaultBrowser();
       return this.view();
+    });
+    ipcMain.handle('settings:record-shortcut', (event, recording: boolean) => {
+      if (fromSettings(event)) this.recording = !!recording;
     });
     ipcMain.handle('settings:choose-downloads-folder', (event) => (fromSettings(event) ? this.chooseDownloadsFolder() : undefined));
   }
@@ -69,6 +78,14 @@ export class Settings {
       },
     });
     this.win.loadFile(path.join(__dirname, '../renderer/settings.html'), pane ? { hash: pane } : undefined);
+    // Runs before the menus see the key, so recording ⌘T doesn't also open a tab.
+    this.win.webContents.on('before-input-event', (event, input) => {
+      if (!this.recording || input.type !== 'keyDown') return;
+      event.preventDefault();
+      const { code, key, shift, control, alt, meta } = input;
+      this.win?.webContents.send('settings:key', { code, key, shift, control, alt, meta });
+    });
+    this.win.on('blur', () => (this.recording = false));
     this.win.once('ready-to-show', () => this.win?.show());
   }
 
@@ -82,6 +99,7 @@ export class Settings {
       theme: this.store.state.theme ?? 'system',
       archiveAfterHours: this.store.state.archiveAfterHours ?? 12,
       peekPinnedLinks: this.store.state.peekPinnedLinks !== false,
+      shortcuts: shortcutList(this.store.state),
       agent: {
         enabled: !!this.store.state.agent?.enabled,
         endpoint: this.agent.endpoint(),
@@ -106,7 +124,35 @@ export class Settings {
     return this.view();
   }
 
+  /** Records one shortcut. A command that had the same keys loses them, and the view says so. */
+  private setShortcut(id: string, keys: string | null): string | undefined {
+    if (!isShortcutId(id)) return undefined;
+    if (keys === 'default') {
+      this.store.setKeybinding(id, undefined);
+      return undefined;
+    }
+    if (keys !== null && !ACCELERATOR.test(keys)) return undefined;
+    // ⌘1…⌘9 and ⌃1…⌃9 pick tabs and Spaces.
+    if (keys && /^(Cmd|Ctrl)\+\d$/.test(keys)) return `${displayKeys(keys)} already goes to a tab or Space.`;
+    let notice: string | undefined;
+    if (keys) {
+      for (const other of SHORTCUTS) {
+        const otherKeys = keysFor(this.store.state, other.id);
+        if (other.id !== id && otherKeys && sameKeys(otherKeys, keys)) {
+          this.store.setKeybinding(other.id, null);
+          notice = `${displayKeys(keys)} was “${other.label}”, which now has no shortcut.`;
+        }
+      }
+    }
+    const fallback = SHORTCUTS.find((s) => s.id === id)!.keys;
+    this.store.setKeybinding(id, keys && sameKeys(keys, fallback) ? undefined : keys);
+    return notice;
+  }
+
   private async apply(patch: SettingsPatch): Promise<SettingsView> {
+    let notice: string | undefined;
+    if (patch.resetShortcuts) this.store.resetKeybindings();
+    if (patch.shortcut) notice = this.setShortcut(String(patch.shortcut.id), patch.shortcut.keys === null ? null : String(patch.shortcut.keys));
     // Ignore ids that aren't in the list rather than storing garbage.
     if (patch.searchEngine && patch.searchEngine in SEARCH_ENGINES) {
       this.store.setSearchEngine(patch.searchEngine);
@@ -127,7 +173,7 @@ export class Settings {
       await setAdBlocking(patch.adBlock).catch((err) => console.error('Ad blocker failed', err));
     }
     this.onChanged();
-    return this.view();
+    return { ...this.view(), notice };
   }
 }
 
