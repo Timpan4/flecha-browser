@@ -1,11 +1,14 @@
+/* The find-in-page bar. Values come from tokens.css. */
+
 html,
 body {
   margin: 0;
   height: 100%;
   overflow: hidden;
   background: transparent;
-  font: 13px -apple-system, BlinkMacSystemFont, sans-serif;
-  color: #1d1d1f;
+  font: 400 var(--text-md) var(--font);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
 }
 
 #bar {
@@ -15,10 +18,9 @@ body {
   height: 100%;
   margin: 0;
   padding: 0 6px 0 12px;
-  box-sizing: border-box;
   border-radius: 10px;
-  background: #fff;
-  border: 0.5px solid rgba(0, 0, 0, 0.18);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 0.5px var(--surface-line);
 }
 
 #query {
@@ -26,19 +28,24 @@ body {
   min-width: 0;
   border: 0;
   outline: none;
-  font: inherit;
   background: transparent;
+  color: var(--text);
+  font: inherit;
+}
+
+#query::placeholder {
+  color: var(--text-3);
 }
 
 #count {
-  font-size: 11px;
-  color: rgba(29, 29, 31, 0.55);
   padding: 0 6px;
+  font: 500 var(--text-xs) var(--mono);
+  color: var(--text-3);
   white-space: nowrap;
 }
 
 #count.none {
-  color: #d33;
+  color: var(--red);
 }
 
 button {
@@ -46,24 +53,17 @@ button {
   place-items: center;
   width: 26px;
   height: 26px;
-  padding: 0;
-  border: 0;
-  border-radius: 6px;
-  background: none;
-  color: rgba(29, 29, 31, 0.6);
+  border-radius: var(--radius-sm);
+  color: var(--text-2);
+  transition: background var(--fast) var(--ease);
 }
 
 button:hover {
-  background: rgba(0, 0, 0, 0.06);
-  color: #1d1d1f;
+  background: var(--surface-2);
+  color: var(--text);
 }
 
 svg {
   width: 14px;
   height: 14px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.6;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
