@@ -1,6 +1,7 @@
 import { devSuggestions } from './devCommands.js';
 import { ICONS, type IconName } from './icons.js';
 import { setupOnboarding } from './onboarding.js';
+import { SPACE_COLORS, SPACE_EMOJIS } from './spaceChoices.js';
 import type { DownloadInfo, DropTarget, FlechaApi, HistoryEntry, PaletteMode, PeekState, PinnedNode, Space, TabInfo, UiState } from '../shared/types';
 
 declare global {
@@ -587,9 +588,6 @@ api.onFlash((message) => {
 });
 
 // ---- Space editor -------------------------------------------------------------------
-
-const SPACE_EMOJIS = ['🏠', '💼', '🚀', '🧪', '🛠️', '🎨', '📚', '🧠', '💡', '🎮', '🎧', '🎬', '✈️', '🌱', '☕️', '🔥', '⭐️', '🌙', '🌊', '🐙', '🦊', '🐳', '⚡️', '🎯', '📈', '💬', '📝', '🗂️', '🛒', '❤️'];
-const SPACE_COLORS = ['#cdd9f7', '#c9e3f5', '#cfe8ec', '#d3ecd5', '#d9e8c6', '#f5e7c4', '#f7dcc0', '#f6d6cc', '#f4cfdc', '#e8d6f3', '#d6d3f5', '#dfe3e8'];
 
 const spaceEditor = $('space-editor');
 const spaceName = $<HTMLInputElement>('space-name');
