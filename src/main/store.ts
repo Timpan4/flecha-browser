@@ -417,6 +417,25 @@ export class Store {
     this.changed();
   }
 
+  /** Another browser's bookmarks become the pinned tabs and folders of a new Space named `name`. */
+  importBookmarks(name: string, nodes: ImportNode[]): Space {
+    const s = this.state;
+    const pristine = this.dropPristineSpace();
+    const n = s.spaces.length;
+    const space: Space = {
+      id: randomUUID(),
+      name,
+      emoji: SPACE_EMOJIS[n % SPACE_EMOJIS.length],
+      color: SPACE_COLORS[n % SPACE_COLORS.length],
+      pinned: this.importNodes(nodes),
+      today: [],
+    };
+    s.spaces.push(space);
+    if (pristine || !s.spaces.some((sp) => sp.id === s.activeSpaceId)) s.activeSpaceId = space.id;
+    this.changed();
+    return space;
+  }
+
   saveNow() {
     clearTimeout(this.saveTimer);
     const tabs = Object.fromEntries(
