@@ -29,6 +29,7 @@ import { registerPermissions } from './permissions';
 import { fixGoogleSignIn, followGoogleSignIn } from './googleSignIn';
 import { AgentBridge, type AgentTab, type ConsoleEntry } from './agentBridge';
 import { History } from './history';
+import { detectBrowsers, importBrowser } from './browserImport';
 import { Downloads } from './downloads';
 import { Settings } from './settings';
 import { canSetDefaultBrowser, deliverLinksTo, isDefaultBrowser, listenForExternalLinks, makeDefaultBrowser } from './defaultBrowser';
@@ -1313,6 +1314,10 @@ function registerIpc(browser: Browser, store: Store, history: History, downloads
   });
   ipcMain.handle('search-history', (event, query: string) =>
     event.sender === browser.uiContents ? history.search(String(query)) : [],
+  );
+  ipcMain.handle('import:detect', (event) => (event.sender === browser.uiContents ? detectBrowsers() : []));
+  ipcMain.handle('import:run', (event, id: string) =>
+    event.sender === browser.uiContents ? importBrowser(String(id), store, history) : undefined,
   );
   ipcMain.handle('top-sites', (event) => {
     if (event.sender !== browser.uiContents) return [];
