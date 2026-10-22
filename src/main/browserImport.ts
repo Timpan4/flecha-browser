@@ -132,10 +132,75 @@ function chromiumNode(node: any): ImportNode[] {
   return [];
 }
 
+// ---- Firefox ---------------------------------------------------------------
+
+/** Bookmarks and history both live in each profile's places.sqlite. */
+function firefoxSource(): BrowserSource {
+  const root = appSupport('Firefox', 'Profiles');
+  return {
+    id: 'firefox',
+    name: 'Firefox',
+    profiles: () =>
+      listDirs(root).flatMap((dir) => {
+        const places = path.join(root, dir, 'places.sqlite');
+        // Profile folders are named "<random>.<name>", e.g. "x1y2z3.default-release".
+        return isFile(places) ? [{ name: dir.replace(/^[^.]+\./, ''), bookmarkFiles: [places], historyFile: places }] : [];
+      }),
+    readBookmarks: async (profile) => firefoxBookmarks(await querySqlite<FirefoxBookmark>(profile.bookmarkFiles[0], FIREFOX_BOOKMARKS)),
+    readHistory: (profile) =>
+      // Firefox counts in microseconds since 1970.
+      querySqlite<HistoryEntry>(
+        profile.historyFile!,
+        `SELECT url, title, visit_count AS visits, last_visit_date / 1000 AS lastVisit
+         FROM moz_places WHERE hidden = 0 AND visit_count > 0 AND last_visit_date IS NOT NULL
+         ORDER BY last_visit_date DESC LIMIT ${HISTORY_ROWS}`,
+      ),
+  };
+}
+
+interface FirefoxBookmark {
+  id: number;
+  parent: number;
+  /** 1 bookmark, 2 folder, 3 separator. */
+  type: number;
+  title: string | null;
+  guid: string;
+  url: string | null;
+}
+
+const FIREFOX_BOOKMARKS = `SELECT b.id AS id, b.parent AS parent, b.type AS type, b.title AS title, b.guid AS guid, p.url AS url
+  FROM moz_bookmarks b LEFT JOIN moz_places p ON p.id = b.fk ORDER BY b.parent, b.position`;
+
+/** The toolbar becomes the top level; the menu, unsorted and mobile roots get folders. Tags are skipped. */
+function firefoxBookmarks(rows: FirefoxBookmark[]): ImportNode[] {
+  const children = new Map<number, FirefoxBookmark[]>();
+  for (const row of rows) {
+    const list = children.get(row.parent) ?? [];
+    list.push(row);
+    children.set(row.parent, list);
+  }
+  const nodes = (parent: number): ImportNode[] =>
+    (children.get(parent) ?? []).flatMap((row): ImportNode[] => {
+      if (row.type === 1 && row.url) return [{ kind: 'tab', url: row.url, title: row.title || row.url }];
+      if (row.type === 2) return [folder(row.title || 'Untitled folder', nodes(row.id))];
+      return [];
+    });
+  const root = (guid: string) => {
+    const row = rows.find((r) => r.guid === guid);
+    return row ? nodes(row.id) : [];
+  };
+  return [
+    ...root('toolbar_____'),
+    folder('Bookmarks Menu', root('menu________')),
+    folder('Other Bookmarks', root('unfiled_____')),
+    folder('Mobile Bookmarks', root('mobile______')),
+  ];
+}
+
 // ---- detecting and importing -------------------------------------------------
 
 function sources(): BrowserSource[] {
-  return [...CHROMIUM.map(([id, name, dir]) => chromiumSource(id, name, appSupport(dir)))];
+  return [...CHROMIUM.map(([id, name, dir]) => chromiumSource(id, name, appSupport(dir))), firefoxSource()];
 }
 
 /** Browsers on this Mac that have bookmarks or history to bring over. Only checks which files exist. */
