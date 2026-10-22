@@ -326,7 +326,8 @@ export class Store {
     return true;
   }
 
-  newSpace(): Space {
+  /** Switches to the new Space unless `activate` is false (Settings adds one without leaving the current Space). */
+  newSpace(activate = true): Space {
     const n = this.state.spaces.length;
     const space: Space = {
       id: randomUUID(),
@@ -337,7 +338,7 @@ export class Store {
       today: [],
     };
     this.state.spaces.push(space);
-    this.state.activeSpaceId = space.id;
+    if (activate) this.state.activeSpaceId = space.id;
     this.changed();
     return space;
   }
