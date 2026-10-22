@@ -31,6 +31,7 @@ import { AgentBridge, type AgentTab, type ConsoleEntry } from './agentBridge';
 import { History } from './history';
 import { Downloads } from './downloads';
 import { Settings } from './settings';
+import { Flechinhas } from './flechinha';
 import { canSetDefaultBrowser, deliverLinksTo, isDefaultBrowser, listenForExternalLinks, makeDefaultBrowser } from './defaultBrowser';
 import { WEB_STORE_URL, installedExtensions, removeExtension, setupExtensions, type TabHost } from './extensions';
 import type { ElectronChromeExtensions } from 'electron-chrome-extensions';
@@ -1487,7 +1488,23 @@ app.whenReady().then(async () => {
   wantFavicons();
   store.onChange(wantFavicons);
   browser.watchLocalServers();
+  const flechinhas = new Flechinhas({
+    resolve: (input) => resolveInput(input, store.state.searchEngine),
+    searchEngineName: () => searchEngine(store.state.searchEngine).name,
+    tint: () => spaceTint(store.activeSpace.color),
+    space: () => ({ name: store.activeSpace.name, emoji: store.activeSpace.emoji }),
+    openTab: (url, background) => {
+      browser!.openTab(url, { activate: !background });
+      if (!background) browser!.focus();
+    },
+    adopt: (view, favicon) => browser!.adoptPage(view, favicon),
+    record: (url, title) => history.record(url, title),
+    updateTitle: (url, title) => history.updateTitle(url, title),
+  });
+  store.onChange(() => flechinhas.refresh());
+  // Links from other apps get a Flechinha of their own, unless that's turned off in Settings.
   deliverLinksTo((url) => {
+    if (store.state.openLinksInFlechinha !== false) return void flechinhas.create(url);
     browser!.openTab(url);
     browser!.focus();
   });
