@@ -37,8 +37,11 @@ import type { ElectronChromeExtensions } from 'electron-chrome-extensions';
 const SIDEBAR_WIDTH = 260;
 /** With the sidebar hidden, this strip at the window's left edge brings it back on hover. */
 const EDGE_WIDTH = 8;
-/** Room around the floating sidebar for its rounded corners and shadow. */
+/** The floating sidebar's inset from the window edge, and the room on its right for its shadow. */
 const FLOAT_MARGIN = 10;
+const FLOAT_SHADOW = 28;
+/** Where the traffic lights sit so they line up with the sidebar toolbar, docked or floating. */
+const TRAFFIC_LIGHTS = { x: 16, y: 18 };
 const FIND_BAR = { width: 360, height: 40 };
 const GAP = 8;
 /** Back/forward entries kept per tab across restarts. */
@@ -94,7 +97,7 @@ class Browser implements TabHost {
       minWidth: 720,
       minHeight: 420,
       titleBarStyle: 'hidden',
-      trafficLightPosition: { x: 16, y: 18 },
+      trafficLightPosition: TRAFFIC_LIGHTS,
       backgroundColor: spaceTint(store.activeSpace.color),
     });
 
@@ -714,11 +717,15 @@ class Browser implements TabHost {
     const sidebarWidth = this.store.state.sidebarVisible
       ? SIDEBAR_WIDTH
       : this.sidebarPeek
-        ? SIDEBAR_WIDTH + FLOAT_MARGIN * 2
+        ? FLOAT_MARGIN + SIDEBAR_WIDTH + FLOAT_SHADOW
         : EDGE_WIDTH;
     this.ui.setBounds({ x: 0, y: 0, width: fullWidth ? width : sidebarWidth, height });
-    // With the sidebar out of the way the traffic lights would sit on the page; they come back with it.
+    // With the sidebar out of the way the traffic lights would sit on the page; they come back with it,
+    // moved in by the floating sidebar's inset so they stay level with its toolbar.
+    const floating = !this.store.state.sidebarVisible && this.sidebarPeek;
     this.win.setWindowButtonVisibility(this.store.state.sidebarVisible || this.sidebarPeek);
+    const inset = floating ? FLOAT_MARGIN : 0;
+    this.win.setWindowButtonPosition({ x: TRAFFIC_LIGHTS.x + inset, y: TRAFFIC_LIGHTS.y + inset });
 
     const area = this.contentRect();
     const [left, right] = this.shown;
