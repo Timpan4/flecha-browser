@@ -17,7 +17,6 @@ import {
 } from 'electron';
 import type { DetectedBrowser, DropTarget, LocalServer, PaletteMode, PeekState, TabInfo, UiState } from '../shared/types';
 import { Store } from './store';
-import { arcSidebarPath, readArcSidebar } from './arcImport';
 import { resolveInput, searchEngine } from './url';
 import { describe as describeEnvironment } from './environments';
 import { addAdBlockSession, setAdBlocking } from './adblock';
@@ -1034,29 +1033,6 @@ class Browser implements TabHost {
       this.importing = false;
     }
   }
-
-  async importArc() {
-    let file = arcSidebarPath();
-    try {
-      readArcSidebar(file);
-    } catch {
-      const picked = await dialog.showOpenDialog(this.win, {
-        title: 'Find Arc’s StorableSidebar.json',
-        filters: [{ name: 'Arc sidebar', extensions: ['json'] }],
-        properties: ['openFile'],
-      });
-      if (picked.canceled || !picked.filePaths[0]) return;
-      file = picked.filePaths[0];
-    }
-    try {
-      const data = readArcSidebar(file);
-      this.store.importArc(data);
-      const tabs = data.favorites.length + data.spaces.reduce((n, s) => n + countTabs(s.pinned) + s.today.length, 0);
-      dialog.showMessageBox(this.win, { message: `Imported ${data.spaces.length} spaces and ${tabs} tabs from Arc.` });
-    } catch (err) {
-      dialog.showErrorBox('Arc import failed', String(err instanceof Error ? err.message : err));
-    }
-  }
 }
 
 /**
@@ -1099,10 +1075,6 @@ function snapshotHistory(wc: WebContents): TabInfo['history'] {
 
 function plural(n: number, word: string) {
   return `${n.toLocaleString()} ${word}${n === 1 ? '' : 's'}`;
-}
-
-function countTabs(nodes: Array<{ kind: string; children?: any[] }>): number {
-  return nodes.reduce((n, node) => n + (node.kind === 'tab' ? 1 : countTabs(node.children ?? [])), 0);
 }
 
 // ---- app wiring ------------------------------------------------------------
@@ -1402,7 +1374,6 @@ function registerIpc(browser: Browser, store: Store, history: History, downloads
     renameFolder: (id: string, name: string) => store.renameFolder(id, name),
     moveTab: (id: string, target: DropTarget) => store.moveTab(id, target),
     clearToday: () => clearToday(browser, store),
-    importArc: () => browser.importArc(),
     importMenu: () => void browser.importMenu(),
     openPalette: (mode: PaletteMode) => browser.setPaletteOpen(true, mode),
     closePalette: () => browser.setPaletteOpen(false),
