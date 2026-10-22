@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { app, protocol } from 'electron';
+import { writeFileAtomic } from './files';
 
 /**
  * Icons for saved tabs that haven't been opened yet (e.g. everything imported from Arc).
@@ -83,7 +84,7 @@ export class Favicons {
 
   private scheduleSave() {
     clearTimeout(this.saveTimer);
-    this.saveTimer = setTimeout(() => fs.writeFileSync(this.file, JSON.stringify(this.entries)), 1000);
+    this.saveTimer = setTimeout(() => writeFileAtomic(this.file, JSON.stringify(this.entries)), 1000);
   }
 }
 

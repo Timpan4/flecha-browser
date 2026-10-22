@@ -3,6 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { BrowserState, DropTarget, Environment, PinnedNode, SearchEngineId, Space, TabInfo, WindowBounds } from '../shared/types';
 import type { ArcImport, ImportNode } from './arcImport';
+import { writeFileAtomic } from './files';
 
 const SPACE_COLORS = ['#cdd9f7', '#f6d6cc', '#d3ecd5', '#e8d6f3', '#f5e7c4', '#cfe8ec'];
 const SPACE_EMOJIS = ['🏠', '💼', '🎨', '📚', '🧪', '🎮'];
@@ -435,7 +436,7 @@ export class Store {
       Object.entries(this.state.tabs).map(([id, { loading, audible, ...tab }]) => [id, tab]),
     );
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
-    fs.writeFileSync(this.file, JSON.stringify({ ...this.state, tabs }, null, 2));
+    writeFileAtomic(this.file, JSON.stringify({ ...this.state, tabs }, null, 2));
   }
 
   private changed() {

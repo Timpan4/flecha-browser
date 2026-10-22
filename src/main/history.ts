@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { HistoryEntry } from '../shared/types';
+import { writeFileAtomic } from './files';
 
 const LIMIT = 5000;
 const DAY = 24 * 60 * 60 * 1000;
@@ -59,7 +60,7 @@ export class History {
   saveNow() {
     clearTimeout(this.saveTimer);
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
-    fs.writeFileSync(this.file, JSON.stringify([...this.entries.values()]));
+    writeFileAtomic(this.file, JSON.stringify([...this.entries.values()]));
   }
 
   private scheduleSave() {
