@@ -19,6 +19,7 @@ import { resolveInput } from './url';
 import { setAdBlocking } from './adblock';
 import { History } from './history';
 import { Downloads } from './downloads';
+import { Settings } from './settings';
 import { WEB_STORE_URL, installedExtensions, removeExtension, setupExtensions, type TabHost } from './extensions';
 import type { ElectronChromeExtensions } from 'electron-chrome-extensions';
 
@@ -566,10 +567,25 @@ function countTabs(nodes: Array<{ kind: string; children?: any[] }>): number {
 
 // ---- app wiring ------------------------------------------------------------
 
-function buildMenu(browser: Browser, store: Store) {
+function buildMenu(browser: Browser, store: Store, settings: Settings) {
   const active = () => browser.activeContents();
   const template: MenuItemConstructorOptions[] = [
-    { role: 'appMenu' },
+    {
+      label: app.name,
+      submenu: [
+        { role: 'about' },
+        { type: 'separator' },
+        { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: () => settings.open() },
+        { type: 'separator' },
+        { role: 'services' },
+        { type: 'separator' },
+        { role: 'hide' },
+        { role: 'hideOthers' },
+        { role: 'unhide' },
+        { type: 'separator' },
+        { role: 'quit' },
+      ],
+    },
     {
       label: 'File',
       submenu: [
@@ -660,16 +676,6 @@ function buildMenu(browser: Browser, store: Store) {
     {
       label: 'Extensions',
       submenu: [
-        {
-          label: 'Block Ads and Trackers',
-          type: 'checkbox',
-          checked: store.state.adBlock !== false,
-          click: (item) => {
-            store.setAdBlock(item.checked);
-            setAdBlocking(item.checked).catch((err) => console.error('Ad blocker failed', err));
-          },
-        },
-        { type: 'separator' },
         { label: 'Chrome Web Store', click: () => browser.openTab(WEB_STORE_URL) },
         { type: 'separator' },
         ...installedExtensions().map(
@@ -795,8 +801,9 @@ app.whenReady().then(async () => {
     setAdBlocking(store.state.adBlock !== false).catch((err) => console.error('Ad blocker failed', err)),
   ]);
   browser = new Browser(store, history, extensions);
-  buildMenu(browser, store);
-  const rebuildMenu = () => buildMenu(browser!, store);
+  const settings = new Settings(store, () => browser!.sendState());
+  buildMenu(browser, store, settings);
+  const rebuildMenu = () => buildMenu(browser!, store, settings);
   session.defaultSession.extensions.on('extension-loaded', rebuildMenu);
   session.defaultSession.extensions.on('extension-unloaded', rebuildMenu);
   const downloads = new Downloads(session.defaultSession, (items, started) =>

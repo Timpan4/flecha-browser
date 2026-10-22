@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'" />
+    <title>Settings</title>
+    <link rel="stylesheet" href="settings.css" />
+  </head>
+  <body>
+    <header class="titlebar">Settings</header>
+    <main>
+      <section>
+        <h2>Privacy</h2>
+        <label class="row">
+          <span>
+            <strong>Block ads and trackers</strong>
+            <small>Uses the EasyList, EasyPrivacy and uBlock filter lists.</small>
+          </span>
+          <input type="checkbox" id="adBlock" class="switch" />
+        </label>
+      </section>
+    </main>
+    <script type="module" src="settings.js"></script>
+  </body>
+</html>

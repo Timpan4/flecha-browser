@@ -103,6 +103,18 @@ export interface FindBarApi {
   close(): void;
 }
 
+/** What the settings page shows. */
+export interface SettingsView {
+  adBlock: boolean;
+}
+
+export type SettingsPatch = Partial<SettingsView>;
+
+export interface SettingsApi {
+  get(): Promise<SettingsView>;
+  set(patch: SettingsPatch): Promise<SettingsView>;
+}
+
 export interface FlechaApi {
   onState(cb: (state: UiState) => void): void;
   onPalette(cb: (mode: PaletteMode) => void): void;
