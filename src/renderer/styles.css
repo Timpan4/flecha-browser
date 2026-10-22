@@ -159,19 +159,36 @@ body {
   height: 15px;
 }
 
-/* A short confirmation ("Link copied") laid over the address. */
+/* A short confirmation ("Link copied") in place of the address, which steps aside for it. */
+#urlbar {
+  transition: opacity var(--fast) var(--ease);
+}
+
+#urlbar-wrap.flashing #urlbar,
+#urlbar-wrap.flashing .url-action {
+  opacity: 0;
+}
+
 #urlbar-wrap.flashing::after {
-  content: attr(data-flash);
+  content: '✓  ' attr(data-flash);
   position: absolute;
   inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   border-radius: inherit;
-  background: var(--fill-active);
   font-weight: 600;
   color: var(--text);
-  animation: fade var(--fast) var(--ease);
+  white-space: pre;
+  pointer-events: none;
+  animation: flash-in var(--medium) var(--ease);
+}
+
+@keyframes flash-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
 }
 
 #urlbar-icon {
