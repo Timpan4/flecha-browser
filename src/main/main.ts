@@ -364,6 +364,11 @@ class Browser implements TabHost {
     this.destroyView(tabId);
   }
 
+  /** A tab's page if it is loaded; never loads one. */
+  loadedContents(tabId: string): WebContents | undefined {
+    return this.views.get(tabId)?.webContents;
+  }
+
   activeContents(): WebContents | undefined {
     const tab = this.store.activeTab;
     return tab ? this.views.get(tab.id)?.webContents : undefined;
