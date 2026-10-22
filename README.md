@@ -21,6 +21,10 @@ For a throwaway profile: `FLECHA_USER_DATA=/tmp/flecha-dev npm start`.
 - ⌘S hides the sidebar; ⌘D pins or unpins; ⇧⌘C copies the URL
 - Split view: right-click a tab → Open in Split View, or ⌃⇧= to split with a new tab (⌃⇧- exits). Clicking into a pane makes it the active tab
 - Peek: links that open a new tab from a pinned tab or favorite open in a floating preview instead; also available from any link's right-click menu. Esc or a click outside closes it, Open turns it into a tab
+- History: every page you visit is searchable from the command bar
+- Downloads save straight to ~/Downloads (no dialog) and are listed from the sidebar's download button
+- Find in page with ⌘F, ⌘G and ⇧⌘G
+- On launch, the window returns to its last position and each tab keeps its back/forward history and scroll position
 - Chrome extensions: install from the Chrome Web Store (Extensions → Chrome Web Store, then "Add to Chrome"); their buttons appear under the address bar. Manage or remove them from the Extensions menu
 - Built-in ad and tracker blocking (EasyList, EasyPrivacy, uBlock lists), toggled in Extensions → Block Ads and Trackers
 
@@ -37,10 +41,12 @@ For a throwaway profile: `FLECHA_USER_DATA=/tmp/flecha-dev npm start`.
 - `src/main/arcImport.ts`: Arc sidebar parser
 - `src/main/extensions.ts`, `src/preload/extension-compat.ts`: Chrome extension and Web Store support
 - `src/main/adblock.ts`: built-in ad blocker
+- `src/main/history.ts`, `src/main/downloads.ts`: browsing history and downloads
+- `src/renderer/find.*`, `src/preload/find-preload.ts`: the find-in-page bar
 - `src/renderer/`: sidebar and command bar UI
 - `src/preload/preload.ts`: the bridge between the sidebar UI and the main process
 
 ## Next up
 
 Resizable split divider and 3–4 pane splits, Little Arc–style quick windows,
-history, downloads UI, and packaging with electron-builder.
+and packaging with electron-builder.
