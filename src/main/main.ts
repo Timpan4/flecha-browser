@@ -807,7 +807,11 @@ app.whenReady().then(async () => {
   const rebuildMenu = () => buildMenu(browser!, store, settings);
   session.defaultSession.extensions.on('extension-loaded', rebuildMenu);
   session.defaultSession.extensions.on('extension-unloaded', rebuildMenu);
-  const downloads = new Downloads(session.defaultSession, (items, started) =>
+  const downloadOptions = () => ({
+    folder: store.state.downloadsFolder ?? app.getPath('downloads'),
+    askWhereToSave: !!store.state.askWhereToSave,
+  });
+  const downloads = new Downloads(session.defaultSession, downloadOptions, (items, started) =>
     browser!.uiContents.send('downloads', items, started),
   );
   registerIpc(browser, store, history, downloads);

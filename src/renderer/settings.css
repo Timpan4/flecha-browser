@@ -138,3 +138,10 @@ button:disabled {
 .switch:checked::after {
   transform: translateX(14px);
 }
+
+#downloadsFolder {
+  max-width: 340px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

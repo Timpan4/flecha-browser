@@ -275,6 +275,12 @@ export class Store {
     this.changed();
   }
 
+  setDownloads(options: { folder?: string; askWhereToSave?: boolean }) {
+    if (options.folder !== undefined) this.state.downloadsFolder = options.folder;
+    if (options.askWhereToSave !== undefined) this.state.askWhereToSave = options.askWhereToSave;
+    this.changed();
+  }
+
   setAdBlock(enabled: boolean) {
     this.state.adBlock = enabled;
     this.changed();

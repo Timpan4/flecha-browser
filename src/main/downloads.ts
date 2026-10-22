@@ -4,9 +4,14 @@ import { randomUUID } from 'node:crypto';
 import { app, shell, type DownloadItem, type Session } from 'electron';
 import type { DownloadInfo } from '../shared/types';
 
+export interface DownloadOptions {
+  folder: string;
+  askWhereToSave: boolean;
+}
+
 /**
- * Saves downloads straight to ~/Downloads (no save dialog, like Chrome) and keeps a
- * list of this session's downloads for the sidebar.
+ * Saves downloads straight to the chosen folder (no save dialog, like Chrome) unless
+ * "ask where to save" is on, and keeps a list of this session's downloads for the sidebar.
  */
 export class Downloads {
   readonly items: DownloadInfo[] = [];
@@ -15,6 +20,7 @@ export class Downloads {
 
   constructor(
     session: Session,
+    private options: () => DownloadOptions,
     private onChange: (items: DownloadInfo[], started?: DownloadInfo) => void,
   ) {
     session.on('will-download', (_event, item) => this.track(item));
@@ -41,8 +47,11 @@ export class Downloads {
   }
 
   private track(item: DownloadItem) {
-    const savePath = uniquePath(app.getPath('downloads'), item.getFilename());
-    item.setSavePath(savePath);
+    const { folder, askWhereToSave } = this.options();
+    const savePath = uniquePath(fs.existsSync(folder) ? folder : app.getPath('downloads'), item.getFilename());
+    // Without a save path Electron shows its save dialog, starting from the suggested one.
+    if (askWhereToSave) item.setSaveDialogOptions({ defaultPath: savePath });
+    else item.setSavePath(savePath);
     const info: DownloadInfo = {
       id: randomUUID(),
       filename: path.basename(savePath),
@@ -57,6 +66,11 @@ export class Downloads {
     this.live.set(info.id, item);
 
     item.on('updated', (_e, state) => {
+      // With the dialog, the real path is only known once the user has picked it.
+      if (item.getSavePath() && item.getSavePath() !== info.path) {
+        info.path = item.getSavePath();
+        info.filename = path.basename(info.path);
+      }
       info.received = item.getReceivedBytes();
       info.total = item.getTotalBytes();
       info.state = state === 'interrupted' ? 'interrupted' : 'progressing';

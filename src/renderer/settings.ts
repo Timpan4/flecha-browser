@@ -9,6 +9,8 @@ declare global {
 const api = window.settings;
 const adBlock = document.getElementById('adBlock') as HTMLInputElement;
 const searchEngine = document.getElementById('searchEngine') as HTMLSelectElement;
+const downloadsFolder = document.getElementById('downloadsFolder')!;
+const askWhereToSave = document.getElementById('askWhereToSave') as HTMLInputElement;
 
 function render(view: SettingsView) {
   adBlock.checked = view.adBlock;
@@ -16,7 +18,13 @@ function render(view: SettingsView) {
     searchEngine.replaceChildren(...view.searchEngines.map((e) => new Option(e.name, e.id)));
   }
   searchEngine.value = view.searchEngine;
+  downloadsFolder.textContent = view.downloadsFolder;
+  downloadsFolder.title = view.downloadsFolder;
+  askWhereToSave.checked = view.askWhereToSave;
 }
+
+document.getElementById('chooseFolder')!.addEventListener('click', async () => render(await api.chooseDownloadsFolder()));
+askWhereToSave.addEventListener('change', async () => render(await api.set({ askWhereToSave: askWhereToSave.checked })));
 
 searchEngine.addEventListener('change', async () =>
   render(await api.set({ searchEngine: searchEngine.value as SettingsView['searchEngine'] })),

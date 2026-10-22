@@ -70,6 +70,9 @@ export interface BrowserState {
   sidebarVisible: boolean;
   window?: WindowBounds;
   searchEngine?: SearchEngineId;
+  /** Where downloads go; the system Downloads folder when unset. */
+  downloadsFolder?: string;
+  askWhereToSave?: boolean;
   /** Built-in ad and tracker blocking; on unless turned off. */
   adBlock?: boolean;
 }
@@ -112,13 +115,18 @@ export interface SettingsView {
   adBlock: boolean;
   searchEngine: SearchEngineId;
   searchEngines: Array<{ id: SearchEngineId; name: string }>;
+  /** For display only, with the home folder shortened to ~. */
+  downloadsFolder: string;
+  askWhereToSave: boolean;
 }
 
-export type SettingsPatch = Partial<Omit<SettingsView, 'searchEngines'>>;
+/** The downloads folder is only changed through the folder picker, never set directly. */
+export type SettingsPatch = Partial<Omit<SettingsView, 'searchEngines' | 'downloadsFolder'>>;
 
 export interface SettingsApi {
   get(): Promise<SettingsView>;
   set(patch: SettingsPatch): Promise<SettingsView>;
+  chooseDownloadsFolder(): Promise<SettingsView>;
 }
 
 export interface FlechaApi {

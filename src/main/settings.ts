@@ -1,5 +1,6 @@
+import os from 'node:os';
 import path from 'node:path';
-import { BrowserWindow, ipcMain } from 'electron';
+import { BrowserWindow, app, dialog, ipcMain } from 'electron';
 import type { SettingsPatch, SettingsView } from '../shared/types';
 import type { Store } from './store';
 import { setAdBlocking } from './adblock';
@@ -16,6 +17,7 @@ export class Settings {
     const fromSettings = (event: Electron.IpcMainInvokeEvent) => !!this.win && event.sender === this.win.webContents;
     ipcMain.handle('settings:get', (event) => (fromSettings(event) ? this.view() : undefined));
     ipcMain.handle('settings:set', (event, patch: SettingsPatch) => (fromSettings(event) ? this.apply(patch) : undefined));
+    ipcMain.handle('settings:choose-downloads-folder', (event) => (fromSettings(event) ? this.chooseDownloadsFolder() : undefined));
   }
 
   open() {
@@ -43,8 +45,20 @@ export class Settings {
     return {
       adBlock: this.store.state.adBlock !== false,
       searchEngine: this.store.state.searchEngine ?? 'google',
+      downloadsFolder: tildify(this.store.state.downloadsFolder ?? app.getPath('downloads')),
+      askWhereToSave: !!this.store.state.askWhereToSave,
       searchEngines: Object.entries(SEARCH_ENGINES).map(([id, e]) => ({ id: id as keyof typeof SEARCH_ENGINES, name: e.name })),
     };
+  }
+
+  private async chooseDownloadsFolder(): Promise<SettingsView> {
+    const { canceled, filePaths } = await dialog.showOpenDialog(this.win!, {
+      title: 'Choose where downloads are saved',
+      defaultPath: this.store.state.downloadsFolder ?? app.getPath('downloads'),
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    if (!canceled && filePaths[0]) this.store.setDownloads({ folder: filePaths[0] });
+    return this.view();
   }
 
   private async apply(patch: SettingsPatch): Promise<SettingsView> {
@@ -52,6 +66,7 @@ export class Settings {
     if (patch.searchEngine && patch.searchEngine in SEARCH_ENGINES) {
       this.store.setSearchEngine(patch.searchEngine);
     }
+    if (patch.askWhereToSave !== undefined) this.store.setDownloads({ askWhereToSave: patch.askWhereToSave });
     if (patch.adBlock !== undefined) {
       this.store.setAdBlock(patch.adBlock);
       await setAdBlocking(patch.adBlock).catch((err) => console.error('Ad blocker failed', err));
@@ -59,4 +74,9 @@ export class Settings {
     this.onChanged();
     return this.view();
   }
+}
+
+function tildify(folder: string) {
+  const home = os.homedir();
+  return folder === home || folder.startsWith(home + path.sep) ? '~' + folder.slice(home.length) : folder;
 }
