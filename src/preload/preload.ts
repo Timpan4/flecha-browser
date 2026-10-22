@@ -13,6 +13,7 @@ const api: FlechaApi = {
   onRenameSpace: (cb) => void ipcRenderer.on('rename-space', (_e, id) => cb(id)),
   onPeek: (cb) => void ipcRenderer.on('peek', (_e, peek) => cb(peek)),
   ready: cmd('ready'),
+  searchHistory: (query) => ipcRenderer.invoke('search-history', query),
   newTab: cmd('newTab'),
   navigate: cmd('navigate'),
   activate: cmd('activate'),

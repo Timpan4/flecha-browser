@@ -16,6 +16,7 @@ import { Store } from './store';
 import { arcSidebarPath, readArcSidebar } from './arcImport';
 import { resolveInput } from './url';
 import { setAdBlocking } from './adblock';
+import { History } from './history';
 import { WEB_STORE_URL, installedExtensions, removeExtension, setupExtensions, type TabHost } from './extensions';
 import type { ElectronChromeExtensions } from 'electron-chrome-extensions';
 
@@ -41,6 +42,7 @@ class Browser implements TabHost {
 
   constructor(
     private store: Store,
+    private history: History,
     private extensions: ElectronChromeExtensions,
   ) {
     this.win = new BaseWindow({
@@ -155,9 +157,15 @@ class Browser implements TabHost {
     const wc = view.webContents;
     const update = (patch: Parameters<Store['updateTab']>[1]) => this.store.updateTab(tabId, patch);
 
-    wc.on('page-title-updated', (_e, title) => update({ title }));
+    wc.on('page-title-updated', (_e, title) => {
+      update({ title });
+      this.history.updateTitle(wc.getURL(), title);
+    });
     wc.on('page-favicon-updated', (_e, favicons) => update({ favicon: favicons[0] }));
-    wc.on('did-navigate', (_e, url) => update({ url }));
+    wc.on('did-navigate', (_e, url) => {
+      update({ url });
+      this.history.record(url, wc.getTitle());
+    });
     wc.on('did-navigate-in-page', (_e, url, isMainFrame) => isMainFrame && update({ url }));
     wc.on('did-start-loading', () => update({ loading: true }));
     wc.on('did-stop-loading', () => {
@@ -557,7 +565,10 @@ function clearToday(browser: Browser, store: Store) {
   for (const id of store.clearToday()) browser.destroyView(id);
 }
 
-function registerIpc(browser: Browser, store: Store) {
+function registerIpc(browser: Browser, store: Store, history: History) {
+  ipcMain.handle('search-history', (event, query: string) =>
+    event.sender === browser.uiContents ? history.search(String(query)) : [],
+  );
   const handlers: Record<string, (...args: any[]) => unknown> = {
     ready: () => browser.sendState(),
     newTab: (input: string) => browser.openTab(input),
@@ -617,6 +628,7 @@ function safeHost(url: string) {
 
 app.whenReady().then(async () => {
   const store = new Store(app.getPath('userData'));
+  const history = new History(app.getPath('userData'));
   store.archiveStale(ARCHIVE_AFTER_MS);
   let browser: Browser | undefined;
   // Extensions and the ad blocker load first so they reach the very first tabs.
@@ -624,16 +636,19 @@ app.whenReady().then(async () => {
     setupExtensions(() => browser),
     setAdBlocking(store.state.adBlock !== false).catch((err) => console.error('Ad blocker failed', err)),
   ]);
-  browser = new Browser(store, extensions);
+  browser = new Browser(store, history, extensions);
   buildMenu(browser, store);
   const rebuildMenu = () => buildMenu(browser!, store);
   session.defaultSession.extensions.on('extension-loaded', rebuildMenu);
   session.defaultSession.extensions.on('extension-unloaded', rebuildMenu);
-  registerIpc(browser, store);
+  registerIpc(browser, store, history);
   registerPermissions(browser);
 
   setInterval(() => {
     for (const id of store.archiveStale(ARCHIVE_AFTER_MS)) browser.destroyView(id);
   }, 60 * 60 * 1000);
-  app.on('before-quit', () => store.saveNow());
+  app.on('before-quit', () => {
+    store.saveNow();
+    history.saveNow();
+  });
 });

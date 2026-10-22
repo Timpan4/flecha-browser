@@ -1,4 +1,4 @@
-import type { DropTarget, FlechaApi, PaletteMode, PeekState, PinnedNode, Space, TabInfo, UiState } from '../shared/types';
+import type { DropTarget, FlechaApi, HistoryEntry, PaletteMode, PeekState, PinnedNode, Space, TabInfo, UiState } from '../shared/types';
 
 declare global {
   interface Window {
@@ -256,7 +256,9 @@ function openPalette(mode: PaletteMode) {
   paletteInput.focus();
   paletteInput.select();
   selected = 0;
+  historyResults = [];
   updatePalette();
+  refreshHistory();
 }
 
 function closePalette() {
@@ -293,6 +295,11 @@ function updatePalette() {
 
   if (q) {
     const seen = new Set(openTabs.map((t) => t.url));
+    const open = paletteMode === 'split' ? api.splitNew : paletteMode === 'navigate' ? api.navigate : api.newTab;
+    for (const entry of historyResults.filter((e) => !seen.has(e.url)).slice(0, 6)) {
+      seen.add(entry.url);
+      items.push({ label: entry.title || entry.url, sub: `History · ${host(entry.url)}`, run: () => open(entry.url) });
+    }
     for (const item of state.archive.filter((a) => !seen.has(a.url) && matches(a.title, a.url)).slice(0, 5)) {
       seen.add(item.url);
       const reopen = paletteMode === 'split' ? api.splitNew : api.newTab;
@@ -331,9 +338,25 @@ function runItem(i: number) {
   closePalette();
 }
 
+// History lives in the main process; results arrive asynchronously and are dropped if stale.
+let historyResults: HistoryEntry[] = [];
+function refreshHistory() {
+  const q = paletteInput.value.trim();
+  if (!q) {
+    historyResults = [];
+    return;
+  }
+  api.searchHistory(q).then((results) => {
+    if (paletteInput.value.trim() !== q || palette.hidden) return;
+    historyResults = results;
+    updatePalette();
+  });
+}
+
 paletteInput.addEventListener('input', () => {
   selected = 0;
   updatePalette();
+  refreshHistory();
 });
 paletteInput.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') closePalette();

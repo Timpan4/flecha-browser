@@ -31,6 +31,13 @@ export interface ArchivedTab {
   closedAt: number;
 }
 
+export interface HistoryEntry {
+  url: string;
+  title: string;
+  visits: number;
+  lastVisit: number;
+}
+
 export interface BrowserState {
   spaces: Space[];
   activeSpaceId: string;
@@ -66,6 +73,7 @@ export interface FlechaApi {
   onRenameSpace(cb: (spaceId: string) => void): void;
   onPeek(cb: (peek: PeekState | null) => void): void;
   ready(): void;
+  searchHistory(query: string): Promise<HistoryEntry[]>;
   newTab(input: string): void;
   navigate(input: string): void;
   activate(tabId: string): void;
