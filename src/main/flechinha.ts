@@ -1,7 +1,6 @@
 import path from 'node:path';
 import { app, BaseWindow, clipboard, ipcMain, Menu, nativeTheme, screen, WebContentsView, type MenuItemConstructorOptions, type WebContents } from 'electron';
 import type { FlechinhaState } from '../shared/types';
-import { followGoogleSignIn } from './googleSignIn';
 import { sessionForSpace } from './sessions';
 
 const SIZE = { width: 900, height: 700 };
@@ -223,8 +222,6 @@ class Flechinha {
       }
     });
     wc.on('context-menu', (_e, params) => mine() && this.pageMenu(wc, params));
-    followGoogleSignIn(wc);
-    wc.on('did-create-window', (popup) => followGoogleSignIn(popup.webContents));
     wc.setWindowOpenHandler(({ url, disposition }) => {
       // Real popups (OAuth, payment) need window.opener, so let them open as windows.
       if (disposition === 'new-window') return { action: 'allow', overrideBrowserWindowOptions: { width: 520, height: 720 } };

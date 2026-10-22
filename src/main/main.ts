@@ -26,7 +26,6 @@ import { findLocalServers } from './localServers';
 import { Boosts, type BoostKind } from './boosts';
 import { Favicons, registerFaviconScheme } from './favicons';
 import { registerPermissions } from './permissions';
-import { fixGoogleSignIn, followGoogleSignIn } from './googleSignIn';
 import { keysFor, shortcutHints, type ShortcutId } from './shortcuts';
 import { AgentBridge, type AgentTab, type ConsoleEntry } from './agentBridge';
 import { History } from './history';
@@ -412,7 +411,6 @@ class Browser implements TabHost {
     // Favorites belong to no Space, so they always use the shared session.
     const ses = sessionForSpace(this.store.locate(tabId)?.space);
     const view = new WebContentsView({ webPreferences: { session: ses, sandbox: true, contextIsolation: true } });
-    followGoogleSignIn(view.webContents);
     this.wireView(tabId, view);
     const wc = view.webContents;
     const tab = this.store.state.tabs[tabId];
@@ -458,8 +456,6 @@ class Browser implements TabHost {
     });
     if (this.store.state.tabs[tabId]?.device === 'mobile') emulatePhone(wc);
     if (this.store.state.tabs[tabId]?.muted) wc.setAudioMuted(true);
-    // Sign-in popups (OAuth) open as their own windows.
-    wc.on('did-create-window', (popup) => followGoogleSignIn(popup.webContents));
     wc.on('did-start-loading', () => update({ loading: true }));
     wc.on('did-stop-loading', () => {
       update({ loading: false });
@@ -642,7 +638,6 @@ class Browser implements TabHost {
     wc.on('did-navigate', send);
     wc.on('did-navigate-in-page', send);
     wc.on('context-menu', (_e, params) => this.pageMenu(wc, params));
-    followGoogleSignIn(wc);
     wc.on('before-input-event', (event, input) => {
       if (input.type === 'keyDown' && input.key === 'Escape') {
         event.preventDefault();
@@ -1596,7 +1591,6 @@ app.whenReady().then(async () => {
   registerIpc(browser, store, history, downloads, flechinhas);
   onEachSession((ses) => {
     addAdBlockSession(ses);
-    fixGoogleSignIn(ses);
     downloads.attach(ses);
     registerPermissions(
       ses,
