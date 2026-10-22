@@ -110,6 +110,8 @@ export interface BrowserState {
   environments?: Environment[];
   /** Built-in ad and tracker blocking; on unless turned off. */
   adBlock?: boolean;
+  /** The MCP bridge for coding agents: off unless turned on in Settings. */
+  agent?: { enabled: boolean; token: string };
 }
 
 export interface UiState extends BrowserState {
@@ -122,6 +124,8 @@ export interface UiState extends BrowserState {
   consoleErrors: Record<string, number>;
   /** Hosts that have a boost (script or styles), for the sidebar's ⚡ marker. */
   boostedHosts: string[];
+  /** What a coding agent is doing, for the sidebar. */
+  agent?: { connected: boolean; tabId?: string; action?: string; busy: boolean };
 }
 
 export type PaletteMode = 'new-tab' | 'navigate' | 'split';
@@ -163,16 +167,21 @@ export interface SettingsView {
   defaultBrowser: { isDefault: boolean; canSet: boolean };
   /** Edited as text: one `label origin` per line. */
   environments: Array<{ id: string; name: string; targetsText: string }>;
+  agent: { enabled: boolean; endpoint?: string; token?: string };
 }
 
 /** The downloads folder is only changed through the folder picker, never set directly. */
-export type SettingsPatch = Partial<Omit<SettingsView, 'searchEngines' | 'downloadsFolder' | 'defaultBrowser'>>;
+export type SettingsPatch = Partial<Omit<SettingsView, 'searchEngines' | 'downloadsFolder' | 'defaultBrowser' | 'agent'>> & {
+  agentEnabled?: boolean;
+};
 
 export interface SettingsApi {
   get(): Promise<SettingsView>;
   set(patch: SettingsPatch): Promise<SettingsView>;
   chooseDownloadsFolder(): Promise<SettingsView>;
   makeDefaultBrowser(): Promise<SettingsView>;
+  newAgentToken(): Promise<SettingsView>;
+  copy(text: string): Promise<void>;
 }
 
 export interface FlechaApi {

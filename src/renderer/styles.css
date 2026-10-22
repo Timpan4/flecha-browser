@@ -796,3 +796,52 @@ footer {
   font-size: 11px;
   opacity: 0.7;
 }
+
+/* ---- coding agents ------------------------------------------------------ */
+
+#agent-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(124, 92, 255, 0.12);
+  color: #5a3fd6;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+#agent-status[hidden] {
+  display: none;
+}
+
+#agent-status-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #7c5cff;
+}
+
+#agent-status.busy .agent-dot {
+  animation: agent-pulse 0.9s ease-in-out infinite alternate;
+}
+
+@keyframes agent-pulse {
+  from {
+    box-shadow: 0 0 0 0 rgba(124, 92, 255, 0.5);
+  }
+  to {
+    box-shadow: 0 0 0 5px rgba(124, 92, 255, 0);
+  }
+}
+
+.row.agent-driving {
+  box-shadow: inset 0 0 0 1.5px #7c5cff;
+}

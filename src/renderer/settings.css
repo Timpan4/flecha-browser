@@ -195,3 +195,7 @@ code {
   display: inline;
   font-weight: 600;
 }
+
+.row[hidden] {
+  display: none;
+}

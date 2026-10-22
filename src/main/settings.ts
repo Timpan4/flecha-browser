@@ -1,6 +1,7 @@
 import os from 'node:os';
 import path from 'node:path';
-import { BrowserWindow, app, dialog, ipcMain } from 'electron';
+import { randomBytes } from 'node:crypto';
+import { BrowserWindow, app, clipboard, dialog, ipcMain } from 'electron';
 import type { SettingsPatch, SettingsView } from '../shared/types';
 import type { Store } from './store';
 import { setAdBlocking } from './adblock';
@@ -15,10 +16,20 @@ export class Settings {
   constructor(
     private store: Store,
     private onChanged: () => void,
+    private agent: { setEnabled(enabled: boolean): Promise<void>; endpoint(): string | undefined },
   ) {
     const fromSettings = (event: Electron.IpcMainInvokeEvent) => !!this.win && event.sender === this.win.webContents;
     ipcMain.handle('settings:get', (event) => (fromSettings(event) ? this.view() : undefined));
     ipcMain.handle('settings:set', (event, patch: SettingsPatch) => (fromSettings(event) ? this.apply(patch) : undefined));
+    ipcMain.handle('settings:new-agent-token', (event) => {
+      if (!fromSettings(event)) return undefined;
+      // The bridge reads the token on every request, so the old one stops working right away.
+      this.store.setAgent({ enabled: !!this.store.state.agent?.enabled, token: newToken() });
+      return this.view();
+    });
+    ipcMain.handle('settings:copy', (event, text: string) => {
+      if (fromSettings(event)) clipboard.writeText(String(text));
+    });
     ipcMain.handle('settings:make-default-browser', (event) => {
       if (!fromSettings(event)) return undefined;
       makeDefaultBrowser();
@@ -55,6 +66,11 @@ export class Settings {
       downloadsFolder: tildify(this.store.state.downloadsFolder ?? app.getPath('downloads')),
       askWhereToSave: !!this.store.state.askWhereToSave,
       defaultBrowser: { isDefault: isDefaultBrowser(), canSet: canSetDefaultBrowser() },
+      agent: {
+        enabled: !!this.store.state.agent?.enabled,
+        endpoint: this.agent.endpoint(),
+        token: this.store.state.agent?.enabled ? this.store.state.agent.token : undefined,
+      },
       environments: (this.store.state.environments ?? []).map((e) => ({
         id: e.id,
         name: e.name,
@@ -81,6 +97,10 @@ export class Settings {
     }
     if (patch.environments !== undefined) this.store.setEnvironments(sanitizeEnvironments(patch.environments));
     if (patch.askWhereToSave !== undefined) this.store.setDownloads({ askWhereToSave: patch.askWhereToSave });
+    if (patch.agentEnabled !== undefined) {
+      this.store.setAgent({ enabled: patch.agentEnabled, token: this.store.state.agent?.token || newToken() });
+      await this.agent.setEnabled(patch.agentEnabled).catch((err) => console.error('Agent bridge failed', err));
+    }
     if (patch.adBlock !== undefined) {
       this.store.setAdBlock(patch.adBlock);
       await setAdBlocking(patch.adBlock).catch((err) => console.error('Ad blocker failed', err));
@@ -93,4 +113,8 @@ export class Settings {
 function tildify(folder: string) {
   const home = os.homedir();
   return folder === home || folder.startsWith(home + path.sep) ? '~' + folder.slice(home.length) : folder;
+}
+
+function newToken() {
+  return randomBytes(24).toString('base64url');
 }

@@ -40,6 +40,41 @@
       </section>
 
       <section>
+        <h2>Coding agents (MCP)</h2>
+        <label class="row">
+          <span>
+            <strong>Let coding agents use Flecha</strong>
+            <small>
+              Full access: Claude Code, Cursor and other MCP clients can read your tabs and their console, take
+              screenshots, click, type and run JavaScript. Only programs on this Mac with the token can connect.
+            </small>
+          </span>
+          <input type="checkbox" id="agentEnabled" class="switch" />
+        </label>
+        <div class="row" data-agent-only>
+          <span>
+            <strong>Claude Code</strong>
+            <small id="agentEndpoint"></small>
+          </span>
+          <button id="copyClaudeCommand">Copy Command</button>
+        </div>
+        <div class="row" data-agent-only>
+          <span>
+            <strong>Other MCP clients</strong>
+            <small>JSON for Cursor, Windsurf and others.</small>
+          </span>
+          <button id="copyAgentJson">Copy Config</button>
+        </div>
+        <div class="row" data-agent-only>
+          <span>
+            <strong>Token</strong>
+            <small>A new token disconnects every agent using the old one.</small>
+          </span>
+          <button id="newAgentToken">New Token</button>
+        </div>
+      </section>
+
+      <section>
         <h2>Downloads</h2>
         <div class="row">
           <span>

@@ -62,6 +62,33 @@ document.getElementById('addEnvironment')!.addEventListener('click', () => {
   environmentList.querySelector<HTMLInputElement>('.env-card:last-child input')?.focus();
 });
 
+const agentEnabled = document.getElementById('agentEnabled') as HTMLInputElement;
+let agent: SettingsView['agent'] = { enabled: false };
+
+function claudeCommand() {
+  return `claude mcp add --transport http flecha ${agent.endpoint} --header "Authorization: Bearer ${agent.token}"`;
+}
+
+function agentJson() {
+  return JSON.stringify(
+    { mcpServers: { flecha: { type: 'http', url: agent.endpoint, headers: { Authorization: `Bearer ${agent.token}` } } } },
+    null,
+    2,
+  );
+}
+
+async function copied(button: HTMLButtonElement, text: string) {
+  await api.copy(text);
+  const label = button.textContent;
+  button.textContent = 'Copied';
+  setTimeout(() => (button.textContent = label), 1200);
+}
+
+agentEnabled.addEventListener('change', async () => render(await api.set({ agentEnabled: agentEnabled.checked })));
+document.getElementById('copyClaudeCommand')!.addEventListener('click', (e) => copied(e.currentTarget as HTMLButtonElement, claudeCommand()));
+document.getElementById('copyAgentJson')!.addEventListener('click', (e) => copied(e.currentTarget as HTMLButtonElement, agentJson()));
+document.getElementById('newAgentToken')!.addEventListener('click', async () => render(await api.newAgentToken()));
+
 function render(view: SettingsView) {
   adBlock.checked = view.adBlock;
   if (searchEngine.options.length !== view.searchEngines.length) {
@@ -71,6 +98,10 @@ function render(view: SettingsView) {
   downloadsFolder.textContent = view.downloadsFolder;
   downloadsFolder.title = view.downloadsFolder;
   askWhereToSave.checked = view.askWhereToSave;
+  agent = view.agent;
+  agentEnabled.checked = agent.enabled;
+  for (const row of document.querySelectorAll<HTMLElement>('[data-agent-only]')) row.hidden = !agent.enabled;
+  document.getElementById('agentEndpoint')!.textContent = agent.endpoint ?? 'Starting…';
   if (!environments.length) {
     environments = view.environments;
     renderEnvironments();

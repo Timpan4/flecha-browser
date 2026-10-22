@@ -82,6 +82,7 @@ function render(s: UiState) {
   );
 
   renderLocalServers(s);
+  renderAgent(s);
 
   const title = $('space-title');
   if (title.contentEditable !== 'true') title.textContent = `${space.emoji ? space.emoji + '  ' : ''}${space.name}`;
@@ -112,6 +113,14 @@ function render(s: UiState) {
   );
 
   if (!palette.hidden) updatePalette();
+}
+
+/** Shows when a coding agent is connected and what it is doing right now. */
+function renderAgent(s: UiState) {
+  const status = $('agent-status');
+  status.hidden = !s.agent?.connected;
+  status.classList.toggle('busy', !!s.agent?.busy);
+  $('agent-status-text').textContent = s.agent?.busy ? `Agent is ${s.agent.action}` : 'Agent connected';
 }
 
 /** Dev servers on this machine; clicking one goes to its tab, or opens one. */
@@ -189,7 +198,9 @@ function tabRow(tab: TabInfo, space: Space, target: DropTarget) {
   const row = h(
     'button',
     {
-      class: `row${tab.id === space.activeTabId ? ' active' : ''}${inSplit ? ' in-split' : ''}${tab.loading ? ' loading' : ''}`,
+      class: `row${tab.id === space.activeTabId ? ' active' : ''}${inSplit ? ' in-split' : ''}${tab.loading ? ' loading' : ''}${
+        state?.agent?.busy && state.agent.tabId === tab.id ? ' agent-driving' : ''
+      }`,
       title: tab.url,
     },
     favicon(tab),

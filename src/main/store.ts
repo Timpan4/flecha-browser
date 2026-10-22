@@ -314,6 +314,11 @@ export class Store {
     this.changed();
   }
 
+  setAgent(agent: { enabled: boolean; token: string }) {
+    this.state.agent = agent;
+    this.changed();
+  }
+
   setAdBlock(enabled: boolean) {
     this.state.adBlock = enabled;
     this.changed();

@@ -22,6 +22,7 @@ import { addAdBlockSession, setAdBlocking } from './adblock';
 import { onEachSession, sessionForSpace } from './sessions';
 import { findLocalServers } from './localServers';
 import { Boosts, type BoostKind } from './boosts';
+import { AgentBridge, type AgentTab, type ConsoleEntry } from './agentBridge';
 import { History } from './history';
 import { Downloads } from './downloads';
 import { Settings } from './settings';
@@ -111,6 +112,57 @@ class Browser implements TabHost {
   }
 
   private localServers: LocalServer[] = [];
+  private consoleLogs = new Map<string, ConsoleEntry[]>();
+  private agentActivity?: { tabId?: string; action: string; at: number };
+  private agentIdleTimer?: NodeJS.Timeout;
+
+  // ---- AgentHost: what coding agents can do through the MCP bridge ---------
+
+  listTabs(): AgentTab[] {
+    const visible = new Set(this.store.visibleTabIds());
+    const tabs: AgentTab[] = [];
+    const add = (id: string, space: string, zone: AgentTab['zone']) => {
+      const tab = this.store.state.tabs[id];
+      if (tab) tabs.push({ id, title: tab.title, url: tab.url, space, zone, active: visible.has(id) });
+    };
+    for (const id of this.store.state.favorites) add(id, '', 'favorites');
+    for (const space of this.store.state.spaces) {
+      for (const id of this.store.allTabIds(space)) {
+        if (!this.store.state.favorites.includes(id)) add(id, space.name, space.today.includes(id) ? 'today' : 'pinned');
+      }
+    }
+    return tabs;
+  }
+
+  contentsFor(tabId?: string) {
+    const id = tabId ?? this.store.activeTab?.id;
+    if (!id || !this.store.state.tabs[id]) return undefined;
+    return { id, wc: this.viewFor(id).webContents };
+  }
+
+  openTabFor(url: string, background: boolean) {
+    return this.openTab(url, { activate: !background }).id;
+  }
+
+  activate(tabId: string) {
+    this.store.activate(tabId);
+  }
+
+  close(tabId: string) {
+    this.closeTab(tabId);
+  }
+
+  consoleLog(tabId: string) {
+    return this.consoleLogs.get(tabId) ?? [];
+  }
+
+  showActivity(tabId: string | undefined, action: string) {
+    this.agentActivity = { tabId, action, at: Date.now() };
+    this.sendStateSoon();
+    // Drop the "busy" highlight once the agent has been quiet for a moment.
+    clearTimeout(this.agentIdleTimer);
+    this.agentIdleTimer = setTimeout(() => this.sendState(), 4000);
+  }
   private boostedHosts: string[] = [];
 
   /** A boost file changed: restyle matching pages in place, or reload them for scripts. */
@@ -264,6 +316,7 @@ class Browser implements TabHost {
     }
     this.views.delete(tabId);
     this.consoleErrors.delete(tabId);
+    this.consoleLogs.delete(tabId);
     view.webContents.close();
     this.sync();
   }
@@ -287,6 +340,9 @@ class Browser implements TabHost {
     wc.on('page-favicon-updated', (_e, favicons) => update({ favicon: favicons[0] }));
     wc.on('dom-ready', () => void this.boosts.apply(wc));
     wc.on('console-message', (event) => {
+      const log = this.consoleLogs.get(tabId) ?? [];
+      log.push({ level: event.level, message: event.message, source: event.sourceId ? `${event.sourceId}:${event.lineNumber}` : '', time: Date.now() });
+      this.consoleLogs.set(tabId, log.slice(-300));
       if (event.level !== 'error') return;
       this.consoleErrors.set(tabId, (this.consoleErrors.get(tabId) ?? 0) + 1);
       this.sendStateSoon();
@@ -596,6 +652,12 @@ class Browser implements TabHost {
       localServers: this.localServers,
       consoleErrors: Object.fromEntries(this.consoleErrors),
       boostedHosts: this.boostedHosts,
+      agent: this.agentActivity && {
+        connected: Date.now() - this.agentActivity.at < 60_000,
+        busy: Date.now() - this.agentActivity.at < 3_500,
+        tabId: this.agentActivity.tabId,
+        action: this.agentActivity.action,
+      },
       nav: {
         canGoBack: wc?.navigationHistory.canGoBack() ?? false,
         canGoForward: wc?.navigationHistory.canGoForward() ?? false,
@@ -1020,7 +1082,23 @@ app.whenReady().then(async () => {
   ]);
   const boosts = new Boosts((file) => browser?.boostChanged(file));
   browser = new Browser(store, history, boosts, extensions);
-  const settings = new Settings(store, () => browser!.sendState());
+  const bridge = new AgentBridge(
+    {
+      listTabs: () => browser!.listTabs(),
+      contentsFor: (id) => browser!.contentsFor(id),
+      openTab: (url, background) => browser!.openTabFor(url, background),
+      activate: (id) => browser!.activate(id),
+      close: (id) => browser!.close(id),
+      consoleLog: (id) => browser!.consoleLog(id),
+      showActivity: (id, action) => browser!.showActivity(id, action),
+    },
+    () => store.state.agent?.token ?? '',
+  );
+  if (store.state.agent?.enabled) await bridge.start().catch((err) => console.error('Agent bridge failed', err));
+  const settings = new Settings(store, () => browser!.sendState(), {
+    setEnabled: (enabled) => (enabled ? bridge.start() : bridge.stop()),
+    endpoint: () => (bridge.port ? `http://127.0.0.1:${bridge.port}/mcp` : undefined),
+  });
   buildMenu(browser, store, settings);
   const rebuildMenu = () => buildMenu(browser!, store, settings);
   session.defaultSession.extensions.on('extension-loaded', rebuildMenu);
