@@ -118,15 +118,17 @@ export interface SettingsView {
   /** For display only, with the home folder shortened to ~. */
   downloadsFolder: string;
   askWhereToSave: boolean;
+  defaultBrowser: { isDefault: boolean; canSet: boolean };
 }
 
 /** The downloads folder is only changed through the folder picker, never set directly. */
-export type SettingsPatch = Partial<Omit<SettingsView, 'searchEngines' | 'downloadsFolder'>>;
+export type SettingsPatch = Partial<Omit<SettingsView, 'searchEngines' | 'downloadsFolder' | 'defaultBrowser'>>;
 
 export interface SettingsApi {
   get(): Promise<SettingsView>;
   set(patch: SettingsPatch): Promise<SettingsView>;
   chooseDownloadsFolder(): Promise<SettingsView>;
+  makeDefaultBrowser(): Promise<SettingsView>;
 }
 
 export interface FlechaApi {

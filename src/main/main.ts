@@ -20,6 +20,7 @@ import { setAdBlocking } from './adblock';
 import { History } from './history';
 import { Downloads } from './downloads';
 import { Settings } from './settings';
+import { deliverLinksTo, listenForExternalLinks } from './defaultBrowser';
 import { WEB_STORE_URL, installedExtensions, removeExtension, setupExtensions, type TabHost } from './extensions';
 import type { ElectronChromeExtensions } from 'electron-chrome-extensions';
 
@@ -34,6 +35,12 @@ app.setName('Flecha');
 // Lets development runs use a throwaway profile: FLECHA_USER_DATA=/tmp/flecha npm start
 if (process.env.FLECHA_USER_DATA) app.setPath('userData', process.env.FLECHA_USER_DATA);
 // Some sites (Google sign-in in particular) refuse user agents that mention Electron.
+// One Flecha per profile: launching it again (e.g. by clicking a link) reuses this one.
+const isPrimaryInstance = app.requestSingleInstanceLock();
+if (!isPrimaryInstance) app.quit();
+let focusBrowser = () => {};
+listenForExternalLinks(() => focusBrowser());
+
 app.userAgentFallback = app.userAgentFallback.replace(/ Electron\/\S+/, '').replace(/ Flecha\/\S+/i, '');
 
 class Browser implements TabHost {
@@ -91,6 +98,13 @@ class Browser implements TabHost {
     this.win.on('closed', () => app.quit());
     store.onChange(() => this.sync());
     this.sync();
+  }
+
+  focus() {
+    if (this.win.isMinimized()) this.win.restore();
+    this.win.show();
+    this.win.focus();
+    app.focus({ steal: true });
   }
 
   get uiContents(): WebContents {
@@ -792,6 +806,7 @@ function safeHost(url: string) {
 }
 
 app.whenReady().then(async () => {
+  if (!isPrimaryInstance) return;
   const store = new Store(app.getPath('userData'));
   const history = new History(app.getPath('userData'));
   store.archiveStale(ARCHIVE_AFTER_MS);
@@ -816,6 +831,11 @@ app.whenReady().then(async () => {
   );
   registerIpc(browser, store, history, downloads);
   registerPermissions(browser);
+  focusBrowser = () => browser!.focus();
+  deliverLinksTo((url) => {
+    browser!.openTab(url);
+    browser!.focus();
+  });
 
   setInterval(() => {
     for (const id of store.archiveStale(ARCHIVE_AFTER_MS)) browser.destroyView(id);

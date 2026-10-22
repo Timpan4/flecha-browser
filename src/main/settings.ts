@@ -5,6 +5,7 @@ import type { SettingsPatch, SettingsView } from '../shared/types';
 import type { Store } from './store';
 import { setAdBlocking } from './adblock';
 import { SEARCH_ENGINES } from './url';
+import { canSetDefaultBrowser, isDefaultBrowser, makeDefaultBrowser } from './defaultBrowser';
 
 /** The ⌘, window: a small page of its own, talking to the main process over `settings:*` IPC. */
 export class Settings {
@@ -17,6 +18,11 @@ export class Settings {
     const fromSettings = (event: Electron.IpcMainInvokeEvent) => !!this.win && event.sender === this.win.webContents;
     ipcMain.handle('settings:get', (event) => (fromSettings(event) ? this.view() : undefined));
     ipcMain.handle('settings:set', (event, patch: SettingsPatch) => (fromSettings(event) ? this.apply(patch) : undefined));
+    ipcMain.handle('settings:make-default-browser', (event) => {
+      if (!fromSettings(event)) return undefined;
+      makeDefaultBrowser();
+      return this.view();
+    });
     ipcMain.handle('settings:choose-downloads-folder', (event) => (fromSettings(event) ? this.chooseDownloadsFolder() : undefined));
   }
 
@@ -47,6 +53,7 @@ export class Settings {
       searchEngine: this.store.state.searchEngine ?? 'google',
       downloadsFolder: tildify(this.store.state.downloadsFolder ?? app.getPath('downloads')),
       askWhereToSave: !!this.store.state.askWhereToSave,
+      defaultBrowser: { isDefault: isDefaultBrowser(), canSet: canSetDefaultBrowser() },
       searchEngines: Object.entries(SEARCH_ENGINES).map(([id, e]) => ({ id: id as keyof typeof SEARCH_ENGINES, name: e.name })),
     };
   }
