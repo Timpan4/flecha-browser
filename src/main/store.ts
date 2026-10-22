@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { BrowserState, DropTarget, PinnedNode, Space, TabInfo, WindowBounds } from '../shared/types';
+import type { BrowserState, DropTarget, PinnedNode, SearchEngineId, Space, TabInfo, WindowBounds } from '../shared/types';
 import type { ArcImport, ImportNode } from './arcImport';
 
 const SPACE_COLORS = ['#cdd9f7', '#f6d6cc', '#d3ecd5', '#e8d6f3', '#f5e7c4', '#cfe8ec'];
@@ -268,6 +268,11 @@ export class Store {
     const item = this.state.archive.shift();
     if (item) this.changed();
     return item;
+  }
+
+  setSearchEngine(id: SearchEngineId) {
+    this.state.searchEngine = id;
+    this.changed();
   }
 
   setAdBlock(enabled: boolean) {

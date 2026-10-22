@@ -276,7 +276,7 @@ function updatePalette() {
 
   if (q) {
     const open = { navigate: api.navigate, 'new-tab': api.newTab, split: api.splitNew }[paletteMode];
-    const verb = looksLikeUrl(q) ? 'Open' : 'Search Google';
+    const verb = looksLikeUrl(q) ? 'Open' : `Search ${state.searchEngineName}`;
     items.push({ label: q, sub: paletteMode === 'split' ? `${verb} in split view` : verb, run: () => open(q) });
   }
 

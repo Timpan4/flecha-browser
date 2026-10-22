@@ -3,6 +3,7 @@ import { BrowserWindow, ipcMain } from 'electron';
 import type { SettingsPatch, SettingsView } from '../shared/types';
 import type { Store } from './store';
 import { setAdBlocking } from './adblock';
+import { SEARCH_ENGINES } from './url';
 
 /** The ⌘, window: a small page of its own, talking to the main process over `settings:*` IPC. */
 export class Settings {
@@ -39,10 +40,18 @@ export class Settings {
   }
 
   view(): SettingsView {
-    return { adBlock: this.store.state.adBlock !== false };
+    return {
+      adBlock: this.store.state.adBlock !== false,
+      searchEngine: this.store.state.searchEngine ?? 'google',
+      searchEngines: Object.entries(SEARCH_ENGINES).map(([id, e]) => ({ id: id as keyof typeof SEARCH_ENGINES, name: e.name })),
+    };
   }
 
   private async apply(patch: SettingsPatch): Promise<SettingsView> {
+    // Ignore ids that aren't in the list rather than storing garbage.
+    if (patch.searchEngine && patch.searchEngine in SEARCH_ENGINES) {
+      this.store.setSearchEngine(patch.searchEngine);
+    }
     if (patch.adBlock !== undefined) {
       this.store.setAdBlock(patch.adBlock);
       await setAdBlocking(patch.adBlock).catch((err) => console.error('Ad blocker failed', err));

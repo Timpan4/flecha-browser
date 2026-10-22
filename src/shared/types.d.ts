@@ -59,6 +59,8 @@ export interface DownloadInfo {
   startedAt: number;
 }
 
+export type SearchEngineId = 'google' | 'duckduckgo' | 'bing' | 'brave' | 'kagi' | 'ecosia';
+
 export interface BrowserState {
   spaces: Space[];
   activeSpaceId: string;
@@ -67,12 +69,14 @@ export interface BrowserState {
   archive: ArchivedTab[];
   sidebarVisible: boolean;
   window?: WindowBounds;
+  searchEngine?: SearchEngineId;
   /** Built-in ad and tracker blocking; on unless turned off. */
   adBlock?: boolean;
 }
 
 export interface UiState extends BrowserState {
   nav: { canGoBack: boolean; canGoForward: boolean };
+  searchEngineName: string;
 }
 
 export type PaletteMode = 'new-tab' | 'navigate' | 'split';
@@ -106,9 +110,11 @@ export interface FindBarApi {
 /** What the settings page shows. */
 export interface SettingsView {
   adBlock: boolean;
+  searchEngine: SearchEngineId;
+  searchEngines: Array<{ id: SearchEngineId; name: string }>;
 }
 
-export type SettingsPatch = Partial<SettingsView>;
+export type SettingsPatch = Partial<Omit<SettingsView, 'searchEngines'>>;
 
 export interface SettingsApi {
   get(): Promise<SettingsView>;

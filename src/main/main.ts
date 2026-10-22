@@ -15,7 +15,7 @@ import {
 import type { DropTarget, PaletteMode, PeekState, TabInfo, UiState } from '../shared/types';
 import { Store } from './store';
 import { arcSidebarPath, readArcSidebar } from './arcImport';
-import { resolveInput } from './url';
+import { resolveInput, searchEngine } from './url';
 import { setAdBlocking } from './adblock';
 import { History } from './history';
 import { Downloads } from './downloads';
@@ -100,7 +100,7 @@ class Browser implements TabHost {
   // ---- tabs ---------------------------------------------------------------
 
   openTab(input: string, opts: { activate?: boolean } = {}) {
-    const url = resolveInput(input);
+    const url = resolveInput(input, this.store.state.searchEngine);
     return this.store.addTab(url, { activate: opts.activate, afterTabId: opts.activate === false ? this.store.activeSpace.activeTabId : undefined });
   }
 
@@ -134,7 +134,7 @@ class Browser implements TabHost {
   navigate(input: string) {
     const tab = this.store.activeTab;
     if (!tab) return this.openTab(input);
-    this.viewFor(tab.id).webContents.loadURL(resolveInput(input));
+    this.viewFor(tab.id).webContents.loadURL(resolveInput(input, this.store.state.searchEngine));
   }
 
   closeTab(tabId: string) {
@@ -442,6 +442,7 @@ class Browser implements TabHost {
     const state: UiState = {
       ...this.store.state,
       tabs,
+      searchEngineName: searchEngine(this.store.state.searchEngine).name,
       nav: {
         canGoBack: wc?.navigationHistory.canGoBack() ?? false,
         canGoForward: wc?.navigationHistory.canGoForward() ?? false,
