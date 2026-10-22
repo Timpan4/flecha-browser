@@ -91,6 +91,16 @@ function render(s: UiState) {
   ($('btn-forward') as HTMLButtonElement).disabled = !s.nav.canGoForward;
 
   document.body.dataset.sidebar = s.sidebarMode;
+  // Shortcuts can be changed in Settings; key caps and tooltips show the current ones.
+  for (const el of document.querySelectorAll<HTMLElement>('[data-shortcut]')) {
+    const keys = s.shortcuts[el.dataset.shortcut!] ?? '';
+    if (el.tagName === 'KBD') {
+      el.textContent = keys;
+      el.hidden = !keys;
+      if (el.parentElement?.parentElement?.classList.contains('empty-hints')) el.parentElement.hidden = !keys;
+    } else if (keys) el.dataset.kbd = keys;
+    else delete el.dataset.kbd;
+  }
   const toggle = $('btn-sidebar');
   toggle.dataset.tip = s.sidebarMode === 'floating' ? 'Keep sidebar open' : 'Hide sidebar';
   renderUrlbar(s, active);
@@ -691,13 +701,13 @@ function closePalette() {
 type PaletteGroup = '' | 'Developer' | 'Actions' | 'Tabs' | 'History' | 'Archive';
 
 /** Commands the bar can run, found by typing any word of their label or keywords. */
-const ACTIONS: Array<{ label: string; keywords: string; icon: IconName; hint?: string; run: () => void }> = [
-  { label: 'New Space', keywords: 'space create add', icon: 'space', hint: '⌃⇧N', run: () => api.newSpace() },
+const ACTIONS: Array<{ label: string; keywords: string; icon: IconName; shortcut?: string; run: () => void }> = [
+  { label: 'New Space', keywords: 'space create add', icon: 'space', shortcut: 'newSpace', run: () => api.newSpace() },
   { label: 'Edit Space', keywords: 'space rename emoji colour color icon', icon: 'space', run: () => state && openSpaceEditor(state.activeSpaceId) },
-  { label: 'Settings', keywords: 'preferences settings config options', icon: 'settings', hint: '⌘,', run: () => api.openSettings() },
-  { label: 'Responsive View', keywords: 'mobile phone responsive device split', icon: 'phone', hint: '⌥⌘M', run: () => api.toggleResponsive() },
-  { label: 'Toggle Sidebar', keywords: 'sidebar hide show', icon: 'sidebar', hint: '⌘S', run: () => api.toggleSidebar() },
-  { label: 'Clear Today Tabs', keywords: 'clear archive today close', icon: 'archive', hint: '⇧⌘K', run: () => api.clearToday() },
+  { label: 'Settings', keywords: 'preferences settings config options', icon: 'settings', shortcut: 'settings', run: () => api.openSettings() },
+  { label: 'Responsive View', keywords: 'mobile phone responsive device split', icon: 'phone', shortcut: 'responsive', run: () => api.toggleResponsive() },
+  { label: 'Toggle Sidebar', keywords: 'sidebar hide show', icon: 'sidebar', shortcut: 'toggleSidebar', run: () => api.toggleSidebar() },
+  { label: 'Clear Today Tabs', keywords: 'clear archive today close', icon: 'archive', shortcut: 'clearToday', run: () => api.clearToday() },
   { label: 'Show Downloads', keywords: 'downloads files', icon: 'download', run: () => (downloadsPanel.hidden = false) },
   { label: 'Import from Arc', keywords: 'import arc migrate', icon: 'import', run: () => api.importArc() },
   { label: 'Open Boosts Folder', keywords: 'boosts folder scripts css', icon: 'zap', run: () => api.openBoostsFolder() },
@@ -764,7 +774,7 @@ function updatePalette() {
       });
     }
     for (const action of matchingActions(q).slice(0, 4)) {
-      items.push({ group: 'Actions', icon: action.icon, label: action.label, sub: '', hint: action.hint, run: action.run });
+      items.push({ group: 'Actions', icon: action.icon, label: action.label, sub: '', hint: action.shortcut && state.shortcuts[action.shortcut], run: action.run });
     }
     // A matching shortcut or action is what was meant (`gh 12`, `settings`); otherwise searching is.
     if (items.length && !isUrl) items.push(searchItem);

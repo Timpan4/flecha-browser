@@ -15,20 +15,20 @@
     <aside id="sidebar">
       <div class="toolbar">
         <div class="traffic-lights"></div>
-        <button id="btn-sidebar" class="icon-button" data-tip="Hide sidebar" data-kbd="⌘S"><i data-icon="sidebar"></i></button>
+        <button id="btn-sidebar" class="icon-button" data-tip="Hide sidebar" data-shortcut="toggleSidebar"><i data-icon="sidebar"></i></button>
         <span class="spacer"></span>
-        <button id="btn-back" class="icon-button" data-tip="Back" data-kbd="⌘["><i data-icon="arrowLeft"></i></button>
-        <button id="btn-forward" class="icon-button" data-tip="Forward" data-kbd="⌘]"><i data-icon="arrowRight"></i></button>
-        <button id="btn-reload" class="icon-button" data-tip="Reload" data-kbd="⌘R"><i data-icon="reload"></i></button>
+        <button id="btn-back" class="icon-button" data-tip="Back" data-shortcut="back"><i data-icon="arrowLeft"></i></button>
+        <button id="btn-forward" class="icon-button" data-tip="Forward" data-shortcut="forward"><i data-icon="arrowRight"></i></button>
+        <button id="btn-reload" class="icon-button" data-tip="Reload" data-shortcut="reload"><i data-icon="reload"></i></button>
       </div>
 
       <div id="urlbar-wrap">
-        <button id="urlbar" data-tip="Open location" data-kbd="⌘L">
+        <button id="urlbar" data-tip="Open location" data-shortcut="openLocation">
           <span id="urlbar-icon"></span>
           <span id="urlbar-env"></span>
           <span id="urlbar-text"></span>
         </button>
-        <button id="btn-copy-link" class="url-action" data-tip="Copy link" data-kbd="⇧⌘C"><i data-icon="link"></i></button>
+        <button id="btn-copy-link" class="url-action" data-tip="Copy link" data-shortcut="copyLink"><i data-icon="link"></i></button>
         <button id="btn-site" class="url-action" data-tip="Site controls"><i data-icon="sliders"></i></button>
       </div>
 
@@ -56,9 +56,9 @@
         <div id="pinned" class="drop-zone"></div>
         <header class="group-header today-header">
           <span>Today</span>
-          <button id="btn-clear" class="text-button" data-tip="Archive today's tabs" data-kbd="⇧⌘K">Clear</button>
+          <button id="btn-clear" class="text-button" data-tip="Archive today's tabs" data-shortcut="clearToday">Clear</button>
         </header>
-        <button id="btn-newtab" class="row new-tab"><span class="row-icon"><i data-icon="plus"></i></span><span class="title">New Tab</span><kbd>⌘T</kbd></button>
+        <button id="btn-newtab" class="row new-tab"><span class="row-icon"><i data-icon="plus"></i></span><span class="title">New Tab</span><kbd data-shortcut="newTab"></kbd></button>
         <div id="today" class="drop-zone"></div>
       </div>
 
@@ -81,9 +81,9 @@
         <div class="site-row">
           <span>Zoom</span>
           <span class="zoom-control">
-            <button id="zoom-out" class="icon-button" data-tip="Zoom out" data-kbd="⌘−"><i data-icon="minus"></i></button>
-            <button id="zoom-reset" class="zoom-value" data-tip="Actual size" data-kbd="⌘0"></button>
-            <button id="zoom-in" class="icon-button" data-tip="Zoom in" data-kbd="⌘="><i data-icon="plus"></i></button>
+            <button id="zoom-out" class="icon-button" data-tip="Zoom out" data-shortcut="zoomOut"><i data-icon="minus"></i></button>
+            <button id="zoom-reset" class="zoom-value" data-tip="Actual size" data-shortcut="actualSize"></button>
+            <button id="zoom-in" class="icon-button" data-tip="Zoom in" data-shortcut="zoomIn"><i data-icon="plus"></i></button>
           </span>
         </div>
         <footer class="popover-footer">
@@ -127,7 +127,7 @@
           <span id="downloads-badge" hidden></span>
         </button>
         <div id="spaces"></div>
-        <button id="btn-newspace" class="icon-button" data-tip="New Space" data-kbd="⌃⇧N"><i data-icon="plus"></i></button>
+        <button id="btn-newspace" class="icon-button" data-tip="New Space" data-shortcut="newSpace"><i data-icon="plus"></i></button>
       </footer>
     </aside>
 
@@ -140,7 +140,7 @@
         <button id="empty-new-tab" class="empty-search">
           <i data-icon="search"></i>
           <span>Search or enter a URL</span>
-          <kbd>⌘T</kbd>
+          <kbd data-shortcut="newTab"></kbd>
         </button>
         <section id="empty-top" class="empty-section" hidden>
           <header>Jump back in</header>
@@ -152,11 +152,11 @@
         </section>
       </div>
       <footer class="empty-hints">
-        <span><kbd>⌘L</kbd> Open location</span>
+        <span><kbd data-shortcut="openLocation"></kbd> Open location</span>
         <span><kbd>⌃1</kbd>–<kbd>9</kbd> Switch Space</span>
-        <span><kbd>⇧⌘T</kbd> Reopen closed tab</span>
-        <span><kbd>⌥⌘M</kbd> Responsive view</span>
-        <span><kbd>⌘/</kbd> All shortcuts</span>
+        <span><kbd data-shortcut="reopenTab"></kbd> Reopen closed tab</span>
+        <span><kbd data-shortcut="responsive"></kbd> Responsive view</span>
+        <span><kbd data-shortcut="shortcuts"></kbd> All shortcuts</span>
       </footer>
     </div>
 
