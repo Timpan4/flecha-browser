@@ -139,9 +139,7 @@
 
 .tour-welcome h1 em {
   font-style: normal;
-  background: linear-gradient(90deg, #7cc8ee, #3aa6d9 45%, #e4572e);
-  -webkit-background-clip: text;
-  color: transparent;
+  color: #7cc8ee;
 }
 
 .tour-head h2 {
