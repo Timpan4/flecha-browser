@@ -1,11 +1,13 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { app, session } from 'electron';
+import { app, ipcMain, session, type Session } from 'electron';
 import { ElectronBlocker } from '@ghostery/adblocker-electron';
 
 const REFRESH_AFTER_MS = 3 * 24 * 60 * 60 * 1000;
 
 let blocker: ElectronBlocker | undefined;
+let enabled = false;
+const sessions = new Set<Session>();
 
 /**
  * Built-in ad and tracker blocking, using the same EasyList / EasyPrivacy / uBlock lists.
@@ -14,14 +16,45 @@ let blocker: ElectronBlocker | undefined;
  * chrome.declarativeNetRequest but never applies its rules, so uBlock Origin Lite installs
  * and matches ads yet blocks nothing (and MV2 uBlock Origin is gone from the Web Store).
  */
-export async function setAdBlocking(enabled: boolean) {
-  const ses = session.defaultSession;
-  if (!enabled) {
-    if (blocker?.isBlockingEnabled(ses)) blocker.disableBlockingInSession(ses);
-    return;
+export async function setAdBlocking(on: boolean) {
+  enabled = on;
+  sessions.add(session.defaultSession);
+  if (on) blocker ??= await loadBlocker();
+  for (const ses of sessions) apply(ses);
+}
+
+/** Space sessions (separate cookies) follow the same on/off setting. */
+export function addAdBlockSession(ses: Session) {
+  sessions.add(ses);
+  apply(ses);
+}
+
+function apply(ses: Session) {
+  if (!blocker) return;
+  const blocking = blocker.isBlockingEnabled(ses);
+  if (enabled && !blocking) enableIn(blocker, ses);
+  else if (!enabled && blocking) blocker.disableBlockingInSession(ses);
+}
+
+/**
+ * The library registers its cosmetic-filter IPC handlers globally every time it is enabled,
+ * which throws for a second session. The first registration already serves every session,
+ * so later ones skip it.
+ */
+function enableIn(engine: ElectronBlocker, ses: Session) {
+  const handle = ipcMain.handle;
+  ipcMain.handle = ((channel, listener) => {
+    try {
+      handle.call(ipcMain, channel, listener);
+    } catch {
+      // Already registered by the first session.
+    }
+  }) as typeof ipcMain.handle;
+  try {
+    engine.enableBlockingInSession(ses);
+  } finally {
+    ipcMain.handle = handle;
   }
-  blocker ??= await loadBlocker();
-  if (!blocker.isBlockingEnabled(ses)) blocker.enableBlockingInSession(ses);
 }
 
 async function loadBlocker() {
