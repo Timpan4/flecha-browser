@@ -266,9 +266,15 @@ export class Store {
     this.moveTab(tabId, { zone: loc?.zone === 'favorites' ? 'today' : 'favorites' });
   }
 
-  newFolder(name = 'New Folder') {
-    this.activeSpace.pinned.push({ kind: 'folder', id: randomUUID(), name, open: true, children: [] });
+  /** In the active Space unless `where` names another, optionally inside a folder. Returns the new folder's id. */
+  newFolder(name = 'New Folder', where: { spaceId?: string; parentId?: string } = {}): string | undefined {
+    const space = where.spaceId ? this.state.spaces.find((s) => s.id === where.spaceId) : this.activeSpace;
+    const list = where.parentId ? (space && findFolder(space.pinned, where.parentId))?.children : space?.pinned;
+    if (!list) return undefined;
+    const id = randomUUID();
+    list.push({ kind: 'folder', id, name: name.trim().slice(0, 80) || 'New Folder', open: true, children: [] });
     this.changed();
+    return id;
   }
 
   toggleFolder(folderId: string) {
