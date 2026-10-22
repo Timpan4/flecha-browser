@@ -283,6 +283,26 @@ class Browser implements TabHost {
     return this.store.addTab(url, { activate: opts.activate, afterTabId: opts.activate === false ? this.store.activeSpace.activeTabId : undefined });
   }
 
+  /**
+   * A page brought in from elsewhere (a Flechinha) becomes a Today tab in the active Space.
+   * It stays loaded, scroll position and all, unless the Space keeps its own cookies: then
+   * the page can't move sessions and opens again from its URL.
+   */
+  adoptPage(view: WebContentsView, favicon?: string) {
+    const wc = view.webContents;
+    const url = wc.getURL() || 'about:blank';
+    if (wc.session !== sessionForSpace(this.store.activeSpace)) {
+      wc.close();
+      this.openTab(url);
+    } else {
+      const tab = this.store.addTab(url, { activate: false });
+      this.store.updateTab(tab.id, { title: wc.getTitle() || url, favicon, history: snapshotHistory(wc) });
+      this.wireView(tab.id, view);
+      this.store.activate(tab.id);
+    }
+    this.focus();
+  }
+
   // ---- TabHost, for chrome.tabs calls from extensions ----------------------
 
   createTabFor(url?: string) {
