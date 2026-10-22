@@ -1,0 +1,69 @@
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+  font: 13px -apple-system, BlinkMacSystemFont, sans-serif;
+  color: #1d1d1f;
+}
+
+#bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 100%;
+  margin: 0;
+  padding: 0 6px 0 12px;
+  box-sizing: border-box;
+  border-radius: 10px;
+  background: #fff;
+  border: 0.5px solid rgba(0, 0, 0, 0.18);
+}
+
+#query {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  font: inherit;
+  background: transparent;
+}
+
+#count {
+  font-size: 11px;
+  color: rgba(29, 29, 31, 0.55);
+  padding: 0 6px;
+  white-space: nowrap;
+}
+
+#count.none {
+  color: #d33;
+}
+
+button {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: rgba(29, 29, 31, 0.6);
+}
+
+button:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: #1d1d1f;
+}
+
+svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}

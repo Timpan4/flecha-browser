@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'" />
+    <title>Find</title>
+    <link rel="stylesheet" href="find.css" />
+  </head>
+  <body>
+    <form id="bar">
+      <input id="query" spellcheck="false" autocomplete="off" placeholder="Find in page" />
+      <span id="count"></span>
+      <button type="button" id="prev" title="Previous (⇧↩)">
+        <svg viewBox="0 0 16 16"><path d="m4 10 4-4 4 4" /></svg>
+      </button>
+      <button type="button" id="next" title="Next (↩)">
+        <svg viewBox="0 0 16 16"><path d="m4 6 4 4 4-4" /></svg>
+      </button>
+      <button type="button" id="close" title="Close (Esc)">
+        <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+      </button>
+    </form>
+    <script type="module" src="find.js"></script>
+  </body>
+</html>

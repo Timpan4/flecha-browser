@@ -78,6 +78,20 @@ export type DropTarget =
   | { zone: 'today'; beforeTabId?: string }
   | { zone: 'pinned'; folderId?: string; beforeTabId?: string };
 
+export interface FindResult {
+  active: number;
+  total: number;
+}
+
+/** The find-in-page bar's bridge; it lives in its own small view above the page. */
+export interface FindBarApi {
+  onOpen(cb: () => void): void;
+  onResult(cb: (result: FindResult) => void): void;
+  /** `newSearch` starts over (the text changed); otherwise it moves to the next or previous match. */
+  find(text: string, forward: boolean, newSearch: boolean): void;
+  close(): void;
+}
+
 export interface FlechaApi {
   onState(cb: (state: UiState) => void): void;
   onPalette(cb: (mode: PaletteMode) => void): void;

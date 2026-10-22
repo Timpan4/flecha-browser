@@ -22,6 +22,7 @@ import { WEB_STORE_URL, installedExtensions, removeExtension, setupExtensions, t
 import type { ElectronChromeExtensions } from 'electron-chrome-extensions';
 
 const SIDEBAR_WIDTH = 260;
+const FIND_BAR = { width: 360, height: 40 };
 const GAP = 8;
 const ARCHIVE_AFTER_MS = 12 * 60 * 60 * 1000;
 
@@ -39,6 +40,9 @@ class Browser implements TabHost {
   private shown: WebContentsView[] = [];
   private peek?: WebContentsView;
   private paletteOpen = false;
+  private findView?: WebContentsView;
+  /** The page being searched; find closes when a different tab comes on screen. */
+  private findTarget?: WebContents;
   private lastSelected?: WebContents;
 
   constructor(
@@ -174,6 +178,11 @@ class Browser implements TabHost {
       this.sendState();
     });
     wc.on('context-menu', (_e, params) => this.pageMenu(wc, params));
+    wc.on('found-in-page', (_e, result) => {
+      if (wc === this.findTarget) {
+        this.findView?.webContents.send('find:result', { active: result.activeMatchOrdinal, total: result.matches });
+      }
+    });
     // Clicking into the other half of a split makes it the active tab.
     wc.on('focus', () => {
       const space = this.store.activeSpace;
@@ -199,6 +208,61 @@ class Browser implements TabHost {
   }
 
   // ---- peek -----------------------------------------------------------------
+
+  // ---- find in page ----------------------------------------------------------
+
+  openFind() {
+    const target = this.activeContents();
+    if (!target) return;
+    if (this.findTarget && this.findTarget !== target) this.findTarget.stopFindInPage('clearSelection');
+    this.findTarget = target;
+
+    if (!this.findView) {
+      this.findView = new WebContentsView({
+        webPreferences: { preload: path.join(__dirname, '../preload/find-preload.js'), sandbox: true, contextIsolation: true },
+      });
+      this.findView.setBackgroundColor('#00000000');
+      this.findView.setBorderRadius(10);
+      this.findView.webContents.loadFile(path.join(__dirname, '../renderer/find.html'));
+    }
+    const view = this.findView;
+    if (!this.win.contentView.children.includes(view)) this.win.contentView.addChildView(view);
+    this.layout();
+    const show = () => {
+      view.webContents.focus();
+      view.webContents.send('find:open');
+    };
+    if (view.webContents.isLoading()) view.webContents.once('did-finish-load', show);
+    else show();
+  }
+
+  closeFind() {
+    if (!this.findView || !this.findTarget) return;
+    this.findTarget.stopFindInPage('keepSelection');
+    this.win.contentView.removeChildView(this.findView);
+    const target = this.findTarget;
+    this.findTarget = undefined;
+    if (!target.isDestroyed()) target.focus();
+  }
+
+  find(text: string, forward: boolean, newSearch: boolean) {
+    const target = this.findTarget;
+    if (!target || target.isDestroyed()) return;
+    if (!text) {
+      target.stopFindInPage('clearSelection');
+      this.findView?.webContents.send('find:result', { active: 0, total: 0 });
+      return;
+    }
+    target.findInPage(text, { forward, findNext: newSearch });
+  }
+
+  get findOpen() {
+    return !!this.findTarget;
+  }
+
+  get findViewContents() {
+    return this.findView?.webContents;
+  }
 
   get peekOpen() {
     return !!this.peek;
@@ -288,6 +352,7 @@ class Browser implements TabHost {
       for (const v of this.shown) if (!views.includes(v)) this.win.contentView.removeChildView(v);
       for (const v of views) if (!this.shown.includes(v)) this.win.contentView.addChildView(v, 0);
       this.shown = views;
+      if (this.findTarget && this.findTarget !== this.activeContents()) this.closeFind();
       if (!this.paletteOpen && !this.peek) this.activeContents()?.focus();
     }
     const active = this.activeContents();
@@ -321,6 +386,16 @@ class Browser implements TabHost {
       right.setBounds({ ...area, x: area.x + half + GAP, width: area.width - half - GAP });
     } else {
       left?.setBounds(area);
+    }
+
+    if (this.findTarget && this.findView) {
+      // Top-right corner of the page being searched.
+      const page = this.views.get(this.store.activeSpace.activeTabId ?? '')?.getBounds() ?? area;
+      this.findView.setBounds({
+        x: page.x + page.width - FIND_BAR.width - 12,
+        y: page.y + 12,
+        ...FIND_BAR,
+      });
     }
 
     if (this.peek) {
@@ -478,7 +553,23 @@ function buildMenu(browser: Browser, store: Store) {
         { label: 'Import from Arc…', click: () => browser.importArc() },
       ],
     },
-    { role: 'editMenu' },
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { role: 'pasteAndMatchStyle' },
+        { role: 'selectAll' },
+        { type: 'separator' },
+        { label: 'Find…', accelerator: 'CmdOrCtrl+F', click: () => browser.openFind() },
+        { label: 'Find Next', accelerator: 'CmdOrCtrl+G', click: () => findAgain(browser, true) },
+        { label: 'Find Previous', accelerator: 'CmdOrCtrl+Shift+G', click: () => findAgain(browser, false) },
+      ],
+    },
     {
       label: 'View',
       submenu: [
@@ -566,7 +657,23 @@ function clearToday(browser: Browser, store: Store) {
   for (const id of store.clearToday()) browser.destroyView(id);
 }
 
+/** The last text searched, so ⌘G works after the find bar has been closed. */
+let lastFind = '';
+
+function findAgain(browser: Browser, forward: boolean) {
+  if (browser.findOpen) browser.find(lastFind, forward, false);
+  else browser.openFind();
+}
+
 function registerIpc(browser: Browser, store: Store, history: History, downloads: Downloads) {
+  ipcMain.on('find:query', (event, text: string, forward: boolean, newSearch: boolean) => {
+    if (event.sender !== browser.findViewContents) return;
+    lastFind = String(text);
+    browser.find(lastFind, !!forward, !!newSearch);
+  });
+  ipcMain.on('find:close', (event) => {
+    if (event.sender === browser.findViewContents) browser.closeFind();
+  });
   ipcMain.handle('search-history', (event, query: string) =>
     event.sender === browser.uiContents ? history.search(String(query)) : [],
   );

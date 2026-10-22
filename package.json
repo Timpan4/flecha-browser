@@ -6,7 +6,7 @@
   "description": "An Arc-style browser built on Chromium (via Electron).",
   "main": "dist/main/main.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json && npm run build:preload && tsc -p src/renderer/tsconfig.json && cp src/renderer/index.html src/renderer/styles.css dist/renderer/",
+    "build": "tsc -p tsconfig.json && npm run build:preload && tsc -p src/renderer/tsconfig.json && cp src/renderer/index.html src/renderer/styles.css src/renderer/find.html src/renderer/find.css dist/renderer/",
     "build:preload": "esbuild src/preload/preload.ts --bundle --platform=node --format=cjs --external:electron --outfile=dist/preload/preload.js --log-level=warning",
     "start": "npm run build && electron .",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p src/renderer/tsconfig.json --noEmit"
