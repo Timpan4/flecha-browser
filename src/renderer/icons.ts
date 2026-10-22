@@ -43,6 +43,8 @@ export const ICONS = {
   volume: 'M2.5 6.5h2.5L8 4v8L5 9.5H2.5zM10.5 6a3 3 0 0 1 0 4M12 4.5a5 5 0 0 1 0 7',
   muted: 'M2.5 6.5h2.5L8 4v8L5 9.5H2.5zM10.5 6.5l3 3M13.5 6.5l-3 3',
   trash: 'M3 4.5h10M6.5 4.5v-1h3v1M4.5 4.5l.6 8a1 1 0 0 0 1 .9h3.8a1 1 0 0 0 1-.9l.6-8',
+  check: 'M3 8.5 6.5 12 13 4.5',
+  shield: 'M8 1.5 13 3.5v4c0 3-2.2 5.3-5 7-2.8-1.7-5-4-5-7v-4z',
 } as const;
 
 export type IconName = keyof typeof ICONS;
