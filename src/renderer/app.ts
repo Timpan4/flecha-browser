@@ -90,6 +90,9 @@ function render(s: UiState) {
   ($('btn-back') as HTMLButtonElement).disabled = !s.nav.canGoBack;
   ($('btn-forward') as HTMLButtonElement).disabled = !s.nav.canGoForward;
 
+  document.body.dataset.sidebar = s.sidebarMode;
+  const toggle = $('btn-sidebar');
+  toggle.dataset.tip = s.sidebarMode === 'floating' ? 'Keep sidebar open' : 'Hide sidebar';
   renderUrlbar(s, active);
   $('empty-state').hidden = !!active;
   $('empty-title').textContent = `Nothing open in ${space.name}`;
@@ -744,6 +747,21 @@ document.addEventListener('mousedown', (e) => {
   if (!downloadsPanel.hidden && !downloadsPanel.contains(target) && !$('btn-downloads').contains(target)) {
     downloadsPanel.hidden = true;
   }
+});
+
+// ---- hidden sidebar: reveal at the edge, hide again when the mouse leaves -------------
+
+let peekCloseTimer: number | undefined;
+$('edge').addEventListener('mouseenter', () => api.setSidebarPeek(true));
+$('sidebar').addEventListener('mouseenter', () => clearTimeout(peekCloseTimer));
+$('sidebar').addEventListener('mouseleave', () => {
+  if (document.body.dataset.sidebar !== 'floating') return;
+  clearTimeout(peekCloseTimer);
+  peekCloseTimer = window.setTimeout(() => {
+    // Stay open while something inside it is being used.
+    if (!palette.hidden || !spaceEditor.hidden || !downloadsPanel.hidden) return;
+    api.setSidebarPeek(false);
+  }, 300);
 });
 
 // ---- tooltips ---------------------------------------------------------------------

@@ -33,6 +33,10 @@ import { WEB_STORE_URL, installedExtensions, removeExtension, setupExtensions, t
 import type { ElectronChromeExtensions } from 'electron-chrome-extensions';
 
 const SIDEBAR_WIDTH = 260;
+/** With the sidebar hidden, this strip at the window's left edge brings it back on hover. */
+const EDGE_WIDTH = 8;
+/** Room around the floating sidebar for its rounded corners and shadow. */
+const FLOAT_MARGIN = 10;
 const FIND_BAR = { width: 360, height: 40 };
 const GAP = 8;
 const ARCHIVE_AFTER_MS = 12 * 60 * 60 * 1000;
@@ -63,6 +67,8 @@ class Browser implements TabHost {
   private shown: WebContentsView[] = [];
   private peek?: WebContentsView;
   private paletteOpen = false;
+  /** The hidden sidebar is showing temporarily, floating over the page. */
+  private sidebarPeek = false;
   private findView?: WebContentsView;
   /** The page being searched; find closes when a different tab comes on screen. */
   private findTarget?: WebContents;
@@ -488,6 +494,18 @@ class Browser implements TabHost {
     if (view && view.webContents.getURL() !== url) view.webContents.loadURL(url);
   }
 
+  setSidebarPeek(peek: boolean) {
+    if (this.store.state.sidebarVisible || this.sidebarPeek === peek) return;
+    this.sidebarPeek = peek;
+    this.layout();
+    this.sendState();
+  }
+
+  toggleSidebar() {
+    this.sidebarPeek = false;
+    this.store.setSidebarVisible(!this.store.state.sidebarVisible);
+  }
+
   get findOpen() {
     return !!this.findTarget;
   }
@@ -610,7 +628,14 @@ class Browser implements TabHost {
     const overlay = this.paletteOpen || !!this.peek;
     // With no page on screen the sidebar UI also draws the empty state where the page would be.
     const fullWidth = overlay || !this.shown.length;
-    this.ui.setBounds({ x: 0, y: 0, width: fullWidth ? width : this.store.state.sidebarVisible ? SIDEBAR_WIDTH : 0, height });
+    const sidebarWidth = this.store.state.sidebarVisible
+      ? SIDEBAR_WIDTH
+      : this.sidebarPeek
+        ? SIDEBAR_WIDTH + FLOAT_MARGIN * 2
+        : EDGE_WIDTH;
+    this.ui.setBounds({ x: 0, y: 0, width: fullWidth ? width : sidebarWidth, height });
+    // With the sidebar out of the way the traffic lights would sit on the page; they come back with it.
+    this.win.setWindowButtonVisibility(this.store.state.sidebarVisible || this.sidebarPeek);
 
     const area = this.contentRect();
     const [left, right] = this.shown;
@@ -662,6 +687,7 @@ class Browser implements TabHost {
       tabs,
       searchEngineName: searchEngine(this.store.state.searchEngine).name,
       tint: spaceTint(this.store.activeSpace.color),
+      sidebarMode: this.store.state.sidebarVisible ? 'docked' : this.sidebarPeek ? 'floating' : 'hidden',
       environment: this.store.activeTab ? describeEnvironment(this.store.activeTab.url, this.store.state.environments) : undefined,
       localServers: this.localServers,
       consoleErrors: Object.fromEntries(this.consoleErrors),
@@ -934,7 +960,7 @@ function buildMenu(browser: Browser, store: Store, settings: Settings) {
     {
       label: 'View',
       submenu: [
-        { label: 'Toggle Sidebar', accelerator: 'CmdOrCtrl+S', click: () => store.setSidebarVisible(!store.state.sidebarVisible) },
+        { label: 'Toggle Sidebar', accelerator: 'CmdOrCtrl+S', click: () => browser.toggleSidebar() },
         { type: 'separator' },
         { label: 'Split View with New Tab', accelerator: 'Ctrl+Shift+=', click: () => browser.setPaletteOpen(true, 'split') },
         { label: 'Exit Split View', accelerator: 'Ctrl+Shift+-', click: () => browser.exitSplit() },
@@ -1065,7 +1091,8 @@ function registerIpc(browser: Browser, store: Store, history: History, downloads
     importArc: () => browser.importArc(),
     openPalette: (mode: PaletteMode) => browser.setPaletteOpen(true, mode),
     closePalette: () => browser.setPaletteOpen(false),
-    toggleSidebar: () => store.setSidebarVisible(!store.state.sidebarVisible),
+    toggleSidebar: () => browser.toggleSidebar(),
+    setSidebarPeek: (peek: boolean) => browser.setSidebarPeek(!!peek),
     copyText: (text: string) => clipboard.writeText(String(text)),
     openSettings: () => browser.openSettings?.(),
     toggleResponsive: () => browser.toggleResponsive(),

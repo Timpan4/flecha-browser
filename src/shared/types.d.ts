@@ -119,6 +119,8 @@ export interface UiState extends BrowserState {
   searchEngineName: string;
   /** The active Space's colour, darkened in dark mode. */
   tint: string;
+  /** docked: always there. hidden: a hover strip at the left edge. floating: shown over the page until the mouse leaves. */
+  sidebarMode: 'docked' | 'hidden' | 'floating';
   /** Set when the active tab is on one of the configured environments. */
   environment?: ActiveEnvironment;
   localServers: LocalServer[];
@@ -221,6 +223,7 @@ export interface FlechaApi {
   openPalette(mode: PaletteMode): void;
   closePalette(): void;
   toggleSidebar(): void;
+  setSidebarPeek(peek: boolean): void;
   copyText(text: string): void;
   openSettings(): void;
   toggleResponsive(): void;

@@ -1422,3 +1422,40 @@ footer {
   color: rgba(255, 255, 255, 0.8);
   box-shadow: none;
 }
+
+/* ---- hidden & floating sidebar ------------------------------------------ */
+
+#edge {
+  display: none;
+  position: fixed;
+  inset: 0 auto 0 0;
+  width: 8px;
+}
+
+body[data-sidebar='hidden'] #edge {
+  display: block;
+}
+
+body[data-sidebar='hidden'] #sidebar,
+body[data-sidebar='hidden'] #empty-state {
+  /* The empty state still shows, just without the sidebar beside it. */
+  inset-inline-start: 0;
+}
+
+body[data-sidebar='hidden'] #sidebar {
+  display: none;
+}
+
+body[data-sidebar='floating'] #sidebar {
+  inset: 10px auto 10px 10px;
+  border-radius: var(--radius-xl);
+  box-shadow: 0 20px 60px rgba(7, 18, 33, 0.3), 0 0 0 0.5px rgba(11, 37, 69, 0.18);
+  animation: slide-in var(--medium) var(--ease);
+}
+
+@keyframes slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(-16px);
+  }
+}
