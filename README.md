@@ -25,8 +25,10 @@ For a throwaway profile: `FLECHA_USER_DATA=/tmp/flecha-dev npm start`.
 - Downloads save straight to ~/Downloads (no dialog) and are listed from the sidebar's download button
 - Find in page with ⌘F, ⌘G and ⇧⌘G
 - On launch, the window returns to its last position and each tab keeps its back/forward history and scroll position
+- Settings (⌘,): search engine (Google, DuckDuckGo, Bing, Brave, Kagi, Ecosia), downloads folder and "ask where to save", ad blocking, default browser
+- Links from other apps open in a new tab, and launching Flecha again reuses the open window. Making Flecha the default browser only works in a packaged Flecha.app; from `npm start` the button is disabled because macOS would register the generic Electron binary
 - Chrome extensions: install from the Chrome Web Store (Extensions → Chrome Web Store, then "Add to Chrome"); their buttons appear under the address bar. Manage or remove them from the Extensions menu
-- Built-in ad and tracker blocking (EasyList, EasyPrivacy, uBlock lists), toggled in Extensions → Block Ads and Trackers
+- Built-in ad and tracker blocking (EasyList, EasyPrivacy, uBlock lists), toggled in Settings
 
 ### Extension caveats
 
@@ -42,6 +44,8 @@ For a throwaway profile: `FLECHA_USER_DATA=/tmp/flecha-dev npm start`.
 - `src/main/extensions.ts`, `src/preload/extension-compat.ts`: Chrome extension and Web Store support
 - `src/main/adblock.ts`: built-in ad blocker
 - `src/main/history.ts`, `src/main/downloads.ts`: browsing history and downloads
+- `src/main/settings.ts`, `src/renderer/settings.*`, `src/preload/settings-preload.ts`: the settings window
+- `src/main/defaultBrowser.ts`: links from other apps and the default-browser setting
 - `src/renderer/find.*`, `src/preload/find-preload.ts`: the find-in-page bar
 - `src/renderer/`: sidebar and command bar UI
 - `src/preload/preload.ts`: the bridge between the sidebar UI and the main process
