@@ -32,6 +32,7 @@ import { AgentBridge, type AgentTab, type ConsoleEntry } from './agentBridge';
 import { History } from './history';
 import { Downloads } from './downloads';
 import { Settings } from './settings';
+import { Flechinhas } from './flechinha';
 import { canSetDefaultBrowser, deliverLinksTo, isDefaultBrowser, listenForExternalLinks, makeDefaultBrowser } from './defaultBrowser';
 import { WEB_STORE_URL, installedExtensions, removeExtension, setupExtensions, type TabHost } from './extensions';
 import type { ElectronChromeExtensions } from 'electron-chrome-extensions';
@@ -284,6 +285,26 @@ class Browser implements TabHost {
     return this.store.addTab(url, { activate: opts.activate, afterTabId: opts.activate === false ? this.store.activeSpace.activeTabId : undefined });
   }
 
+  /**
+   * A page brought in from elsewhere (a Flechinha) becomes a Today tab in the active Space.
+   * It stays loaded, scroll position and all, unless the Space keeps its own cookies: then
+   * the page can't move sessions and opens again from its URL.
+   */
+  adoptPage(view: WebContentsView, favicon?: string) {
+    const wc = view.webContents;
+    const url = wc.getURL() || 'about:blank';
+    if (wc.session !== sessionForSpace(this.store.activeSpace)) {
+      wc.close();
+      this.openTab(url);
+    } else {
+      const tab = this.store.addTab(url, { activate: false });
+      this.store.updateTab(tab.id, { title: wc.getTitle() || url, favicon, history: snapshotHistory(wc) });
+      this.wireView(tab.id, view);
+      this.store.activate(tab.id);
+    }
+    this.focus();
+  }
+
   // ---- TabHost, for chrome.tabs calls from extensions ----------------------
 
   createTabFor(url?: string) {
@@ -387,6 +408,18 @@ class Browser implements TabHost {
     // Favorites belong to no Space, so they always use the shared session.
     const ses = sessionForSpace(this.store.locate(tabId)?.space);
     const view = new WebContentsView({ webPreferences: { session: ses, sandbox: true, contextIsolation: true } });
+    followGoogleSignIn(view.webContents);
+    this.wireView(tabId, view);
+    const wc = view.webContents;
+    const tab = this.store.state.tabs[tabId];
+    const url = tab?.url ?? 'about:blank';
+    if (tab?.history?.entries.length) wc.navigationHistory.restore(tab.history).catch(() => wc.loadURL(url));
+    else wc.loadURL(url);
+    return view;
+  }
+
+  /** Makes a page view the given tab's: keeps the sidebar in step with it and routes its links. */
+  private wireView(tabId: string, view: WebContentsView) {
     view.setBorderRadius(10);
     const wc = view.webContents;
     const update = (patch: Parameters<Store['updateTab']>[1]) => this.store.updateTab(tabId, patch);
@@ -421,7 +454,6 @@ class Browser implements TabHost {
     });
     if (this.store.state.tabs[tabId]?.device === 'mobile') emulatePhone(wc);
     if (this.store.state.tabs[tabId]?.muted) wc.setAudioMuted(true);
-    followGoogleSignIn(wc);
     // Sign-in popups (OAuth) open as their own windows.
     wc.on('did-create-window', (popup) => followGoogleSignIn(popup.webContents));
     wc.on('did-start-loading', () => update({ loading: true }));
@@ -455,11 +487,6 @@ class Browser implements TabHost {
 
     this.views.set(tabId, view);
     if (wc.session === session.defaultSession) this.extensions.addTab(wc, this.win);
-    const tab = this.store.state.tabs[tabId];
-    const url = tab?.url ?? 'about:blank';
-    if (tab?.history?.entries.length) wc.navigationHistory.restore(tab.history).catch(() => wc.loadURL(url));
-    else wc.loadURL(url);
-    return view;
   }
 
   // ---- peek -----------------------------------------------------------------
@@ -1065,8 +1092,9 @@ function countTabs(nodes: Array<{ kind: string; children?: any[] }>): number {
 
 // ---- app wiring ------------------------------------------------------------
 
-function buildMenu(browser: Browser, store: Store, settings: Settings) {
-  const active = () => browser.activeContents();
+function buildMenu(browser: Browser, store: Store, settings: Settings, flechinhas: Flechinhas) {
+  // Page commands act on a Flechinha's page while one is in front.
+  const active = () => flechinhas.focused()?.pageContents ?? browser.activeContents();
   const tab = () => store.activeTab;
   const space = store.activeSpace;
   const copy = (text: string | undefined, message: string) => {
@@ -1101,15 +1129,29 @@ function buildMenu(browser: Browser, store: Store, settings: Settings) {
     {
       label: 'File',
       submenu: [
-        { label: 'New Tab', accelerator: k('newTab'), click: () => browser.setPaletteOpen(true, 'new-tab') },
-        { label: 'Open Location…', accelerator: k('openLocation'), click: () => browser.setPaletteOpen(true, 'navigate') },
+        {
+          label: 'New Tab',
+          accelerator: k('newTab'),
+          click: () => {
+            // From a Flechinha, the new tab is Flecha's: bring the main window forward for it.
+            if (flechinhas.focused()) browser.focus();
+            browser.setPaletteOpen(true, 'new-tab');
+          },
+        },
+        {
+          label: 'Open Location…',
+          accelerator: k('openLocation'),
+          click: () => (flechinhas.focused() ? flechinhas.focused()!.editAddress() : browser.setPaletteOpen(true, 'navigate')),
+        },
         { label: 'New Space', accelerator: k('newSpace'), click: () => browser.newSpace() },
+        { label: 'New Flechinha Window', accelerator: k('newFlechinha'), click: () => flechinhas.create() },
         { type: 'separator' },
         {
           label: 'Close Tab',
           accelerator: k('closeTab'),
           click: () => {
-            if (browser.peekOpen) browser.closePeek();
+            if (flechinhas.focused()) flechinhas.focused()!.close();
+            else if (browser.peekOpen) browser.closePeek();
             else if (tab()) browser.closeTab(tab()!.id);
           },
         },
@@ -1125,7 +1167,11 @@ function buildMenu(browser: Browser, store: Store, settings: Settings) {
         {
           label: 'Share',
           submenu: [
-            { label: 'Copy Link', accelerator: k('copyLink'), click: () => copy(tab()?.url, 'Link copied') },
+            {
+              label: 'Copy Link',
+              accelerator: k('copyLink'),
+              click: () => (flechinhas.focused() ? flechinhas.focused()!.copyLink() : copy(tab()?.url, 'Link copied')),
+            },
             {
               label: 'Copy as Markdown Link',
               accelerator: k('copyMarkdown'),
@@ -1151,9 +1197,10 @@ function buildMenu(browser: Browser, store: Store, settings: Settings) {
         { role: 'pasteAndMatchStyle' },
         { role: 'selectAll' },
         { type: 'separator' },
-        { label: 'Find…', accelerator: k('find'), click: () => browser.openFind() },
-        { label: 'Find Next', accelerator: 'CmdOrCtrl+G', click: () => findAgain(browser, true) },
-        { label: 'Find Previous', accelerator: 'CmdOrCtrl+Shift+G', click: () => findAgain(browser, false) },
+        // The find bar lives in the main window; a Flechinha has none.
+        { label: 'Find…', accelerator: k('find'), click: () => !flechinhas.focused() && browser.openFind() },
+        { label: 'Find Next', accelerator: 'CmdOrCtrl+G', click: () => !flechinhas.focused() && findAgain(browser, true) },
+        { label: 'Find Previous', accelerator: 'CmdOrCtrl+Shift+G', click: () => !flechinhas.focused() && findAgain(browser, false) },
       ],
     },
     {
@@ -1311,7 +1358,7 @@ function findAgain(browser: Browser, forward: boolean) {
   else browser.openFind();
 }
 
-function registerIpc(browser: Browser, store: Store, history: History, downloads: Downloads) {
+function registerIpc(browser: Browser, store: Store, history: History, downloads: Downloads, flechinhas: Flechinhas) {
   ipcMain.on('find:query', (event, text: string, forward: boolean, newSearch: boolean) => {
     if (event.sender !== browser.findViewContents) return;
     lastFind = String(text);
@@ -1413,6 +1460,7 @@ function registerIpc(browser: Browser, store: Store, history: History, downloads
       // macOS confirms in its own dialog; check again once Flecha is back in front.
       browser.win.once('focus', () => browser.sendState());
     },
+    newFlechinha: () => flechinhas.create(),
   };
   ipcMain.on('cmd', (event, name: string, ...args: unknown[]) => {
     if (event.sender !== browser.uiContents) return;
@@ -1462,9 +1510,23 @@ app.whenReady().then(async () => {
     store.setOnboarded(false);
     browser!.focus();
   });
-  buildMenu(browser, store, settings);
+  const flechinhas = new Flechinhas({
+    resolve: (input) => resolveInput(input, store.state.searchEngine),
+    searchEngineName: () => searchEngine(store.state.searchEngine).name,
+    tint: () => spaceTint(store.activeSpace.color),
+    space: () => ({ name: store.activeSpace.name, emoji: store.activeSpace.emoji }),
+    openTab: (url, background) => {
+      browser!.openTab(url, { activate: !background });
+      if (!background) browser!.focus();
+    },
+    adopt: (view, favicon) => browser!.adoptPage(view, favicon),
+    record: (url, title) => history.record(url, title),
+    updateTitle: (url, title) => history.updateTitle(url, title),
+  });
+  store.onChange(() => flechinhas.refresh());
+  buildMenu(browser, store, settings, flechinhas);
   browser.openSettings = (pane) => settings.open(pane);
-  const rebuildMenu = () => buildMenu(browser!, store, settings);
+  const rebuildMenu = () => buildMenu(browser!, store, settings, flechinhas);
   // The Spaces, Tabs and Archive menus show live state; rebuild only when what they show changes.
   let menuSignature = '';
   store.onChange(() => {
@@ -1490,12 +1552,17 @@ app.whenReady().then(async () => {
   const downloads = new Downloads(downloadOptions, (items, started) =>
     browser!.uiContents.send('downloads', items, started),
   );
-  registerIpc(browser, store, history, downloads);
+  registerIpc(browser, store, history, downloads, flechinhas);
   onEachSession((ses) => {
     addAdBlockSession(ses);
     fixGoogleSignIn(ses);
     downloads.attach(ses);
-    registerPermissions(ses, store, browser!.win, (wc) => wc === browser!.uiContents);
+    registerPermissions(
+      ses,
+      store,
+      (wc) => flechinhas.windowFor(wc) ?? browser!.win,
+      (wc) => wc === browser!.uiContents || flechinhas.isToolbar(wc),
+    );
   });
   focusBrowser = () => browser!.focus();
   browser.favicons = favicons;
@@ -1503,7 +1570,9 @@ app.whenReady().then(async () => {
   wantFavicons();
   store.onChange(wantFavicons);
   browser.watchLocalServers();
+  // Links from other apps get a Flechinha of their own, unless that's turned off in Settings.
   deliverLinksTo((url) => {
+    if (store.state.openLinksInFlechinha !== false) return void flechinhas.create(url);
     browser!.openTab(url);
     browser!.focus();
   });

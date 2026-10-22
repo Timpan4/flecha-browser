@@ -107,6 +107,7 @@ export class Settings {
       archiveAfterHours: this.store.state.archiveAfterHours ?? 12,
       peekPinnedLinks: this.store.state.peekPinnedLinks !== false,
       shortcuts: shortcutList(this.store.state),
+      openLinksInFlechinha: this.store.state.openLinksInFlechinha !== false,
       agent: {
         enabled: !!this.store.state.agent?.enabled,
         endpoint: this.agent.endpoint(),
@@ -170,6 +171,7 @@ export class Settings {
       this.store.setPreferences({ theme: patch.theme, peekPinnedLinks: patch.peekPinnedLinks });
       nativeTheme.themeSource = this.store.state.theme ?? 'system';
     }
+    if (patch.openLinksInFlechinha !== undefined) this.store.setOpenLinksInFlechinha(patch.openLinksInFlechinha);
     if (typeof patch.archiveAfterHours === 'number') this.store.setArchiveAfter(patch.archiveAfterHours);
     if (patch.agentEnabled !== undefined) {
       this.store.setAgent({ enabled: patch.agentEnabled, token: this.store.state.agent?.token || newToken() });

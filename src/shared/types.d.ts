@@ -113,6 +113,8 @@ export interface BrowserState {
   theme?: 'system' | 'light' | 'dark';
   /** Links that leave a pinned tab or favorite open in Peek. Default on. */
   peekPinnedLinks?: boolean;
+  /** Links arriving from other apps open in a Flechinha instead of a tab. Default on. */
+  openLinksInFlechinha?: boolean;
   /** Today tabs untouched this long are archived; 0 keeps them forever. Default 12. */
   archiveAfterHours?: number;
   /** Remembered answers to site permission prompts, by origin then permission. */
@@ -196,6 +198,42 @@ export interface FindBarApi {
   close(): void;
 }
 
+/** What a Flechinha's toolbar shows. */
+export interface FlechinhaState {
+  /** Empty until something has been opened. */
+  url: string;
+  title: string;
+  favicon?: string;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  loading: boolean;
+  /** The active Space's colour, darkened in dark mode; the toolbar wears it. */
+  tint: string;
+  /** Where "Open in Flecha" puts the page. */
+  space: { name: string; emoji?: string };
+  searchEngineName: string;
+}
+
+/** A Flechinha toolbar's bridge: the small window for links from other apps and quick lookups. */
+export interface FlechinhaApi {
+  onState(cb: (state: FlechinhaState) => void): void;
+  /** ⌘L: start editing the address. */
+  onEditAddress(cb: () => void): void;
+  /** A short confirmation in place of the address ("Link copied"). */
+  onFlash(cb: (message: string) => void): void;
+  ready(): void;
+  back(): void;
+  forward(): void;
+  reload(): void;
+  stop(): void;
+  /** A URL or a search, resolved like the command bar. */
+  navigate(input: string): void;
+  copyLink(): void;
+  /** Moves the page into the main window as a Today tab and closes the Flechinha. */
+  openInFlecha(): void;
+  close(): void;
+}
+
 /** What the settings page shows. */
 export interface SettingsView {
   adBlock: boolean;
@@ -214,6 +252,7 @@ export interface SettingsView {
   shortcuts: ShortcutInfo[];
   /** Set after recording a shortcut another command had, which lost it. */
   notice?: string;
+  openLinksInFlechinha: boolean;
 }
 
 /** The downloads folder is only changed through the folder picker, never set directly. */
@@ -334,4 +373,6 @@ export interface FlechaApi {
   /** Other browsers on this Mac with data Flecha can import. */
   detectBrowsers(): Promise<Array<{ id: string; name: string; profiles: number; hasBookmarks: boolean; hasHistory: boolean }>>;
   importBrowser(id: string): Promise<{ spaces: number; bookmarks: number; history: number; warnings: string[] }>;
+  /** An empty Flechinha, for a quick lookup. */
+  newFlechinha(): void;
 }

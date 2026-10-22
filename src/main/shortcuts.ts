@@ -15,6 +15,7 @@ export const SHORTCUTS = [
   { id: 'find', group: 'Getting around', label: 'Find in page', keys: 'CmdOrCtrl+F' },
   { id: 'toggleSidebar', group: 'Getting around', label: 'Show or hide the sidebar', keys: 'CmdOrCtrl+S' },
   { id: 'settings', group: 'Getting around', label: 'Settings', keys: 'CmdOrCtrl+,' },
+  { id: 'newFlechinha', group: 'Tabs', label: 'New Flechinha window', keys: 'Alt+CmdOrCtrl+N' },
   { id: 'closeTab', group: 'Tabs', label: 'Close tab', keys: 'CmdOrCtrl+W' },
   { id: 'reopenTab', group: 'Tabs', label: 'Reopen closed tab', keys: 'CmdOrCtrl+Shift+T' },
   { id: 'nextTab', group: 'Tabs', label: 'Next tab', keys: 'Ctrl+Tab' },

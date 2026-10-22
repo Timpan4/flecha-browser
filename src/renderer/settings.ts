@@ -106,12 +106,14 @@ document.getElementById('addEnvironment')!.addEventListener('click', () => {
 
 const archiveAfter = document.getElementById('archiveAfter') as HTMLSelectElement;
 const peekPinnedLinks = document.getElementById('peekPinnedLinks') as HTMLInputElement;
+const openLinksInFlechinha = document.getElementById('openLinksInFlechinha') as HTMLInputElement;
 
 for (const card of document.querySelectorAll<HTMLElement>('.theme-card')) {
   card.addEventListener('click', async () => render(await api.set({ theme: card.dataset.theme as SettingsView['theme'] })));
 }
 archiveAfter.addEventListener('change', async () => render(await api.set({ archiveAfterHours: Number(archiveAfter.value) })));
 peekPinnedLinks.addEventListener('change', async () => render(await api.set({ peekPinnedLinks: peekPinnedLinks.checked })));
+openLinksInFlechinha.addEventListener('change', async () => render(await api.set({ openLinksInFlechinha: openLinksInFlechinha.checked })));
 
 // ---- keyboard shortcuts: click a key cap, press the new keys --------------------------
 
@@ -260,6 +262,7 @@ function render(view: SettingsView) {
     shortcuts = view.shortcuts;
     renderShortcuts();
   }
+  openLinksInFlechinha.checked = view.openLinksInFlechinha;
   agent = view.agent;
   agentEnabled.checked = agent.enabled;
   for (const row of document.querySelectorAll<HTMLElement>('[data-agent-only]')) row.hidden = !agent.enabled;

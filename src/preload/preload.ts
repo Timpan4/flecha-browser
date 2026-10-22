@@ -71,6 +71,7 @@ const api: FlechaApi = {
   makeDefaultBrowser: cmd('makeDefaultBrowser'),
   detectBrowsers: () => ipcRenderer.invoke('import:detect'),
   importBrowser: (id) => ipcRenderer.invoke('import:run', id),
+  newFlechinha: cmd('newFlechinha'),
 };
 
 contextBridge.exposeInMainWorld('flecha', api);
