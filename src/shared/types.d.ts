@@ -301,6 +301,8 @@ export interface SettingsApi {
   /** Plays the welcome tour again in the browser window. */
   showTour(): Promise<void>;
   onPane(cb: (pane: string) => void): void;
+  /** ⌘F while Settings is in front: focus its search field. */
+  onFind(cb: () => void): void;
   /** While recording, every key goes to `onKey` instead of the page or the menus. */
   recordShortcut(recording: boolean): Promise<void>;
   onKey(cb: (key: RecordedKey) => void): void;

@@ -58,6 +58,13 @@ export class Settings {
     ipcMain.handle('settings:choose-downloads-folder', (event) => (fromSettings(event) ? this.chooseDownloadsFolder() : undefined));
   }
 
+  /** ⌘F goes to Settings' search when Settings is the window in front. Returns whether it did. */
+  focusSearch() {
+    if (!this.win || this.win.isDestroyed() || !this.win.isFocused()) return false;
+    this.win.webContents.send('settings:find');
+    return true;
+  }
+
   /** Opens Settings, optionally on a given pane (e.g. `shortcuts` from the Help menu). */
   open(pane?: string) {
     if (this.win && !this.win.isDestroyed()) {

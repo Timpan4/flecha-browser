@@ -11,6 +11,7 @@ const api: SettingsApi = {
   openBoosts: () => ipcRenderer.invoke('settings:open-boosts'),
   showTour: () => ipcRenderer.invoke('settings:show-tour'),
   onPane: (cb) => void ipcRenderer.on('settings:pane', (_e, pane) => cb(pane)),
+  onFind: (cb) => void ipcRenderer.on('settings:find', () => cb()),
   recordShortcut: (recording) => ipcRenderer.invoke('settings:record-shortcut', recording),
   onKey: (cb) => void ipcRenderer.on('settings:key', (_e, key) => cb(key)),
 };

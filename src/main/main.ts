@@ -1226,7 +1226,11 @@ function buildMenu(browser: Browser, store: Store, settings: Settings, flechinha
         { role: 'selectAll' },
         { type: 'separator' },
         // The find bar lives in the main window; a Flechinha has none.
-        { label: 'Find…', accelerator: k('find'), click: () => !flechinhas.focused() && browser.openFind() },
+        {
+          label: 'Find…',
+          accelerator: k('find'),
+          click: () => !flechinhas.focused() && !settings.focusSearch() && browser.openFind(),
+        },
         { label: 'Find Next', accelerator: 'CmdOrCtrl+G', click: () => !flechinhas.focused() && findAgain(browser, true) },
         { label: 'Find Previous', accelerator: 'CmdOrCtrl+Shift+G', click: () => !flechinhas.focused() && findAgain(browser, false) },
       ],
