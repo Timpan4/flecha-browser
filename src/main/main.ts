@@ -30,7 +30,7 @@ import { AgentBridge, type AgentTab, type ConsoleEntry } from './agentBridge';
 import { History } from './history';
 import { Downloads } from './downloads';
 import { Settings } from './settings';
-import { deliverLinksTo, listenForExternalLinks } from './defaultBrowser';
+import { canSetDefaultBrowser, deliverLinksTo, isDefaultBrowser, listenForExternalLinks, makeDefaultBrowser } from './defaultBrowser';
 import { WEB_STORE_URL, installedExtensions, removeExtension, setupExtensions, type TabHost } from './extensions';
 import type { ElectronChromeExtensions } from 'electron-chrome-extensions';
 
@@ -41,7 +41,6 @@ const EDGE_WIDTH = 8;
 const FLOAT_MARGIN = 10;
 const FIND_BAR = { width: 360, height: 40 };
 const GAP = 8;
-const ARCHIVE_AFTER_MS = 12 * 60 * 60 * 1000;
 /** Back/forward entries kept per tab across restarts. */
 const SAVED_HISTORY = 25;
 /** The responsive split's phone: an iPhone-15-wide viewport with a mobile Chrome user agent. */
@@ -318,6 +317,19 @@ class Browser implements TabHost {
   activeContents(): WebContents | undefined {
     const tab = this.store.activeTab;
     return tab ? this.views.get(tab.id)?.webContents : undefined;
+  }
+
+  /** ⌘1–⌘8 pick a tab by position (favorites, then pinned, then today); ⌘9 the last one. */
+  selectTabIndex(index: number) {
+    const ids = this.store.allTabIds(this.store.activeSpace);
+    const id = index < 0 ? ids[ids.length - 1] : ids[index];
+    if (id) this.store.activate(id);
+  }
+
+  cycleSpace(step: 1 | -1) {
+    const spaces = this.store.state.spaces;
+    const i = spaces.findIndex((sp) => sp.id === this.store.state.activeSpaceId);
+    this.store.switchSpace(spaces[(i + step + spaces.length) % spaces.length].id);
   }
 
   cycleTab(step: 1 | -1) {
@@ -1010,13 +1022,26 @@ function countTabs(nodes: Array<{ kind: string; children?: any[] }>): number {
 
 function buildMenu(browser: Browser, store: Store, settings: Settings) {
   const active = () => browser.activeContents();
+  const tab = () => store.activeTab;
+  const space = store.activeSpace;
+  const copy = (text: string | undefined, message: string) => {
+    if (!text) return;
+    clipboard.writeText(text);
+    browser.flash(message);
+  };
+  const archiveAfter = store.state.archiveAfterHours ?? 12;
   const template: MenuItemConstructorOptions[] = [
     {
       label: app.name,
       submenu: [
-        { role: 'about' },
+        { role: 'about', label: `About ${app.name}` },
         { type: 'separator' },
         { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: () => settings.open() },
+        {
+          label: 'Make Flecha Your Default Browser',
+          enabled: canSetDefaultBrowser() && !isDefaultBrowser(),
+          click: () => makeDefaultBrowser(),
+        },
         { type: 'separator' },
         { role: 'services' },
         { type: 'separator' },
@@ -1031,14 +1056,15 @@ function buildMenu(browser: Browser, store: Store, settings: Settings) {
       label: 'File',
       submenu: [
         { label: 'New Tab', accelerator: 'CmdOrCtrl+T', click: () => browser.setPaletteOpen(true, 'new-tab') },
-        { label: 'Open Location', accelerator: 'CmdOrCtrl+L', click: () => browser.setPaletteOpen(true, 'navigate') },
+        { label: 'Open Location…', accelerator: 'CmdOrCtrl+L', click: () => browser.setPaletteOpen(true, 'navigate') },
         { label: 'New Space', accelerator: 'Ctrl+Shift+N', click: () => browser.newSpace() },
+        { type: 'separator' },
         {
           label: 'Close Tab',
           accelerator: 'CmdOrCtrl+W',
           click: () => {
             if (browser.peekOpen) browser.closePeek();
-            else if (store.activeTab) browser.closeTab(store.activeTab.id);
+            else if (tab()) browser.closeTab(tab()!.id);
           },
         },
         {
@@ -1049,6 +1075,20 @@ function buildMenu(browser: Browser, store: Store, settings: Settings) {
             if (item) browser.openTab(item.url);
           },
         },
+        { type: 'separator' },
+        {
+          label: 'Share',
+          submenu: [
+            { label: 'Copy Link', accelerator: 'CmdOrCtrl+Shift+C', click: () => copy(tab()?.url, 'Link copied') },
+            {
+              label: 'Copy as Markdown Link',
+              accelerator: 'Alt+CmdOrCtrl+C',
+              click: () => tab() && copy(`[${tab()!.customTitle ?? tab()!.title}](${tab()!.url})`, 'Markdown link copied'),
+            },
+            { label: 'Copy Screenshot', accelerator: 'CmdOrCtrl+Shift+2', click: () => void browser.capturePage() },
+          ],
+        },
+        { label: 'Print…', accelerator: 'CmdOrCtrl+P', click: () => active()?.print() },
         { type: 'separator' },
         { label: 'Import from Arc…', click: () => browser.importArc() },
       ],
@@ -1075,46 +1115,101 @@ function buildMenu(browser: Browser, store: Store, settings: Settings) {
       submenu: [
         { label: 'Toggle Sidebar', accelerator: 'CmdOrCtrl+S', click: () => browser.toggleSidebar() },
         { type: 'separator' },
-        { label: 'Split View with New Tab', accelerator: 'Ctrl+Shift+=', click: () => browser.setPaletteOpen(true, 'split') },
-        { label: 'Exit Split View', accelerator: 'Ctrl+Shift+-', click: () => browser.exitSplit() },
-        { label: 'Responsive View', accelerator: 'Alt+CmdOrCtrl+M', click: () => browser.toggleResponsive() },
-        { type: 'separator' },
         { label: 'Reload', accelerator: 'CmdOrCtrl+R', click: () => active()?.reload() },
         { label: 'Hard Reload', accelerator: 'CmdOrCtrl+Shift+R', click: () => active()?.reloadIgnoringCache() },
-        { label: 'Next Environment', accelerator: 'Alt+CmdOrCtrl+E', click: () => browser.nextEnvironment() },
         { label: 'Back', accelerator: 'CmdOrCtrl+[', click: () => active()?.navigationHistory.goBack() },
         { label: 'Forward', accelerator: 'CmdOrCtrl+]', click: () => active()?.navigationHistory.goForward() },
         { type: 'separator' },
-        { label: 'Zoom In', accelerator: 'CmdOrCtrl+=', click: () => zoom(active(), 0.5) },
-        { label: 'Zoom Out', accelerator: 'CmdOrCtrl+-', click: () => zoom(active(), -0.5) },
-        { label: 'Actual Size', accelerator: 'CmdOrCtrl+0', click: () => active()?.setZoomLevel(0) },
+        { label: 'Split View with New Tab', accelerator: 'Ctrl+Shift+=', click: () => browser.setPaletteOpen(true, 'split') },
+        { label: 'Exit Split View', accelerator: 'Ctrl+Shift+-', enabled: !!space.split, click: () => browser.exitSplit() },
         { type: 'separator' },
-        { label: 'Developer Tools', accelerator: 'Alt+CmdOrCtrl+I', click: () => active()?.toggleDevTools() },
-        { label: 'Sidebar Developer Tools', click: () => browser.uiContents.openDevTools({ mode: 'detach' }) },
+        { label: 'Zoom In', accelerator: 'CmdOrCtrl+=', click: () => browser.zoom(1) },
+        { label: 'Zoom Out', accelerator: 'CmdOrCtrl+-', click: () => browser.zoom(-1) },
+        { label: 'Actual Size', accelerator: 'CmdOrCtrl+0', click: () => browser.zoom(0) },
+        { type: 'separator' },
+        {
+          label: 'Developer',
+          submenu: [
+            { label: 'Developer Tools', accelerator: 'Alt+CmdOrCtrl+I', click: () => active()?.toggleDevTools() },
+            { label: 'Responsive View', accelerator: 'Alt+CmdOrCtrl+M', click: () => browser.toggleResponsive() },
+            { label: 'Next Environment', accelerator: 'Alt+CmdOrCtrl+E', click: () => browser.nextEnvironment() },
+            { label: 'Edit Boost for This Site', accelerator: 'Alt+CmdOrCtrl+B', click: () => browser.editBoost('script') },
+            { type: 'separator' },
+            { label: 'View Source', accelerator: 'Alt+CmdOrCtrl+U', click: () => tab() && browser.openTab(`view-source:${tab()!.url}`) },
+            { label: 'Sidebar Developer Tools', click: () => browser.uiContents.openDevTools({ mode: 'detach' }) },
+          ],
+        },
+        { type: 'separator' },
         { role: 'togglefullscreen' },
+      ],
+    },
+    {
+      label: 'Spaces',
+      submenu: [
+        ...store.state.spaces.map(
+          (s, i): MenuItemConstructorOptions => ({
+            label: `${s.emoji ? s.emoji + '  ' : ''}${s.name}`,
+            type: 'checkbox',
+            checked: s.id === space.id,
+            accelerator: i < 9 ? `Ctrl+${i + 1}` : undefined,
+            click: () => store.switchSpace(s.id),
+          }),
+        ),
+        { type: 'separator' },
+        { label: 'Next Space', accelerator: 'Alt+CmdOrCtrl+Right', click: () => browser.cycleSpace(1) },
+        { label: 'Previous Space', accelerator: 'Alt+CmdOrCtrl+Left', click: () => browser.cycleSpace(-1) },
+        { type: 'separator' },
+        { label: 'New Space', click: () => browser.newSpace() },
+        { label: 'Edit Space…', click: () => browser.editSpace(space.id) },
+        {
+          label: 'Separate Cookies and Logins',
+          type: 'checkbox',
+          checked: !!space.isolated,
+          click: () => browser.setSpaceIsolated(space.id, !space.isolated),
+        },
       ],
     },
     {
       label: 'Tabs',
       submenu: [
-        { label: 'Pin / Unpin Tab', accelerator: 'CmdOrCtrl+D', click: () => store.activeTab && store.togglePin(store.activeTab.id) },
-        { label: 'Copy URL', accelerator: 'CmdOrCtrl+Shift+C', click: () => store.activeTab && clipboard.writeText(store.activeTab.url) },
         { label: 'Next Tab', accelerator: 'Ctrl+Tab', click: () => browser.cycleTab(1) },
         { label: 'Previous Tab', accelerator: 'Ctrl+Shift+Tab', click: () => browser.cycleTab(-1) },
+        ...Array.from({ length: 9 }, (_, i) => ({
+          label: i === 8 ? 'Last Tab' : `Tab ${i + 1}`,
+          accelerator: `CmdOrCtrl+${i + 1}`,
+          visible: false,
+          acceleratorWorksWhenHidden: true,
+          click: () => browser.selectTabIndex(i === 8 ? -1 : i),
+        })),
+        { type: 'separator' },
+        { label: 'Pin / Unpin Tab', accelerator: 'CmdOrCtrl+D', click: () => tab() && store.togglePin(tab()!.id) },
+        { label: 'Add to Favorites', click: () => tab() && store.toggleFavorite(tab()!.id) },
+        { label: 'Duplicate Tab', accelerator: 'Alt+CmdOrCtrl+D', click: () => tab() && browser.openTab(tab()!.url) },
+        { label: tab()?.muted ? 'Unmute Tab' : 'Mute Tab', accelerator: 'Ctrl+M', click: () => tab() && browser.toggleMute(tab()!.id) },
         { type: 'separator' },
         { label: 'Clear Today Tabs', accelerator: 'CmdOrCtrl+Shift+K', click: () => clearToday(browser, store) },
       ],
     },
     {
-      label: 'Spaces',
-      submenu: Array.from({ length: 9 }, (_, i) => ({
-        label: `Space ${i + 1}`,
-        accelerator: `Ctrl+${i + 1}`,
-        click: () => {
-          const space = store.state.spaces[i];
-          if (space) store.switchSpace(space.id);
+      label: 'Archive',
+      submenu: [
+        { label: 'Recently Closed', enabled: false },
+        ...store.state.archive.slice(0, 12).map((item) => ({
+          label: item.title.length > 60 ? item.title.slice(0, 57) + '…' : item.title || item.url,
+          click: () => browser.openTab(item.url),
+        })),
+        ...(store.state.archive.length ? [] : [{ label: 'Nothing archived yet', enabled: false }]),
+        { type: 'separator' },
+        {
+          label: 'Archive Today Tabs After',
+          submenu: [12, 24, 24 * 7, 24 * 30, 0].map((hours) => ({
+            label: hours === 0 ? 'Never' : hours < 24 ? `${hours} Hours` : hours === 24 ? '1 Day' : `${hours / 24} Days`,
+            type: 'radio' as const,
+            checked: archiveAfter === hours,
+            click: () => store.setArchiveAfter(hours),
+          })),
         },
-      })),
+      ],
     },
     {
       label: 'Extensions',
@@ -1123,7 +1218,7 @@ function buildMenu(browser: Browser, store: Store, settings: Settings) {
         {
           label: 'Boosts',
           submenu: [
-            { label: 'Edit Script for This Site', accelerator: 'Alt+CmdOrCtrl+B', click: () => browser.editBoost('script') },
+            { label: 'Edit Script for This Site', click: () => browser.editBoost('script') },
             { label: 'Edit Styles for This Site', click: () => browser.editBoost('styles') },
             { type: 'separator' },
             { label: 'Open Boosts Folder', click: () => browser.openBoostsFolder() },
@@ -1146,12 +1241,15 @@ function buildMenu(browser: Browser, store: Store, settings: Settings) {
       ],
     },
     { role: 'windowMenu' },
+    {
+      role: 'help',
+      submenu: [
+        { label: 'Keyboard Shortcuts', accelerator: 'CmdOrCtrl+/', click: () => settings.open('shortcuts') },
+        { label: 'Flecha Website', click: () => browser.openTab('https://flecha.oprimo.dev') },
+      ],
+    },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
-}
-
-function zoom(wc: WebContents | undefined, delta: number) {
-  wc?.setZoomLevel(wc.getZoomLevel() + delta);
 }
 
 function clearToday(browser: Browser, store: Store) {
@@ -1248,7 +1346,7 @@ app.whenReady().then(async () => {
   if (!isPrimaryInstance) return;
   const store = new Store(app.getPath('userData'));
   const history = new History(app.getPath('userData'));
-  store.archiveStale(ARCHIVE_AFTER_MS);
+  store.archiveStale();
   let browser: Browser | undefined;
   // Extensions and the ad blocker load first so they reach the very first tabs.
   const [extensions] = await Promise.all([
@@ -1285,6 +1383,21 @@ app.whenReady().then(async () => {
   buildMenu(browser, store, settings);
   browser.openSettings = () => settings.open();
   const rebuildMenu = () => buildMenu(browser!, store, settings);
+  // The Spaces, Tabs and Archive menus show live state; rebuild only when what they show changes.
+  let menuSignature = '';
+  store.onChange(() => {
+    const st = store.state;
+    const signature = JSON.stringify([
+      st.activeSpaceId,
+      st.spaces.map((sp) => [sp.id, sp.name, sp.emoji, sp.isolated, !!sp.split]),
+      st.archive.slice(0, 12).map((a) => a.url),
+      st.archiveAfterHours,
+      store.activeTab?.muted,
+    ]);
+    if (signature === menuSignature) return;
+    menuSignature = signature;
+    rebuildMenu();
+  });
   session.defaultSession.extensions.on('extension-loaded', rebuildMenu);
   session.defaultSession.extensions.on('extension-unloaded', rebuildMenu);
   const downloadOptions = () => ({
@@ -1312,7 +1425,7 @@ app.whenReady().then(async () => {
   });
 
   setInterval(() => {
-    for (const id of store.archiveStale(ARCHIVE_AFTER_MS)) browser.destroyView(id);
+    for (const id of store.archiveStale()) browser.destroyView(id);
   }, 60 * 60 * 1000);
   app.on('before-quit', () => {
     browser!.snapshotTabs();

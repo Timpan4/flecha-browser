@@ -42,8 +42,12 @@ export class Settings {
     ipcMain.handle('settings:choose-downloads-folder', (event) => (fromSettings(event) ? this.chooseDownloadsFolder() : undefined));
   }
 
-  open() {
-    if (this.win && !this.win.isDestroyed()) return this.win.focus();
+  /** Opens Settings, optionally on a given pane (e.g. `shortcuts` from the Help menu). */
+  open(pane?: string) {
+    if (this.win && !this.win.isDestroyed()) {
+      if (pane) this.win.webContents.send('settings:pane', pane);
+      return this.win.focus();
+    }
     this.win = new BrowserWindow({
       width: 780,
       height: 580,
@@ -64,7 +68,7 @@ export class Settings {
         contextIsolation: true,
       },
     });
-    this.win.loadFile(path.join(__dirname, '../renderer/settings.html'));
+    this.win.loadFile(path.join(__dirname, '../renderer/settings.html'), pane ? { hash: pane } : undefined);
     this.win.once('ready-to-show', () => this.win?.show());
   }
 

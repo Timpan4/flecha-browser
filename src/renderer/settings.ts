@@ -39,7 +39,9 @@ try {
 } catch {
   // Private storage can be unavailable.
 }
-showPane(lastPane);
+// A pane asked for by the menu (Help → Keyboard Shortcuts) wins over the last one used.
+showPane(location.hash.slice(1) || lastPane);
+api.onPane(showPane);
 const adBlock = document.getElementById('adBlock') as HTMLInputElement;
 const searchEngine = document.getElementById('searchEngine') as HTMLSelectElement;
 const downloadsFolder = document.getElementById('downloadsFolder')!;

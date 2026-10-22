@@ -308,8 +308,10 @@ export class Store {
   }
 
   /** Arc's auto-archive: today tabs untouched for a while go away on their own. */
-  archiveStale(maxAgeMs: number): string[] {
-    const cutoff = Date.now() - maxAgeMs;
+  archiveStale(): string[] {
+    const hours = this.state.archiveAfterHours ?? 12;
+    if (hours === 0) return [];
+    const cutoff = Date.now() - hours * 60 * 60 * 1000;
     const removed: string[] = [];
     for (const space of this.state.spaces) {
       space.today = space.today.filter((id) => {
@@ -363,6 +365,11 @@ export class Store {
     if (decision) site[permission] = decision;
     else delete site[permission];
     if (!Object.keys(site).length) delete all[origin];
+    this.changed();
+  }
+
+  setArchiveAfter(hours: number) {
+    this.state.archiveAfterHours = Math.max(0, hours);
     this.changed();
   }
 

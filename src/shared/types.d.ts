@@ -110,6 +110,8 @@ export interface BrowserState {
   archive: ArchivedTab[];
   sidebarVisible: boolean;
   window?: WindowBounds;
+  /** Today tabs untouched this long are archived; 0 keeps them forever. Default 12. */
+  archiveAfterHours?: number;
   /** Remembered answers to site permission prompts, by origin then permission. */
   sitePermissions?: Record<string, Record<string, 'allow' | 'block'>>;
   searchEngine?: SearchEngineId;
@@ -198,6 +200,7 @@ export interface SettingsApi {
   newAgentToken(): Promise<SettingsView>;
   copy(text: string): Promise<void>;
   openBoosts(): Promise<void>;
+  onPane(cb: (pane: string) => void): void;
 }
 
 /** The split divider's bridge; it lives in its own thin view between the panes. */

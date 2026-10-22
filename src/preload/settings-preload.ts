@@ -9,6 +9,7 @@ const api: SettingsApi = {
   newAgentToken: () => ipcRenderer.invoke('settings:new-agent-token'),
   copy: (text) => ipcRenderer.invoke('settings:copy', text),
   openBoosts: () => ipcRenderer.invoke('settings:open-boosts'),
+  onPane: (cb) => void ipcRenderer.on('settings:pane', (_e, pane) => cb(pane)),
 };
 
 contextBridge.exposeInMainWorld('settings', api);
