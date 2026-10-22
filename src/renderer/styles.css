@@ -1459,3 +1459,31 @@ body[data-sidebar='floating'] #sidebar {
     transform: translateX(-16px);
   }
 }
+
+/* ---- split pairs in the sidebar ----------------------------------------- */
+
+.split-row {
+  display: flex;
+  gap: 2px;
+  margin: 1px 0;
+  padding: 2px;
+  border-radius: calc(var(--radius-md) + 2px);
+  background: var(--fill-subtle);
+}
+
+.split-row.showing {
+  background: var(--fill-hover);
+}
+
+.split-row > .row {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  gap: 8px;
+  padding: 0 4px 0 8px;
+}
+
+/* Inside a pair the split mark is redundant. */
+.split-row .split-badge {
+  display: none !important;
+}

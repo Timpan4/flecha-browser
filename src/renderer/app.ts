@@ -119,9 +119,7 @@ function render(s: UiState) {
   $('space-isolated').hidden = !space.isolated;
 
   $('pinned').replaceChildren(...space.pinned.map((node) => renderNode(node, space, undefined)));
-  $('today').replaceChildren(
-    ...space.today.map((id) => s.tabs[id]).filter(Boolean).map((tab) => tabRow(tab, space, { zone: 'today', beforeTabId: tab.id })),
-  );
+  $('today').replaceChildren(...todayRows(s, space));
 
   $('spaces').replaceChildren(
     ...s.spaces.map((sp) =>
@@ -224,6 +222,31 @@ function renderNode(node: PinnedNode, space: Space, folderId: string | undefined
     header,
     h('div', { class: 'folder-children' }, ...node.children.map((child) => renderNode(child, space, node.id))),
   );
+}
+
+/** Today's tabs, with the two halves of a split drawn together as one row, as in Arc. */
+function todayRows(s: UiState, space: Space): HTMLElement[] {
+  const pair = space.split && space.split.every((id) => space.today.includes(id) && s.tabs[id]) ? space.split : undefined;
+  const rows: HTMLElement[] = [];
+  for (const id of space.today) {
+    const tab = s.tabs[id];
+    if (!tab || (pair && id === pair[1] && rows.some((r) => r.classList.contains('split-row')))) continue;
+    if (pair && pair.includes(id)) {
+      const [left, right] = pair.map((pid) => s.tabs[pid]);
+      const showing = !!space.activeTabId && pair.includes(space.activeTabId);
+      rows.push(
+        h(
+          'div',
+          { class: `split-row${showing ? ' showing' : ''}`, title: space.splitMode === 'responsive' ? 'Responsive view' : 'Split view' },
+          tabRow(left, space, { zone: 'today', beforeTabId: left.id }),
+          tabRow(right, space, { zone: 'today', beforeTabId: right.id }),
+        ),
+      );
+      continue;
+    }
+    rows.push(tabRow(tab, space, { zone: 'today', beforeTabId: tab.id }));
+  }
+  return rows;
 }
 
 function tabRow(tab: TabInfo, space: Space, target: DropTarget) {
