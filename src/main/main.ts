@@ -2,6 +2,7 @@ import path from 'node:path';
 import {
   app,
   BaseWindow,
+  nativeTheme,
   screen,
   WebContentsView,
   Menu,
@@ -83,7 +84,7 @@ class Browser implements TabHost {
       minHeight: 420,
       titleBarStyle: 'hidden',
       trafficLightPosition: { x: 16, y: 18 },
-      backgroundColor: store.activeSpace.color,
+      backgroundColor: spaceTint(store.activeSpace.color),
     });
 
     this.ui = new WebContentsView({
@@ -99,6 +100,10 @@ class Browser implements TabHost {
 
     if (onScreen && saved.maximized) this.win.maximize();
     this.win.on('resize', () => this.layout());
+    nativeTheme.on('updated', () => {
+      this.win.setBackgroundColor(spaceTint(this.store.activeSpace.color));
+      this.sendState();
+    });
     const saveBounds = () => this.saveBounds();
     this.win.on('resize', saveBounds);
     this.win.on('move', saveBounds);
@@ -582,7 +587,7 @@ class Browser implements TabHost {
       if (active.session === session.defaultSession) this.extensions.selectTab(active);
       this.lastSelected = active;
     }
-    this.win.setBackgroundColor(this.store.activeSpace.color);
+    this.win.setBackgroundColor(spaceTint(this.store.activeSpace.color));
     this.layout();
     this.sendState();
   }
@@ -648,6 +653,7 @@ class Browser implements TabHost {
       ...this.store.state,
       tabs,
       searchEngineName: searchEngine(this.store.state.searchEngine).name,
+      tint: spaceTint(this.store.activeSpace.color),
       environment: this.store.activeTab ? describeEnvironment(this.store.activeTab.url, this.store.state.environments) : undefined,
       localServers: this.localServers,
       consoleErrors: Object.fromEntries(this.consoleErrors),
@@ -813,6 +819,15 @@ function emulatePhone(wc: WebContents) {
   send('Emulation.setDeviceMetricsOverride', { width: PHONE.width, height: 0, deviceScaleFactor: 3, mobile: true });
   send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
   send('Emulation.setEmitTouchEventsForMouse', { enabled: true, configuration: 'mobile' });
+}
+
+/** Space colours are pastels; in dark mode they become a deep tint of the same hue. */
+function spaceTint(color: string) {
+  if (!nativeTheme.shouldUseDarkColors) return color;
+  const base = [17, 24, 36];
+  const rgb = [1, 3, 5].map((i) => parseInt(color.slice(i, i + 2), 16));
+  const mixed = rgb.map((c, i) => Math.round(c * 0.16 + base[i] * 0.84));
+  return '#' + mixed.map((c) => c.toString(16).padStart(2, '0')).join('');
 }
 
 function snapshotHistory(wc: WebContents): TabInfo['history'] {

@@ -1,0 +1,144 @@
+/* Flecha design tokens, shared by the sidebar, the find bar and Settings.
+   Colours follow the Blueprint identity (ink, paper, drafting blue, marker orange);
+   everything else sits on a 4px grid. Dark mode follows the system. */
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('fonts/jetbrains-mono.woff2') format('woff2');
+  font-weight: 100 800;
+  font-display: swap;
+}
+
+:root {
+  color-scheme: light dark;
+
+  /* Brand */
+  --ink: #0b2545;
+  --paper: #eef2f6;
+  --blue: #3aa6d9;
+  --mark: #e4572e;
+
+  /* Text */
+  --text: #16243a;
+  --text-2: rgba(22, 36, 58, 0.62);
+  --text-3: rgba(22, 36, 58, 0.42);
+
+  /* Surfaces on top of the Space tint */
+  --fill-hover: rgba(255, 255, 255, 0.42);
+  --fill-active: rgba(255, 255, 255, 0.92);
+  --fill-subtle: rgba(255, 255, 255, 0.3);
+  --line: rgba(11, 37, 69, 0.1);
+
+  /* Floating surfaces: command bar, menus, panels */
+  --surface: rgba(255, 255, 255, 0.98);
+  --surface-2: #f4f6f9;
+  --surface-line: rgba(11, 37, 69, 0.1);
+  --selection: #1f6fb5;
+  --selection-text: #fff;
+  --focus: rgba(58, 166, 217, 0.55);
+
+  /* Status */
+  --green: #1f9d5b;
+  --amber: #d98a12;
+  --red: #d93f3f;
+  --agent: #6d5bd0;
+
+  /* Type */
+  --font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-md: 13px;
+  --text-lg: 15px;
+  --text-xl: 17px;
+
+  /* Space, shape, depth, motion */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --shadow-row: 0 1px 2px rgba(11, 37, 69, 0.08), 0 0 0 0.5px rgba(11, 37, 69, 0.06);
+  --shadow-pop: 0 18px 50px rgba(11, 37, 69, 0.22), 0 0 0 0.5px rgba(11, 37, 69, 0.14);
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --fast: 120ms;
+  --medium: 200ms;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --text: #e6ecf3;
+    --text-2: rgba(230, 236, 243, 0.62);
+    --text-3: rgba(230, 236, 243, 0.4);
+
+    --fill-hover: rgba(255, 255, 255, 0.06);
+    --fill-active: rgba(255, 255, 255, 0.13);
+    --fill-subtle: rgba(255, 255, 255, 0.05);
+    --line: rgba(230, 236, 243, 0.1);
+
+    --surface: rgba(22, 30, 43, 0.98);
+    --surface-2: #1b2433;
+    --surface-line: rgba(230, 236, 243, 0.1);
+    --selection: #2b7fc4;
+
+    --shadow-row: 0 0 0 0.5px rgba(255, 255, 255, 0.08);
+    --shadow-pop: 0 18px 50px rgba(0, 0, 0, 0.5), 0 0 0 0.5px rgba(255, 255, 255, 0.12);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --fast: 0ms;
+    --medium: 0ms;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: default;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+kbd {
+  display: inline-block;
+  min-width: 18px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--fill-subtle);
+  box-shadow: inset 0 0 0 0.5px var(--surface-line);
+  font: 500 var(--text-xs) / 16px var(--mono);
+  text-align: center;
+  color: var(--text-2);
+}

@@ -6,7 +6,7 @@
   "description": "An Arc-style browser built on Chromium (via Electron).",
   "main": "dist/main/main.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json && npm run build:preload && tsc -p src/renderer/tsconfig.json && cp src/renderer/index.html src/renderer/styles.css src/renderer/find.html src/renderer/find.css src/renderer/settings.html src/renderer/settings.css dist/renderer/",
+    "build": "tsc -p tsconfig.json && npm run build:preload && tsc -p src/renderer/tsconfig.json && cp src/renderer/*.html src/renderer/*.css dist/renderer/ && mkdir -p dist/renderer/fonts && cp node_modules/@fontsource-variable/jetbrains-mono/files/jetbrains-mono-latin-wght-normal.woff2 dist/renderer/fonts/jetbrains-mono.woff2",
     "build:preload": "esbuild src/preload/preload.ts --bundle --platform=node --format=cjs --external:electron --outfile=dist/preload/preload.js --log-level=warning",
     "start": "npm run build && electron .",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p src/renderer/tsconfig.json --noEmit"
@@ -17,6 +17,7 @@
     "typescript": "^7.0.2"
   },
   "dependencies": {
+    "@fontsource-variable/jetbrains-mono": "^5.3.0",
     "@ghostery/adblocker-electron": "^2.20.1",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "electron-chrome-extensions": "^4.9.0",

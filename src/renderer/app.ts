@@ -58,7 +58,7 @@ function render(s: UiState) {
   state = s;
   const space = s.spaces.find((sp) => sp.id === s.activeSpaceId) ?? s.spaces[0];
   const active = space.activeTabId ? s.tabs[space.activeTabId] : undefined;
-  document.documentElement.style.setProperty('--space-color', space.color);
+  document.documentElement.style.setProperty('--space-color', s.tint);
 
   ($('btn-back') as HTMLButtonElement).disabled = !s.nav.canGoBack;
   ($('btn-forward') as HTMLButtonElement).disabled = !s.nav.canGoForward;

@@ -117,6 +117,8 @@ export interface BrowserState {
 export interface UiState extends BrowserState {
   nav: { canGoBack: boolean; canGoForward: boolean };
   searchEngineName: string;
+  /** The active Space's colour, darkened in dark mode. */
+  tint: string;
   /** Set when the active tab is on one of the configured environments. */
   environment?: ActiveEnvironment;
   localServers: LocalServer[];
