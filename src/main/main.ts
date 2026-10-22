@@ -17,7 +17,8 @@ import { Store } from './store';
 import { arcSidebarPath, readArcSidebar } from './arcImport';
 import { resolveInput, searchEngine } from './url';
 import { describe as describeEnvironment } from './environments';
-import { setAdBlocking } from './adblock';
+import { addAdBlockSession, setAdBlocking } from './adblock';
+import { onEachSession, sessionForSpace } from './sessions';
 import { History } from './history';
 import { Downloads } from './downloads';
 import { Settings } from './settings';
@@ -188,7 +189,9 @@ class Browser implements TabHost {
     const existing = this.views.get(tabId);
     if (existing) return existing;
 
-    const view = new WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true } });
+    // Favorites belong to no Space, so they always use the shared session.
+    const ses = sessionForSpace(this.store.locate(tabId)?.space);
+    const view = new WebContentsView({ webPreferences: { session: ses, sandbox: true, contextIsolation: true } });
     view.setBorderRadius(10);
     const wc = view.webContents;
     const update = (patch: Parameters<Store['updateTab']>[1]) => this.store.updateTab(tabId, patch);
@@ -225,7 +228,7 @@ class Browser implements TabHost {
       // Like Arc, links leaving a pinned tab or favorite open in Peek instead of a new tab.
       const zone = this.store.locate(tabId)?.zone;
       if (disposition === 'foreground-tab' && zone && zone !== 'today') {
-        this.openPeek(url);
+        this.openPeek(url, wc.session);
         return { action: 'deny' };
       }
       this.openTab(url, { activate: disposition !== 'background-tab' });
@@ -233,7 +236,7 @@ class Browser implements TabHost {
     });
 
     this.views.set(tabId, view);
-    this.extensions.addTab(wc, this.win);
+    if (wc.session === session.defaultSession) this.extensions.addTab(wc, this.win);
     const tab = this.store.state.tabs[tabId];
     const url = tab?.url ?? 'about:blank';
     if (tab?.history?.entries.length) wc.navigationHistory.restore(tab.history).catch(() => wc.loadURL(url));
@@ -311,9 +314,9 @@ class Browser implements TabHost {
   }
 
   /** A floating preview above the current page, dismissed with Escape or a click outside. */
-  openPeek(url: string) {
+  openPeek(url: string, ses = this.activeContents()?.session ?? session.defaultSession) {
     this.closePeek();
-    const view = new WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true } });
+    const view = new WebContentsView({ webPreferences: { session: ses, sandbox: true, contextIsolation: true } });
     view.setBorderRadius(12);
     const wc = view.webContents;
     const send = () => this.sendPeek();
@@ -333,7 +336,7 @@ class Browser implements TabHost {
     });
 
     this.peek = view;
-    this.extensions.addTab(wc, this.win);
+    if (wc.session === session.defaultSession) this.extensions.addTab(wc, this.win);
     // Added last so it sits above the sidebar UI, which draws the dimmed backdrop and toolbar.
     this.win.contentView.addChildView(view);
     wc.loadURL(url);
@@ -400,7 +403,7 @@ class Browser implements TabHost {
     const active = this.activeContents();
     if (active && active !== this.lastSelected) {
       // Keeps chrome.tabs and the extension toolbar pointed at the tab on screen.
-      this.extensions.selectTab(active);
+      if (active.session === session.defaultSession) this.extensions.selectTab(active);
       this.lastSelected = active;
     }
     this.win.setBackgroundColor(this.store.activeSpace.color);
@@ -503,10 +506,38 @@ class Browser implements TabHost {
     ]).popup({ window: this.win });
   }
 
+  private async clearSpaceData(spaceId: string) {
+    const space = this.store.state.spaces.find((s) => s.id === spaceId);
+    if (!space?.isolated) return;
+    const { response } = await dialog.showMessageBox(this.win, {
+      message: `Sign out of everything in “${space.name}”?`,
+      detail: 'Clears cookies, storage and cache for this Space only.',
+      buttons: ['Clear', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1,
+    });
+    if (response !== 0) return;
+    await sessionForSpace(space).clearStorageData();
+    for (const id of this.store.allTabIds(space)) if (!this.store.state.favorites.includes(id)) this.views.get(id)?.webContents.reload();
+  }
+
   spaceMenu(spaceId: string) {
+    const space = this.store.state.spaces.find((s) => s.id === spaceId);
     Menu.buildFromTemplate([
       { label: 'Rename Space', click: () => this.ui.webContents.send('rename-space', spaceId) },
       { label: 'New Folder', click: () => this.store.newFolder() },
+      { type: 'separator' },
+      {
+        label: 'Separate Cookies and Logins',
+        type: 'checkbox',
+        checked: !!space?.isolated,
+        click: () => {
+          for (const id of this.store.setIsolated(spaceId, !space?.isolated)) this.destroyView(id);
+        },
+      },
+      ...(space?.isolated
+        ? [{ label: 'Clear Cookies and Site Data…', click: () => this.clearSpaceData(spaceId) }]
+        : []),
       { type: 'separator' },
       {
         label: 'Delete Space…',
@@ -529,7 +560,7 @@ class Browser implements TabHost {
     if (params.linkURL) {
       items.push(
         { label: 'Open Link in New Tab', click: () => this.openTab(params.linkURL, { activate: false }) },
-        { label: 'Open Link in Peek', click: () => this.openPeek(params.linkURL) },
+        { label: 'Open Link in Peek', click: () => this.openPeek(params.linkURL, wc.session) },
         { label: 'Open Link in Split View', click: () => this.splitNew(params.linkURL) },
         { label: 'Copy Link', click: () => clipboard.writeText(params.linkURL) },
         { type: 'separator' },
@@ -537,7 +568,8 @@ class Browser implements TabHost {
     }
     if (params.isEditable) items.push({ role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { type: 'separator' });
     else if (params.selectionText) items.push({ role: 'copy' }, { type: 'separator' });
-    const extensionItems = this.extensions.getContextMenuItems(wc, params);
+    // Extensions only run in the shared session, not in Spaces with separate cookies.
+    const extensionItems = wc.session === session.defaultSession ? this.extensions.getContextMenuItems(wc, params) : [];
     if (extensionItems.length) {
       for (const item of extensionItems) items.push(item);
       items.push({ type: 'separator' });
@@ -793,10 +825,10 @@ function registerIpc(browser: Browser, store: Store, history: History, downloads
   });
 }
 
-function registerPermissions(browser: Browser) {
+function registerPermissions(browser: Browser, ses: Electron.Session) {
   const silent = new Set(['fullscreen', 'clipboard-sanitized-write', 'pointerLock']);
   const asked = new Set(['media', 'geolocation', 'notifications', 'display-capture', 'midi', 'clipboard-read']);
-  session.defaultSession.setPermissionRequestHandler(async (wc, permission, callback, details) => {
+  ses.setPermissionRequestHandler(async (wc, permission, callback, details) => {
     if (wc === browser.uiContents || !asked.has(permission)) return callback(silent.has(permission));
     const host = safeHost(details.requestingUrl);
     const { response } = await dialog.showMessageBox(browser.win, {
@@ -838,11 +870,15 @@ app.whenReady().then(async () => {
     folder: store.state.downloadsFolder ?? app.getPath('downloads'),
     askWhereToSave: !!store.state.askWhereToSave,
   });
-  const downloads = new Downloads(session.defaultSession, downloadOptions, (items, started) =>
+  const downloads = new Downloads(downloadOptions, (items, started) =>
     browser!.uiContents.send('downloads', items, started),
   );
   registerIpc(browser, store, history, downloads);
-  registerPermissions(browser);
+  onEachSession((ses) => {
+    addAdBlockSession(ses);
+    downloads.attach(ses);
+    registerPermissions(browser!, ses);
+  });
   focusBrowser = () => browser!.focus();
   deliverLinksTo((url) => {
     browser!.openTab(url);

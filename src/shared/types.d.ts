@@ -31,6 +31,8 @@ export interface Space {
   pinned: PinnedNode[];
   today: string[];
   activeTabId?: string;
+  /** Separate cookies, storage and logins from the other Spaces. */
+  isolated?: boolean;
   /** Two tabs shown side by side (left, right) whenever either one is active. */
   split?: [string, string];
 }

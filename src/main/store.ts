@@ -227,6 +227,15 @@ export class Store {
     return ids;
   }
 
+  /** Returns the space's tab ids: their pages must be reopened in the new session. */
+  setIsolated(spaceId: string, isolated: boolean): string[] {
+    const space = this.state.spaces.find((s) => s.id === spaceId);
+    if (!space) return [];
+    space.isolated = isolated;
+    this.changed();
+    return [...pinnedTabIds(space.pinned), ...space.today];
+  }
+
   switchSpace(spaceId: string) {
     if (!this.state.spaces.some((s) => s.id === spaceId)) return;
     this.state.activeSpaceId = spaceId;

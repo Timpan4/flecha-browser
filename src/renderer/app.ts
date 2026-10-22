@@ -84,6 +84,7 @@ function render(s: UiState) {
   const title = $('space-title');
   if (title.contentEditable !== 'true') title.textContent = `${space.emoji ? space.emoji + '  ' : ''}${space.name}`;
   title.dataset.spaceId = space.id;
+  $('space-isolated').hidden = !space.isolated;
 
   $('pinned').replaceChildren(...space.pinned.map((node) => renderNode(node, space, undefined)));
   $('today').replaceChildren(

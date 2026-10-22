@@ -19,10 +19,12 @@ export class Downloads {
   private emitTimer?: NodeJS.Timeout;
 
   constructor(
-    session: Session,
     private options: () => DownloadOptions,
     private onChange: (items: DownloadInfo[], started?: DownloadInfo) => void,
-  ) {
+  ) {}
+
+  /** Each session (the default one and every isolated Space) reports its own downloads. */
+  attach(session: Session) {
     session.on('will-download', (_event, item) => this.track(item));
   }
 

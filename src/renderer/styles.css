@@ -707,3 +707,23 @@ footer {
 .env-badge.production {
   background: #d93f3f;
 }
+
+#space-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+#space-isolated {
+  display: grid;
+  color: var(--muted);
+}
+
+#space-isolated[hidden] {
+  display: none;
+}
+
+#space-isolated svg {
+  width: 13px;
+  height: 13px;
+}
