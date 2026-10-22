@@ -389,12 +389,18 @@ export async function importBrowser(id: string, store: Store, history: History):
     result.warnings.push(`Couldn’t look for ${source.name} profiles: ${reason(err)}`);
   }
   const label = (p: Profile) => (profiles.length > 1 ? `${source.name} (${p.name})` : source.name);
+  // Missing Full Disk Access blocks every file alike, so it is explained once.
+  const warn = (what: string, err: unknown) => {
+    const message = reason(err);
+    const warning = message === FULL_DISK_ACCESS ? message : `Couldn’t read ${what}: ${message}`;
+    if (!result.warnings.includes(warning)) result.warnings.push(warning);
+  };
 
   if (source.sidebar) {
     try {
       Object.assign(result, source.sidebar.import(store));
     } catch (err) {
-      result.warnings.push(`Couldn’t read ${source.name}’s sidebar: ${reason(err)}`);
+      warn(`${source.name}’s sidebar`, err);
     }
   }
 
@@ -407,14 +413,14 @@ export async function importBrowser(id: string, store: Store, history: History):
         const nodes = tidy.run(await source.readBookmarks(profile));
         if (nodes.length) perProfile.push({ profile, nodes });
       } catch (err) {
-        result.warnings.push(`Couldn’t read bookmarks from ${label(profile)}: ${reason(err)}`);
+        warn(`bookmarks from ${label(profile)}`, err);
       }
     }
     if (profile.historyFile) {
       try {
         visits.push(...(await source.readHistory(profile)).map(cleanEntry));
       } catch (err) {
-        result.warnings.push(`Couldn’t read history from ${label(profile)}: ${reason(err)}`);
+        warn(`history from ${label(profile)}`, err);
       }
     }
   }
