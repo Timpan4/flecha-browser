@@ -26,6 +26,7 @@ import { findLocalServers } from './localServers';
 import { Boosts, type BoostKind } from './boosts';
 import { Favicons, registerFaviconScheme } from './favicons';
 import { registerPermissions } from './permissions';
+import { fixGoogleSignIn, followGoogleSignIn } from './googleSignIn';
 import { AgentBridge, type AgentTab, type ConsoleEntry } from './agentBridge';
 import { History } from './history';
 import { Downloads } from './downloads';
@@ -401,6 +402,9 @@ class Browser implements TabHost {
     });
     if (this.store.state.tabs[tabId]?.device === 'mobile') emulatePhone(wc);
     if (this.store.state.tabs[tabId]?.muted) wc.setAudioMuted(true);
+    followGoogleSignIn(wc);
+    // Sign-in popups (OAuth) open as their own windows.
+    wc.on('did-create-window', (popup) => followGoogleSignIn(popup.webContents));
     wc.on('did-start-loading', () => update({ loading: true }));
     wc.on('did-stop-loading', () => {
       update({ loading: false });
@@ -580,6 +584,7 @@ class Browser implements TabHost {
     wc.on('did-navigate', send);
     wc.on('did-navigate-in-page', send);
     wc.on('context-menu', (_e, params) => this.pageMenu(wc, params));
+    followGoogleSignIn(wc);
     wc.on('before-input-event', (event, input) => {
       if (input.type === 'keyDown' && input.key === 'Escape') {
         event.preventDefault();
@@ -1420,6 +1425,7 @@ app.whenReady().then(async () => {
   registerIpc(browser, store, history, downloads);
   onEachSession((ses) => {
     addAdBlockSession(ses);
+    fixGoogleSignIn(ses);
     downloads.attach(ses);
     registerPermissions(ses, store, browser!.win, (wc) => wc === browser!.uiContents);
   });
