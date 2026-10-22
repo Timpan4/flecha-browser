@@ -1080,7 +1080,8 @@ function countTabs(nodes: Array<{ kind: string; children?: any[] }>): number {
 // ---- app wiring ------------------------------------------------------------
 
 function buildMenu(browser: Browser, store: Store, settings: Settings, flechinhas: Flechinhas) {
-  const active = () => browser.activeContents();
+  // Page commands act on a Flechinha's page while one is in front.
+  const active = () => flechinhas.focused()?.pageContents ?? browser.activeContents();
   const tab = () => store.activeTab;
   const space = store.activeSpace;
   const copy = (text: string | undefined, message: string) => {
@@ -1114,8 +1115,20 @@ function buildMenu(browser: Browser, store: Store, settings: Settings, flechinha
     {
       label: 'File',
       submenu: [
-        { label: 'New Tab', accelerator: 'CmdOrCtrl+T', click: () => browser.setPaletteOpen(true, 'new-tab') },
-        { label: 'Open Location…', accelerator: 'CmdOrCtrl+L', click: () => browser.setPaletteOpen(true, 'navigate') },
+        {
+          label: 'New Tab',
+          accelerator: 'CmdOrCtrl+T',
+          click: () => {
+            // From a Flechinha, the new tab is Flecha's: bring the main window forward for it.
+            if (flechinhas.focused()) browser.focus();
+            browser.setPaletteOpen(true, 'new-tab');
+          },
+        },
+        {
+          label: 'Open Location…',
+          accelerator: 'CmdOrCtrl+L',
+          click: () => (flechinhas.focused() ? flechinhas.focused()!.editAddress() : browser.setPaletteOpen(true, 'navigate')),
+        },
         { label: 'New Space', accelerator: 'Ctrl+Shift+N', click: () => browser.newSpace() },
         { label: 'New Flechinha Window', accelerator: 'Alt+CmdOrCtrl+N', click: () => flechinhas.create() },
         { type: 'separator' },
@@ -1123,7 +1136,8 @@ function buildMenu(browser: Browser, store: Store, settings: Settings, flechinha
           label: 'Close Tab',
           accelerator: 'CmdOrCtrl+W',
           click: () => {
-            if (browser.peekOpen) browser.closePeek();
+            if (flechinhas.focused()) flechinhas.focused()!.close();
+            else if (browser.peekOpen) browser.closePeek();
             else if (tab()) browser.closeTab(tab()!.id);
           },
         },
@@ -1139,7 +1153,11 @@ function buildMenu(browser: Browser, store: Store, settings: Settings, flechinha
         {
           label: 'Share',
           submenu: [
-            { label: 'Copy Link', accelerator: 'CmdOrCtrl+Shift+C', click: () => copy(tab()?.url, 'Link copied') },
+            {
+              label: 'Copy Link',
+              accelerator: 'CmdOrCtrl+Shift+C',
+              click: () => (flechinhas.focused() ? flechinhas.focused()!.copyLink() : copy(tab()?.url, 'Link copied')),
+            },
             {
               label: 'Copy as Markdown Link',
               accelerator: 'Alt+CmdOrCtrl+C',
@@ -1165,9 +1183,10 @@ function buildMenu(browser: Browser, store: Store, settings: Settings, flechinha
         { role: 'pasteAndMatchStyle' },
         { role: 'selectAll' },
         { type: 'separator' },
-        { label: 'Find…', accelerator: 'CmdOrCtrl+F', click: () => browser.openFind() },
-        { label: 'Find Next', accelerator: 'CmdOrCtrl+G', click: () => findAgain(browser, true) },
-        { label: 'Find Previous', accelerator: 'CmdOrCtrl+Shift+G', click: () => findAgain(browser, false) },
+        // The find bar lives in the main window; a Flechinha has none.
+        { label: 'Find…', accelerator: 'CmdOrCtrl+F', click: () => !flechinhas.focused() && browser.openFind() },
+        { label: 'Find Next', accelerator: 'CmdOrCtrl+G', click: () => !flechinhas.focused() && findAgain(browser, true) },
+        { label: 'Find Previous', accelerator: 'CmdOrCtrl+Shift+G', click: () => !flechinhas.focused() && findAgain(browser, false) },
       ],
     },
     {
