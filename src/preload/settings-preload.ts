@@ -8,6 +8,7 @@ const api: SettingsApi = {
   makeDefaultBrowser: () => ipcRenderer.invoke('settings:make-default-browser'),
   newAgentToken: () => ipcRenderer.invoke('settings:new-agent-token'),
   copy: (text) => ipcRenderer.invoke('settings:copy', text),
+  openBoosts: () => ipcRenderer.invoke('settings:open-boosts'),
 };
 
 contextBridge.exposeInMainWorld('settings', api);

@@ -186,6 +186,7 @@ export interface SettingsApi {
   makeDefaultBrowser(): Promise<SettingsView>;
   newAgentToken(): Promise<SettingsView>;
   copy(text: string): Promise<void>;
+  openBoosts(): Promise<void>;
 }
 
 export interface FlechaApi {

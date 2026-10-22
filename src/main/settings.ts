@@ -17,6 +17,7 @@ export class Settings {
     private store: Store,
     private onChanged: () => void,
     private agent: { setEnabled(enabled: boolean): Promise<void>; endpoint(): string | undefined },
+    openBoosts: () => void,
   ) {
     const fromSettings = (event: Electron.IpcMainInvokeEvent) => !!this.win && event.sender === this.win.webContents;
     ipcMain.handle('settings:get', (event) => (fromSettings(event) ? this.view() : undefined));
@@ -26,6 +27,9 @@ export class Settings {
       // The bridge reads the token on every request, so the old one stops working right away.
       this.store.setAgent({ enabled: !!this.store.state.agent?.enabled, token: newToken() });
       return this.view();
+    });
+    ipcMain.handle('settings:open-boosts', (event) => {
+      if (fromSettings(event)) openBoosts();
     });
     ipcMain.handle('settings:copy', (event, text: string) => {
       if (fromSettings(event)) clipboard.writeText(String(text));
@@ -41,13 +45,18 @@ export class Settings {
   open() {
     if (this.win && !this.win.isDestroyed()) return this.win.focus();
     this.win = new BrowserWindow({
-      width: 560,
-      height: 640,
+      width: 780,
+      height: 580,
       resizable: false,
       fullscreenable: false,
+      minimizable: false,
       title: 'Settings',
       titleBarStyle: 'hiddenInset',
-      backgroundColor: '#f5f5f7',
+      trafficLightPosition: { x: 18, y: 18 },
+      // The sidebar shows the desktop through macOS's translucent material, like System Settings.
+      vibrancy: 'sidebar',
+      visualEffectState: 'followWindow',
+      backgroundColor: '#00000000',
       show: false,
       webPreferences: {
         preload: path.join(__dirname, '../preload/settings-preload.js'),

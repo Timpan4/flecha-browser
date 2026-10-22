@@ -1146,7 +1146,7 @@ app.whenReady().then(async () => {
   const settings = new Settings(store, () => browser!.sendState(), {
     setEnabled: (enabled) => (enabled ? bridge.start() : bridge.stop()),
     endpoint: () => (bridge.port ? `http://127.0.0.1:${bridge.port}/mcp` : undefined),
-  });
+  }, () => browser!.openBoostsFolder());
   buildMenu(browser, store, settings);
   browser.openSettings = () => settings.open();
   const rebuildMenu = () => buildMenu(browser!, store, settings);

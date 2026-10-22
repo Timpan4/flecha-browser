@@ -1,4 +1,5 @@
 import type { SettingsApi, SettingsView } from '../shared/types';
+import { ICONS, type IconName } from './icons.js';
 
 declare global {
   interface Window {
@@ -7,6 +8,38 @@ declare global {
 }
 
 const api = window.settings;
+
+function icon(name: IconName) {
+  const el = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  el.setAttribute('viewBox', '0 0 16 16');
+  el.innerHTML = `<path d="${ICONS[name]}"/>`;
+  return el;
+}
+
+for (const el of document.querySelectorAll<HTMLElement>('i[data-icon]')) el.replaceWith(icon(el.dataset.icon as IconName));
+
+// ---- navigation: one pane at a time, like System Settings ----------------------
+
+function showPane(name: string) {
+  const item = document.querySelector<HTMLElement>(`.nav-item[data-pane="${name}"]`) ?? document.querySelector<HTMLElement>('.nav-item')!;
+  for (const el of document.querySelectorAll<HTMLElement>('.nav-item')) el.classList.toggle('selected', el === item);
+  for (const pane of document.querySelectorAll<HTMLElement>('.pane')) pane.hidden = pane.dataset.pane !== item.dataset.pane;
+  document.getElementById('pane-title')!.textContent = item.textContent!.trim();
+  try {
+    localStorage.setItem('pane', item.dataset.pane!);
+  } catch {
+    // Remembering the pane is a nicety.
+  }
+}
+
+for (const item of document.querySelectorAll<HTMLElement>('.nav-item')) item.addEventListener('click', () => showPane(item.dataset.pane!));
+let lastPane = 'general';
+try {
+  lastPane = localStorage.getItem('pane') ?? lastPane;
+} catch {
+  // Private storage can be unavailable.
+}
+showPane(lastPane);
 const adBlock = document.getElementById('adBlock') as HTMLInputElement;
 const searchEngine = document.getElementById('searchEngine') as HTMLSelectElement;
 const downloadsFolder = document.getElementById('downloadsFolder')!;
@@ -22,22 +55,27 @@ function renderEnvironments() {
   environmentList.replaceChildren(
     ...environments.map((env, i) => {
       const card = document.createElement('div');
-      card.className = 'env-card';
-      const name = Object.assign(document.createElement('input'), { value: env.name, placeholder: 'Project name' });
+      card.className = 'card env-card';
+      const name = Object.assign(document.createElement('input'), { value: env.name, placeholder: 'Project name', className: 'env-name' });
       const targets = Object.assign(document.createElement('textarea'), {
         value: env.targetsText,
         placeholder: 'local http://localhost:3000\nstaging https://staging.example.com\nprod https://example.com',
         rows: 3,
         spellcheck: false,
+        className: 'env-targets',
       });
-      const remove = Object.assign(document.createElement('button'), { textContent: 'Remove' });
+      const remove = Object.assign(document.createElement('button'), { className: 'icon-button', title: 'Remove project' });
+      remove.append(icon('close'));
       name.addEventListener('change', () => saveEnvironments({ ...env, name: name.value }, i));
       targets.addEventListener('change', () => saveEnvironments({ ...env, targetsText: targets.value }, i));
       remove.addEventListener('click', () => {
         environments.splice(i, 1);
         void persistEnvironments();
       });
-      card.append(name, targets, remove);
+      const header = document.createElement('div');
+      header.className = 'env-header';
+      header.append(name, remove);
+      card.append(header, targets);
       return card;
     }),
   );
@@ -59,7 +97,7 @@ async function persistEnvironments() {
 document.getElementById('addEnvironment')!.addEventListener('click', () => {
   environments.push({ id: crypto.randomUUID(), name: '', targetsText: '' });
   renderEnvironments();
-  environmentList.querySelector<HTMLInputElement>('.env-card:last-child input')?.focus();
+  environmentList.querySelector<HTMLInputElement>('.env-card:last-child .env-name')?.focus();
 });
 
 const agentEnabled = document.getElementById('agentEnabled') as HTMLInputElement;
@@ -121,6 +159,7 @@ makeDefault.addEventListener('click', async () => render(await api.makeDefaultBr
 // macOS asks for confirmation in its own dialog, so check again when the window regains focus.
 window.addEventListener('focus', async () => render(await api.get()));
 
+document.getElementById('openBoosts')!.addEventListener('click', () => api.openBoosts());
 document.getElementById('chooseFolder')!.addEventListener('click', async () => render(await api.chooseDownloadsFolder()));
 askWhereToSave.addEventListener('change', async () => render(await api.set({ askWhereToSave: askWhereToSave.checked })));
 

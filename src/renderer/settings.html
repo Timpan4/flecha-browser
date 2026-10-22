@@ -8,99 +8,139 @@
     <link rel="stylesheet" href="settings.css" />
   </head>
   <body>
-    <header class="titlebar">Settings</header>
+    <nav id="nav">
+      <div class="nav-titlebar"></div>
+      <button class="nav-item" data-pane="general"><span class="nav-icon gray"><i data-icon="settings"></i></span>General</button>
+      <button class="nav-item" data-pane="privacy"><span class="nav-icon blue"><i data-icon="lock"></i></span>Privacy</button>
+      <button class="nav-item" data-pane="downloads"><span class="nav-icon green"><i data-icon="download"></i></span>Downloads</button>
+      <div class="nav-label">Developer</div>
+      <button class="nav-item" data-pane="environments"><span class="nav-icon amber"><i data-icon="code"></i></span>Environments</button>
+      <button class="nav-item" data-pane="boosts"><span class="nav-icon orange"><i data-icon="zap"></i></span>Boosts</button>
+      <button class="nav-item" data-pane="agents"><span class="nav-icon purple"><i data-icon="sparkle"></i></span>Coding Agents</button>
+    </nav>
+
     <main>
-      <section>
-        <h2>General</h2>
-        <div class="row">
-          <span>
-            <strong>Default browser</strong>
-            <small id="defaultBrowserStatus"></small>
-          </span>
-          <button id="makeDefault">Make Default</button>
-        </div>
-        <label class="row">
-          <span>
-            <strong>Search engine</strong>
-            <small>Used when what you type in the command bar isn't a web address.</small>
-          </span>
-          <select id="searchEngine"></select>
-        </label>
-      </section>
+      <header class="pane-titlebar"><h1 id="pane-title"></h1></header>
 
-      <section id="environments">
-        <h2>Environments</h2>
-        <div class="row column">
-          <small>
-            Group the places a project runs. <strong>⌥⌘E</strong> moves the current page to the next one, keeping the path,
-            and the address bar shows which one you're on. One per line: <code>label origin</code>.
-          </small>
-          <div id="environmentList"></div>
-          <button id="addEnvironment">Add Project</button>
+      <section class="pane" data-pane="general">
+        <div class="card">
+          <div class="row">
+            <div class="row-text">
+              <strong>Default browser</strong>
+              <small id="defaultBrowserStatus"></small>
+            </div>
+            <button id="makeDefault" class="button">Make Default</button>
+          </div>
+          <label class="row">
+            <div class="row-text">
+              <strong>Search engine</strong>
+              <small>Used when what you type in the command bar isn't a web address.</small>
+            </div>
+            <select id="searchEngine" class="select"></select>
+          </label>
         </div>
       </section>
 
-      <section>
-        <h2>Coding agents (MCP)</h2>
-        <label class="row">
-          <span>
-            <strong>Let coding agents use Flecha</strong>
-            <small>
-              Full access: Claude Code, Cursor and other MCP clients can read your tabs and their console, take
-              screenshots, click, type and run JavaScript. Only programs on this Mac with the token can connect.
-            </small>
-          </span>
-          <input type="checkbox" id="agentEnabled" class="switch" />
-        </label>
-        <div class="row" data-agent-only>
-          <span>
-            <strong>Claude Code</strong>
-            <small id="agentEndpoint"></small>
-          </span>
-          <button id="copyClaudeCommand">Copy Command</button>
+      <section class="pane" data-pane="privacy">
+        <div class="card">
+          <label class="row">
+            <div class="row-text">
+              <strong>Block ads and trackers</strong>
+              <small>Uses the EasyList, EasyPrivacy and uBlock filter lists, in every Space.</small>
+            </div>
+            <input type="checkbox" id="adBlock" class="switch" />
+          </label>
         </div>
-        <div class="row" data-agent-only>
-          <span>
-            <strong>Other MCP clients</strong>
-            <small>JSON for Cursor, Windsurf and others.</small>
-          </span>
-          <button id="copyAgentJson">Copy Config</button>
-        </div>
-        <div class="row" data-agent-only>
-          <span>
-            <strong>Token</strong>
-            <small>A new token disconnects every agent using the old one.</small>
-          </span>
-          <button id="newAgentToken">New Token</button>
+        <p class="footnote">
+          To keep a Space's cookies and logins apart from the others, open its editor (double-click the Space name)
+          and turn on <em>Separate cookies and logins</em>.
+        </p>
+      </section>
+
+      <section class="pane" data-pane="downloads">
+        <div class="card">
+          <div class="row">
+            <div class="row-text">
+              <strong>Save files to</strong>
+              <small id="downloadsFolder" class="mono"></small>
+            </div>
+            <button id="chooseFolder" class="button">Change…</button>
+          </div>
+          <label class="row">
+            <div class="row-text">
+              <strong>Ask where to save each file</strong>
+              <small>Otherwise files go straight to the folder above.</small>
+            </div>
+            <input type="checkbox" id="askWhereToSave" class="switch" />
+          </label>
         </div>
       </section>
 
-      <section>
-        <h2>Downloads</h2>
-        <div class="row">
-          <span>
-            <strong>Save files to</strong>
-            <small id="downloadsFolder"></small>
-          </span>
-          <button id="chooseFolder">Change…</button>
-        </div>
-        <label class="row">
-          <span>
-            <strong>Ask where to save each file</strong>
-          </span>
-          <input type="checkbox" id="askWhereToSave" class="switch" />
-        </label>
+      <section class="pane" data-pane="environments">
+        <p class="lead">
+          Group the places a project runs. <kbd>⌥⌘E</kbd> moves the page to the next one with the same path, and the
+          address bar shows a <span class="tone local">LOCAL</span> <span class="tone staging">STAGING</span>
+          <span class="tone production">PROD</span> badge so production never looks like a safe place to click around.
+        </p>
+        <div id="environmentList"></div>
+        <button id="addEnvironment" class="button">Add Project</button>
       </section>
 
-      <section>
-        <h2>Privacy</h2>
-        <label class="row">
-          <span>
-            <strong>Block ads and trackers</strong>
-            <small>Uses the EasyList, EasyPrivacy and uBlock filter lists.</small>
-          </span>
-          <input type="checkbox" id="adBlock" class="switch" />
-        </label>
+      <section class="pane" data-pane="boosts">
+        <p class="lead">
+          Boosts are your own TypeScript and CSS for any site, as plain files you can keep in git. Name them after the
+          host: <code>github.com.ts</code>, <code>github.com.css</code>, or <code>all.css</code> for every site. Styles
+          apply as you save; scripts reload the page.
+        </p>
+        <div class="card">
+          <div class="row">
+            <div class="row-text">
+              <strong>Boosts folder</strong>
+              <small class="mono">~/.flecha/boosts</small>
+            </div>
+            <button id="openBoosts" class="button">Open Folder</button>
+          </div>
+        </div>
+        <p class="footnote">Tip: press <kbd>⌥⌘B</kbd> on any site to create or edit its boost.</p>
+      </section>
+
+      <section class="pane" data-pane="agents">
+        <p class="lead">
+          Let Claude Code, Cursor and other MCP clients see and drive your tabs: read pages and their console, take
+          screenshots, click, type and run JavaScript. You'll see what an agent is doing in the sidebar.
+        </p>
+        <div class="card">
+          <label class="row">
+            <div class="row-text">
+              <strong>Let coding agents use Flecha</strong>
+              <small>Full access. Only programs on this Mac that have the token can connect.</small>
+            </div>
+            <input type="checkbox" id="agentEnabled" class="switch" />
+          </label>
+        </div>
+        <div class="card" data-agent-only>
+          <div class="row">
+            <div class="row-text">
+              <strong>Claude Code</strong>
+              <small id="agentEndpoint" class="mono"></small>
+            </div>
+            <button id="copyClaudeCommand" class="button">Copy Command</button>
+          </div>
+          <div class="row">
+            <div class="row-text">
+              <strong>Other MCP clients</strong>
+              <small>JSON for Cursor, Windsurf and others.</small>
+            </div>
+            <button id="copyAgentJson" class="button">Copy Config</button>
+          </div>
+          <div class="row">
+            <div class="row-text">
+              <strong>Token</strong>
+              <small>A new token disconnects every agent using the old one.</small>
+            </div>
+            <button id="newAgentToken" class="button">New Token</button>
+          </div>
+        </div>
       </section>
     </main>
     <script type="module" src="settings.js"></script>
