@@ -399,21 +399,7 @@ export class Store {
 
   importArc(data: ArcImport) {
     const s = this.state;
-    const pristine = s.spaces.length === 1 && this.allTabIds(s.spaces[0]).length === 0;
-    if (pristine) s.spaces = [];
-
-    const makeTab = (t: { url: string; title: string }, pinned: boolean) => {
-      const tab: TabInfo = { id: randomUUID(), url: t.url, title: t.title || t.url, lastActive: Date.now() };
-      if (pinned) tab.homeUrl = t.url;
-      s.tabs[tab.id] = tab;
-      return tab.id;
-    };
-    const makeNodes = (nodes: ImportNode[]): PinnedNode[] =>
-      nodes.map((n) =>
-        n.kind === 'tab'
-          ? { kind: 'tab', tabId: makeTab(n, true) }
-          : { kind: 'folder', id: randomUUID(), name: n.name, open: false, children: makeNodes(n.children) },
-      );
+    const pristine = this.dropPristineSpace();
 
     for (const imported of data.spaces) {
       const n = s.spaces.length;
@@ -422,11 +408,11 @@ export class Store {
         name: imported.name,
         emoji: imported.emoji,
         color: SPACE_COLORS[n % SPACE_COLORS.length],
-        pinned: makeNodes(imported.pinned),
-        today: imported.today.map((t) => makeTab(t, false)),
+        pinned: this.importNodes(imported.pinned),
+        today: imported.today.map((t) => this.importTab(t, false)),
       });
     }
-    for (const fav of data.favorites) s.favorites.push(makeTab(fav, true));
+    for (const fav of data.favorites) s.favorites.push(this.importTab(fav, true));
     if (pristine || !s.spaces.some((sp) => sp.id === s.activeSpaceId)) s.activeSpaceId = s.spaces[0].id;
     this.changed();
   }
@@ -461,6 +447,29 @@ export class Store {
     this.state.favorites = this.state.favorites.filter((id) => id !== tabId);
     space.today = space.today.filter((id) => id !== tabId);
     removePinned(space.pinned, tabId);
+  }
+
+  /** A fresh install's single empty Space gives way to imported ones. Returns whether it did. */
+  private dropPristineSpace() {
+    const s = this.state;
+    const pristine = s.spaces.length === 1 && this.allTabIds(s.spaces[0]).length === 0;
+    if (pristine) s.spaces = [];
+    return pristine;
+  }
+
+  private importTab(t: { url: string; title: string }, pinned: boolean) {
+    const tab: TabInfo = { id: randomUUID(), url: t.url, title: t.title || t.url, lastActive: Date.now() };
+    if (pinned) tab.homeUrl = t.url;
+    this.state.tabs[tab.id] = tab;
+    return tab.id;
+  }
+
+  private importNodes(nodes: ImportNode[]): PinnedNode[] {
+    return nodes.map((n) =>
+      n.kind === 'tab'
+        ? { kind: 'tab', tabId: this.importTab(n, true) }
+        : { kind: 'folder', id: randomUUID(), name: n.name, open: false, children: this.importNodes(n.children) },
+    );
   }
 
   private archive(tab: TabInfo | undefined) {
