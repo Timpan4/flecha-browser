@@ -4,7 +4,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { app } from 'electron';
-import type { HistoryEntry } from '../shared/types';
+import type { DetectedBrowser, HistoryEntry, ImportResult } from '../shared/types';
 import type { History } from './history';
 import type { Store } from './store';
 import { arcSidebarPath, readArcSidebar, type ImportNode } from './arcImport';
@@ -23,21 +23,6 @@ const HISTORY_ROWS = 5000;
 const MAX_BOOKMARKS = 2000;
 /** Folders nested deeper than this are flattened into their parent. */
 const MAX_DEPTH = 8;
-
-export interface DetectedBrowser {
-  id: string;
-  name: string;
-  profiles: number;
-  hasBookmarks: boolean;
-  hasHistory: boolean;
-}
-
-export interface ImportResult {
-  spaces: number;
-  bookmarks: number;
-  history: number;
-  warnings: string[];
-}
 
 /** One profile of a browser, with whichever of its files exist. */
 interface Profile {

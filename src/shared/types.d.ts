@@ -61,6 +61,23 @@ export interface HistoryEntry {
   lastVisit: number;
 }
 
+/** Another browser on this Mac with data Flecha can bring over. */
+export interface DetectedBrowser {
+  id: string;
+  name: string;
+  profiles: number;
+  hasBookmarks: boolean;
+  hasHistory: boolean;
+}
+
+/** What one import brought over. Problems that didn't stop it are listed in `warnings`. */
+export interface ImportResult {
+  spaces: number;
+  bookmarks: number;
+  history: number;
+  warnings: string[];
+}
+
 export interface DownloadInfo {
   id: string;
   filename: string;
