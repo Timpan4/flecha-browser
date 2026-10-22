@@ -178,6 +178,42 @@ export interface FindBarApi {
   close(): void;
 }
 
+/** What a Flechinha's toolbar shows. */
+export interface FlechinhaState {
+  /** Empty until something has been opened. */
+  url: string;
+  title: string;
+  favicon?: string;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  loading: boolean;
+  /** The active Space's colour, darkened in dark mode; the toolbar wears it. */
+  tint: string;
+  /** Where "Open in Flecha" puts the page. */
+  space: { name: string; emoji?: string };
+  searchEngineName: string;
+}
+
+/** A Flechinha toolbar's bridge: the small window for links from other apps and quick lookups. */
+export interface FlechinhaApi {
+  onState(cb: (state: FlechinhaState) => void): void;
+  /** ⌘L: start editing the address. */
+  onEditAddress(cb: () => void): void;
+  /** A short confirmation in place of the address ("Link copied"). */
+  onFlash(cb: (message: string) => void): void;
+  ready(): void;
+  back(): void;
+  forward(): void;
+  reload(): void;
+  stop(): void;
+  /** A URL or a search, resolved like the command bar. */
+  navigate(input: string): void;
+  copyLink(): void;
+  /** Moves the page into the main window as a Today tab and closes the Flechinha. */
+  openInFlecha(): void;
+  close(): void;
+}
+
 /** What the settings page shows. */
 export interface SettingsView {
   adBlock: boolean;
