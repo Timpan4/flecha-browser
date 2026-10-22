@@ -126,6 +126,21 @@ export interface BrowserState {
   adBlock?: boolean;
   /** The MCP bridge for coding agents: off unless turned on in Settings. */
   agent?: { enabled: boolean; token: string };
+  /** Your own keyboard shortcuts by command id (Electron accelerators); null removes a shortcut. */
+  keybindings?: Record<string, string | null>;
+}
+
+/** One row of Settings → Keyboard Shortcuts. */
+export interface ShortcutInfo {
+  id: string;
+  group: string;
+  label: string;
+  /** For display ("⇧⌘T"); empty when the command has no shortcut. */
+  keys: string;
+  /** Differs from Flecha's default. */
+  changed?: boolean;
+  /** A family of keys like ⌘1…⌘9, shown but not recordable. */
+  fixed?: boolean;
 }
 
 export interface UiState extends BrowserState {
@@ -146,6 +161,8 @@ export interface UiState extends BrowserState {
   faviconHosts: string[];
   /** What a coding agent is doing, for the sidebar. */
   agent?: { connected: boolean; tabId?: string; action?: string; busy: boolean };
+  /** Current shortcut per command, for display ("⌘T"); empty when removed. */
+  shortcuts: Record<string, string>;
 }
 
 export type PaletteMode = 'new-tab' | 'navigate' | 'split';
@@ -191,12 +208,28 @@ export interface SettingsView {
   theme: 'system' | 'light' | 'dark';
   archiveAfterHours: number;
   peekPinnedLinks: boolean;
+  shortcuts: ShortcutInfo[];
+  /** Set after recording a shortcut another command had, which lost it. */
+  notice?: string;
 }
 
 /** The downloads folder is only changed through the folder picker, never set directly. */
-export type SettingsPatch = Partial<Omit<SettingsView, 'searchEngines' | 'downloadsFolder' | 'defaultBrowser' | 'agent'>> & {
+export type SettingsPatch = Partial<Omit<SettingsView, 'searchEngines' | 'downloadsFolder' | 'defaultBrowser' | 'agent' | 'shortcuts' | 'notice'>> & {
   agentEnabled?: boolean;
+  /** An accelerator, null for no shortcut, or 'default' to go back to Flecha's. */
+  shortcut?: { id: string; keys: string | null };
+  resetShortcuts?: boolean;
 };
+
+/** A key pressed while Settings records a shortcut. */
+export interface RecordedKey {
+  code: string;
+  key: string;
+  shift: boolean;
+  control: boolean;
+  alt: boolean;
+  meta: boolean;
+}
 
 export interface SettingsApi {
   get(): Promise<SettingsView>;
@@ -207,6 +240,9 @@ export interface SettingsApi {
   copy(text: string): Promise<void>;
   openBoosts(): Promise<void>;
   onPane(cb: (pane: string) => void): void;
+  /** While recording, every key goes to `onKey` instead of the page or the menus. */
+  recordShortcut(recording: boolean): Promise<void>;
+  onKey(cb: (key: RecordedKey) => void): void;
 }
 
 /** The split divider's bridge; it lives in its own thin view between the panes. */

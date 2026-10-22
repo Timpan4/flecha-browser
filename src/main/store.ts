@@ -381,6 +381,19 @@ export class Store {
     this.changed();
   }
 
+  /** `keys`: an accelerator, null for none, or undefined to go back to the default. */
+  setKeybinding(id: string, keys: string | null | undefined) {
+    const all = (this.state.keybindings ??= {});
+    if (keys === undefined) delete all[id];
+    else all[id] = keys;
+    this.changed();
+  }
+
+  resetKeybindings() {
+    delete this.state.keybindings;
+    this.changed();
+  }
+
   setAdBlock(enabled: boolean) {
     this.state.adBlock = enabled;
     this.changed();
