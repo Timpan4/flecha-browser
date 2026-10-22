@@ -27,7 +27,13 @@ export const PERMISSION_LABELS: Record<string, string> = {
  * Site permissions: asked once per site, remembered in the browser state, and reported
  * back to pages that check before asking (otherwise they'd keep asking on every visit).
  */
-export function registerPermissions(ses: Session, store: Store, win: BaseWindow, isUi: (wc: WebContents) => boolean) {
+export function registerPermissions(
+  ses: Session,
+  store: Store,
+  /** The window a page's prompt is attached to. */
+  windowFor: (wc: WebContents) => BaseWindow,
+  isUi: (wc: WebContents) => boolean,
+) {
   const pending = new Map<string, Promise<boolean>>();
 
   ses.setPermissionCheckHandler((wc, permission, requestingOrigin) => {
@@ -46,7 +52,7 @@ export function registerPermissions(ses: Session, store: Store, win: BaseWindow,
     const key = `${origin} ${permission}`;
     let answer = pending.get(key);
     if (!answer) {
-      answer = ask(win, origin, permission).then(({ allow, remember }) => {
+      answer = ask(windowFor(wc), origin, permission).then(({ allow, remember }) => {
         if (remember) store.setSitePermission(origin, permission, allow ? 'allow' : 'block');
         return allow;
       });

@@ -1515,7 +1515,12 @@ app.whenReady().then(async () => {
     addAdBlockSession(ses);
     fixGoogleSignIn(ses);
     downloads.attach(ses);
-    registerPermissions(ses, store, browser!.win, (wc) => wc === browser!.uiContents);
+    registerPermissions(
+      ses,
+      store,
+      (wc) => flechinhas.windowFor(wc) ?? browser!.win,
+      (wc) => wc === browser!.uiContents || flechinhas.isToolbar(wc),
+    );
   });
   focusBrowser = () => browser!.focus();
   browser.favicons = favicons;
