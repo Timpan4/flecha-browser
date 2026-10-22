@@ -736,3 +736,39 @@ footer {
 .row:hover .device-badge {
   display: none;
 }
+
+/* ---- local servers ------------------------------------------------------ */
+
+#local-servers[hidden] {
+  display: none;
+}
+
+.section-label {
+  padding: 2px 8px 2px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.row.local-server {
+  height: 30px;
+}
+
+.local-server .live-dot {
+  width: 7px;
+  height: 7px;
+  margin: 0 4px 0 4px;
+  border-radius: 50%;
+  background: #2e9d5b;
+  box-shadow: 0 0 0 3px rgba(46, 157, 91, 0.18);
+  flex: none;
+}
+
+.local-server .port {
+  font: 11px ui-monospace, 'SF Mono', Menlo, monospace;
+  color: var(--muted);
+}
+
+.local-server.open .title {
+  font-weight: 500;
+}

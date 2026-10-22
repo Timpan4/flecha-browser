@@ -85,6 +85,14 @@ export interface ActiveEnvironment {
   switches: Array<{ label: string; tone: ActiveEnvironment['tone']; url: string }>;
 }
 
+/** A dev server found listening on this machine. */
+export interface LocalServer {
+  port: number;
+  url: string;
+  /** The project folder it runs in, or the process name. */
+  name: string;
+}
+
 export type SearchEngineId = 'google' | 'duckduckgo' | 'bing' | 'brave' | 'kagi' | 'ecosia';
 
 export interface BrowserState {
@@ -109,6 +117,7 @@ export interface UiState extends BrowserState {
   searchEngineName: string;
   /** Set when the active tab is on one of the configured environments. */
   environment?: ActiveEnvironment;
+  localServers: LocalServer[];
 }
 
 export type PaletteMode = 'new-tab' | 'navigate' | 'split';

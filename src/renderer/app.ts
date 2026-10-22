@@ -81,6 +81,8 @@ function render(s: UiState) {
       }),
   );
 
+  renderLocalServers(s);
+
   const title = $('space-title');
   if (title.contentEditable !== 'true') title.textContent = `${space.emoji ? space.emoji + '  ' : ''}${space.name}`;
   title.dataset.spaceId = space.id;
@@ -110,6 +112,36 @@ function render(s: UiState) {
   );
 
   if (!palette.hidden) updatePalette();
+}
+
+/** Dev servers on this machine; clicking one goes to its tab, or opens one. */
+function renderLocalServers(s: UiState) {
+  $('local-servers').hidden = !s.localServers.length;
+  $('local-server-list').replaceChildren(
+    ...s.localServers.map((server) => {
+      const open = Object.values(s.tabs).find((t) => originOf(t.url) === originOf(server.url));
+      return h(
+        'button',
+        {
+          class: `row local-server${open ? ' open' : ''}`,
+          title: server.url,
+          onclick: () => (open ? api.activate(open.id) : api.newTab(server.url)),
+        },
+        h('span', { class: 'live-dot' }),
+        h('span', { class: 'title' }, server.name),
+        h('span', { class: 'port' }, `:${server.port}`),
+      );
+    }),
+  );
+}
+
+function originOf(url: string) {
+  try {
+    // localhost and 127.0.0.1 are the same server.
+    return new URL(url).origin.replace('127.0.0.1', 'localhost');
+  } catch {
+    return url;
+  }
 }
 
 function renderNode(node: PinnedNode, space: Space, folderId: string | undefined): HTMLElement {

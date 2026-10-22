@@ -12,13 +12,14 @@ import {
   session,
   type WebContents,
 } from 'electron';
-import type { DropTarget, PaletteMode, PeekState, TabInfo, UiState } from '../shared/types';
+import type { DropTarget, LocalServer, PaletteMode, PeekState, TabInfo, UiState } from '../shared/types';
 import { Store } from './store';
 import { arcSidebarPath, readArcSidebar } from './arcImport';
 import { resolveInput, searchEngine } from './url';
 import { describe as describeEnvironment } from './environments';
 import { addAdBlockSession, setAdBlocking } from './adblock';
 import { onEachSession, sessionForSpace } from './sessions';
+import { findLocalServers } from './localServers';
 import { History } from './history';
 import { Downloads } from './downloads';
 import { Settings } from './settings';
@@ -103,6 +104,27 @@ class Browser implements TabHost {
     this.win.on('closed', () => app.quit());
     store.onChange(() => this.sync());
     this.sync();
+  }
+
+  private localServers: LocalServer[] = [];
+
+  /** Looks for dev servers every few seconds while Flecha is in front, and rarely otherwise. */
+  watchLocalServers() {
+    let last = 0;
+    const scan = async () => {
+      const due = this.win.isFocused() ? 4000 : 30000;
+      if (Date.now() - last >= due) {
+        last = Date.now();
+        const servers = await findLocalServers();
+        if (JSON.stringify(servers) !== JSON.stringify(this.localServers)) {
+          this.localServers = servers;
+          this.sendState();
+        }
+      }
+      setTimeout(scan, 2000);
+    };
+    this.win.on('focus', () => (last = 0));
+    void scan();
   }
 
   focus() {
@@ -503,6 +525,7 @@ class Browser implements TabHost {
       tabs,
       searchEngineName: searchEngine(this.store.state.searchEngine).name,
       environment: this.store.activeTab ? describeEnvironment(this.store.activeTab.url, this.store.state.environments) : undefined,
+      localServers: this.localServers,
       nav: {
         canGoBack: wc?.navigationHistory.canGoBack() ?? false,
         canGoForward: wc?.navigationHistory.canGoForward() ?? false,
@@ -933,6 +956,7 @@ app.whenReady().then(async () => {
     registerPermissions(browser!, ses);
   });
   focusBrowser = () => browser!.focus();
+  browser.watchLocalServers();
   deliverLinksTo((url) => {
     browser!.openTab(url);
     browser!.focus();
