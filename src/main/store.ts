@@ -291,6 +291,25 @@ export class Store {
     this.changed();
   }
 
+  /**
+   * Removes a folder. Its tabs (and subfolders) take its place when `keepTabs` is set;
+   * otherwise they are deleted too. Returns the ids of deleted tabs.
+   */
+  deleteFolder(folderId: string, keepTabs: boolean): string[] {
+    const found = this.findFolder(folderId);
+    if (!found) return [];
+    const { folder, parent } = found;
+    parent.splice(parent.indexOf(folder), 1, ...(keepTabs ? folder.children : []));
+    const removed = keepTabs ? [] : pinnedTabIds(folder.children);
+    for (const id of removed) {
+      this.archive(this.state.tabs[id]);
+      delete this.state.tabs[id];
+    }
+    this.forgetMissingActive();
+    this.changed();
+    return removed;
+  }
+
   newSpace(): Space {
     const n = this.state.spaces.length;
     const space: Space = {
