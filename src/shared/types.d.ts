@@ -119,7 +119,7 @@ export interface BrowserState {
 }
 
 export interface UiState extends BrowserState {
-  nav: { canGoBack: boolean; canGoForward: boolean };
+  nav: { canGoBack: boolean; canGoForward: boolean; zoom: number };
   searchEngineName: string;
   /** The active Space's colour, darkened in dark mode. */
   tint: string;
@@ -239,6 +239,14 @@ export interface FlechaApi {
   toggleSidebar(): void;
   setSidebarPeek(peek: boolean): void;
   copyText(text: string): void;
+  /** Screenshot of the active page, to the clipboard. */
+  capturePage(): void;
+  clearSiteData(origin: string): void;
+  setSitePermission(origin: string, permission: string, decision: 'allow' | 'block' | 'ask'): void;
+  zoom(step: 1 | -1 | 0): void;
+  openDevTools(): void;
+  /** A short confirmation shown in the address bar ("Link copied"). */
+  onFlash(cb: (message: string) => void): void;
   openSettings(): void;
   toggleResponsive(): void;
   showConsole(tabId: string): void;

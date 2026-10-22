@@ -106,21 +106,72 @@ body {
 
 /* ---- address bar -------------------------------------------------------- */
 
-#urlbar {
+#urlbar-wrap {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: var(--space-2);
   height: 36px;
-  padding: 0 var(--space-3) 0 10px;
+  padding-right: 4px;
   border-radius: var(--radius-lg);
   background: var(--fill-subtle);
   box-shadow: inset 0 0 0 0.5px var(--line);
-  text-align: left;
   transition: background var(--fast) var(--ease);
 }
 
-#urlbar:hover {
+#urlbar-wrap:hover {
   background: var(--fill-hover);
+}
+
+#urlbar {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 100%;
+  padding: 0 4px 0 10px;
+  text-align: left;
+}
+
+.url-action {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-sm);
+  color: var(--text-3);
+  opacity: 0;
+  transition: opacity var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+
+#urlbar-wrap:hover .url-action,
+.url-action:focus-visible {
+  opacity: 1;
+}
+
+.url-action:hover {
+  background: var(--fill-hover);
+  color: var(--text);
+}
+
+.url-action svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* A short confirmation ("Link copied") laid over the address. */
+#urlbar-wrap.flashing::after {
+  content: attr(data-flash);
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: inherit;
+  background: var(--fill-active);
+  font-weight: 600;
+  color: var(--text);
+  animation: fade var(--fast) var(--ease);
 }
 
 #urlbar-icon {
@@ -1486,4 +1537,140 @@ body[data-sidebar='floating'] #sidebar {
 /* Inside a pair the split mark is redundant. */
 .split-row .split-badge {
   display: none !important;
+}
+
+/* ---- site panel --------------------------------------------------------- */
+
+.site-panel {
+  top: 92px;
+  bottom: auto;
+  max-height: none;
+  z-index: 2;
+}
+
+.site-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 14px 10px;
+}
+
+.site-header .favicon {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+}
+
+.site-title {
+  min-width: 0;
+}
+
+.site-title strong {
+  display: block;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.site-title small {
+  display: block;
+  font-size: var(--text-xs);
+  color: var(--text-3);
+}
+
+.site-title small.insecure {
+  color: var(--amber);
+}
+
+.site-actions {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  padding: 0 12px 8px;
+}
+
+.site-action {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 0 6px;
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-2);
+  transition: background var(--fast) var(--ease);
+}
+
+.site-action:hover:not(:disabled) {
+  background: var(--fill-hover);
+  color: var(--text);
+  box-shadow: inset 0 0 0 0.5px var(--surface-line);
+}
+
+.site-action:disabled {
+  opacity: 0.4;
+}
+
+.site-label {
+  padding: 4px 14px 0;
+}
+
+.site-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 32px;
+  padding: 0 10px 0 14px;
+}
+
+.mini-select {
+  height: 24px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font: 500 var(--text-sm) var(--font);
+}
+
+.zoom-control {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.zoom-control .icon-button {
+  width: 24px;
+  height: 24px;
+}
+
+.zoom-control .icon-button svg {
+  width: 13px;
+  height: 13px;
+}
+
+.zoom-value {
+  min-width: 44px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  font: 500 var(--text-xs) var(--mono);
+  color: var(--text-2);
+}
+
+.zoom-value:hover {
+  background: var(--surface-2);
+}
+
+.site-panel .popover-footer .text-button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.site-panel .popover-footer svg {
+  width: 13px;
+  height: 13px;
 }

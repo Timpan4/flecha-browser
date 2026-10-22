@@ -141,6 +141,7 @@ function render(s: UiState) {
 
   if (!palette.hidden) updatePalette();
   if (!spaceEditor.hidden) renderSpaceEditor();
+  if (!sitePanel.hidden) renderSitePanel();
 }
 
 /** Host, a padlock or code icon for the kind of connection, and the environment badge. */
@@ -375,6 +376,112 @@ function editInline(el: HTMLElement, current: string, commit: (value: string) =>
   el.addEventListener('keydown', onKey);
   el.addEventListener('blur', onBlur);
 }
+
+// ---- site panel (the sliders button in the address bar) ------------------------------
+
+const sitePanel = $('site-panel');
+const SITE_PERMISSIONS: Array<[string, string]> = [
+  ['geolocation', 'Location'],
+  ['media', 'Camera & microphone'],
+  ['notifications', 'Notifications'],
+  ['clipboard-read', 'Clipboard'],
+];
+
+function activeTab() {
+  const space = state?.spaces.find((s) => s.id === state!.activeSpaceId);
+  return space?.activeTabId ? state?.tabs[space.activeTabId] : undefined;
+}
+
+function toggleSitePanel(open = sitePanel.hidden) {
+  sitePanel.hidden = !open || !activeTab();
+  if (!sitePanel.hidden) {
+    spaceEditor.hidden = true;
+    downloadsPanel.hidden = true;
+    renderSitePanel();
+  }
+}
+
+function renderSitePanel() {
+  const tab = activeTab();
+  if (!tab || !state) return toggleSitePanel(false);
+  let origin = '';
+  try {
+    origin = new URL(tab.url).origin;
+  } catch {
+    // Not a web page.
+  }
+  $('site-favicon').replaceChildren(favicon(tab));
+  $('site-host').textContent = host(tab.url);
+  $('site-security').textContent = isDevUrl(tab.url)
+    ? 'Local development server'
+    : tab.url.startsWith('https:')
+      ? 'Connection is secure'
+      : tab.url.startsWith('http:')
+        ? 'Connection is not secure'
+        : 'Not a web page';
+  $('site-security').className = tab.url.startsWith('http:') && !isDevUrl(tab.url) ? 'insecure' : '';
+
+  const saved = state.sitePermissions?.[origin] ?? {};
+  $('site-permissions').replaceChildren(
+    ...SITE_PERMISSIONS.map(([permission, label]) => {
+      const select = h('select', { class: 'mini-select', 'aria-label': label }) as HTMLSelectElement;
+      select.append(new Option('Ask', 'ask'), new Option('Allow', 'allow'), new Option('Block', 'block'));
+      select.value = saved[permission] ?? 'ask';
+      select.addEventListener('change', () => api.setSitePermission(origin, permission, select.value as 'allow' | 'block' | 'ask'));
+      return h('label', { class: 'site-row' }, h('span', {}, label), select);
+    }),
+  );
+  $('zoom-reset').textContent = `${state.nav.zoom}%`;
+  for (const id of ['site-copy', 'site-shot', 'site-boost', 'site-devtools', 'site-clear', 'zoom-in', 'zoom-out', 'zoom-reset']) {
+    ($(id) as HTMLButtonElement).disabled = !origin;
+  }
+}
+
+$('btn-site').onclick = () => toggleSitePanel();
+$('btn-copy-link').onclick = () => {
+  const tab = activeTab();
+  if (tab) api.copyText(tab.url);
+};
+$('site-copy').onclick = () => {
+  const tab = activeTab();
+  if (tab) api.copyText(tab.url);
+  toggleSitePanel(false);
+};
+$('site-shot').onclick = () => {
+  toggleSitePanel(false);
+  api.capturePage();
+};
+$('site-boost').onclick = () => {
+  toggleSitePanel(false);
+  api.editBoost('script');
+};
+$('site-devtools').onclick = () => {
+  toggleSitePanel(false);
+  api.openDevTools();
+};
+$('site-clear').onclick = () => {
+  const tab = activeTab();
+  if (tab) api.clearSiteData(new URL(tab.url).origin);
+  toggleSitePanel(false);
+};
+$('zoom-in').onclick = () => api.zoom(1);
+$('zoom-out').onclick = () => api.zoom(-1);
+$('zoom-reset').onclick = () => api.zoom(0);
+document.addEventListener('mousedown', (e) => {
+  const target = e.target as Node;
+  if (!sitePanel.hidden && !sitePanel.contains(target) && !$('btn-site').contains(target)) toggleSitePanel(false);
+});
+document.addEventListener('keydown', (e) => e.key === 'Escape' && !sitePanel.hidden && toggleSitePanel(false));
+
+// Confirmations ("Link copied") replace the address for a moment.
+let flashTimer: number | undefined;
+api.onFlash((message) => {
+  const wrap = $('urlbar-wrap');
+  wrap.dataset.flash = message;
+  wrap.classList.add('flashing');
+  clearTimeout(flashTimer);
+  flashTimer = window.setTimeout(() => wrap.classList.remove('flashing'), 1400);
+});
 
 // ---- Space editor -------------------------------------------------------------------
 

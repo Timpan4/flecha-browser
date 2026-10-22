@@ -22,11 +22,15 @@
         <button id="btn-reload" class="icon-button" data-tip="Reload" data-kbd="⌘R"><i data-icon="reload"></i></button>
       </div>
 
-      <button id="urlbar" data-tip="Open location" data-kbd="⌘L">
-        <span id="urlbar-icon"></span>
-        <span id="urlbar-env"></span>
-        <span id="urlbar-text"></span>
-      </button>
+      <div id="urlbar-wrap">
+        <button id="urlbar" data-tip="Open location" data-kbd="⌘L">
+          <span id="urlbar-icon"></span>
+          <span id="urlbar-env"></span>
+          <span id="urlbar-text"></span>
+        </button>
+        <button id="btn-copy-link" class="url-action" data-tip="Copy link" data-kbd="⇧⌘C"><i data-icon="link"></i></button>
+        <button id="btn-site" class="url-action" data-tip="Site controls"><i data-icon="sliders"></i></button>
+      </div>
 
       <browser-action-list id="extensions"></browser-action-list>
 
@@ -56,6 +60,35 @@
         </header>
         <button id="btn-newtab" class="row new-tab"><span class="row-icon"><i data-icon="plus"></i></span><span class="title">New Tab</span><kbd>⌘T</kbd></button>
         <div id="today" class="drop-zone"></div>
+      </div>
+
+      <div id="site-panel" class="popover site-panel" hidden>
+        <header class="site-header">
+          <span id="site-favicon"></span>
+          <span class="site-title">
+            <strong id="site-host"></strong>
+            <small id="site-security"></small>
+          </span>
+        </header>
+        <div class="site-actions">
+          <button id="site-copy" class="site-action"><i data-icon="link"></i><span>Copy Link</span></button>
+          <button id="site-shot" class="site-action"><i data-icon="camera"></i><span>Screenshot</span></button>
+          <button id="site-boost" class="site-action"><i data-icon="zap"></i><span>Boost</span></button>
+          <button id="site-devtools" class="site-action"><i data-icon="wrench"></i><span>DevTools</span></button>
+        </div>
+        <div class="field-label site-label">Permissions</div>
+        <div id="site-permissions"></div>
+        <div class="site-row">
+          <span>Zoom</span>
+          <span class="zoom-control">
+            <button id="zoom-out" class="icon-button" data-tip="Zoom out" data-kbd="⌘−"><i data-icon="minus"></i></button>
+            <button id="zoom-reset" class="zoom-value" data-tip="Actual size" data-kbd="⌘0"></button>
+            <button id="zoom-in" class="icon-button" data-tip="Zoom in" data-kbd="⌘="><i data-icon="plus"></i></button>
+          </span>
+        </div>
+        <footer class="popover-footer">
+          <button id="site-clear" class="text-button danger"><i data-icon="trash"></i>Clear Site Data</button>
+        </footer>
       </div>
 
       <div id="space-editor" class="popover space-editor" hidden>

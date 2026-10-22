@@ -8,6 +8,7 @@ import {
   Menu,
   MenuItemConstructorOptions,
   clipboard,
+  ClipboardItem,
   dialog,
   ipcMain,
   shell,
@@ -509,6 +510,34 @@ class Browser implements TabHost {
     this.store.setSidebarVisible(!this.store.state.sidebarVisible);
   }
 
+  flash(message: string) {
+    this.ui.webContents.send('flash', message);
+  }
+
+  async capturePage() {
+    const wc = this.activeContents();
+    if (!wc) return;
+    const png = (await wc.capturePage()).toPNG();
+    await clipboard.write([new ClipboardItem({ 'image/png': new Blob([new Uint8Array(png)], { type: 'image/png' }) })]);
+    this.flash('Screenshot copied');
+  }
+
+  /** Signs out of one site: its cookies, storage and cache, in the session the tab uses. */
+  async clearSiteData(origin: string) {
+    const wc = this.activeContents();
+    if (!wc) return;
+    await wc.session.clearStorageData({ origin });
+    wc.reload();
+    this.flash('Site data cleared');
+  }
+
+  zoom(step: 1 | -1 | 0) {
+    const wc = this.activeContents();
+    if (!wc) return;
+    wc.setZoomLevel(step === 0 ? 0 : wc.getZoomLevel() + step * 0.5);
+    this.sendState();
+  }
+
   get findOpen() {
     return !!this.findTarget;
   }
@@ -743,6 +772,7 @@ class Browser implements TabHost {
       nav: {
         canGoBack: wc?.navigationHistory.canGoBack() ?? false,
         canGoForward: wc?.navigationHistory.canGoForward() ?? false,
+        zoom: wc ? Math.round(wc.getZoomFactor() * 100) : 100,
       },
     };
     this.ui.webContents.send('state', state);
@@ -1140,7 +1170,16 @@ function registerIpc(browser: Browser, store: Store, history: History, downloads
     closePalette: () => browser.setPaletteOpen(false),
     toggleSidebar: () => browser.toggleSidebar(),
     setSidebarPeek: (peek: boolean) => browser.setSidebarPeek(!!peek),
-    copyText: (text: string) => clipboard.writeText(String(text)),
+    copyText: (text: string) => {
+      clipboard.writeText(String(text));
+      browser.flash('Link copied');
+    },
+    capturePage: () => void browser.capturePage(),
+    clearSiteData: (origin: string) => void browser.clearSiteData(String(origin)),
+    setSitePermission: (origin: string, permission: string, decision: string) =>
+      store.setSitePermission(String(origin), String(permission), decision === 'allow' || decision === 'block' ? decision : undefined),
+    zoom: (step: number) => browser.zoom(step > 0 ? 1 : step < 0 ? -1 : 0),
+    openDevTools: () => browser.activeContents()?.openDevTools({ mode: 'detach' }),
     openSettings: () => browser.openSettings?.(),
     toggleResponsive: () => browser.toggleResponsive(),
     showConsole: (id: string) => browser.showConsole(id),
