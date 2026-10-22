@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { BrowserState, DropTarget, PinnedNode, Space, TabInfo } from '../shared/types';
+import type { BrowserState, DropTarget, PinnedNode, Space, TabInfo, WindowBounds } from '../shared/types';
 import type { ArcImport, ImportNode } from './arcImport';
 
 const SPACE_COLORS = ['#cdd9f7', '#f6d6cc', '#d3ecd5', '#e8d6f3', '#f5e7c4', '#cfe8ec'];
@@ -89,6 +89,7 @@ export class Store {
 
     if (loc.zone !== 'today') {
       if (tab.homeUrl) tab.url = tab.homeUrl;
+      delete tab.history;
       for (const s of this.state.spaces) if (s.activeTabId === tabId) s.activeTabId = undefined;
       this.changed();
       return 'unloaded';
@@ -274,6 +275,12 @@ export class Store {
     this.changed();
   }
 
+  /** Saved without notifying listeners: nothing on screen depends on it. */
+  setWindowBounds(bounds: WindowBounds) {
+    this.state.window = bounds;
+    this.scheduleSave();
+  }
+
   setSidebarVisible(visible: boolean) {
     this.state.sidebarVisible = visible;
     this.changed();
@@ -327,9 +334,13 @@ export class Store {
       // A split ends as soon as either half leaves the space.
       if (space.split && !space.split.every((id) => this.allTabIds(space).includes(id))) delete space.split;
     }
+    this.scheduleSave();
+    for (const fn of this.listeners) fn();
+  }
+
+  private scheduleSave() {
     clearTimeout(this.saveTimer);
     this.saveTimer = setTimeout(() => this.saveNow(), 500);
-    for (const fn of this.listeners) fn();
   }
 
   private detach(tabId: string, space: Space) {

@@ -7,6 +7,16 @@ export interface TabInfo {
   homeUrl?: string;
   loading?: boolean;
   lastActive: number;
+  /** Back/forward entries (with scroll position) so a tab comes back as it was after a restart. */
+  history?: { entries: Array<{ url: string; title: string; pageState?: string }>; index: number };
+}
+
+export interface WindowBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  maximized?: boolean;
 }
 
 export type PinnedNode =
@@ -56,6 +66,7 @@ export interface BrowserState {
   tabs: Record<string, TabInfo>;
   archive: ArchivedTab[];
   sidebarVisible: boolean;
+  window?: WindowBounds;
   /** Built-in ad and tracker blocking; on unless turned off. */
   adBlock?: boolean;
 }

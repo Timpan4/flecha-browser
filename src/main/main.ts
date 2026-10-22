@@ -2,6 +2,7 @@ import path from 'node:path';
 import {
   app,
   BaseWindow,
+  screen,
   WebContentsView,
   Menu,
   MenuItemConstructorOptions,
@@ -11,7 +12,7 @@ import {
   session,
   type WebContents,
 } from 'electron';
-import type { DropTarget, PaletteMode, PeekState, UiState } from '../shared/types';
+import type { DropTarget, PaletteMode, PeekState, TabInfo, UiState } from '../shared/types';
 import { Store } from './store';
 import { arcSidebarPath, readArcSidebar } from './arcImport';
 import { resolveInput } from './url';
@@ -25,6 +26,8 @@ const SIDEBAR_WIDTH = 260;
 const FIND_BAR = { width: 360, height: 40 };
 const GAP = 8;
 const ARCHIVE_AFTER_MS = 12 * 60 * 60 * 1000;
+/** Back/forward entries kept per tab across restarts. */
+const SAVED_HISTORY = 25;
 
 app.setName('Flecha');
 // Lets development runs use a throwaway profile: FLECHA_USER_DATA=/tmp/flecha npm start
@@ -50,9 +53,13 @@ class Browser implements TabHost {
     private history: History,
     private extensions: ElectronChromeExtensions,
   ) {
+    const saved = store.state.window;
+    // Only reuse the old position if it is still on a connected display.
+    const onScreen =
+      saved &&
+      screen.getAllDisplays().some(({ workArea: a }) => saved.x < a.x + a.width && saved.x + saved.width > a.x && saved.y < a.y + a.height && saved.y + saved.height > a.y);
     this.win = new BaseWindow({
-      width: 1440,
-      height: 900,
+      ...(onScreen ? { x: saved.x, y: saved.y, width: saved.width, height: saved.height } : { width: 1440, height: 900 }),
       minWidth: 720,
       minHeight: 420,
       titleBarStyle: 'hidden',
@@ -71,7 +78,15 @@ class Browser implements TabHost {
     this.win.contentView.addChildView(this.ui);
     this.ui.webContents.loadFile(path.join(__dirname, '../renderer/index.html'));
 
+    if (onScreen && saved.maximized) this.win.maximize();
     this.win.on('resize', () => this.layout());
+    const saveBounds = () => this.saveBounds();
+    this.win.on('resize', saveBounds);
+    this.win.on('move', saveBounds);
+    this.win.on('maximize', saveBounds);
+    this.win.on('unmaximize', saveBounds);
+    // Tab views are gone once the window has closed, so take the snapshot just before.
+    this.win.on('close', () => this.snapshotTabs());
     this.win.on('closed', () => app.quit());
     store.onChange(() => this.sync());
     this.sync();
@@ -168,10 +183,10 @@ class Browser implements TabHost {
     });
     wc.on('page-favicon-updated', (_e, favicons) => update({ favicon: favicons[0] }));
     wc.on('did-navigate', (_e, url) => {
-      update({ url });
+      update({ url, history: snapshotHistory(wc) });
       this.history.record(url, wc.getTitle());
     });
-    wc.on('did-navigate-in-page', (_e, url, isMainFrame) => isMainFrame && update({ url }));
+    wc.on('did-navigate-in-page', (_e, url, isMainFrame) => isMainFrame && update({ url, history: snapshotHistory(wc) }));
     wc.on('did-start-loading', () => update({ loading: true }));
     wc.on('did-stop-loading', () => {
       update({ loading: false });
@@ -203,7 +218,10 @@ class Browser implements TabHost {
 
     this.views.set(tabId, view);
     this.extensions.addTab(wc, this.win);
-    wc.loadURL(this.store.state.tabs[tabId]?.url ?? 'about:blank');
+    const tab = this.store.state.tabs[tabId];
+    const url = tab?.url ?? 'about:blank';
+    if (tab?.history?.entries.length) wc.navigationHistory.restore(tab.history).catch(() => wc.loadURL(url));
+    else wc.loadURL(url);
     return view;
   }
 
@@ -404,10 +422,25 @@ class Browser implements TabHost {
     }
   }
 
+  /** Records every open tab's back/forward list and scroll position, for the next launch. */
+  snapshotTabs() {
+    for (const [id, view] of this.views) {
+      if (!view.webContents.isDestroyed()) this.store.updateTab(id, { history: snapshotHistory(view.webContents) });
+    }
+  }
+
+  private saveBounds() {
+    if (this.win.isFullScreen() || this.win.isMinimized()) return;
+    this.store.setWindowBounds({ ...this.win.getNormalBounds(), maximized: this.win.isMaximized() });
+  }
+
   sendState() {
     const wc = this.activeContents();
+    // Navigation history is only for restoring; the sidebar doesn't need it.
+    const tabs = Object.fromEntries(Object.entries(this.store.state.tabs).map(([id, { history, ...tab }]) => [id, tab]));
     const state: UiState = {
       ...this.store.state,
+      tabs,
       nav: {
         canGoBack: wc?.navigationHistory.canGoBack() ?? false,
         canGoForward: wc?.navigationHistory.canGoForward() ?? false,
@@ -515,6 +548,16 @@ class Browser implements TabHost {
       dialog.showErrorBox('Arc import failed', String(err instanceof Error ? err.message : err));
     }
   }
+}
+
+function snapshotHistory(wc: WebContents): TabInfo['history'] {
+  const entries = wc.navigationHistory.getAllEntries();
+  const index = wc.navigationHistory.getActiveIndex();
+  const start = Math.max(0, Math.min(index, entries.length - SAVED_HISTORY));
+  return {
+    entries: entries.slice(start, start + SAVED_HISTORY).map(({ url, title, pageState }) => ({ url, title, pageState })),
+    index: index - start,
+  };
 }
 
 function countTabs(nodes: Array<{ kind: string; children?: any[] }>): number {
@@ -766,6 +809,7 @@ app.whenReady().then(async () => {
     for (const id of store.archiveStale(ARCHIVE_AFTER_MS)) browser.destroyView(id);
   }, 60 * 60 * 1000);
   app.on('before-quit', () => {
+    browser!.snapshotTabs();
     store.saveNow();
     history.saveNow();
   });
