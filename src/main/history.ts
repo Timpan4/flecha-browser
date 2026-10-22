@@ -35,6 +35,30 @@ export class History {
     this.scheduleSave();
   }
 
+  /**
+   * Folds in history from another browser. A page known to both keeps the higher visit
+   * count and the later visit. Returns how many of `imported` are still kept afterwards
+   * (the oldest pages fall out once the history is full).
+   */
+  merge(imported: HistoryEntry[]): number {
+    const urls = new Set<string>();
+    for (const e of imported) {
+      if (!/^https?:/.test(e.url) || !Number.isFinite(e.lastVisit)) continue;
+      urls.add(e.url);
+      const entry = this.entries.get(e.url);
+      if (entry) {
+        entry.visits = Math.max(entry.visits, e.visits);
+        entry.lastVisit = Math.max(entry.lastVisit, e.lastVisit);
+        if (!entry.title || entry.title === entry.url) entry.title = e.title || entry.title;
+      } else {
+        this.entries.set(e.url, { url: e.url, title: e.title || e.url, visits: Math.max(1, e.visits), lastVisit: e.lastVisit });
+      }
+    }
+    if (this.entries.size > LIMIT) this.dropOldest();
+    this.scheduleSave();
+    return [...urls].filter((url) => this.entries.has(url)).length;
+  }
+
   updateTitle(url: string, title: string) {
     const entry = this.entries.get(url);
     if (!entry || !title || entry.title === title) return;
