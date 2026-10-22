@@ -1,0 +1,393 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import type { BrowserState, DropTarget, PinnedNode, Space, TabInfo } from '../shared/types';
+import type { ArcImport, ImportNode } from './arcImport';
+
+const SPACE_COLORS = ['#cdd9f7', '#f6d6cc', '#d3ecd5', '#e8d6f3', '#f5e7c4', '#cfe8ec'];
+const SPACE_EMOJIS = ['🏠', '💼', '🎨', '📚', '🧪', '🎮'];
+const ARCHIVE_LIMIT = 500;
+
+type Location = { space?: Space; zone: 'today' | 'pinned' | 'favorites' };
+
+export class Store {
+  state: BrowserState;
+  private file: string;
+  private saveTimer?: NodeJS.Timeout;
+  private listeners: Array<() => void> = [];
+
+  constructor(dir: string) {
+    this.file = path.join(dir, 'flecha-state.json');
+    this.state = this.load() ?? this.initialState();
+  }
+
+  onChange(fn: () => void) {
+    this.listeners.push(fn);
+  }
+
+  get activeSpace(): Space {
+    return this.state.spaces.find((s) => s.id === this.state.activeSpaceId) ?? this.state.spaces[0];
+  }
+
+  get activeTab(): TabInfo | undefined {
+    const id = this.activeSpace.activeTabId;
+    return id ? this.state.tabs[id] : undefined;
+  }
+
+  allTabIds(space: Space): string[] {
+    return [...this.state.favorites, ...pinnedTabIds(space.pinned), ...space.today];
+  }
+
+  locate(tabId: string): Location | undefined {
+    if (this.state.favorites.includes(tabId)) return { zone: 'favorites' };
+    for (const space of this.state.spaces) {
+      if (space.today.includes(tabId)) return { space, zone: 'today' };
+      if (pinnedTabIds(space.pinned).includes(tabId)) return { space, zone: 'pinned' };
+    }
+    return undefined;
+  }
+
+  addTab(url: string, opts: { activate?: boolean; afterTabId?: string } = {}): TabInfo {
+    const tab: TabInfo = { id: randomUUID(), url, title: url, lastActive: Date.now() };
+    this.state.tabs[tab.id] = tab;
+    const space = this.activeSpace;
+    const after = opts.afterTabId ? space.today.indexOf(opts.afterTabId) : -1;
+    space.today.splice(after + 1, 0, tab.id);
+    if (opts.activate !== false) space.activeTabId = tab.id;
+    this.changed();
+    return tab;
+  }
+
+  activate(tabId: string) {
+    const tab = this.state.tabs[tabId];
+    if (!tab) return;
+    const loc = this.locate(tabId);
+    if (loc?.space) this.state.activeSpaceId = loc.space.id;
+    this.activeSpace.activeTabId = tabId;
+    tab.lastActive = Date.now();
+    this.changed();
+  }
+
+  updateTab(tabId: string, patch: Partial<TabInfo>) {
+    const tab = this.state.tabs[tabId];
+    if (!tab) return;
+    const keys = Object.keys(patch) as Array<keyof TabInfo>;
+    if (keys.every((k) => tab[k] === patch[k])) return;
+    Object.assign(tab, patch);
+    this.changed();
+  }
+
+  /**
+   * Today tabs are archived and removed. Pinned tabs and favorites stay in the
+   * sidebar and only unload, going back to their home URL (Arc's behaviour).
+   */
+  closeTab(tabId: string): 'removed' | 'unloaded' {
+    const tab = this.state.tabs[tabId];
+    const loc = this.locate(tabId);
+    if (!tab || !loc) return 'removed';
+    const space = loc.space ?? this.activeSpace;
+
+    if (loc.zone !== 'today') {
+      if (tab.homeUrl) tab.url = tab.homeUrl;
+      for (const s of this.state.spaces) if (s.activeTabId === tabId) s.activeTabId = undefined;
+      this.changed();
+      return 'unloaded';
+    }
+
+    const index = space.today.indexOf(tabId);
+    space.today.splice(index, 1);
+    this.archive(tab);
+    delete this.state.tabs[tabId];
+    if (space.activeTabId === tabId) {
+      space.activeTabId = space.today[Math.min(index, space.today.length - 1)];
+    }
+    this.changed();
+    return 'removed';
+  }
+
+  /** Moves a tab between favorites, pinned (optionally into a folder) and today. */
+  moveTab(tabId: string, target: DropTarget) {
+    const tab = this.state.tabs[tabId];
+    const from = this.locate(tabId);
+    if (!tab || !from || target.beforeTabId === tabId) return;
+    const space = from.space ?? this.activeSpace;
+    const targetSpace = this.activeSpace;
+
+    this.detach(tabId, space);
+    const insert = (list: string[]) => {
+      const i = target.beforeTabId ? list.indexOf(target.beforeTabId) : -1;
+      list.splice(i < 0 ? list.length : i, 0, tabId);
+    };
+
+    if (target.zone === 'favorites') {
+      insert(this.state.favorites);
+    } else if (target.zone === 'today') {
+      insert(targetSpace.today);
+    } else {
+      const parent = target.folderId ? findFolder(targetSpace.pinned, target.folderId)?.children : undefined;
+      const list = parent ?? (target.beforeTabId ? findParentList(targetSpace.pinned, target.beforeTabId) : undefined) ?? targetSpace.pinned;
+      const i = target.beforeTabId ? list.findIndex((n) => n.kind === 'tab' && n.tabId === target.beforeTabId) : -1;
+      list.splice(i < 0 ? list.length : i, 0, { kind: 'tab', tabId });
+    }
+
+    if (target.zone === 'today') delete tab.homeUrl;
+    else tab.homeUrl ??= tab.url;
+    if (space.activeTabId === tabId && space !== targetSpace) space.activeTabId = undefined;
+    this.changed();
+  }
+
+  /** Puts `tabId` next to the active tab. The active tab stays on the left. */
+  splitWith(tabId: string) {
+    const space = this.activeSpace;
+    const current = space.activeTabId;
+    if (!current || current === tabId || !this.allTabIds(space).includes(tabId)) return;
+    space.split = [current, tabId];
+    space.activeTabId = tabId;
+    this.state.tabs[tabId].lastActive = Date.now();
+    this.changed();
+  }
+
+  unsplit() {
+    if (!this.activeSpace.split) return;
+    delete this.activeSpace.split;
+    this.changed();
+  }
+
+  /** The tabs on screen right now: the active tab, or both halves of its split. */
+  visibleTabIds(): string[] {
+    const space = this.activeSpace;
+    const active = space.activeTabId;
+    if (!active) return [];
+    return space.split?.includes(active) ? [...space.split] : [active];
+  }
+
+  togglePin(tabId: string) {
+    const loc = this.locate(tabId);
+    this.moveTab(tabId, { zone: loc?.zone === 'today' ? 'pinned' : 'today' });
+  }
+
+  toggleFavorite(tabId: string) {
+    const loc = this.locate(tabId);
+    this.moveTab(tabId, { zone: loc?.zone === 'favorites' ? 'today' : 'favorites' });
+  }
+
+  newFolder(name = 'New Folder') {
+    this.activeSpace.pinned.push({ kind: 'folder', id: randomUUID(), name, open: true, children: [] });
+    this.changed();
+  }
+
+  toggleFolder(folderId: string) {
+    const folder = findFolder(this.activeSpace.pinned, folderId);
+    if (!folder) return;
+    folder.open = !folder.open;
+    this.changed();
+  }
+
+  renameFolder(folderId: string, name: string) {
+    const folder = findFolder(this.activeSpace.pinned, folderId);
+    if (!folder || !name.trim()) return;
+    folder.name = name.trim();
+    this.changed();
+  }
+
+  newSpace(): Space {
+    const n = this.state.spaces.length;
+    const space: Space = {
+      id: randomUUID(),
+      name: `Space ${n + 1}`,
+      emoji: SPACE_EMOJIS[n % SPACE_EMOJIS.length],
+      color: SPACE_COLORS[n % SPACE_COLORS.length],
+      pinned: [],
+      today: [],
+    };
+    this.state.spaces.push(space);
+    this.state.activeSpaceId = space.id;
+    this.changed();
+    return space;
+  }
+
+  renameSpace(spaceId: string, name: string) {
+    const space = this.state.spaces.find((s) => s.id === spaceId);
+    if (!space || !name.trim()) return;
+    space.name = name.trim();
+    this.changed();
+  }
+
+  /** Returns the ids of tabs that were dropped, so their views can be destroyed. */
+  deleteSpace(spaceId: string): string[] {
+    if (this.state.spaces.length < 2) return [];
+    const space = this.state.spaces.find((s) => s.id === spaceId);
+    if (!space) return [];
+    const ids = [...pinnedTabIds(space.pinned), ...space.today];
+    for (const id of ids) delete this.state.tabs[id];
+    this.state.spaces = this.state.spaces.filter((s) => s !== space);
+    if (this.state.activeSpaceId === spaceId) this.state.activeSpaceId = this.state.spaces[0].id;
+    this.changed();
+    return ids;
+  }
+
+  switchSpace(spaceId: string) {
+    if (!this.state.spaces.some((s) => s.id === spaceId)) return;
+    this.state.activeSpaceId = spaceId;
+    this.changed();
+  }
+
+  /** Archives every today tab in the active space. Returns the removed ids. */
+  clearToday(): string[] {
+    const space = this.activeSpace;
+    const ids = space.today.splice(0);
+    for (const id of ids) {
+      this.archive(this.state.tabs[id]);
+      delete this.state.tabs[id];
+    }
+    if (space.activeTabId && ids.includes(space.activeTabId)) space.activeTabId = undefined;
+    this.changed();
+    return ids;
+  }
+
+  /** Arc's auto-archive: today tabs untouched for a while go away on their own. */
+  archiveStale(maxAgeMs: number): string[] {
+    const cutoff = Date.now() - maxAgeMs;
+    const removed: string[] = [];
+    for (const space of this.state.spaces) {
+      space.today = space.today.filter((id) => {
+        const tab = this.state.tabs[id];
+        if (!tab || id === space.activeTabId || tab.lastActive >= cutoff) return true;
+        this.archive(tab);
+        delete this.state.tabs[id];
+        removed.push(id);
+        return false;
+      });
+    }
+    if (removed.length) this.changed();
+    return removed;
+  }
+
+  popArchive() {
+    const item = this.state.archive.shift();
+    if (item) this.changed();
+    return item;
+  }
+
+  setAdBlock(enabled: boolean) {
+    this.state.adBlock = enabled;
+    this.changed();
+  }
+
+  setSidebarVisible(visible: boolean) {
+    this.state.sidebarVisible = visible;
+    this.changed();
+  }
+
+  importArc(data: ArcImport) {
+    const s = this.state;
+    const pristine = s.spaces.length === 1 && this.allTabIds(s.spaces[0]).length === 0;
+    if (pristine) s.spaces = [];
+
+    const makeTab = (t: { url: string; title: string }, pinned: boolean) => {
+      const tab: TabInfo = { id: randomUUID(), url: t.url, title: t.title || t.url, lastActive: Date.now() };
+      if (pinned) tab.homeUrl = t.url;
+      s.tabs[tab.id] = tab;
+      return tab.id;
+    };
+    const makeNodes = (nodes: ImportNode[]): PinnedNode[] =>
+      nodes.map((n) =>
+        n.kind === 'tab'
+          ? { kind: 'tab', tabId: makeTab(n, true) }
+          : { kind: 'folder', id: randomUUID(), name: n.name, open: false, children: makeNodes(n.children) },
+      );
+
+    for (const imported of data.spaces) {
+      const n = s.spaces.length;
+      s.spaces.push({
+        id: randomUUID(),
+        name: imported.name,
+        emoji: imported.emoji,
+        color: SPACE_COLORS[n % SPACE_COLORS.length],
+        pinned: makeNodes(imported.pinned),
+        today: imported.today.map((t) => makeTab(t, false)),
+      });
+    }
+    for (const fav of data.favorites) s.favorites.push(makeTab(fav, true));
+    if (pristine || !s.spaces.some((sp) => sp.id === s.activeSpaceId)) s.activeSpaceId = s.spaces[0].id;
+    this.changed();
+  }
+
+  saveNow() {
+    clearTimeout(this.saveTimer);
+    const tabs = Object.fromEntries(
+      Object.entries(this.state.tabs).map(([id, { loading, ...tab }]) => [id, tab]),
+    );
+    fs.mkdirSync(path.dirname(this.file), { recursive: true });
+    fs.writeFileSync(this.file, JSON.stringify({ ...this.state, tabs }, null, 2));
+  }
+
+  private changed() {
+    for (const space of this.state.spaces) {
+      // A split ends as soon as either half leaves the space.
+      if (space.split && !space.split.every((id) => this.allTabIds(space).includes(id))) delete space.split;
+    }
+    clearTimeout(this.saveTimer);
+    this.saveTimer = setTimeout(() => this.saveNow(), 500);
+    for (const fn of this.listeners) fn();
+  }
+
+  private detach(tabId: string, space: Space) {
+    this.state.favorites = this.state.favorites.filter((id) => id !== tabId);
+    space.today = space.today.filter((id) => id !== tabId);
+    removePinned(space.pinned, tabId);
+  }
+
+  private archive(tab: TabInfo | undefined) {
+    if (!tab || tab.url === 'about:blank') return;
+    this.state.archive.unshift({ url: tab.url, title: tab.title, closedAt: Date.now() });
+    this.state.archive.length = Math.min(this.state.archive.length, ARCHIVE_LIMIT);
+  }
+
+  private load(): BrowserState | undefined {
+    try {
+      const state = JSON.parse(fs.readFileSync(this.file, 'utf8')) as BrowserState;
+      return state.spaces?.length ? state : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private initialState(): BrowserState {
+    const space: Space = { id: randomUUID(), name: 'Personal', emoji: '🏠', color: SPACE_COLORS[0], pinned: [], today: [] };
+    return { spaces: [space], activeSpaceId: space.id, favorites: [], tabs: {}, archive: [], sidebarVisible: true };
+  }
+}
+
+export function pinnedTabIds(nodes: PinnedNode[]): string[] {
+  return nodes.flatMap((n) => (n.kind === 'tab' ? [n.tabId] : pinnedTabIds(n.children)));
+}
+
+function findFolder(nodes: PinnedNode[], id: string): Extract<PinnedNode, { kind: 'folder' }> | undefined {
+  for (const n of nodes) {
+    if (n.kind !== 'folder') continue;
+    if (n.id === id) return n;
+    const inner = findFolder(n.children, id);
+    if (inner) return inner;
+  }
+  return undefined;
+}
+
+function findParentList(nodes: PinnedNode[], tabId: string): PinnedNode[] | undefined {
+  for (const n of nodes) {
+    if (n.kind === 'tab' && n.tabId === tabId) return nodes;
+    if (n.kind === 'folder') {
+      const inner = findParentList(n.children, tabId);
+      if (inner) return inner;
+    }
+  }
+  return undefined;
+}
+
+function removePinned(nodes: PinnedNode[], tabId: string) {
+  for (let i = nodes.length - 1; i >= 0; i--) {
+    const n = nodes[i];
+    if (n.kind === 'tab' && n.tabId === tabId) nodes.splice(i, 1);
+    else if (n.kind === 'folder') removePinned(n.children, tabId);
+  }
+}
