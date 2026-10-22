@@ -165,6 +165,23 @@ export class Store {
     return tab;
   }
 
+  /**
+   * Deletes tabs for good, wherever they are: pinned tabs and favorites too, which
+   * `closeTab` only unloads. They go to the archive, so they can still be found. Returns the removed ids.
+   */
+  removeTabs(tabIds: string[]): string[] {
+    const removed = tabIds.filter((id) => this.state.tabs[id] && this.locate(id));
+    for (const id of removed) {
+      this.detachEverywhere(id);
+      this.archive(this.state.tabs[id]);
+      delete this.state.tabs[id];
+    }
+    if (!removed.length) return [];
+    this.forgetMissingActive();
+    this.changed();
+    return removed;
+  }
+
   /** Puts `tabId` next to the active tab, on the right unless `side` says otherwise. */
   splitWith(tabId: string, side: 'left' | 'right' = 'right') {
     const space = this.activeSpace;
