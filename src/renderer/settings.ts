@@ -1,5 +1,6 @@
 import type { RecordedKey, SettingsApi, SettingsView } from '../shared/types';
 import { ICONS, type IconName } from './icons.js';
+import { setupTabsPane } from './tabsPane.js';
 
 declare global {
   interface Window {
@@ -15,6 +16,8 @@ function icon(name: IconName) {
   el.innerHTML = `<path d="${ICONS[name]}"/>`;
   return el;
 }
+
+setupTabsPane(icon);
 
 for (const el of document.querySelectorAll<HTMLElement>('i[data-icon]')) el.replaceWith(icon(el.dataset.icon as IconName));
 
@@ -146,8 +149,11 @@ search.addEventListener('keydown', (e) => {
 });
 // ⌘F, as in System Settings (the app menu's Find sends it here while Settings is in front).
 api.onFind(() => {
-  search.focus();
-  search.select();
+  // On Tabs & Spaces, ⌘F searches the tabs instead.
+  const tabSearch = document.getElementById('tm-search') as HTMLInputElement | null;
+  const field = tabSearch && tabSearch.offsetParent ? tabSearch : search;
+  field.focus();
+  field.select();
 });
 const adBlock = document.getElementById('adBlock') as HTMLInputElement;
 const searchEngine = document.getElementById('searchEngine') as HTMLSelectElement;

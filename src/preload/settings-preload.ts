@@ -14,6 +14,12 @@ const api: SettingsApi = {
   onFind: (cb) => void ipcRenderer.on('settings:find', () => cb()),
   recordShortcut: (recording) => ipcRenderer.invoke('settings:record-shortcut', recording),
   onKey: (cb) => void ipcRenderer.on('settings:key', (_e, key) => cb(key)),
+  tabs: () => ipcRenderer.invoke('settings:tabs'),
+  editTabs: (edit) => ipcRenderer.invoke('settings:edit-tabs', edit),
+  tabsMenu: (request) => ipcRenderer.invoke('settings:tabs-menu', request),
+  onTabs: (cb) => void ipcRenderer.on('settings:tabs', (_e, view) => cb(view)),
+  showTab: (tabId) => ipcRenderer.invoke('settings:show-tab', tabId),
+  showEmojiPanel: () => ipcRenderer.invoke('settings:emoji-panel'),
 };
 
 contextBridge.exposeInMainWorld('settings', api);

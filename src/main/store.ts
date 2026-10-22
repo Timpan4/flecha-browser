@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { BrowserState, DropTarget, Environment, PinnedNode, SearchEngineId, Space, TabInfo, WindowBounds } from '../shared/types';
+import type { BrowserState, DropTarget, Environment, PinnedNode, SearchEngineId, Space, TabInfo, TabPlacement, WindowBounds } from '../shared/types';
 import type { ArcImport, ImportNode } from './arcImport';
 import { writeFileAtomic } from './files';
 
@@ -138,6 +138,50 @@ export class Store {
     this.changed();
   }
 
+  /**
+   * Moves a tab anywhere, in any Space (Settings' tab manager). Unlike `moveTab`, the target
+   * names its Space. Returns whether it moved.
+   */
+  placeTab(tabId: string, to: TabPlacement): boolean {
+    const tab = this.state.tabs[tabId];
+    if (!tab || !this.locate(tabId) || to.beforeId === tabId || !this.placementExists(to)) return false;
+    this.detachEverywhere(tabId);
+    this.insert(tabId, to);
+    if (to.zone === 'today') delete tab.homeUrl;
+    else tab.homeUrl ??= tab.url;
+    this.forgetMissingActive();
+    this.changed();
+    return true;
+  }
+
+  /** A new pinned tab, favorite or Today tab that isn't opened yet. */
+  createTab(url: string, title: string, to: TabPlacement): TabInfo | undefined {
+    if (!this.placementExists(to)) return undefined;
+    const tab: TabInfo = { id: randomUUID(), url, title: title || url, lastActive: Date.now() };
+    if (to.zone !== 'today') tab.homeUrl = url;
+    this.state.tabs[tab.id] = tab;
+    this.insert(tab.id, to);
+    this.changed();
+    return tab;
+  }
+
+  /**
+   * Deletes tabs for good, wherever they are: pinned tabs and favorites too, which
+   * `closeTab` only unloads. They go to the archive, so they can still be found. Returns the removed ids.
+   */
+  removeTabs(tabIds: string[]): string[] {
+    const removed = tabIds.filter((id) => this.state.tabs[id] && this.locate(id));
+    for (const id of removed) {
+      this.detachEverywhere(id);
+      this.archive(this.state.tabs[id]);
+      delete this.state.tabs[id];
+    }
+    if (!removed.length) return [];
+    this.forgetMissingActive();
+    this.changed();
+    return removed;
+  }
+
   /** Puts `tabId` next to the active tab, on the right unless `side` says otherwise. */
   splitWith(tabId: string, side: 'left' | 'right' = 'right') {
     const space = this.activeSpace;
@@ -222,26 +266,68 @@ export class Store {
     this.moveTab(tabId, { zone: loc?.zone === 'favorites' ? 'today' : 'favorites' });
   }
 
-  newFolder(name = 'New Folder') {
-    this.activeSpace.pinned.push({ kind: 'folder', id: randomUUID(), name, open: true, children: [] });
+  /** In the active Space unless `where` names another, optionally inside a folder. Returns the new folder's id. */
+  newFolder(name = 'New Folder', where: { spaceId?: string; parentId?: string } = {}): string | undefined {
+    const space = where.spaceId ? this.state.spaces.find((s) => s.id === where.spaceId) : this.activeSpace;
+    const list = where.parentId ? (space && findFolder(space.pinned, where.parentId))?.children : space?.pinned;
+    if (!list) return undefined;
+    const id = randomUUID();
+    list.push({ kind: 'folder', id, name: name.trim().slice(0, 80) || 'New Folder', open: true, children: [] });
     this.changed();
+    return id;
   }
 
   toggleFolder(folderId: string) {
-    const folder = findFolder(this.activeSpace.pinned, folderId);
+    const folder = this.findFolder(folderId)?.folder;
     if (!folder) return;
     folder.open = !folder.open;
     this.changed();
   }
 
   renameFolder(folderId: string, name: string) {
-    const folder = findFolder(this.activeSpace.pinned, folderId);
+    const folder = this.findFolder(folderId)?.folder;
     if (!folder || !name.trim()) return;
     folder.name = name.trim();
     this.changed();
   }
 
-  newSpace(): Space {
+  /**
+   * Removes a folder. Its tabs (and subfolders) take its place when `keepTabs` is set;
+   * otherwise they are deleted too. Returns the ids of deleted tabs.
+   */
+  deleteFolder(folderId: string, keepTabs: boolean): string[] {
+    const found = this.findFolder(folderId);
+    if (!found) return [];
+    const { folder, parent } = found;
+    parent.splice(parent.indexOf(folder), 1, ...(keepTabs ? folder.children : []));
+    const removed = keepTabs ? [] : pinnedTabIds(folder.children);
+    for (const id of removed) {
+      this.archive(this.state.tabs[id]);
+      delete this.state.tabs[id];
+    }
+    this.forgetMissingActive();
+    this.changed();
+    return removed;
+  }
+
+  /** Moves a folder within the pinned tabs of any Space; never into itself. Returns whether it moved. */
+  moveFolder(folderId: string, to: { spaceId: string; folderId?: string; beforeId?: string }): boolean {
+    const found = this.findFolder(folderId);
+    const space = this.state.spaces.find((s) => s.id === to.spaceId);
+    if (!found || !space || to.beforeId === folderId) return false;
+    if (to.folderId && (to.folderId === folderId || findFolder(found.folder.children, to.folderId))) return false;
+    const list = to.folderId ? findFolder(space.pinned, to.folderId)?.children : space.pinned;
+    if (!list) return false;
+    found.parent.splice(found.parent.indexOf(found.folder), 1);
+    const i = to.beforeId ? list.findIndex((n) => nodeId(n) === to.beforeId) : -1;
+    list.splice(i < 0 ? list.length : i, 0, found.folder);
+    this.forgetMissingActive();
+    this.changed();
+    return true;
+  }
+
+  /** Switches to the new Space unless `activate` is false (Settings adds one without leaving the current Space). */
+  newSpace(activate = true): Space {
     const n = this.state.spaces.length;
     const space: Space = {
       id: randomUUID(),
@@ -252,9 +338,20 @@ export class Store {
       today: [],
     };
     this.state.spaces.push(space);
-    this.state.activeSpaceId = space.id;
+    if (activate) this.state.activeSpaceId = space.id;
     this.changed();
     return space;
+  }
+
+  /** Reorders the Spaces: `spaceId` goes before `beforeSpaceId`, or last. */
+  moveSpace(spaceId: string, beforeSpaceId?: string) {
+    const space = this.state.spaces.find((s) => s.id === spaceId);
+    if (!space || beforeSpaceId === spaceId) return;
+    const spaces = this.state.spaces.filter((s) => s !== space);
+    const i = beforeSpaceId ? spaces.findIndex((s) => s.id === beforeSpaceId) : -1;
+    spaces.splice(i < 0 ? spaces.length : i, 0, space);
+    this.state.spaces = spaces;
+    this.changed();
   }
 
   /** Name, emoji and colour. Invalid values are ignored rather than stored. */
@@ -485,6 +582,56 @@ export class Store {
     this.saveTimer = setTimeout(() => this.saveNow(), 500);
   }
 
+  /** A folder in any Space, with the list it sits in. */
+  private findFolder(folderId: string) {
+    for (const space of this.state.spaces) {
+      const folder = findFolder(space.pinned, folderId);
+      if (folder) return { space, folder, parent: findParentList(space.pinned, folderId)! };
+    }
+    return undefined;
+  }
+
+  private placementExists(to: TabPlacement) {
+    if (to.zone === 'favorites') return true;
+    const space = this.state.spaces.find((s) => s.id === to.spaceId);
+    if (!space) return false;
+    return to.zone === 'today' || !to.folderId || !!findFolder(space.pinned, to.folderId);
+  }
+
+  /** Inserts a tab that is in no list at a placement `placementExists` accepted. */
+  private insert(tabId: string, to: TabPlacement) {
+    const before = (list: string[]) => {
+      const i = to.beforeId ? list.indexOf(to.beforeId) : -1;
+      return i < 0 ? list.length : i;
+    };
+    if (to.zone === 'favorites') return void this.state.favorites.splice(before(this.state.favorites), 0, tabId);
+    const space = this.state.spaces.find((s) => s.id === to.spaceId)!;
+    if (to.zone === 'today') return void space.today.splice(before(space.today), 0, tabId);
+    const list = to.folderId ? findFolder(space.pinned, to.folderId)!.children : space.pinned;
+    const i = to.beforeId ? list.findIndex((n) => nodeId(n) === to.beforeId) : -1;
+    list.splice(i < 0 ? list.length : i, 0, { kind: 'tab', tabId });
+  }
+
+  /** Takes a tab out of favorites and every Space, editing the lists in place. */
+  private detachEverywhere(tabId: string) {
+    const drop = (list: string[]) => {
+      const i = list.indexOf(tabId);
+      if (i >= 0) list.splice(i, 1);
+    };
+    drop(this.state.favorites);
+    for (const space of this.state.spaces) {
+      drop(space.today);
+      removePinned(space.pinned, tabId);
+    }
+  }
+
+  /** A Space whose active tab went elsewhere shows nothing until you pick a tab. */
+  private forgetMissingActive() {
+    for (const space of this.state.spaces) {
+      if (space.activeTabId && !this.allTabIds(space).includes(space.activeTabId)) space.activeTabId = undefined;
+    }
+  }
+
   private detach(tabId: string, space: Space) {
     this.state.favorites = this.state.favorites.filter((id) => id !== tabId);
     space.today = space.today.filter((id) => id !== tabId);
@@ -539,7 +686,7 @@ export function pinnedTabIds(nodes: PinnedNode[]): string[] {
   return nodes.flatMap((n) => (n.kind === 'tab' ? [n.tabId] : pinnedTabIds(n.children)));
 }
 
-function findFolder(nodes: PinnedNode[], id: string): Extract<PinnedNode, { kind: 'folder' }> | undefined {
+export function findFolder(nodes: PinnedNode[], id: string): Extract<PinnedNode, { kind: 'folder' }> | undefined {
   for (const n of nodes) {
     if (n.kind !== 'folder') continue;
     if (n.id === id) return n;
@@ -549,15 +696,20 @@ function findFolder(nodes: PinnedNode[], id: string): Extract<PinnedNode, { kind
   return undefined;
 }
 
-function findParentList(nodes: PinnedNode[], tabId: string): PinnedNode[] | undefined {
+/** The list holding the tab or folder with this id. */
+function findParentList(nodes: PinnedNode[], id: string): PinnedNode[] | undefined {
   for (const n of nodes) {
-    if (n.kind === 'tab' && n.tabId === tabId) return nodes;
+    if (nodeId(n) === id) return nodes;
     if (n.kind === 'folder') {
-      const inner = findParentList(n.children, tabId);
+      const inner = findParentList(n.children, id);
       if (inner) return inner;
     }
   }
   return undefined;
+}
+
+function nodeId(node: PinnedNode) {
+  return node.kind === 'tab' ? node.tabId : node.id;
 }
 
 function removePinned(nodes: PinnedNode[], tabId: string) {
