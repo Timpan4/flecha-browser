@@ -1,5 +1,6 @@
 import { devSuggestions } from './devCommands.js';
 import { ICONS, type IconName } from './icons.js';
+import { setupOnboarding } from './onboarding.js';
 import type { DownloadInfo, DropTarget, FlechaApi, HistoryEntry, PaletteMode, PeekState, PinnedNode, Space, TabInfo, UiState } from '../shared/types';
 
 declare global {
@@ -1100,7 +1101,11 @@ acceptDrops($('pinned'), { zone: 'pinned' });
 acceptDrops($('today'), { zone: 'today' });
 acceptDrops($('btn-newtab'), { zone: 'today' });
 
-api.onState(render);
+const renderOnboarding = setupOnboarding(api, h, icon);
+api.onState((s) => {
+  render(s);
+  renderOnboarding(s);
+});
 api.onPalette(openPalette);
 api.onEditSpace(openSpaceEditor);
 api.onRenameTab(renameTab);
