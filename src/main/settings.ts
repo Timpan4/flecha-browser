@@ -31,7 +31,7 @@ export class Settings {
     tabs: TabManagerHost,
   ) {
     this.tabs = new TabManager(store, tabs, () => this.win);
-    const fromSettings = (event: Electron.IpcMainInvokeEvent) => !!this.win && event.sender === this.win.webContents;
+    const fromSettings = (event: Electron.IpcMainInvokeEvent) => !!this.win && !this.win.isDestroyed() && event.sender === this.win.webContents;
     ipcMain.handle('settings:get', (event) => (fromSettings(event) ? this.view() : undefined));
     ipcMain.handle('settings:set', (event, patch: SettingsPatch) => (fromSettings(event) ? this.apply(patch) : undefined));
     ipcMain.handle('settings:new-agent-token', (event) => {
