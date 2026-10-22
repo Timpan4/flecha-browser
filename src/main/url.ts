@@ -17,8 +17,14 @@ export function searchEngine(id: SearchEngineId | undefined) {
 export function resolveInput(raw: string, engine?: SearchEngineId): string {
   const input = raw.trim();
   if (!input) return 'about:blank';
+  return webAddress(input) ?? searchEngine(engine).url.replace('%s', encodeURIComponent(input));
+}
+
+/** What was typed as a URL, completed (`github.com` → `https://github.com`); undefined when it reads as a search. */
+export function webAddress(raw: string): string | undefined {
+  const input = raw.trim();
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(input) || /^(about|data|file):/i.test(input)) return input;
   if (/^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/.*)?$/i.test(input)) return `http://${input}`;
   if (!/\s/.test(input) && /^[^/]+\.[a-z]{2,}(:\d+)?(\/.*)?$/i.test(input)) return `https://${input}`;
-  return searchEngine(engine).url.replace('%s', encodeURIComponent(input));
+  return undefined;
 }
