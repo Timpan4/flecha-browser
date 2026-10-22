@@ -89,6 +89,7 @@ function render(s: FlechinhaState) {
 
 function startEditing() {
   editing = true;
+  address.classList.remove('flashing');
   address.classList.add('editing');
   show.hidden = true;
   form.hidden = false;
