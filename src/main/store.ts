@@ -376,6 +376,11 @@ export class Store {
     this.changed();
   }
 
+  setOpenLinksInFlechinha(enabled: boolean) {
+    if (typeof enabled === 'boolean') this.state.openLinksInFlechinha = enabled;
+    this.changed();
+  }
+
   setArchiveAfter(hours: number) {
     this.state.archiveAfterHours = Math.max(0, hours);
     this.changed();

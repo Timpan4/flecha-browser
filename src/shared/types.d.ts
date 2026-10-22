@@ -113,6 +113,8 @@ export interface BrowserState {
   theme?: 'system' | 'light' | 'dark';
   /** Links that leave a pinned tab or favorite open in Peek. Default on. */
   peekPinnedLinks?: boolean;
+  /** Links arriving from other apps open in a Flechinha instead of a tab. Default on. */
+  openLinksInFlechinha?: boolean;
   /** Today tabs untouched this long are archived; 0 keeps them forever. Default 12. */
   archiveAfterHours?: number;
   /** Remembered answers to site permission prompts, by origin then permission. */
