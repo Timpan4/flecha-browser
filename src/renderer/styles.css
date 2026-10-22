@@ -1,0 +1,539 @@
+:root {
+  --text: #1d1d1f;
+  --muted: rgba(29, 29, 31, 0.55);
+  --hover: rgba(255, 255, 255, 0.4);
+  --active: rgba(255, 255, 255, 0.85);
+  --line: rgba(29, 29, 31, 0.12);
+  --radius: 8px;
+  --sidebar: 260px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  /* The window background shows through, tinted with the space colour. */
+  background: transparent;
+  color: var(--text);
+  font: 13px/1.3 -apple-system, BlinkMacSystemFont, 'Inter', sans-serif;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: default;
+}
+
+svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ---- sidebar ------------------------------------------------------------ */
+
+#sidebar {
+  position: fixed;
+  inset: 0 auto 0 0;
+  width: var(--sidebar);
+  /* Painted opaque on purpose: Chromium does not clear stale frames under transparent
+     pixels of an overlaid view, which made old rows ghost behind new ones. */
+  background: var(--space-color, #cdd9f7);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 6px 8px 10px;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 28px;
+  -webkit-app-region: drag;
+}
+
+.toolbar button,
+.toolbar input {
+  -webkit-app-region: no-drag;
+}
+
+.traffic-lights {
+  width: 66px;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.icon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  color: var(--muted);
+}
+
+.icon:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.icon:disabled {
+  opacity: 0.35;
+}
+
+#urlbar {
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.45);
+  text-align: left;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#urlbar:hover {
+  background: rgba(255, 255, 255, 0.65);
+}
+
+#urlbar.has-url {
+  color: var(--text);
+}
+
+/* ---- favorites ---------------------------------------------------------- */
+
+#favorites {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+
+#favorites:empty {
+  display: none;
+}
+
+#favorites.drag-over:empty,
+#favorites.show-empty {
+  display: block;
+  min-height: 40px;
+  border: 1.5px dashed var(--line);
+  border-radius: 10px;
+}
+
+.fav {
+  display: grid;
+  place-items: center;
+  height: 48px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.fav:hover {
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.fav.active {
+  background: var(--active);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.fav .favicon {
+  width: 20px;
+  height: 20px;
+}
+
+/* ---- space -------------------------------------------------------------- */
+
+#space-header {
+  padding: 6px 8px 0;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+#space-title[contenteditable='true'],
+.folder-name[contenteditable='true'] {
+  outline: none;
+  color: var(--text);
+  background: var(--active);
+  border-radius: 4px;
+  padding: 0 4px;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+#scroll {
+  flex: 1;
+  overflow-y: auto;
+  margin-right: -4px;
+  padding-right: 4px;
+}
+
+#scroll::-webkit-scrollbar {
+  width: 0;
+}
+
+.drop-zone {
+  min-height: 4px;
+}
+
+#pinned:empty {
+  min-height: 24px;
+}
+
+#pinned:empty::before {
+  content: 'Drag tabs here to pin them';
+  display: block;
+  padding: 4px 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.today-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 4px;
+  padding: 0 4px 0 8px;
+}
+
+.today-divider span {
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+
+.today-divider button {
+  font-size: 11px;
+  color: var(--muted);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.today-divider button:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+/* ---- rows --------------------------------------------------------------- */
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 34px;
+  padding: 0 6px 0 8px;
+  border-radius: var(--radius);
+  text-align: left;
+}
+
+.row:hover {
+  background: var(--hover);
+}
+
+.row.active {
+  background: var(--active);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.row .title {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.row .close {
+  display: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  color: var(--muted);
+}
+
+.row:hover .close {
+  display: grid;
+  place-items: center;
+}
+
+.row .close:hover {
+  background: rgba(0, 0, 0, 0.07);
+  color: var(--text);
+}
+
+.row .close svg {
+  width: 12px;
+  height: 12px;
+}
+
+.row.loading .favicon {
+  animation: pulse 1s ease-in-out infinite alternate;
+}
+
+@keyframes pulse {
+  to {
+    opacity: 0.35;
+  }
+}
+
+.new-tab {
+  color: var(--muted);
+}
+
+.new-tab .plus {
+  width: 16px;
+  text-align: center;
+  font-size: 16px;
+}
+
+.favicon {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  border-radius: 3px;
+  object-fit: contain;
+}
+
+.favicon.letter {
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+  background: rgba(29, 29, 31, 0.45);
+}
+
+.folder > .row .chevron {
+  width: 16px;
+  color: var(--muted);
+  transition: transform 0.12s;
+}
+
+.folder.open > .row .chevron {
+  transform: rotate(90deg);
+}
+
+.folder-children {
+  padding-left: 14px;
+}
+
+.folder:not(.open) > .folder-children {
+  display: none;
+}
+
+.drop-before {
+  box-shadow: inset 0 2px 0 #3478f6;
+}
+
+.drag-over {
+  background: rgba(255, 255, 255, 0.25);
+  border-radius: var(--radius);
+}
+
+/* ---- footer ------------------------------------------------------------- */
+
+footer {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+#spaces {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  gap: 2px;
+}
+
+.space-dot {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  font-size: 14px;
+  opacity: 0.55;
+}
+
+.space-dot:hover {
+  background: var(--hover);
+  opacity: 1;
+}
+
+.space-dot.active {
+  opacity: 1;
+  background: var(--hover);
+}
+
+/* ---- command bar -------------------------------------------------------- */
+
+#palette {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 18vh;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+#palette[hidden] {
+  display: none;
+}
+
+.palette-box {
+  width: min(640px, 90vw);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.3), 0 0 0 0.5px rgba(0, 0, 0, 0.15);
+  overflow: hidden;
+}
+
+#palette-input {
+  width: 100%;
+  height: 54px;
+  padding: 0 18px;
+  border: 0;
+  outline: none;
+  font: 17px -apple-system, BlinkMacSystemFont, sans-serif;
+  background: transparent;
+  color: var(--text);
+}
+
+#palette-results {
+  list-style: none;
+  margin: 0;
+  padding: 0 6px 6px;
+  /* Fixed height so the box never shrinks and leaves stale pixels over the transparent backdrop. */
+  height: min(400px, 50vh);
+  overflow-y: auto;
+}
+
+#palette-results li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 40px;
+  padding: 0 12px;
+  border-radius: 8px;
+}
+
+#palette-results li.selected {
+  background: #3478f6;
+  color: #fff;
+}
+
+#palette-results .label {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#palette-results .sub {
+  font-size: 12px;
+  opacity: 0.6;
+  white-space: nowrap;
+}
+
+/* ---- split -------------------------------------------------------------- */
+
+.row.in-split:not(.active) {
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.row .split-badge {
+  display: none;
+  color: var(--muted);
+}
+
+.row.in-split .split-badge {
+  display: grid;
+}
+
+.row:hover .split-badge {
+  display: none;
+}
+
+/* ---- peek --------------------------------------------------------------- */
+
+#peek {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.28);
+}
+
+#peek[hidden] {
+  display: none;
+}
+
+.peek-bar {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 4px 0 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+}
+
+.peek-title {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--muted);
+}
+
+#peek-open {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 6px;
+}
+
+#peek-open:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+/* ---- extensions --------------------------------------------------------- */
+
+#extensions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin: -2px 0;
+}
+
+#extensions::part(action) {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background-color: transparent;
+}
+
+#extensions::part(action):hover {
+  background-color: var(--hover);
+}
