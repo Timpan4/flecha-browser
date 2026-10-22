@@ -316,9 +316,9 @@ body {
   transform: scale(0.97);
 }
 
-#open-in-flecha:disabled {
-  opacity: 0.35;
-  box-shadow: none;
+/* Nothing to keep until something is open. */
+body.is-empty #open-in-flecha {
+  display: none;
 }
 
 #open-in-flecha svg {
