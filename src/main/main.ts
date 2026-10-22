@@ -171,6 +171,8 @@ class Browser implements TabHost {
     this.agentIdleTimer = setTimeout(() => this.sendState(), 4000);
   }
   private boostedHosts: string[] = [];
+  /** Set right after startup, once the settings window exists. */
+  openSettings?: () => void;
   /** Set right after startup; fetches icons for saved tabs that were never opened. */
   favicons?: Favicons;
 
@@ -1063,6 +1065,8 @@ function registerIpc(browser: Browser, store: Store, history: History, downloads
     closePalette: () => browser.setPaletteOpen(false),
     toggleSidebar: () => store.setSidebarVisible(!store.state.sidebarVisible),
     copyText: (text: string) => clipboard.writeText(String(text)),
+    openSettings: () => browser.openSettings?.(),
+    toggleResponsive: () => browser.toggleResponsive(),
     showConsole: (id: string) => browser.showConsole(id),
     editBoost: (kind: BoostKind) => browser.editBoost(kind === 'styles' ? 'styles' : 'script'),
     openBoostsFolder: () => browser.openBoostsFolder(),
@@ -1144,6 +1148,7 @@ app.whenReady().then(async () => {
     endpoint: () => (bridge.port ? `http://127.0.0.1:${bridge.port}/mcp` : undefined),
   });
   buildMenu(browser, store, settings);
+  browser.openSettings = () => settings.open();
   const rebuildMenu = () => buildMenu(browser!, store, settings);
   session.defaultSession.extensions.on('extension-loaded', rebuildMenu);
   session.defaultSession.extensions.on('extension-unloaded', rebuildMenu);

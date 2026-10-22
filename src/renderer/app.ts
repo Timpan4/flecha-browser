@@ -417,8 +417,13 @@ document.addEventListener('keydown', (e) => e.key === 'Escape' && !spaceEditor.h
 // ---- command bar ----------------------------------------------------------------
 
 interface PaletteItem {
+  group: PaletteGroup;
+  /** An icon name, a tab (its favicon) or a URL (that site's icon). */
+  icon: IconName | TabInfo | string;
   label: string;
   sub: string;
+  /** A keyboard shortcut for the same command, shown on the right. */
+  hint?: string;
   run: () => void;
   /** Shown under the results while this item is selected, e.g. a decoded JWT. */
   detail?: string;
@@ -455,41 +460,87 @@ function closePalette() {
   api.closePalette();
 }
 
+type PaletteGroup = '' | 'Developer' | 'Actions' | 'Tabs' | 'History' | 'Archive';
+
+/** Commands the bar can run, found by typing any word of their label or keywords. */
+const ACTIONS: Array<{ label: string; keywords: string; icon: IconName; hint?: string; run: () => void }> = [
+  { label: 'New Space', keywords: 'space create add', icon: 'space', hint: '⌃⇧N', run: () => api.newSpace() },
+  { label: 'Edit Space', keywords: 'space rename emoji colour color icon', icon: 'space', run: () => state && openSpaceEditor(state.activeSpaceId) },
+  { label: 'Settings', keywords: 'preferences settings config options', icon: 'settings', hint: '⌘,', run: () => api.openSettings() },
+  { label: 'Responsive View', keywords: 'mobile phone responsive device split', icon: 'phone', hint: '⌥⌘M', run: () => api.toggleResponsive() },
+  { label: 'Toggle Sidebar', keywords: 'sidebar hide show', icon: 'sidebar', hint: '⌘S', run: () => api.toggleSidebar() },
+  { label: 'Clear Today Tabs', keywords: 'clear archive today close', icon: 'archive', hint: '⇧⌘K', run: () => api.clearToday() },
+  { label: 'Show Downloads', keywords: 'downloads files', icon: 'download', run: () => (downloadsPanel.hidden = false) },
+  { label: 'Import from Arc', keywords: 'import arc migrate', icon: 'import', run: () => api.importArc() },
+  { label: 'Open Boosts Folder', keywords: 'boosts folder scripts css', icon: 'zap', run: () => api.openBoostsFolder() },
+];
+
+function matchingActions(q: string) {
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length || q.length < 2) return [];
+  return ACTIONS.filter((a) => {
+    const haystack = `${a.label} ${a.keywords}`.toLowerCase().split(/\s+/);
+    return words.every((w) => haystack.some((h) => h.startsWith(w)));
+  });
+}
+
+function itemIcon(source: IconName | TabInfo | string) {
+  if (typeof source === 'object') return favicon(source);
+  if (source in ICONS) return icon(source as IconName);
+  // A URL: show its site's icon, as if it were a tab.
+  return favicon({ id: '', url: source, title: '', lastActive: 0 });
+}
+
 function updatePalette() {
   if (!state) return;
   const q = paletteInput.value.trim();
   const lower = q.toLowerCase();
   const matches = (title: string, url: string) => !lower || title.toLowerCase().includes(lower) || url.toLowerCase().includes(lower);
   const items: PaletteItem[] = [];
-
+  const open = { navigate: api.navigate, 'new-tab': api.newTab, split: api.splitNew }[paletteMode];
   const activeId = state.spaces.find((s) => s.id === state!.activeSpaceId)?.activeTabId;
+  const activeUrl = activeId ? state.tabs[activeId]?.url : undefined;
+
+  $('palette-mode').textContent = { navigate: 'Current Tab', split: 'Split View', 'new-tab': '' }[paletteMode];
+
   if (q) {
-    const open = { navigate: api.navigate, 'new-tab': api.newTab, split: api.splitNew }[paletteMode];
+    const isUrl = looksLikeUrl(q);
+    const searchItem: PaletteItem = {
+      group: '',
+      icon: isUrl ? 'globe' : 'search',
+      label: q,
+      sub: isUrl ? 'Open' : `Search ${state.searchEngineName}`,
+      run: () => open(q),
+    };
+
     // `env` lists the current page on the project's other environments.
     if (/^env\b/i.test(q) && state.environment) {
       for (const target of state.environment.switches) {
-        items.push({ label: `Switch to ${target.label}`, sub: `${state.environment.name} · ${host(target.url)}`, run: () => api.navigate(target.url) });
+        items.push({ group: 'Developer', icon: 'code', label: `Switch to ${target.label}`, sub: host(target.url), run: () => api.navigate(target.url) });
       }
     }
     // `boost` edits this site's boost files.
-    if (/^boost/i.test(q)) {
-      const site = activeId ? host(state.tabs[activeId]?.url ?? '') : '';
-      if (site) {
-        items.push({ label: `Edit boost script for ${site}`, sub: 'TypeScript · runs on every page of the site', run: () => api.editBoost('script') });
-        items.push({ label: `Edit boost styles for ${site}`, sub: 'CSS · applies live as you save', run: () => api.editBoost('styles') });
-      }
-      items.push({ label: 'Open boosts folder', sub: '~/.flecha/boosts · keep it in git', run: () => api.openBoostsFolder() });
+    if (/^boost/i.test(q) && activeUrl) {
+      const site = host(activeUrl);
+      items.push({ group: 'Developer', icon: 'zap', label: `Edit boost script for ${site}`, sub: 'TypeScript', run: () => api.editBoost('script') });
+      items.push({ group: 'Developer', icon: 'zap', label: `Edit boost styles for ${site}`, sub: 'CSS, live', run: () => api.editBoost('styles') });
     }
-    for (const dev of devSuggestions(q, activeId ? state.tabs[activeId]?.url : undefined)) {
+    for (const dev of devSuggestions(q, activeUrl)) {
       items.push({
+        group: 'Developer',
+        icon: dev.url ? dev.url : 'code',
         label: dev.label,
         sub: dev.sub,
         detail: dev.copy,
         run: () => (dev.url ? open(dev.url) : api.copyText(dev.copy ?? '')),
       });
     }
-    const verb = looksLikeUrl(q) ? 'Open' : `Search ${state.searchEngineName}`;
-    items.push({ label: q, sub: paletteMode === 'split' ? `${verb} in split view` : verb, run: () => open(q) });
+    for (const action of matchingActions(q).slice(0, 4)) {
+      items.push({ group: 'Actions', icon: action.icon, label: action.label, sub: '', hint: action.hint, run: action.run });
+    }
+    // A matching shortcut or action is what was meant (`gh 12`, `settings`); otherwise searching is.
+    if (items.length && !isUrl) items.push(searchItem);
+    else items.unshift(searchItem);
   }
 
   const openTabs = Object.values(state.tabs)
@@ -497,35 +548,43 @@ function updatePalette() {
     .sort((a, b) => b.lastActive - a.lastActive)
     .slice(0, q ? 6 : 8);
   for (const tab of openTabs) {
-    items.push(
-      paletteMode === 'split'
-        ? { label: tab.title || tab.url, sub: `Split with · ${host(tab.url)}`, run: () => api.splitWith(tab.id) }
-        : { label: tab.title || tab.url, sub: `Switch to tab · ${host(tab.url)}`, run: () => api.activate(tab.id) },
-    );
+    items.push({
+      group: 'Tabs',
+      icon: tab,
+      label: tab.title || tab.url,
+      sub: host(tab.url),
+      run: paletteMode === 'split' ? () => api.splitWith(tab.id) : () => api.activate(tab.id),
+    });
   }
 
   if (q) {
     const seen = new Set(openTabs.map((t) => t.url));
-    const open = paletteMode === 'split' ? api.splitNew : paletteMode === 'navigate' ? api.navigate : api.newTab;
     for (const entry of historyResults.filter((e) => !seen.has(e.url)).slice(0, 6)) {
       seen.add(entry.url);
-      items.push({ label: entry.title || entry.url, sub: `History · ${host(entry.url)}`, run: () => open(entry.url) });
+      items.push({ group: 'History', icon: entry.url, label: entry.title || entry.url, sub: host(entry.url), run: () => open(entry.url) });
     }
+    const reopen = paletteMode === 'split' ? api.splitNew : api.newTab;
     for (const item of state.archive.filter((a) => !seen.has(a.url) && matches(a.title, a.url)).slice(0, 5)) {
       seen.add(item.url);
-      const reopen = paletteMode === 'split' ? api.splitNew : api.newTab;
-      items.push({ label: item.title || item.url, sub: `Archive · ${host(item.url)}`, run: () => reopen(item.url) });
+      items.push({ group: 'Archive', icon: item.url, label: item.title || item.url, sub: host(item.url), run: () => reopen(item.url) });
     }
   }
 
   paletteItems = items;
   selected = Math.min(selected, Math.max(items.length - 1, 0));
-  paletteList.replaceChildren(
-    ...items.map((item, i) =>
+  const rows: HTMLElement[] = [];
+  let group: PaletteGroup | undefined;
+  items.forEach((item, i) => {
+    if (item.group !== group) {
+      group = item.group;
+      if (group) rows.push(h('li', { class: 'group-label' }, group));
+    }
+    rows.push(
       h(
         'li',
         {
-          class: i === selected ? 'selected' : undefined,
+          class: `item${i === selected ? ' selected' : ''}`,
+          dataset: { index: String(i) },
           onmousemove: () => {
             if (selected !== i) (selected = i), updatePalette();
           },
@@ -534,12 +593,16 @@ function updatePalette() {
             runItem(i);
           },
         },
+        h('span', { class: 'item-icon' }, itemIcon(item.icon)),
         h('span', { class: 'label' }, item.label),
-        h('span', { class: 'sub' }, item.sub),
+        item.sub ? h('span', { class: 'sub' }, item.sub) : null,
+        item.hint ? h('kbd', {}, item.hint) : null,
+        h('kbd', { class: 'enter' }, '↵'),
       ),
-    ),
-  );
-  paletteList.children[selected]?.scrollIntoView({ block: 'nearest' });
+    );
+  });
+  paletteList.replaceChildren(...rows);
+  paletteList.querySelector('.item.selected')?.scrollIntoView({ block: 'nearest' });
   const detail = $('palette-detail');
   detail.hidden = !items[selected]?.detail;
   detail.textContent = items[selected]?.detail ?? '';

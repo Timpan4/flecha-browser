@@ -38,6 +38,8 @@ const api: FlechaApi = {
   closePalette: cmd('closePalette'),
   toggleSidebar: cmd('toggleSidebar'),
   copyText: cmd('copyText'),
+  openSettings: cmd('openSettings'),
+  toggleResponsive: cmd('toggleResponsive'),
   showConsole: cmd('showConsole'),
   editBoost: cmd('editBoost'),
   openBoostsFolder: cmd('openBoostsFolder'),

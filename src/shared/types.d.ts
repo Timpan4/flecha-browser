@@ -221,6 +221,8 @@ export interface FlechaApi {
   closePalette(): void;
   toggleSidebar(): void;
   copyText(text: string): void;
+  openSettings(): void;
+  toggleResponsive(): void;
   showConsole(tabId: string): void;
   editBoost(kind: 'script' | 'styles'): void;
   openBoostsFolder(): void;
