@@ -1314,6 +1314,12 @@ function registerIpc(browser: Browser, store: Store, history: History, downloads
   ipcMain.handle('search-history', (event, query: string) =>
     event.sender === browser.uiContents ? history.search(String(query)) : [],
   );
+  ipcMain.handle('top-sites', (event) => {
+    if (event.sender !== browser.uiContents) return [];
+    const sites = history.top();
+    browser.favicons?.want(sites.map((site) => site.url));
+    return sites;
+  });
   const handlers: Record<string, (...args: any[]) => unknown> = {
     ready: () => {
       browser.sendState();

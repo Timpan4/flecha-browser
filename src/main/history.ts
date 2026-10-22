@@ -57,6 +57,26 @@ export class History {
       .slice(0, limit);
   }
 
+  /** The most visited sites (one page per host, its most visited), for the empty page. */
+  top(limit = 8): HistoryEntry[] {
+    const now = Date.now();
+    const score = (e: HistoryEntry) => e.visits / (1 + (now - e.lastVisit) / (7 * DAY));
+    const best = new Map<string, HistoryEntry>();
+    for (const e of this.entries.values()) {
+      let host: string;
+      try {
+        host = new URL(e.url).hostname.replace(/^www\./, '');
+      } catch {
+        continue;
+      }
+      // Sign-in and redirect hops are visited often but never worth going back to.
+      if (/^(accounts|login|auth|signin)\./.test(host)) continue;
+      const current = best.get(host);
+      if (!current || score(e) > score(current)) best.set(host, e);
+    }
+    return [...best.values()].sort((a, b) => score(b) - score(a)).slice(0, limit);
+  }
+
   saveNow() {
     clearTimeout(this.saveTimer);
     fs.mkdirSync(path.dirname(this.file), { recursive: true });

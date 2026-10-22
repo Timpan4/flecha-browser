@@ -94,8 +94,7 @@ function render(s: UiState) {
   const toggle = $('btn-sidebar');
   toggle.dataset.tip = s.sidebarMode === 'floating' ? 'Keep sidebar open' : 'Hide sidebar';
   renderUrlbar(s, active);
-  $('empty-state').hidden = !!active;
-  $('empty-title').textContent = `Nothing open in ${space.name}`;
+  renderEmptyState(s, space, !active);
 
   $('favorites').replaceChildren(
     ...s.favorites
@@ -145,6 +144,61 @@ function render(s: UiState) {
   if (!palette.hidden) updatePalette();
   if (!spaceEditor.hidden) renderSpaceEditor();
   if (!sitePanel.hidden) renderSitePanel();
+}
+
+/** What a blank Space offers: search, the sites you go back to most, and your dev servers. */
+let topSitesFetched = 0;
+let topSites: HistoryEntry[] = [];
+function renderEmptyState(s: UiState, space: Space, show: boolean) {
+  const empty = $('empty-state');
+  const wasHidden = empty.hidden;
+  empty.hidden = !show;
+  if (!show) return;
+  const hour = new Date().getHours();
+  $('empty-title').textContent = hour < 5 ? 'Up late?' : hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+  $('empty-space').replaceChildren(h('span', { class: 'empty-space-emoji' }, space.emoji ?? ''), h('span', {}, space.name));
+  // History changes as you browse, so the tiles are fetched each time the page becomes empty.
+  if (wasHidden || Date.now() - topSitesFetched > 60_000) {
+    topSitesFetched = Date.now();
+    api.topSites().then((sites) => {
+      topSites = sites;
+      if (state) render(state);
+    });
+  }
+  // Drawn on every update so icons appear as they are fetched.
+  $('empty-top').hidden = !topSites.length;
+  $('empty-top-sites').replaceChildren(
+        ...topSites.map((site) =>
+          h(
+            'button',
+            { class: 'top-site', title: site.url, onclick: () => api.newTab(site.url) },
+            h('span', { class: 'top-site-icon' }, favicon({ id: '', url: site.url, title: '', lastActive: 0 })),
+            h('span', { class: 'top-site-name' }, siteName(site)),
+          ),
+        ),
+  );
+  $('empty-local').hidden = !s.localServers.length;
+  $('empty-local-list').replaceChildren(
+    ...s.localServers.map((server) =>
+      h(
+        'button',
+        { class: 'local-chip', title: server.url, onclick: () => api.newTab(server.url) },
+        h('span', { class: 'live-dot' }),
+        h('span', {}, server.name),
+        h('span', { class: 'port' }, `:${server.port}`),
+      ),
+    ),
+  );
+}
+
+/** A short name for a tile: the site's own name from its title when it has one, else the host. */
+function siteName(entry: HistoryEntry) {
+  const full = host(entry.url);
+  const site = full.replace(/\.(com|org|net|io|dev|app|co)(\.[a-z]{2})?$/, '');
+  const parts = entry.title.split(/\s+[-|–—·:]\s+/).map((p) => p.trim()).filter(Boolean);
+  const named = parts.find((p) => p.length <= 18 && p.toLowerCase().replace(/\s/g, '').includes(site.split('.').pop()!.toLowerCase()));
+  // A bare domain reads as a name ("X", "Figma"); hosts with ports stay as they are.
+  return named ?? (site === full ? site : site[0].toUpperCase() + site.slice(1));
 }
 
 /** Host, a padlock or code icon for the kind of connection, and the environment badge. */

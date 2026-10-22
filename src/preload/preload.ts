@@ -16,6 +16,7 @@ const api: FlechaApi = {
   onDownloads: (cb) => void ipcRenderer.on('downloads', (_e, items, started) => cb(items, started)),
   ready: cmd('ready'),
   searchHistory: (query) => ipcRenderer.invoke('search-history', query),
+  topSites: () => ipcRenderer.invoke('top-sites'),
   newTab: cmd('newTab'),
   navigate: cmd('navigate'),
   activate: cmd('activate'),

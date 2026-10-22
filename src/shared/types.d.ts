@@ -231,6 +231,8 @@ export interface FlechaApi {
   onDownloads(cb: (items: DownloadInfo[], started?: DownloadInfo) => void): void;
   ready(): void;
   searchHistory(query: string): Promise<HistoryEntry[]>;
+  /** Most visited sites, one per host. */
+  topSites(): Promise<HistoryEntry[]>;
   newTab(input: string): void;
   navigate(input: string): void;
   activate(tabId: string): void;
