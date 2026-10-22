@@ -1,4 +1,4 @@
-import type { DropTarget, FlechaApi, HistoryEntry, PaletteMode, PeekState, PinnedNode, Space, TabInfo, UiState } from '../shared/types';
+import type { DownloadInfo, DropTarget, FlechaApi, HistoryEntry, PaletteMode, PeekState, PinnedNode, Space, TabInfo, UiState } from '../shared/types';
 
 declare global {
   interface Window {
@@ -396,6 +396,76 @@ peek.addEventListener('mousedown', (e) => {
 $('peek-open').onclick = () => api.promotePeek();
 $('peek-close').onclick = () => api.closePeek();
 
+// ---- downloads --------------------------------------------------------------------
+
+const downloadsPanel = $('downloads-panel');
+
+function formatBytes(n: number) {
+  if (n < 1024) return `${n} B`;
+  const units = ['KB', 'MB', 'GB'];
+  let value = n / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) (value /= 1024), unit++;
+  return `${value.toFixed(value < 10 ? 1 : 0)} ${units[unit]}`;
+}
+
+function downloadStatus(d: DownloadInfo) {
+  if (d.state === 'completed') return formatBytes(d.received);
+  if (d.state === 'cancelled') return 'Cancelled';
+  if (d.state === 'interrupted') return 'Failed';
+  return d.total ? `${formatBytes(d.received)} of ${formatBytes(d.total)}` : formatBytes(d.received);
+}
+
+function renderDownloads(items: DownloadInfo[], started?: DownloadInfo) {
+  const active = items.filter((d) => d.state === 'progressing').length;
+  const badge = $('downloads-badge');
+  badge.hidden = !active;
+  badge.textContent = String(active);
+  if (started) downloadsPanel.hidden = false;
+
+  $('downloads-list').replaceChildren(
+    ...items.map((d) => {
+      const progress = d.state === 'progressing' && d.total ? d.received / d.total : d.state === 'completed' ? 1 : 0;
+      return h(
+        'li',
+        {
+          class: `download ${d.state}`,
+          title: d.state === 'completed' ? 'Open' : d.url,
+          onclick: () => api.openDownload(d.id),
+        },
+        h('span', { class: 'name' }, d.filename),
+        h('span', { class: 'status' }, downloadStatus(d)),
+        d.state === 'progressing'
+          ? h('span', { class: 'bar' }, h('span', { class: 'fill', style: `width: ${Math.round(progress * 100)}%` }))
+          : null,
+        h(
+          'button',
+          {
+            class: 'icon',
+            title: d.state === 'progressing' ? 'Cancel' : 'Show in Finder',
+            onclick: (e: Event) => {
+              e.stopPropagation();
+              if (d.state === 'progressing') api.cancelDownload(d.id);
+              else api.revealDownload(d.id);
+            },
+          },
+          d.state === 'progressing' ? svg('M4 4l8 8M12 4l-8 8') : svg('M2 4h4l1.5 2H14v6.5H2z'),
+        ),
+      );
+    }),
+  );
+  if (!items.length) $('downloads-list').append(h('li', { class: 'empty' }, 'No downloads yet'));
+}
+
+$('btn-downloads').onclick = () => (downloadsPanel.hidden = !downloadsPanel.hidden);
+$('btn-clear-downloads').onclick = () => api.clearDownloads();
+document.addEventListener('mousedown', (e) => {
+  const target = e.target as Node;
+  if (!downloadsPanel.hidden && !downloadsPanel.contains(target) && !$('btn-downloads').contains(target)) {
+    downloadsPanel.hidden = true;
+  }
+});
+
 // ---- wiring ---------------------------------------------------------------------
 
 $('btn-sidebar').onclick = () => api.toggleSidebar();
@@ -422,4 +492,5 @@ api.onState(render);
 api.onPalette(openPalette);
 api.onRenameSpace(renameSpace);
 api.onPeek(renderPeek);
+api.onDownloads(renderDownloads);
 api.ready();

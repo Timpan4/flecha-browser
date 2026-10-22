@@ -12,6 +12,7 @@ const api: FlechaApi = {
   onPalette: (cb) => void ipcRenderer.on('palette', (_e, mode) => cb(mode)),
   onRenameSpace: (cb) => void ipcRenderer.on('rename-space', (_e, id) => cb(id)),
   onPeek: (cb) => void ipcRenderer.on('peek', (_e, peek) => cb(peek)),
+  onDownloads: (cb) => void ipcRenderer.on('downloads', (_e, items, started) => cb(items, started)),
   ready: cmd('ready'),
   searchHistory: (query) => ipcRenderer.invoke('search-history', query),
   newTab: cmd('newTab'),
@@ -37,6 +38,10 @@ const api: FlechaApi = {
   splitWith: cmd('splitWith'),
   splitNew: cmd('splitNew'),
   closePeek: cmd('closePeek'),
+  openDownload: cmd('openDownload'),
+  revealDownload: cmd('revealDownload'),
+  cancelDownload: cmd('cancelDownload'),
+  clearDownloads: cmd('clearDownloads'),
   promotePeek: cmd('promotePeek'),
 };
 

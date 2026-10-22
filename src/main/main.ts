@@ -17,6 +17,7 @@ import { arcSidebarPath, readArcSidebar } from './arcImport';
 import { resolveInput } from './url';
 import { setAdBlocking } from './adblock';
 import { History } from './history';
+import { Downloads } from './downloads';
 import { WEB_STORE_URL, installedExtensions, removeExtension, setupExtensions, type TabHost } from './extensions';
 import type { ElectronChromeExtensions } from 'electron-chrome-extensions';
 
@@ -565,12 +566,15 @@ function clearToday(browser: Browser, store: Store) {
   for (const id of store.clearToday()) browser.destroyView(id);
 }
 
-function registerIpc(browser: Browser, store: Store, history: History) {
+function registerIpc(browser: Browser, store: Store, history: History, downloads: Downloads) {
   ipcMain.handle('search-history', (event, query: string) =>
     event.sender === browser.uiContents ? history.search(String(query)) : [],
   );
   const handlers: Record<string, (...args: any[]) => unknown> = {
-    ready: () => browser.sendState(),
+    ready: () => {
+      browser.sendState();
+      browser.uiContents.send('downloads', downloads.items);
+    },
     newTab: (input: string) => browser.openTab(input),
     navigate: (input: string) => browser.navigate(input),
     activate: (id: string) => store.activate(id),
@@ -594,6 +598,10 @@ function registerIpc(browser: Browser, store: Store, history: History) {
     splitWith: (id: string) => store.splitWith(id),
     splitNew: (input: string) => browser.splitNew(input),
     closePeek: () => browser.closePeek(),
+    openDownload: (id: string) => downloads.open(id),
+    revealDownload: (id: string) => downloads.reveal(id),
+    cancelDownload: (id: string) => downloads.cancel(id),
+    clearDownloads: () => downloads.clear(),
     promotePeek: () => browser.promotePeek(),
   };
   ipcMain.on('cmd', (event, name: string, ...args: unknown[]) => {
@@ -641,7 +649,10 @@ app.whenReady().then(async () => {
   const rebuildMenu = () => buildMenu(browser!, store);
   session.defaultSession.extensions.on('extension-loaded', rebuildMenu);
   session.defaultSession.extensions.on('extension-unloaded', rebuildMenu);
-  registerIpc(browser, store, history);
+  const downloads = new Downloads(session.defaultSession, (items, started) =>
+    browser!.uiContents.send('downloads', items, started),
+  );
+  registerIpc(browser, store, history, downloads);
   registerPermissions(browser);
 
   setInterval(() => {

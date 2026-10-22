@@ -48,9 +48,21 @@
         <div id="today" class="drop-zone"></div>
       </div>
 
+      <div id="downloads-panel" hidden>
+        <div class="downloads-header">
+          <span>Downloads</span>
+          <button id="btn-clear-downloads">Clear</button>
+        </div>
+        <ul id="downloads-list"></ul>
+      </div>
+
       <footer>
-        <button id="btn-import" class="icon" title="Import from Arc">
+        <button id="btn-downloads" class="icon" title="Downloads">
           <svg viewBox="0 0 16 16"><path d="M8 2v8m-3-3 3 3 3-3M3 13h10" /></svg>
+          <span id="downloads-badge" hidden></span>
+        </button>
+        <button id="btn-import" class="icon" title="Import from Arc">
+          <svg viewBox="0 0 16 16"><path d="M5 3 2 6l3 3M2 6h9M11 7l3 3-3 3M14 10H5" /></svg>
         </button>
         <div id="spaces"></div>
         <button id="btn-newspace" class="icon" title="New space">

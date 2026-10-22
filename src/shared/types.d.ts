@@ -38,6 +38,17 @@ export interface HistoryEntry {
   lastVisit: number;
 }
 
+export interface DownloadInfo {
+  id: string;
+  filename: string;
+  path: string;
+  url: string;
+  received: number;
+  total: number;
+  state: 'progressing' | 'completed' | 'cancelled' | 'interrupted';
+  startedAt: number;
+}
+
 export interface BrowserState {
   spaces: Space[];
   activeSpaceId: string;
@@ -72,6 +83,8 @@ export interface FlechaApi {
   onPalette(cb: (mode: PaletteMode) => void): void;
   onRenameSpace(cb: (spaceId: string) => void): void;
   onPeek(cb: (peek: PeekState | null) => void): void;
+  /** `started` is set when this update is a new download beginning. */
+  onDownloads(cb: (items: DownloadInfo[], started?: DownloadInfo) => void): void;
   ready(): void;
   searchHistory(query: string): Promise<HistoryEntry[]>;
   newTab(input: string): void;
@@ -97,5 +110,9 @@ export interface FlechaApi {
   splitWith(tabId: string): void;
   splitNew(input: string): void;
   closePeek(): void;
+  openDownload(id: string): void;
+  revealDownload(id: string): void;
+  cancelDownload(id: string): void;
+  clearDownloads(): void;
   promotePeek(): void;
 }

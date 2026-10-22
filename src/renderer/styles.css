@@ -537,3 +537,129 @@ footer {
 #extensions::part(action):hover {
   background-color: var(--hover);
 }
+
+/* ---- downloads ---------------------------------------------------------- */
+
+#btn-downloads {
+  position: relative;
+}
+
+#downloads-badge {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: #3478f6;
+  color: #fff;
+  font-size: 9px;
+  line-height: 14px;
+  font-weight: 700;
+}
+
+#downloads-badge[hidden] {
+  display: none;
+}
+
+#downloads-panel {
+  position: absolute;
+  left: 8px;
+  right: 4px;
+  bottom: 44px;
+  max-height: 50vh;
+  display: flex;
+  flex-direction: column;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18), 0 0 0 0.5px rgba(0, 0, 0, 0.12);
+}
+
+#downloads-panel[hidden] {
+  display: none;
+}
+
+.downloads-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px 6px;
+  font-weight: 600;
+}
+
+.downloads-header button {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.downloads-header button:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+#downloads-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 6px 6px;
+  overflow-y: auto;
+}
+
+.download {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas: 'name action' 'status action' 'bar bar';
+  column-gap: 6px;
+  padding: 6px 4px 6px 8px;
+  border-radius: 8px;
+}
+
+.download:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.download .name {
+  grid-area: name;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.download .status {
+  grid-area: status;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.download.cancelled .name,
+.download.interrupted .name {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.download .icon {
+  grid-area: action;
+  align-self: center;
+}
+
+.download .bar {
+  grid-area: bar;
+  height: 3px;
+  margin-top: 4px;
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+}
+
+.download .fill {
+  display: block;
+  height: 100%;
+  background: #3478f6;
+}
+
+#downloads-list .empty {
+  padding: 8px;
+  color: var(--muted);
+}
