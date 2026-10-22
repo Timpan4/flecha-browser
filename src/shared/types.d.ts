@@ -299,6 +299,50 @@ export interface RecordedKey {
   meta: boolean;
 }
 
+/** Settings → Tabs & Spaces: favorites and every Space at once, for editing like a bookmarks manager. */
+export interface TabsView {
+  favorites: string[];
+  spaces: Array<Pick<Space, 'id' | 'name' | 'emoji' | 'color' | 'pinned' | 'today' | 'isolated'>>;
+  activeSpaceId: string;
+  tabs: Record<string, Pick<TabInfo, 'id' | 'url' | 'title' | 'customTitle' | 'favicon' | 'homeUrl'> & { open: boolean }>;
+  /** Hosts whose icon is cached and served as `favicon://<host>`. */
+  faviconHosts: string[];
+}
+
+/** Where a folder can go: the pinned tabs of a Space, optionally inside another folder. */
+export interface FolderPlacement {
+  spaceId: string;
+  folderId?: string;
+  beforeId?: string;
+}
+
+/** One change made in Settings → Tabs & Spaces. Deleting a folder or a Space asks first, in a native dialog. */
+export type TabsEdit =
+  | { op: 'renameTab'; tabId: string; title: string }
+  | { op: 'setUrl'; tabId: string; url: string }
+  | { op: 'move'; tabIds: string[]; to: TabPlacement }
+  | { op: 'delete'; tabIds: string[] }
+  | { op: 'add'; url: string; title?: string; to: TabPlacement }
+  | { op: 'newFolder'; spaceId: string; parentId?: string }
+  | { op: 'renameFolder'; folderId: string; name: string }
+  | { op: 'deleteFolder'; folderId: string }
+  | { op: 'moveFolder'; folderId: string; to: FolderPlacement }
+  | { op: 'newSpace' }
+  | { op: 'updateSpace'; spaceId: string; name?: string; emoji?: string; color?: string }
+  | { op: 'deleteSpace'; spaceId: string }
+  | { op: 'moveSpace'; spaceId: string; beforeSpaceId?: string };
+
+export interface TabsEditResult {
+  view: TabsView;
+  /** The folder or Space just made, so it can be named right away. */
+  created?: string;
+  /** Why nothing changed, e.g. an address that doesn't parse. */
+  error?: string;
+}
+
+/** What a right-click on tabs or a folder asks the page to do; the rest happens in main. */
+export type TabsMenuAction = 'rename' | 'edit';
+
 export interface SettingsApi {
   get(): Promise<SettingsView>;
   set(patch: SettingsPatch): Promise<SettingsView>;
@@ -313,6 +357,16 @@ export interface SettingsApi {
   /** While recording, every key goes to `onKey` instead of the page or the menus. */
   recordShortcut(recording: boolean): Promise<void>;
   onKey(cb: (key: RecordedKey) => void): void;
+  tabs(): Promise<TabsView>;
+  editTabs(edit: TabsEdit): Promise<TabsEditResult>;
+  /** The native menu for tabs (`tabIds`) or one folder: Move to…, Delete and, with `context`, Rename and Edit Address. */
+  tabsMenu(request: { tabIds?: string[]; folderId?: string; context?: boolean }): Promise<TabsMenuAction | undefined>;
+  /** The pane redraws whenever the sidebar changes something. */
+  onTabs(cb: (view: TabsView) => void): void;
+  /** Opens a tab in the browser window. */
+  showTab(tabId: string): Promise<void>;
+  /** The macOS emoji picker, for a Space's icon. */
+  showEmojiPanel(): Promise<void>;
 }
 
 /** The split divider's bridge; it lives in its own thin view between the panes. */
