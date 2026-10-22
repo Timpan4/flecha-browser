@@ -686,7 +686,7 @@ export function pinnedTabIds(nodes: PinnedNode[]): string[] {
   return nodes.flatMap((n) => (n.kind === 'tab' ? [n.tabId] : pinnedTabIds(n.children)));
 }
 
-function findFolder(nodes: PinnedNode[], id: string): Extract<PinnedNode, { kind: 'folder' }> | undefined {
+export function findFolder(nodes: PinnedNode[], id: string): Extract<PinnedNode, { kind: 'folder' }> | undefined {
   for (const n of nodes) {
     if (n.kind !== 'folder') continue;
     if (n.id === id) return n;
