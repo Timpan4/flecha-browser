@@ -271,6 +271,9 @@ export interface FlechaApi {
   editBoost(kind: 'script' | 'styles'): void;
   openBoostsFolder(): void;
   splitWith(tabId: string): void;
+  /** While a tab is dragged, the sidebar UI covers the page so it can be dropped there. */
+  setTabDragging(dragging: boolean): void;
+  dropToSplit(tabId: string, side: 'left' | 'right'): void;
   splitNew(input: string): void;
   closePeek(): void;
   openDownload(id: string): void;

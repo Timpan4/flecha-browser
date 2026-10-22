@@ -138,12 +138,13 @@ export class Store {
     this.changed();
   }
 
-  /** Puts `tabId` next to the active tab. The active tab stays on the left. */
-  splitWith(tabId: string) {
+  /** Puts `tabId` next to the active tab, on the right unless `side` says otherwise. */
+  splitWith(tabId: string, side: 'left' | 'right' = 'right') {
     const space = this.activeSpace;
     const current = space.activeTabId;
     if (!current || current === tabId || !this.allTabIds(space).includes(tabId)) return;
-    space.split = [current, tabId];
+    space.split = side === 'left' ? [tabId, current] : [current, tabId];
+    delete space.splitMode;
     space.activeTabId = tabId;
     this.state.tabs[tabId].lastActive = Date.now();
     this.changed();

@@ -54,6 +54,8 @@ const api: FlechaApi = {
   editBoost: cmd('editBoost'),
   openBoostsFolder: cmd('openBoostsFolder'),
   splitWith: cmd('splitWith'),
+  setTabDragging: cmd('setTabDragging'),
+  dropToSplit: cmd('dropToSplit'),
   splitNew: cmd('splitNew'),
   closePeek: cmd('closePeek'),
   openDownload: cmd('openDownload'),

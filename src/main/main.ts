@@ -72,6 +72,8 @@ class Browser implements TabHost {
   private shown: WebContentsView[] = [];
   private peek?: WebContentsView;
   private paletteOpen = false;
+  /** A tab is being dragged from the sidebar; the sidebar UI covers the page to offer split drop zones. */
+  private tabDragging = false;
   /** The hidden sidebar is showing temporarily, floating over the page. */
   private sidebarPeek = false;
   private findView?: WebContentsView;
@@ -301,6 +303,22 @@ class Browser implements TabHost {
   private tabIdFor(wc: WebContents) {
     for (const [id, view] of this.views) if (view.webContents === wc) return id;
     return undefined;
+  }
+
+  setTabDragging(dragging: boolean) {
+    if (this.tabDragging === dragging) return;
+    this.tabDragging = dragging;
+    this.layout();
+  }
+
+  /** A tab dropped on the page: show it beside the page, on the side it was dropped. */
+  dropToSplit(tabId: string, side: 'left' | 'right') {
+    this.setTabDragging(false);
+    const space = this.store.activeSpace;
+    if (!space.activeTabId || space.activeTabId === tabId) return this.store.activate(tabId);
+    // A responsive mirror only exists for its split; it goes away when something else takes its place.
+    if (space.splitMode === 'responsive') this.exitSplit();
+    this.store.splitWith(tabId, side);
   }
 
   splitNew(input: string) {
@@ -716,7 +734,7 @@ class Browser implements TabHost {
   private layout() {
     const { width, height } = this.win.getContentBounds();
     // The sidebar UI covers the whole window while it draws an overlay (command bar, peek backdrop).
-    const overlay = this.paletteOpen || !!this.peek;
+    const overlay = this.paletteOpen || !!this.peek || this.tabDragging;
     // With no page on screen the sidebar UI also draws the empty state where the page would be.
     const fullWidth = overlay || !this.shown.length;
     const sidebarWidth = this.store.state.sidebarVisible
@@ -1342,6 +1360,8 @@ function registerIpc(browser: Browser, store: Store, history: History, downloads
     editBoost: (kind: BoostKind) => browser.editBoost(kind === 'styles' ? 'styles' : 'script'),
     openBoostsFolder: () => browser.openBoostsFolder(),
     splitWith: (id: string) => store.splitWith(id),
+    setTabDragging: (dragging: boolean) => browser.setTabDragging(!!dragging),
+    dropToSplit: (id: string, side: string) => browser.dropToSplit(String(id), side === 'left' ? 'left' : 'right'),
     splitNew: (input: string) => browser.splitNew(input),
     closePeek: () => browser.closePeek(),
     openDownload: (id: string) => downloads.open(id),
