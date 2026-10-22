@@ -201,6 +201,15 @@ export type DropTarget =
   | { zone: 'today'; beforeTabId?: string }
   | { zone: 'pinned'; folderId?: string; beforeTabId?: string };
 
+/**
+ * A place in any Space, for Settings → Tabs & Spaces. `beforeId` is a tab (or, in pinned, a folder)
+ * in that list; without it, or when it isn't there, the item goes at the end.
+ */
+export type TabPlacement =
+  | { zone: 'favorites'; beforeId?: string }
+  | { zone: 'today'; spaceId: string; beforeId?: string }
+  | { zone: 'pinned'; spaceId: string; folderId?: string; beforeId?: string };
+
 export interface FindResult {
   active: number;
   total: number;

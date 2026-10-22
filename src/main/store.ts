@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { BrowserState, DropTarget, Environment, PinnedNode, SearchEngineId, Space, TabInfo, WindowBounds } from '../shared/types';
+import type { BrowserState, DropTarget, Environment, PinnedNode, SearchEngineId, Space, TabInfo, TabPlacement, WindowBounds } from '../shared/types';
 import type { ArcImport, ImportNode } from './arcImport';
 import { writeFileAtomic } from './files';
 
@@ -136,6 +136,22 @@ export class Store {
     else tab.homeUrl ??= tab.url;
     if (space.activeTabId === tabId && space !== targetSpace) space.activeTabId = undefined;
     this.changed();
+  }
+
+  /**
+   * Moves a tab anywhere, in any Space (Settings' tab manager). Unlike `moveTab`, the target
+   * names its Space. Returns whether it moved.
+   */
+  placeTab(tabId: string, to: TabPlacement): boolean {
+    const tab = this.state.tabs[tabId];
+    if (!tab || !this.locate(tabId) || to.beforeId === tabId || !this.placementExists(to)) return false;
+    this.detachEverywhere(tabId);
+    this.insert(tabId, to);
+    if (to.zone === 'today') delete tab.homeUrl;
+    else tab.homeUrl ??= tab.url;
+    this.forgetMissingActive();
+    this.changed();
+    return true;
   }
 
   /** Puts `tabId` next to the active tab, on the right unless `side` says otherwise. */
@@ -492,6 +508,47 @@ export class Store {
       if (folder) return { space, folder, parent: findParentList(space.pinned, folderId)! };
     }
     return undefined;
+  }
+
+  private placementExists(to: TabPlacement) {
+    if (to.zone === 'favorites') return true;
+    const space = this.state.spaces.find((s) => s.id === to.spaceId);
+    if (!space) return false;
+    return to.zone === 'today' || !to.folderId || !!findFolder(space.pinned, to.folderId);
+  }
+
+  /** Inserts a tab that is in no list at a placement `placementExists` accepted. */
+  private insert(tabId: string, to: TabPlacement) {
+    const before = (list: string[]) => {
+      const i = to.beforeId ? list.indexOf(to.beforeId) : -1;
+      return i < 0 ? list.length : i;
+    };
+    if (to.zone === 'favorites') return void this.state.favorites.splice(before(this.state.favorites), 0, tabId);
+    const space = this.state.spaces.find((s) => s.id === to.spaceId)!;
+    if (to.zone === 'today') return void space.today.splice(before(space.today), 0, tabId);
+    const list = to.folderId ? findFolder(space.pinned, to.folderId)!.children : space.pinned;
+    const i = to.beforeId ? list.findIndex((n) => nodeId(n) === to.beforeId) : -1;
+    list.splice(i < 0 ? list.length : i, 0, { kind: 'tab', tabId });
+  }
+
+  /** Takes a tab out of favorites and every Space, editing the lists in place. */
+  private detachEverywhere(tabId: string) {
+    const drop = (list: string[]) => {
+      const i = list.indexOf(tabId);
+      if (i >= 0) list.splice(i, 1);
+    };
+    drop(this.state.favorites);
+    for (const space of this.state.spaces) {
+      drop(space.today);
+      removePinned(space.pinned, tabId);
+    }
+  }
+
+  /** A Space whose active tab went elsewhere shows nothing until you pick a tab. */
+  private forgetMissingActive() {
+    for (const space of this.state.spaces) {
+      if (space.activeTabId && !this.allTabIds(space).includes(space.activeTabId)) space.activeTabId = undefined;
+    }
   }
 
   private detach(tabId: string, space: Space) {
