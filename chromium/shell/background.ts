@@ -713,6 +713,8 @@ async function start() {
   // Flecha's keyboard shortcuts, taken by the browser before the page (patch 0016).
   registerNative({
     store,
+    chromeTabId: (id) => live.get(id),
+    flechaTabId: (chromeId) => flechaIdFor(chromeId),
     run: (command) => {
       const numbered = /^select(Tab|Space):(\d)$/.exec(command);
       runCommand(numbered ? `${numbered[1].toLowerCase()}${numbered[2]}` : command);
