@@ -27,7 +27,7 @@ if [ ! -f "$dmg" ]; then
   echo "error: no $dmg" >&2
   exit 1
 fi
-release="${FLECHA_RELEASE_DIR:-$src/out/Release/flecha-release}"
+release="${FLECHA_RELEASE_DIR:-$release_out/flecha-release}"
 folder="${2:-$release/appcast}"
 prefix="${FLECHA_DOWNLOAD_URL_PREFIX:-https://flecha.dev/releases/}"
 sparkle="$("$here/scripts/fetch-sparkle.sh")"
@@ -45,10 +45,11 @@ cp -f "$dmg" "$folder/"
 echo "== generate_appcast $folder"
 "$sparkle/bin/generate_appcast" \
   --download-url-prefix "$prefix" \
+  -o "$folder/$release_feed" \
   --link "https://flecha.dev" \
   "$folder"
 
-feed="$folder/appcast.xml"
+feed="$folder/$release_feed"
 if [ ! -f "$feed" ] || ! grep -q 'sparkle:edSignature' "$feed"; then
   echo "error: $feed is missing or has no EdDSA signature" >&2
   exit 1
@@ -56,6 +57,6 @@ fi
 echo "== $(basename "$dmg"): $("$sparkle/bin/sign_update" "$folder/$(basename "$dmg")")"
 cat <<EOF
 
-Made $feed. To publish, upload the folder's dmgs to $prefix and appcast.xml to
-https://flecha.dev/appcast.xml.
+Made $feed. To publish, upload the folder's dmgs to $prefix and $release_feed to
+https://flecha.dev/$release_feed.
 EOF
