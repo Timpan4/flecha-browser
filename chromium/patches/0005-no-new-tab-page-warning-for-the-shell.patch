@@ -1,0 +1,23 @@
+--- a/chrome/browser/ui/extensions/settings_overridden_params_providers.cc
++++ b/chrome/browser/ui/extensions/settings_overridden_params_providers.cc
+@@ -20,6 +20,7 @@
+ #include "build/branding_buildflags.h"
+ #include "chrome/browser/extensions/extension_url_overrides.h"
+ #include "chrome/browser/extensions/settings_api_helpers.h"
++#include "chrome/browser/flecha/flecha_shell.h"
+ #include "chrome/browser/image_fetcher/image_fetcher_service_factory.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/profiles/profile_key.h"
+@@ -408,6 +409,12 @@
+     return std::nullopt;
+   }
+ 
++  // Flecha: the new tab page is the shell's own (chromium/shell), so there is
++  // nothing to warn about, and "change it back" would disable Flecha's UI.
++  if (IsFlechaShell(extension->id())) {
++    return std::nullopt;
++  }
++
+   // This preference tracks whether users have acknowledged the extension's
+   // control, so that they are not warned twice about the same extension.
+   const char* preference_name = extensions::kNtpOverridingExtensionAcknowledged;
