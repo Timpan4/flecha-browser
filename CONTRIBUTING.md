@@ -4,7 +4,7 @@ Thanks for looking. Flecha is a young project with a strong opinion about how it
 
 ## Reporting bugs
 
-Open an issue with: what you did, what you expected, what happened, your macOS version and the Flecha version (Flecha menu, About). A screenshot or a short screen recording helps a lot for anything visual. For a crash, say what the page or action was.
+Open an issue with: what you did, what you expected, what happened, your macOS version and the Flecha version. A screenshot or a short screen recording helps a lot for anything visual. For a crash, say what the page or action was.
 
 ## Setup
 
@@ -34,7 +34,7 @@ chromium/scripts/run.sh                # relaunch the dev build with the new she
 4. Run `chromium/scripts/apply.sh` again on its own: it resets every file it touches, then applies all patches in order, so it proves the set still applies cleanly.
 5. Build with `chromium/scripts/build.sh` and try it.
 
-Keep a patch small and about one thing. Put a comment at the top of new files, and `// Flecha:` comments at the edits inside Chromium's files, saying why. New code goes in new files where possible, so Chromium upgrades hurt less. Numbers 0001 to 0049 are the browser's behaviour, 0050 and above are packaging.
+Keep a patch small and about one thing. Put a comment at the top of new files, and `// Flecha:` comments at the edits inside Chromium's files, saying why. New code goes in new files where possible, so Chromium upgrades hurt less. Packaging patches are numbered from 0050.
 
 ## Style
 
