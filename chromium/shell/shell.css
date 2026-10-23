@@ -36,3 +36,17 @@
 [data-surface='panel'] #onboarding {
   display: none !important;
 }
+
+/* The command bar drops down inside the sidebar, the width of the panel. */
+[data-surface='panel'] #palette {
+  padding: 8px;
+  background: rgba(7, 18, 33, 0.12);
+}
+
+[data-surface='panel'] .palette-box {
+  width: 100%;
+}
+
+[data-surface='panel'] .palette-footer {
+  display: none;
+}

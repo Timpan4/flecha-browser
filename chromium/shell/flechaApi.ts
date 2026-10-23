@@ -2,28 +2,38 @@
  * window.flecha for the Chromium build: the same API the Electron preload gives the sidebar,
  * over the shell's port. Imported before the sidebar code so it is there when that runs.
  */
-import type { FlechaApi, UiState } from '../../src/shared/types';
+import type { FlechaApi, PaletteMode, UiState } from '../../src/shared/types';
 import { spaceTint } from '../../src/main/spaceTint';
 import { cmd, invoke, on } from './client';
 
 const surface = document.documentElement.dataset.surface;
 const systemDark = matchMedia('(prefers-color-scheme: dark)');
 
-/** The background sends the Space's light colour; dark mode darkens it here. */
+/**
+ * The background sends the Space's light colour; dark mode darkens it here. Pages follow
+ * Chromium's appearance (the system's), not Flecha's theme setting, until a native patch
+ * applies that setting to Chromium; the tint follows the same thing so text stays readable.
+ */
 const stateListeners: Array<(state: UiState) => void> = [];
 let lastState: UiState | undefined;
 function emitState(state: UiState) {
   lastState = state;
-  const dark = state.theme === 'dark' || (state.theme !== 'light' && systemDark.matches);
-  const shown = { ...state, tint: spaceTint(state.tint, dark) };
+  const shown = { ...state, tint: spaceTint(state.tint, systemDark.matches) };
   for (const cb of stateListeners) cb(shown);
 }
 on('state', emitState);
+
+const paletteListeners: Array<(mode: PaletteMode) => void> = [];
 systemDark.addEventListener('change', () => lastState && emitState(lastState));
 
 const api: FlechaApi = {
   onState: (cb) => void stateListeners.push(cb),
-  onPalette: (cb) => on('palette', cb),
+  // The command bar lives in the sidebar; new tab pages have their own search.
+  onPalette: (cb) => {
+    if (surface !== 'panel') return;
+    paletteListeners.push(cb);
+    on('palette', cb);
+  },
   onEditSpace: (cb) => on('edit-space', cb),
   onRenameTab: (cb) => on('rename-tab', cb),
   onPeek: (cb) => on('peek', cb),
@@ -66,8 +76,9 @@ const api: FlechaApi = {
     };
     input.click();
   },
-  openPalette: cmd('openPalette'),
-  closePalette: cmd('closePalette'),
+  // Electron had to grow its overlay first; here the sidebar just opens it.
+  openPalette: (mode) => paletteListeners.forEach((cb) => cb(mode)),
+  closePalette: () => undefined,
   toggleSidebar: cmd('toggleSidebar'),
   setSidebarPeek: cmd('setSidebarPeek'),
   // The page can write the clipboard itself; the background has no document to do it from.
