@@ -25,7 +25,7 @@
 #      staples the ticket to the dmg and the app.
 # Everything is redone on each run, so it is safe to run again.
 #
-# Node is $FLECHA_NODE or the node on PATH: 22.5+ (node:sqlite), arm64, and linked only to
+# Node is $FLECHA_NODE or the node on PATH: 22.5+ (node:sqlite), of FLECHA_ARCH's CPU, linked only to
 # system libraries (an official or nvm build; Homebrew's links its own dylibs). Its LICENSE
 # goes along with it.
 set -euo pipefail
@@ -41,8 +41,8 @@ for arg in "$@"; do
 done
 
 product="$(sed -n 's/^PRODUCT_FULLNAME=//p' "$here/branding/BRANDING")"
-built="${FLECHA_APP_IN:-$src/out/Release/$product.app}"
-release="${FLECHA_RELEASE_DIR:-$src/out/Release/flecha-release}"
+built="${FLECHA_APP_IN:-$release_out/$product.app}"
+release="${FLECHA_RELEASE_DIR:-$release_out/flecha-release}"
 stage="$release/$product"
 app="$stage/$product.app"
 fw="$app/Contents/Frameworks/$product Framework.framework"
@@ -82,8 +82,8 @@ if ! "$node" -e 'require("node:sqlite")' 2>/dev/null; then
   echo "error: $node has no node:sqlite; the host needs Node 22.5 or newer" >&2
   exit 1
 fi
-if ! lipo -archs "$node" | grep -qw arm64; then
-  echo "error: $node is not an arm64 binary" >&2
+if ! lipo -archs "$node" | grep -qw "$node_arch"; then
+  echo "error: $node is not an $node_arch binary (FLECHA_ARCH=$FLECHA_ARCH; set FLECHA_NODE)" >&2
   exit 1
 fi
 if otool -L "$node" | tail -n +2 | awk '{print $1}' | grep -Eqv '^(/usr/lib/|/System/)'; then
@@ -215,7 +215,7 @@ if [ "$dmg" = 1 ]; then
     echo "error: the app says version $plist_version, package.json $version; rebuild with build-release.sh" >&2
     exit 1
   fi
-  image="$release/$product-$version.dmg"
+  image="$release/$product-$version$release_suffix.dmg"
   echo "== dmg $image"
   # A read-write image first, laid out like an installer: the app and an Applications
   # alias side by side over a background (chromium/branding/dmg), a fixed window with no
