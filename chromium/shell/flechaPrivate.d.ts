@@ -37,4 +37,21 @@ declare namespace chrome.flechaPrivate {
 
   /** The window a frame page belongs to; frame pages are opened by the browser, one per window. */
   function getWindowId(): Promise<number>;
+
+  /**
+   * Flecha's keyboard shortcuts (patch 0016): `shortcuts` maps Electron accelerators
+   * ("CmdOrCtrl+Shift+T", "Alt+CmdOrCtrl+Left", "Ctrl+Tab", "CmdOrCtrl+[") to command ids.
+   * Flecha windows take these keys before the page and before Chromium's own shortcuts and
+   * menu items (so ⌘S no longer opens Save Page), and send them to onShortcut. Each call
+   * replaces the whole map; keys left out go back to Chromium (⌘C, ⌘V, ⌘P…).
+   *
+   * Syntax: modifiers Cmd/Command/CmdOrCtrl/CommandOrControl/Super/Meta, Ctrl/Control,
+   * Alt/Option, Shift, then one key: a letter, a digit, [ ] = - , . / ; ' ` \, Plus, Tab,
+   * Space, Enter/Return, Escape/Esc, Backspace, Delete, Up/Down/Left/Right, Home, End,
+   * PageUp, PageDown, F1–F24. Resolves with the accelerators it couldn't read (ignored).
+   */
+  function setShortcuts(shortcuts: Record<string, string>): Promise<string[]>;
+
+  /** A shortcut from setShortcuts() was pressed in window `windowId`. */
+  const onShortcut: chrome.events.Event<(command: string, windowId: number) => void>;
 }
