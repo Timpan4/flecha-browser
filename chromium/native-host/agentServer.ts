@@ -3,8 +3,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 
 /**
- * The agent bridge's HTTP side, shared by the Electron spike (agentBridge.ts) and the
- * Chromium build's native messaging host. Nothing here needs Electron.
+ * The agent bridge's HTTP side, for the native messaging host, as the Electron version
+ * ran it in its main process.
  */
 
 export * from '../shared/agentTools';

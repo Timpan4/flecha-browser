@@ -19,7 +19,7 @@ function copyStatic() {
     path.join(root, 'node_modules/@fontsource-variable/jetbrains-mono/files/jetbrains-mono-latin-wght-normal.woff2'),
     path.join(out, 'fonts/jetbrains-mono.woff2'),
   );
-  // The Electron sidebar page, pointed at the shell's bundle, once per surface.
+  // The sidebar page (ui/index.html), pointed at the shell's bundle, once per surface.
   const html = fs
     .readFileSync(path.join(ui, 'index.html'), 'utf8')
     .replace('src="app.js"', 'src="sidebar.js"')

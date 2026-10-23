@@ -12,7 +12,7 @@ export interface AskOptions {
 }
 
 /**
- * What the tab manager needs from the browser it runs in (Electron's window, or the Chromium
+ * What the tab manager needs from the browser it runs in (the Chromium
  * shell's background): its tab pages, a way to ask, and a way to send the pane a fresh view.
  */
 export interface TabManagerHost {

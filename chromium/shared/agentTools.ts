@@ -1,9 +1,8 @@
 import { z } from 'zod';
 
 /**
- * The agent bridge's tools: names, descriptions and inputs, shared by the Electron spike
- * (agentBridge.ts, which drives WebContents) and the Chromium build, whose native host serves
- * them and whose shell extension runs them. Needs neither Node nor Electron.
+ * The agent bridge's tools: names, descriptions and inputs, as the Electron version had
+ * them: the native host serves them and the shell extension runs them. Needs no Node.
  */
 
 export interface AgentTab {

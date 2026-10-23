@@ -1,6 +1,6 @@
 /**
- * How boosts are named and which pages they apply to, without Node, so Electron's boosts
- * folder and the Chromium shell's stored boosts follow the same rules.
+ * How boosts are named and which pages they apply to, without Node, so the Chromium
+ * shell's stored boosts follow the same rules as the Electron version's boosts folder.
  *
  * A boost is named after its host: `github.com.ts` (script), `github.com.css` (styles), or
  * `all.css` for every site. It applies to that host and its subdomains.

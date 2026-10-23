@@ -1,6 +1,6 @@
 /**
- * What Settings shows and how it changes the Store, without Electron or Node, so Electron's
- * Settings window and the Chromium shell's background share one set of rules.
+ * What Settings shows and how it changes the Store, without Node, as the Electron
+ * version's Settings window had them, for the Chromium shell's background.
  */
 import type { SettingsPatch, SettingsView } from '../../shared/types';
 import type { Store } from '../../shared/store';
