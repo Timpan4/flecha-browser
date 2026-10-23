@@ -3,17 +3,14 @@
   "productName": "Flecha",
   "version": "0.1.0",
   "private": true,
-  "description": "An Arc-style browser built on Chromium (via Electron).",
-  "main": "dist/main/main.js",
+  "description": "An Arc-style browser built on a Chromium fork.",
   "scripts": {
-    "build": "tsc -p tsconfig.json && npm run build:preload && tsc -p src/renderer/tsconfig.json && cp src/renderer/*.html src/renderer/*.css dist/renderer/ && mkdir -p dist/renderer/fonts && cp node_modules/@fontsource-variable/jetbrains-mono/files/jetbrains-mono-latin-wght-normal.woff2 dist/renderer/fonts/jetbrains-mono.woff2",
-    "build:preload": "esbuild src/preload/preload.ts --bundle --platform=node --format=cjs --external:electron --outfile=dist/preload/preload.js --log-level=warning",
-    "start": "npm run build && electron .",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p src/renderer/tsconfig.json --noEmit",
-    "package": "npm run build && electron-builder --mac dir",
     "shell:build": "node chromium/shell/build.mjs",
     "shell:watch": "node chromium/shell/build.mjs --watch",
-    "shell:typecheck": "tsc -p chromium/shell"
+    "shell:typecheck": "tsc -p chromium/shell",
+    "host:build": "node chromium/native-host/build.mjs",
+    "host:typecheck": "tsc -p chromium/native-host",
+    "typecheck": "tsc -p chromium/shell && tsc -p chromium/native-host"
   },
   "devDependencies": {
     "@types/chrome": "^0.3.6",
@@ -31,52 +28,5 @@
     "electron-chrome-web-store": "^0.13.0",
     "esbuild": "^0.28.2",
     "zod": "^4.6.7"
-  },
-  "build": {
-    "appId": "dev.oprimo.flecha",
-    "productName": "Flecha",
-    "copyright": "Flecha contributors",
-    "directories": {
-      "output": "release",
-      "buildResources": "build"
-    },
-    "files": [
-      "dist/**/*",
-      "package.json"
-    ],
-    "asarUnpack": [
-      "node_modules/esbuild/**",
-      "node_modules/@esbuild/**"
-    ],
-    "mac": {
-      "category": "public.app-category.productivity",
-      "icon": "build/icon.icns",
-      "identity": "-",
-      "target": [
-        "dir"
-      ],
-      "extendInfo": {
-        "CFBundleURLTypes": [
-          {
-            "CFBundleURLName": "Web site URL",
-            "CFBundleURLSchemes": [
-              "http",
-              "https"
-            ]
-          }
-        ],
-        "CFBundleDocumentTypes": [
-          {
-            "CFBundleTypeName": "HTML document",
-            "CFBundleTypeRole": "Viewer",
-            "LSItemContentTypes": [
-              "public.html",
-              "public.xhtml"
-            ]
-          }
-        ]
-      },
-      "hardenedRuntime": false
-    }
   }
 }
