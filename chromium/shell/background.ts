@@ -277,6 +277,20 @@ async function start() {
       })),
     topSites: async () => (await chrome.topSites.get()).map((s) => ({ url: s.url, title: s.title || s.url, visits: 0, lastVisit: 0 })),
     detectBrowsers: () => [],
+    importFlechaState: (json: string) => {
+      let state: BrowserState | undefined;
+      try {
+        state = JSON.parse(String(json)) as BrowserState;
+      } catch {
+        // Reported below.
+      }
+      // The tab ids change, so every open Chromium tab is closed and reopens on demand.
+      const open = [...live.keys()];
+      if (!state || !store.replaceState(state)) return broadcast('flash', 'That isn’t a Flecha state file');
+      void unload(open);
+      const tabs = Object.keys(state.tabs).length;
+      broadcast('flash', `Imported ${state.spaces.length} Spaces and ${tabs} tabs`);
+    },
   });
 
   registerSettings({
