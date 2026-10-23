@@ -73,7 +73,7 @@ def ds_store(records):
     records = sorted(records, key=lambda r: (r[0].lower(), r[1]))
     leaf = struct.pack('>II', 0, len(records)) + b''.join(record(*r) for r in records)
     if len(leaf) > PAGE_SIZE:
-        raise ValueError('too many records for one B-tree node')
+        raise ValueError(f'too many records for one B-tree node: {len(leaf)} bytes; ' + ', '.join(f'{r[0]}:{r[1]}={len(record(*r))}' for r in records))
 
     # Where Finder puts things in a small store: the root block at 0x1000 (2 KiB), the
     # B-tree's superblock at 0x40 (32 bytes) and its one node at 0x2000 (4 KiB). The file's

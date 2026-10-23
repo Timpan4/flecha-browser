@@ -220,11 +220,15 @@ if [ "$dmg" = 1 ]; then
   # A read-write image first, laid out like an installer: the app and an Applications
   # alias side by side over a background (chromium/branding/dmg), a fixed window with no
   # toolbar or sidebar, Flecha's icon on the volume. Then it's compressed.
-  rw="$work/$product-rw.dmg"
   # macOS won't mount an image inside another mounted image (the build volume), so the
   # mount point is a temporary folder on the system disk.
-  mnt="$(mktemp -d -t flecha-dmg)"
-  trap 'hdiutil detach -quiet -force "$mnt" 2>/dev/null || true; rmdir "$mnt" 2>/dev/null || true' EXIT
+  # The read-write image lives there too: a bookmark to a file on an image that is itself
+  # inside the build volume's image records that whole chain, and outgrows the .DS_Store.
+  tmp="$(mktemp -d /tmp/flecha-dmg.XXXX)"
+  mnt="$tmp/mnt"
+  rw="$tmp/$product-rw.dmg"
+  mkdir "$mnt"
+  trap 'hdiutil detach -quiet -force "$mnt" 2>/dev/null || true; rm -rf "$tmp"' EXIT
   size_mb=$(( $(du -sm "$app" | cut -f1) + 64 ))
   hdiutil create -quiet -ov -size "${size_mb}m" -fs HFS+ -volname "$product" -type UDIF "$rw"
   hdiutil attach -quiet -nobrowse -noverify -noautoopen -mountpoint "$mnt" "$rw"
@@ -232,12 +236,12 @@ if [ "$dmg" = 1 ]; then
   ln -s /Applications "$mnt/Applications"
   mkdir "$mnt/.background"
   cp "$here/branding/dmg/background.tiff" "$mnt/.background/background.tiff"
-  cp "$here/branding/mac/app.icns" "$mnt/.VolumeIcon.icns"
-  # The volume shows .VolumeIcon.icns once its root has the custom-icon Finder flag.
-  xcrun SetFile -a C "$mnt"
   python3 "$here/scripts/dmg-layout.py" "$mnt" \
     --background .background/background.tiff --window 660x420 --icon-size 128 \
     --icon "$product.app=170,196" --icon "Applications=490,196"
+  cp "$here/branding/mac/app.icns" "$mnt/.VolumeIcon.icns"
+  # The volume shows .VolumeIcon.icns once its root has the custom-icon Finder flag.
+  xcrun SetFile -a C "$mnt"
   # Mounting opens the window (HFS+ only; harmless where bless can't).
   bless --folder "$mnt" --openfolder "$mnt" 2>/dev/null || true
   rm -rf "$mnt/.fseventsd"
