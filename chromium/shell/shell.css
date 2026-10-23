@@ -63,6 +63,7 @@
   position: fixed;
   inset: 0;
   z-index: 1000;
+  outline: none;
 }
 
 .shell-menu {
@@ -87,9 +88,8 @@
   cursor: default;
 }
 
-.shell-menu-item:hover:not(:disabled),
-.shell-menu-item:focus-visible,
-.shell-menu-branch.open > .shell-menu-item {
+.shell-menu-item.active,
+.shell-menu-item.open {
   background: var(--selection);
   color: var(--selection-text);
   outline: none;
@@ -120,20 +120,6 @@
   height: 1px;
   margin: 5px 6px;
   background: var(--surface-line);
-}
-
-/* Submenus open in place, below their item, so they never run off the page. */
-.shell-submenu {
-  display: none;
-  position: static;
-  box-shadow: none;
-  padding: 2px 0 2px 12px;
-  background: none;
-}
-
-.shell-menu-branch:hover > .shell-submenu,
-.shell-menu-branch.open > .shell-submenu {
-  display: block;
 }
 
 /* ---- questions --------------------------------------------------------------- */
