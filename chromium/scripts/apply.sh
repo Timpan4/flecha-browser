@@ -3,7 +3,7 @@
 # Safe to run again: it first resets every file it touches.
 set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
-src="${CHROMIUM_SRC:-/Volumes/EXT_FLASH_1TB/projs/flecha/chromium/src}"
+. "$here/scripts/env.sh"
 theme="$src/chrome/app/theme/chromium"
 cd "$src"
 
