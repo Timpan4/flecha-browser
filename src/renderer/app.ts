@@ -583,6 +583,34 @@ document.addEventListener('mousedown', (e) => {
   if (!sitePanel.hidden && !sitePanel.contains(target) && !$('btn-site').contains(target)) toggleSitePanel(false);
 });
 document.addEventListener('keydown', (e) => e.key === 'Escape' && !sitePanel.hidden && toggleSitePanel(false));
+// Scrolling sideways over the sidebar (a trackpad swipe, a mouse's thumb wheel) changes
+// Space, one per gesture: the scroll adds up to a step, then waits for the gesture to end.
+const SPACE_SWIPE_STEP = 60;
+let swipe = 0;
+let swipeDone = false;
+let swipeEnd: number | undefined;
+$('sidebar').addEventListener(
+  'wheel',
+  (e) => {
+    if (Math.abs(e.deltaX) <= Math.abs(e.deltaY) || !state) return;
+    e.preventDefault();
+    clearTimeout(swipeEnd);
+    swipeEnd = window.setTimeout(() => {
+      swipe = 0;
+      swipeDone = false;
+    }, 250);
+    if (swipeDone) return;
+    swipe += e.deltaX;
+    if (Math.abs(swipe) < SPACE_SWIPE_STEP) return;
+    swipeDone = true;
+    const spaces = state.spaces;
+    const i = spaces.findIndex((sp) => sp.id === state!.activeSpaceId);
+    const next = spaces[i + (swipe > 0 ? 1 : -1)];
+    if (next) api.switchSpace(next.id);
+  },
+  { passive: false },
+);
+
 // A click on the page takes the focus from the sidebar's page: that closes the panel too.
 window.addEventListener('blur', () => !sitePanel.hidden && toggleSitePanel(false));
 
