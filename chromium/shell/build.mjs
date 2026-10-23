@@ -22,8 +22,8 @@ function copyStatic() {
     .readFileSync(path.join(renderer, 'index.html'), 'utf8')
     .replace('src="app.js"', 'src="sidebar.js"')
     .replace('<link rel="stylesheet" href="onboarding.css" />', '$&\n    <link rel="stylesheet" href="shell.css" />');
-  for (const surface of ['panel', 'newtab']) {
-    const page = surface === 'panel' ? 'sidebar.html' : 'newtab.html';
+  const pages = { window: 'window.html', panel: 'sidebar.html', newtab: 'newtab.html' };
+  for (const [surface, page] of Object.entries(pages)) {
     fs.writeFileSync(path.join(out, page), html.replace('<html>', `<html data-surface="${surface}">`));
   }
   fs.copyFileSync(path.join(here, 'shell.css'), path.join(out, 'shell.css'));
