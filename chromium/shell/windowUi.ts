@@ -73,6 +73,23 @@ async function runMenuItem(run: MenuRun) {
     hooks?.rename(run.rename);
   }
   else if ('deleteSpace' in run) await confirmDeleteSpace(run.deleteSpace);
+  else if ('clearSpaceData' in run) await confirmClearSpaceData(run.clearSpaceData);
+}
+
+/** Electron's "Sign out of everything in “Space”?" message box, in the page. */
+async function confirmClearSpaceData(spaceId: string) {
+  const space = hooks?.state()?.spaces.find((s) => s.id === spaceId);
+  if (!space?.isolated) return;
+  const response = await overWindow('dialog', () =>
+    askDialog({
+      message: `Sign out of everything in “${space.name}”?`,
+      detail: 'Clears cookies, storage and cache for this Space only.',
+      buttons: ['Clear', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1,
+    }),
+  );
+  if (response === 0) cmd('clearSpaceData')(spaceId);
 }
 
 /** Electron's "Delete “Space”?" message box, in the page. */
