@@ -115,8 +115,7 @@ export function registerFeatures(ctx: FeaturesContext): Features {
         if (tab?.active) break;
         await new Promise((r) => setTimeout(r, 50));
       }
-      // TODO(chromium): Electron opened DevTools on the Console panel; `openDevTools` opens it as last used.
-      if (!run('openDevTools')) broadcast('flash', 'Press ⌥⌘I for the console');
+      if (!run('openDevTools', { console: true })) broadcast('flash', 'Press ⌥⌘I for the console');
     },
   });
 
