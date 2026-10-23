@@ -1,19 +1,13 @@
 import os from 'node:os';
 import path from 'node:path';
-import { randomBytes } from 'node:crypto';
 import { BrowserWindow, app, clipboard, dialog, ipcMain, nativeTheme } from 'electron';
 import type { SettingsPatch, SettingsView } from '../shared/types';
 import type { Store } from './store';
 import { setAdBlocking } from './adblock';
-import { SEARCH_ENGINES } from './url';
-import { sanitize as sanitizeEnvironments } from './environments';
 import { canSetDefaultBrowser, isDefaultBrowser, makeDefaultBrowser } from './defaultBrowser';
-import { SHORTCUTS, displayKeys, isShortcutId, keysFor, sameKeys, shortcutList } from './shortcuts';
+import { applySettings, renewAgentToken, settingsView } from './settingsCore';
 import type { TabManager } from './tabManager';
 import { electronTabManager, type BrowserTabsHost } from './tabManagerElectron';
-
-/** A modifier and a key, or a function key alone: "Alt+Cmd+K", "F5". */
-const ACCELERATOR = /^((Ctrl|Alt|Shift|Cmd)\+){1,4}[^+]+$|^F\d{1,2}$/;
 
 /** The ⌘, window: a small page of its own, talking to the main process over `settings:*` IPC. */
 export class Settings {
@@ -37,8 +31,7 @@ export class Settings {
     ipcMain.handle('settings:set', (event, patch: SettingsPatch) => (fromSettings(event) ? this.apply(patch) : undefined));
     ipcMain.handle('settings:new-agent-token', (event) => {
       if (!fromSettings(event)) return undefined;
-      // The bridge reads the token on every request, so the old one stops working right away.
-      this.store.setAgent({ enabled: !!this.store.state.agent?.enabled, token: newToken() });
+      renewAgentToken(this.store);
       return this.view();
     });
     ipcMain.handle('settings:open-boosts', (event) => {
@@ -112,29 +105,11 @@ export class Settings {
   }
 
   view(): SettingsView {
-    return {
-      adBlock: this.store.state.adBlock !== false,
-      searchEngine: this.store.state.searchEngine ?? 'google',
+    return settingsView(this.store, {
       downloadsFolder: tildify(this.store.state.downloadsFolder ?? app.getPath('downloads')),
-      askWhereToSave: !!this.store.state.askWhereToSave,
       defaultBrowser: { isDefault: isDefaultBrowser(), canSet: canSetDefaultBrowser() },
-      theme: this.store.state.theme ?? 'system',
-      archiveAfterHours: this.store.state.archiveAfterHours ?? 12,
-      peekPinnedLinks: this.store.state.peekPinnedLinks !== false,
-      shortcuts: shortcutList(this.store.state),
-      openLinksInFlechinha: this.store.state.openLinksInFlechinha !== false,
-      agent: {
-        enabled: !!this.store.state.agent?.enabled,
-        endpoint: this.agent.endpoint(),
-        token: this.store.state.agent?.enabled ? this.store.state.agent.token : undefined,
-      },
-      environments: (this.store.state.environments ?? []).map((e) => ({
-        id: e.id,
-        name: e.name,
-        targetsText: e.targets.map((t) => `${t.label} ${t.origin}`).join('\n'),
-      })),
-      searchEngines: Object.entries(SEARCH_ENGINES).map(([id, e]) => ({ id: id as keyof typeof SEARCH_ENGINES, name: e.name })),
-    };
+      agentEndpoint: this.agent.endpoint(),
+    });
   }
 
   private async chooseDownloadsFolder(): Promise<SettingsView> {
@@ -147,55 +122,12 @@ export class Settings {
     return this.view();
   }
 
-  /** Records one shortcut. A command that had the same keys loses them, and the view says so. */
-  private setShortcut(id: string, keys: string | null): string | undefined {
-    if (!isShortcutId(id)) return undefined;
-    if (keys === 'default') {
-      this.store.setKeybinding(id, undefined);
-      return undefined;
-    }
-    if (keys !== null && !ACCELERATOR.test(keys)) return undefined;
-    // ⌘1…⌘9 and ⌃1…⌃9 pick tabs and Spaces.
-    if (keys && /^(Cmd|Ctrl)\+\d$/.test(keys)) return `${displayKeys(keys)} already goes to a tab or Space.`;
-    let notice: string | undefined;
-    if (keys) {
-      for (const other of SHORTCUTS) {
-        const otherKeys = keysFor(this.store.state, other.id);
-        if (other.id !== id && otherKeys && sameKeys(otherKeys, keys)) {
-          this.store.setKeybinding(other.id, null);
-          notice = `${displayKeys(keys)} was “${other.label}”, which now has no shortcut.`;
-        }
-      }
-    }
-    const fallback = SHORTCUTS.find((s) => s.id === id)!.keys;
-    this.store.setKeybinding(id, keys && sameKeys(keys, fallback) ? undefined : keys);
-    return notice;
-  }
-
   private async apply(patch: SettingsPatch): Promise<SettingsView> {
-    let notice: string | undefined;
-    if (patch.resetShortcuts) this.store.resetKeybindings();
-    if (patch.shortcut) notice = this.setShortcut(String(patch.shortcut.id), patch.shortcut.keys === null ? null : String(patch.shortcut.keys));
-    // Ignore ids that aren't in the list rather than storing garbage.
-    if (patch.searchEngine && patch.searchEngine in SEARCH_ENGINES) {
-      this.store.setSearchEngine(patch.searchEngine);
-    }
-    if (patch.environments !== undefined) this.store.setEnvironments(sanitizeEnvironments(patch.environments));
-    if (patch.askWhereToSave !== undefined) this.store.setDownloads({ askWhereToSave: patch.askWhereToSave });
-    if (patch.theme || patch.peekPinnedLinks !== undefined) {
-      this.store.setPreferences({ theme: patch.theme, peekPinnedLinks: patch.peekPinnedLinks });
-      nativeTheme.themeSource = this.store.state.theme ?? 'system';
-    }
-    if (patch.openLinksInFlechinha !== undefined) this.store.setOpenLinksInFlechinha(patch.openLinksInFlechinha);
-    if (typeof patch.archiveAfterHours === 'number') this.store.setArchiveAfter(patch.archiveAfterHours);
-    if (patch.agentEnabled !== undefined) {
-      this.store.setAgent({ enabled: patch.agentEnabled, token: this.store.state.agent?.token || newToken() });
-      await this.agent.setEnabled(patch.agentEnabled).catch((err) => console.error('Agent bridge failed', err));
-    }
-    if (patch.adBlock !== undefined) {
-      this.store.setAdBlock(patch.adBlock);
-      await setAdBlocking(patch.adBlock).catch((err) => console.error('Ad blocker failed', err));
-    }
+    const notice = await applySettings(this.store, patch, {
+      theme: (theme) => (nativeTheme.themeSource = theme),
+      agent: (enabled) => this.agent.setEnabled(enabled),
+      adBlock: (enabled) => setAdBlocking(enabled),
+    });
     this.onChanged();
     return { ...this.view(), notice };
   }
@@ -204,8 +136,4 @@ export class Settings {
 function tildify(folder: string) {
   const home = os.homedir();
   return folder === home || folder.startsWith(home + path.sep) ? '~' + folder.slice(home.length) : folder;
-}
-
-function newToken() {
-  return randomBytes(24).toString('base64url');
 }
