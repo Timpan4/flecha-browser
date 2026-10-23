@@ -12,6 +12,8 @@ import { shortcutHints } from '../../src/main/shortcuts';
 import { describe as describeEnvironment } from '../../src/main/environments';
 import type { BrowserState, DropTarget, SearchEngineId, UiState } from '../../src/shared/types';
 import { broadcast, handle, listen, onConnect } from './hub';
+import type { MenuRun } from './protocol';
+import type { MenuEntry } from './settingsUi';
 import { openSettings, registerSettings } from './settingsHandlers';
 
 const STATE_KEY = 'state';
@@ -96,11 +98,11 @@ async function start() {
   // ---- the window frame, as the Electron spike's Browser.layout() --------------
   // The frame page applies it (chrome.flechaPrivate.setFrame), since only a page knows
   // whether the system is in dark mode for the background colour.
-  const frame = { paletteOpen: false, sidebarPeek: false, tabDragging: false };
+  const frame = { paletteOpen: false, sidebarPeek: false, tabDragging: false, overlays: new Set<string>() };
   function sendFrame() {
     const sidebar: chrome.flechaPrivate.SidebarMode = store.state.sidebarVisible ? 'docked' : frame.sidebarPeek ? 'floating' : 'hidden';
     // The frame covers the whole window while it draws over the page.
-    const overlay = frame.paletteOpen || frame.tabDragging || !store.state.onboarded;
+    const overlay = frame.paletteOpen || frame.tabDragging || frame.overlays.size > 0 || !store.state.onboarded;
     broadcast('frame', { sidebar, overlay });
   }
   const hasFrame = () => typeof chrome.flechaPrivate?.setFrame === 'function';
@@ -123,6 +125,7 @@ async function start() {
     try {
       const created = await chrome.tabs.create({ windowId: await mainWindow(), url: tab.url === 'about:blank' ? undefined : tab.url, active });
       live.set(id, created.id!);
+      if (tab.muted) void chrome.tabs.update(created.id!, { muted: true });
       rememberLive();
       return created.id!;
     } finally {
@@ -249,6 +252,83 @@ async function start() {
       afterTabId: activate ? undefined : store.activeSpace.activeTabId,
     });
 
+  // ---- context menus, as the Electron spike's tabMenu / spaceMenu ----------------
+  // Built here, where the Store is; the page that asked draws them (windowUi.ts).
+
+  const SEPARATOR = { separator: true } as const;
+  const run = (name: string, ...args: unknown[]): MenuRun => ({ cmd: name, args });
+  const spaceLabel = (s: { emoji?: string; name: string }) => `${s.emoji ? s.emoji + '  ' : ''}${s.name}`;
+
+  function tabMenu(tabId: string): MenuEntry<MenuRun>[] | undefined {
+    const tab = store.state.tabs[tabId];
+    const zone = store.locate(tabId)?.zone;
+    if (!tab || !zone) return undefined;
+    const space = store.activeSpace;
+    const split: MenuEntry<MenuRun>[] = [];
+    if (space.split?.includes(tabId)) split.push({ label: 'Exit Split View', run: run('exitSplit') });
+    else if (space.activeTabId && space.activeTabId !== tabId) split.push({ label: 'Open in Split View', run: run('splitWith', tabId) });
+    const name = tab.customTitle ?? tab.title;
+    const otherSpaces = store.state.spaces.filter((s) => s.id !== store.locate(tabId)?.space?.id);
+    return [
+      ...split,
+      ...(split.length ? [SEPARATOR] : []),
+      { label: 'Copy Link', run: { copy: tab.url, message: 'Link copied' } },
+      { label: 'Copy as Markdown Link', run: { copy: `[${name}](${tab.url})`, message: 'Markdown link copied' } },
+      { label: 'Rename…', run: { rename: tabId } },
+      { label: 'Duplicate', run: run('newTab', tab.url) },
+      // A Flechinha window of its own; the window code lives in another shell module.
+      { label: 'Open in Flechinha', run: run('openFlechinha', tab.url, tabId) },
+      SEPARATOR,
+      { label: zone === 'today' ? 'Pin Tab' : 'Unpin Tab', run: run('togglePin', tabId) },
+      { label: zone === 'favorites' ? 'Remove from Favorites' : 'Add to Favorites', run: run('toggleFavorite', tabId) },
+      {
+        label: 'Move to Space',
+        enabled: zone !== 'favorites' && otherSpaces.length > 0,
+        submenu: otherSpaces.map((s) => ({ label: spaceLabel(s), run: run('moveToSpace', tabId, s.id) })),
+      },
+      SEPARATOR,
+      { label: 'Reload', enabled: live.has(tabId), run: run('reloadTab', tabId) },
+      { label: tab.muted ? 'Unmute Tab' : 'Mute Tab', run: run('toggleMute', tabId) },
+      ...(tab.homeUrl && tab.homeUrl !== tab.url ? [{ label: 'Go Back to Pinned URL', run: run('goHome', tabId) }] : []),
+      SEPARATOR,
+      { label: zone === 'today' ? 'Close Tab' : 'Unload Tab', run: run('close', tabId) },
+      ...(zone === 'today'
+        ? [
+            { label: 'Close Tabs Below', run: run('closeTabs', tabId, 'below') },
+            { label: 'Close Other Tabs', run: run('closeTabs', tabId, 'others') },
+          ]
+        : []),
+    ];
+  }
+
+  function spaceMenu(spaceId: string): MenuEntry<MenuRun>[] | undefined {
+    const space = store.state.spaces.find((s) => s.id === spaceId);
+    if (!space) return undefined;
+    return [
+      { label: 'Edit Space…', run: run('editSpace', spaceId) },
+      { label: 'New Folder', run: run('newFolder') },
+      SEPARATOR,
+      { label: 'Separate Cookies and Logins', checked: !!space.isolated, run: run('setSpaceIsolated', spaceId, !space.isolated) },
+      SEPARATOR,
+      { label: 'Delete Space…', enabled: store.state.spaces.length > 1, run: { deleteSpace: spaceId } },
+    ];
+  }
+
+  /** Opens the sidebar's Space editor (name, emoji, colour), in that Space. */
+  function editSpace(spaceId: string) {
+    if (store.state.activeSpaceId !== spaceId) store.switchSpace(spaceId);
+    broadcast('edit-space', spaceId);
+  }
+
+  function toggleMute(tabId: string) {
+    const tab = store.state.tabs[tabId];
+    if (!tab) return;
+    const chromeId = live.get(tabId);
+    // An unloaded tab remembers it, and opens muted.
+    if (chromeId === undefined) store.updateTab(tabId, { muted: !tab.muted });
+    else void chrome.tabs.update(chromeId, { muted: !tab.muted });
+  }
+
   handle({
     ready: sendState,
     newTab: (input: string) => openTab(input),
@@ -266,10 +346,31 @@ async function start() {
     forward: onActive((id) => chrome.tabs.goForward(id).catch(() => undefined)),
     reload: onActive((id) => chrome.tabs.reload(id)),
     switchSpace: (id: string) => store.switchSpace(id),
-    newSpace: () => {
-      const space = store.newSpace();
-      broadcast('edit-space', space.id);
+    newSpace: () => editSpace(store.newSpace().id),
+    editSpace: (id: string) => editSpace(String(id)),
+    newFolder: () => store.newFolder(),
+    tabMenu: (id: string) => tabMenu(String(id)),
+    spaceMenu: (id: string) => spaceMenu(String(id)),
+    setOverlay: (name: string, on: boolean) => {
+      if (on) frame.overlays.add(String(name));
+      else frame.overlays.delete(String(name));
+      sendFrame();
     },
+    togglePin: (id: string) => store.togglePin(id),
+    toggleFavorite: (id: string) => store.toggleFavorite(id),
+    moveToSpace: (id: string, spaceId: string) => store.moveToSpace(id, spaceId),
+    reloadTab: (id: string) => {
+      const chromeId = live.get(id);
+      if (chromeId !== undefined) void chrome.tabs.reload(chromeId);
+    },
+    goHome: (id: string) => {
+      const home = store.state.tabs[id]?.homeUrl;
+      const chromeId = live.get(id);
+      if (!home) return;
+      if (chromeId !== undefined) void chrome.tabs.update(chromeId, { url: home });
+      else store.updateTab(id, { url: home });
+    },
+    closeTabs: (id: string, which: string) => void unload(store.closeTodayTabs(id, which === 'others' ? 'others' : 'below')),
     updateSpace: (id: string, patch: { name?: string; emoji?: string; color?: string }) => store.updateSpace(id, patch ?? {}),
     // Spaces with their own cookies need a separate Chromium profile; not in this build yet.
     setSpaceIsolated: () => broadcast('flash', 'Separate cookies aren’t in this build yet'),
@@ -281,10 +382,7 @@ async function start() {
     moveTab: (id: string, target: DropTarget) => store.moveTab(id, target),
     clearToday: () => void unload(store.clearToday()),
     renameTab: (id: string, title: string) => store.updateTab(id, { customTitle: String(title).trim() || undefined }),
-    toggleMute: (id: string) => {
-      const chromeId = live.get(id);
-      if (chromeId !== undefined) void chrome.tabs.update(chromeId, { muted: !store.state.tabs[id]?.muted });
-    },
+    toggleMute: (id: string) => toggleMute(String(id)),
     flash: (message: string) => broadcast('flash', String(message)),
     openPalette: (mode: string) => openPalette(mode),
     closePalette: () => {
