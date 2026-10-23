@@ -17,9 +17,16 @@ function copyStatic() {
     path.join(root, 'node_modules/@fontsource-variable/jetbrains-mono/files/jetbrains-mono-latin-wght-normal.woff2'),
     path.join(out, 'fonts/jetbrains-mono.woff2'),
   );
-  // The Electron sidebar page, pointed at the shell's bundle.
-  const html = fs.readFileSync(path.join(renderer, 'index.html'), 'utf8').replace('src="app.js"', 'src="sidebar.js"');
-  fs.writeFileSync(path.join(out, 'sidebar.html'), html);
+  // The Electron sidebar page, pointed at the shell's bundle, once per surface.
+  const html = fs
+    .readFileSync(path.join(renderer, 'index.html'), 'utf8')
+    .replace('src="app.js"', 'src="sidebar.js"')
+    .replace('<link rel="stylesheet" href="onboarding.css" />', '$&\n    <link rel="stylesheet" href="shell.css" />');
+  for (const surface of ['panel', 'newtab']) {
+    const page = surface === 'panel' ? 'sidebar.html' : 'newtab.html';
+    fs.writeFileSync(path.join(out, page), html.replace('<html>', `<html data-surface="${surface}">`));
+  }
+  fs.copyFileSync(path.join(here, 'shell.css'), path.join(out, 'shell.css'));
   for (const f of ['settings.html', 'settings-shell.css']) fs.copyFileSync(path.join(here, f), path.join(out, f));
 }
 
