@@ -62,6 +62,11 @@
   --radius-md: 8px;
   --radius-lg: 12px;
   --radius-xl: 16px;
+  /* Corners nested in the window are concentric with it: its radius minus their inset.
+     macOS draws a borderless window with 20pt corners. */
+  --window-radius: 20px;
+  --page-radius: calc(var(--window-radius) - 8px); /* the page area, 8px in (main.ts GAP) */
+  --float-radius: calc(var(--window-radius) - 10px); /* the floating sidebar, 10px in */
   --shadow-row: 0 1px 2px rgba(11, 37, 69, 0.08), 0 0 0 0.5px rgba(11, 37, 69, 0.06);
   --shadow-pop: 0 18px 50px rgba(11, 37, 69, 0.22), 0 0 0 0.5px rgba(11, 37, 69, 0.14);
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
