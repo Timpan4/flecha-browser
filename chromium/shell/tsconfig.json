@@ -9,5 +9,5 @@
     "noEmit": true,
     "types": ["chrome"]
   },
-  "include": ["*.ts", "../../src/shared/*.d.ts"]
+  "include": ["*.ts", "features/*.ts", "../../src/shared/*.d.ts"]
 }

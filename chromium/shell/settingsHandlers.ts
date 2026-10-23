@@ -85,7 +85,7 @@ export function registerSettings(ctx: SettingsContext) {
         theme: () => {},
         // TODO(chromium): no agent bridge yet; the choice is kept for when there is one.
         agent: async () => {},
-        // TODO(chromium): ad blocking needs declarativeNetRequest rules from the filter lists; the choice is kept.
+        // features/adblock.ts follows state.adBlock itself, whoever sets it.
         adBlock: async () => {},
       });
       ctx.broadcastState();
@@ -99,8 +99,7 @@ export function registerSettings(ctx: SettingsContext) {
     'settings:choose-downloads-folder': () => ({ ...view(), ...notYet('Choosing the downloads folder') }),
     // TODO(chromium): needs native code to become the default browser.
     'settings:make-default-browser': () => ({ ...view(), ...notYet('Making Flecha the default browser') }),
-    // TODO(chromium): Boosts live in ~/.flecha/boosts, which an extension can't open in Finder.
-    'settings:open-boosts': () => notYet('Opening the Boosts folder'),
+    // 'settings:open-boosts' opens the Boosts page; features.ts handles it.
     // TODO(chromium): the welcome tour (src/renderer/onboarding.ts) isn't in the shell's sidebar yet.
     'settings:show-tour': () => notYet('The welcome tour'),
     // TODO(chromium): there's no extension API for the macOS emoji picker; ⌃⌘Space opens it.

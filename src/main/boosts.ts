@@ -3,10 +3,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { transform } from 'esbuild';
 import type { WebContents } from 'electron';
+import { boostMatches, boostName, parseBoostName as parse, type BoostKind } from './boostFiles';
 
-export type BoostKind = 'script' | 'styles';
-
-const EXTENSIONS: Record<BoostKind, string> = { script: '.ts', styles: '.css' };
+export type { BoostKind };
 
 const TEMPLATES: Record<BoostKind, (host: string) => string> = {
   script: (host) => `// Boost for ${host}: runs on every page of this site once it has loaded.
@@ -51,13 +50,7 @@ export class Boosts {
   }
 
   matches(url: string, host: string) {
-    if (host === 'all') return /^https?:/.test(url);
-    try {
-      const hostname = new URL(url).hostname;
-      return hostname === host || hostname.endsWith(`.${host}`);
-    } catch {
-      return false;
-    }
+    return boostMatches(url, host);
   }
 
   /** Applies every matching boost to a page that just finished building its DOM. */
@@ -88,7 +81,7 @@ export class Boosts {
 
   /** The boost file for a host, created from a template the first time. */
   fileFor(host: string, kind: BoostKind) {
-    const file = path.join(this.dir, host + EXTENSIONS[kind]);
+    const file = path.join(this.dir, boostName(host, kind));
     if (!fs.existsSync(file)) fs.writeFileSync(file, TEMPLATES[kind](host));
     return file;
   }
@@ -115,13 +108,6 @@ export class Boosts {
     this.compiled.set(file, { mtimeMs, code });
     return code;
   }
-}
-
-/** `github.com.ts` → { host: 'github.com', kind: 'script' }. */
-function parse(filename: string): { host: string; kind: BoostKind } | undefined {
-  const match = filename.match(/^(.+)\.(ts|css)$/);
-  if (!match || match[1].startsWith('.')) return undefined;
-  return { host: match[1], kind: match[2] === 'ts' ? 'script' : 'styles' };
 }
 
 /** Boost errors go to the page's own console, where the developer is already looking. */
