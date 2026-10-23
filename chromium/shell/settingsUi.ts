@@ -20,13 +20,22 @@ for (const type of ['pointerdown', 'contextmenu'] as const) {
 
 let closeOpenMenu: (() => void) | undefined;
 
-/** Shows the menu at the pointer; resolves with the item picked, or undefined if dismissed. */
+/**
+ * Shows the menu at the pointer; resolves with the item picked, or undefined if dismissed.
+ * It behaves like a macOS menu: one highlighted item, which the pointer and the arrow keys
+ * both move; submenus open beside their item, on hover or →.
+ */
 export function popupMenu<T>(items: MenuEntry<T>[]): Promise<Picked<T> | undefined> {
   closeOpenMenu?.();
   return new Promise((resolve) => {
     const layer = document.createElement('div');
     layer.className = 'shell-menu-layer';
+    /** The open menus, the root first; each remembers its highlighted row. */
+    const stack: Array<{ menu: HTMLElement; rows: HTMLButtonElement[]; active?: HTMLButtonElement }> = [];
+    let openTimer: number | undefined;
+
     const close = (picked?: Picked<T>) => {
+      clearTimeout(openTimer);
       layer.remove();
       window.removeEventListener('keydown', onKey, true);
       window.removeEventListener('blur', dismiss);
@@ -34,12 +43,113 @@ export function popupMenu<T>(items: MenuEntry<T>[]): Promise<Picked<T> | undefin
       resolve(picked);
     };
     const dismiss = () => close();
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      close();
+
+    /** Closes the submenus deeper than `level`. */
+    const closeBelow = (level: number) => {
+      while (stack.length > level + 1) stack.pop()!.menu.remove();
+      for (const row of stack[level].rows) row.classList.remove('open');
     };
+
+    const highlight = (level: number, row: HTMLButtonElement | undefined) => {
+      const entry = stack[level];
+      entry.active?.classList.remove('active');
+      entry.active = row;
+      row?.classList.add('active');
+      row?.scrollIntoView({ block: 'nearest' });
+    };
+
+    const openSubmenu = (level: number, row: HTMLButtonElement, entries: MenuEntry<T>[], focusFirst: boolean) => {
+      if (stack[level + 1]?.menu.dataset.parent === row.dataset.key) return;
+      closeBelow(level);
+      row.classList.add('open');
+      const sub = build(entries, level + 1);
+      sub.dataset.parent = row.dataset.key;
+      layer.append(sub);
+      // Beside its item, flipped to the other side when there's no room.
+      const at = row.getBoundingClientRect();
+      const { width, height } = sub.getBoundingClientRect();
+      const right = at.right + 2;
+      sub.style.left = `${right + width <= innerWidth - 4 ? right : Math.max(4, at.left - width - 2)}px`;
+      sub.style.top = `${Math.max(4, Math.min(at.top - 5, innerHeight - height - 4))}px`;
+      if (focusFirst) highlight(level + 1, stack[level + 1].rows[0]);
+    };
+
+    let keys = 0;
+    const build = (entries: MenuEntry<T>[], level: number): HTMLElement => {
+      const menu = document.createElement('div');
+      menu.className = 'shell-menu';
+      menu.setAttribute('role', 'menu');
+      const rows: HTMLButtonElement[] = [];
+      stack[level] = { menu, rows };
+      for (const item of entries) {
+        if ('separator' in item) {
+          menu.append(Object.assign(document.createElement('div'), { className: 'shell-menu-separator' }));
+          continue;
+        }
+        const row = Object.assign(document.createElement('button'), { className: 'shell-menu-item', textContent: item.label, tabIndex: -1 });
+        row.dataset.key = String(keys++);
+        row.setAttribute('role', 'menuitem');
+        menu.append(row);
+        if (item.enabled === false) {
+          row.disabled = true;
+          continue;
+        }
+        rows.push(row);
+        if ('checked' in item && item.checked !== undefined) {
+          row.setAttribute('role', 'menuitemcheckbox');
+          row.setAttribute('aria-checked', String(item.checked));
+          row.classList.add('checkable');
+        }
+        const submenu = 'submenu' in item ? item.submenu : undefined;
+        if (submenu) row.classList.add('has-submenu');
+        row.addEventListener('pointerenter', () => {
+          highlight(level, row);
+          clearTimeout(openTimer);
+          // A short pause, so passing over an item on the way to its neighbour opens nothing.
+          openTimer = window.setTimeout(() => (submenu ? openSubmenu(level, row, submenu, false) : closeBelow(level)), 120);
+        });
+        row.addEventListener('click', () => {
+          if (submenu) openSubmenu(level, row, submenu, false);
+          else close(item as Picked<T>);
+        });
+        row.addEventListener('mousedown', (e) => e.preventDefault());
+      }
+      return menu;
+    };
+
+    const onKey = (e: KeyboardEvent) => {
+      const level = stack.length - 1;
+      const { rows, active } = stack[level];
+      const i = active ? rows.indexOf(active) : -1;
+      const handled = () => {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+      };
+      if (e.key === 'Escape') {
+        handled();
+        if (level > 0) {
+          closeBelow(level - 1);
+        } else close();
+      } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        handled();
+        const step = e.key === 'ArrowDown' ? 1 : -1;
+        highlight(level, rows[(i + step + rows.length) % rows.length] ?? rows[0]);
+      } else if (e.key === 'ArrowRight' && active?.classList.contains('has-submenu')) {
+        handled();
+        active.click();
+        if (stack[level + 1]) highlight(level + 1, stack[level + 1].rows[0]);
+      } else if (e.key === 'ArrowLeft' && level > 0) {
+        handled();
+        closeBelow(level - 1);
+      } else if (e.key === 'Enter' || e.key === ' ') {
+        handled();
+        if (active?.classList.contains('has-submenu')) {
+          active.click();
+          if (stack[level + 1]) highlight(level + 1, stack[level + 1].rows[0]);
+        } else active?.click();
+      }
+    };
+
     layer.addEventListener('pointerdown', (e) => e.target === layer && close());
     layer.addEventListener('contextmenu', (e) => {
       e.preventDefault();
@@ -49,52 +159,17 @@ export function popupMenu<T>(items: MenuEntry<T>[]): Promise<Picked<T> | undefin
     window.addEventListener('blur', dismiss);
     closeOpenMenu = dismiss;
 
-    const build = (entries: MenuEntry<T>[]): HTMLElement => {
-      const menu = document.createElement('div');
-      menu.className = 'shell-menu';
-      menu.setAttribute('role', 'menu');
-      for (const item of entries) {
-        if ('separator' in item) {
-          menu.append(Object.assign(document.createElement('div'), { className: 'shell-menu-separator' }));
-          continue;
-        }
-        const row = Object.assign(document.createElement('button'), { className: 'shell-menu-item', textContent: item.label });
-        row.setAttribute('role', 'menuitem');
-        if (item.enabled === false) {
-          row.disabled = true;
-          menu.append(row);
-          continue;
-        }
-        if ('checked' in item && item.checked !== undefined) {
-          row.setAttribute('role', 'menuitemcheckbox');
-          row.setAttribute('aria-checked', String(item.checked));
-          row.classList.add('checkable');
-        }
-        if ('submenu' in item) {
-          row.classList.add('has-submenu');
-          const sub = build(item.submenu);
-          sub.classList.add('shell-submenu');
-          const wrap = document.createElement('div');
-          wrap.className = 'shell-menu-branch';
-          wrap.append(row, sub);
-          row.addEventListener('click', () => wrap.classList.toggle('open'));
-          menu.append(wrap);
-        } else {
-          row.addEventListener('click', () => close(item));
-          menu.append(row);
-        }
-      }
-      return menu;
-    };
-
-    const menu = build(items);
+    const menu = build(items, 0);
     layer.append(menu);
     document.body.append(layer);
     // Keep the menu on screen.
     const { width, height } = menu.getBoundingClientRect();
     menu.style.left = `${Math.max(4, Math.min(pointer.x, innerWidth - width - 4))}px`;
     menu.style.top = `${Math.max(4, Math.min(pointer.y, innerHeight - height - 4))}px`;
-    menu.querySelector<HTMLButtonElement>('.shell-menu-item:not(:disabled)')?.focus();
+    // Like a native menu, nothing is highlighted until the pointer or a key says so; the
+    // layer takes focus so the arrow keys reach it.
+    layer.tabIndex = -1;
+    layer.focus();
   });
 }
 
