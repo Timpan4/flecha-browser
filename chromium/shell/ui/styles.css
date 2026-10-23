@@ -1623,6 +1623,21 @@ body[data-sidebar='floating'] #sidebar {
   }
 }
 
+/* ---- fullscreen (the browser says so, patch 0039) -------------------------------------
+   No traffic lights in the sidebar's top row, so the toggle moves to the left; the floating
+   sidebar is a card on the screen's edge, full height, as in Arc. */
+
+@media (display-mode: fullscreen) {
+  .traffic-lights {
+    display: none;
+  }
+
+  body[data-sidebar='floating'] #sidebar {
+    inset: 0 auto 0 0;
+    border-radius: 0 var(--float-radius) var(--float-radius) 0;
+  }
+}
+
 /* ---- split pairs in the sidebar ----------------------------------------- */
 
 .split-row {
