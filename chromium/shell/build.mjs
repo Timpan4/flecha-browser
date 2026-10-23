@@ -26,15 +26,24 @@ function copyStatic() {
     .replace('<link rel="stylesheet" href="onboarding.css" />', '$&\n    <link rel="stylesheet" href="shell.css" />');
   const pages = { window: 'window.html', panel: 'sidebar.html', newtab: 'newtab.html' };
   for (const [surface, page] of Object.entries(pages)) {
-    fs.writeFileSync(path.join(out, page), html.replace('<html>', `<html data-surface="${surface}">`));
+    let pageHtml = html.replace('<html>', `<html data-surface="${surface}">`);
+    if (surface === 'window') pageHtml = pageHtml.replace('<title>', '<script src="kind.js"></script>\n    <title>');
+    fs.writeFileSync(path.join(out, page), pageHtml);
   }
   fs.copyFileSync(path.join(here, 'shell.css'), path.join(out, 'shell.css'));
+  // A Flechinha's frame page is window.html?kind=flechinha; this sends it on to the
+  // Flechinha toolbar before the sidebar's code runs.
+  fs.writeFileSync(
+    path.join(out, 'kind.js'),
+    "if (new URLSearchParams(location.search).get('kind') === 'flechinha') location.replace('flechinha.html' + location.search);\n",
+  );
+  fs.writeFileSync(path.join(out, 'flechinha.html'), fs.readFileSync(path.join(renderer, 'flechinha.html'), 'utf8'));
   for (const f of ['settings.html', 'settings-shell.css']) fs.copyFileSync(path.join(here, f), path.join(out, f));
   copyFeatureStatic(out);
 }
 
 const options = {
-  entryPoints: { background: path.join(here, 'background.ts'), sidebar: path.join(here, 'sidebar.ts'), settings: path.join(here, 'settings.ts'), ...featureEntries },
+  entryPoints: { background: path.join(here, 'background.ts'), sidebar: path.join(here, 'sidebar.ts'), settings: path.join(here, 'settings.ts'), flechinha: path.join(here, 'flechinha.ts'), ...featureEntries },
   bundle: true,
   format: 'esm',
   target: 'chrome140',
