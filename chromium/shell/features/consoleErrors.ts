@@ -3,7 +3,10 @@
  * Electron. The content scripts (consoleHook.ts, consoleBridge.ts) count them, so no tab needs
  * the DevTools protocol attached just to have a badge.
  */
-const SESSION_KEY = 'consoleErrors';
+import { sessionKey } from '../incognito';
+
+// Each copy of the shell (regular, incognito) keeps its own.
+const SESSION_KEY = sessionKey('consoleErrors');
 
 /** By Chromium tab id; kept in session storage so a background that slept still knows. */
 const counts = new Map<number, number>();

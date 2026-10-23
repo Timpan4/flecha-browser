@@ -65,8 +65,8 @@ export function registerSettings(ctx: SettingsContext) {
     },
     // TODO(chromium): site icons come from chrome://favicon2 / _favicon, not a favicon:// cache; tabs use their own favicon URL for now.
     faviconHosts: () => [],
-    // Chromium's profile has one cookie jar; a Space with separate cookies and logins isn't wired yet.
-    // TODO(chromium): give isolated Spaces their own storage partition, then key this on it.
+    // A Space with separate cookies and logins has its own storage partition, named after it
+    // (background.ts partitionFor, patch 0034): tabs moving across it reopen in the other one.
     sessionOf: (space) => (space?.isolated ? space.id : 'default'),
     ask,
     push: (view) => broadcast('settings:tabs', view),

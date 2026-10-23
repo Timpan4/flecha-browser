@@ -109,6 +109,47 @@ declare namespace chrome.flechaPrivate {
   function getFlechinhas(): Promise<number[]>;
 
   /**
+   * Incognito windows (patch 0032). The shell runs in split incognito mode: incognito windows
+   * get their frame page from a second copy of the shell, in the incognito profile, and every
+   * call above made by that copy is about incognito windows and tabs only (and the regular
+   * copy's never reach them). Events go to the copy of the window they're about. The
+   * shortcut map (setShortcuts), setTheme, setPeekTabs and setOpenLinksInFlechinha are the
+   * browser's, one for every window: the regular copy sets them.
+   *
+   * runInRegularProfile(command) is for the incognito copy: the regular copy gets `command`
+   * as onShortcut(command, -1). Settings keep one state, the regular profile's, so incognito
+   * windows open them this way ("settings", or "openSettings:<pane>").
+   */
+  function runInRegularProfile(command: string): Promise<void>;
+
+  /**
+   * Spaces with separate cookies and logins (patch 0034), like the spike's
+   * persist:space-<id> session partitions. A tab of such a Space lives in a storage partition
+   * of its own, named by the shell (the Space's id): cookies, localStorage, IndexedDB, service
+   * workers and cache, kept on disk across restarts (in memory in incognito). A tab's
+   * partition is fixed for its life, across every navigation; tabs and Peeks its pages open
+   * inherit it. To move a tab to another partition, close it and create it again.
+   *
+   * createTab(options) is tabs.create() with a `partition` ("" or none: the profile's own
+   * storage); it resolves with the new tab's id (tabs.onCreated fires first).
+   * getTabPartition(tabId) says which partition a tab is in ("" for the profile's own).
+   * clearPartition(partition) removes everything in a Space's partition (the spike's "Clear
+   * Cookies and Site Data…"); its pages keep running, so reload them.
+   */
+  interface CreateTabOptions {
+    /** Default: Flecha's main window. */
+    windowId?: number;
+    /** Default: the new tab page. */
+    url?: string;
+    /** Default: true. */
+    active?: boolean;
+    partition?: string;
+  }
+  function createTab(options: CreateTabOptions): Promise<number>;
+  function getTabPartition(tabId: number): Promise<string>;
+  function clearPartition(partition: string): Promise<void>;
+
+  /**
    * Peek (patch 0026), like the spike's openPeek(): a page in a floating card over the page
    * area, at peekBounds() = page area inset round(8% of its width) on each side, 48 from its
    * top (room for the frame page's Peek toolbar) and 24 from its bottom; 12px corners.
@@ -160,6 +201,9 @@ declare namespace chrome.flechaPrivate {
   /** Asks macOS to make Flecha the default browser (macOS confirms), then reports the result. */
   function makeDefaultBrowser(): Promise<DefaultBrowserState>;
 
-  /** A shortcut from setShortcuts() was pressed in window `windowId`. */
+  /**
+   * A shortcut from setShortcuts() was pressed in window `windowId` (-1: a command from
+   * runInRegularProfile, no window in particular).
+   */
   const onShortcut: chrome.events.Event<(command: string, windowId: number) => void>;
 }

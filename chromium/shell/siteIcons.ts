@@ -6,6 +6,7 @@
  */
 
 import { declaredIcons } from '../../src/main/declaredIcons';
+import { incognito } from './incognito';
 
 const STORAGE_KEY = 'siteIcons';
 const RETRY_MISSES_AFTER = 7 * 24 * 60 * 60 * 1000;
@@ -64,6 +65,8 @@ export class SiteIcons {
 
   private scheduleSave() {
     clearTimeout(this.saveTimer);
+    // An incognito window leaves no trace of the sites it visited.
+    if (incognito) return;
     this.saveTimer = setTimeout(() => void chrome.storage.local.set({ [STORAGE_KEY]: this.entries }), 1000);
   }
 }

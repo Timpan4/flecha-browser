@@ -18,4 +18,6 @@ export type MenuRun =
   /** The sidebar's inline rename of a tab row. */
   | { rename: string }
   /** Asks first, in the page, then deletes the Space. */
-  | { deleteSpace: string };
+  | { deleteSpace: string }
+  /** Asks first, in the page, then signs out of everything in the Space (separate cookies). */
+  | { clearSpaceData: string };

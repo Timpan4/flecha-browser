@@ -8,6 +8,7 @@
 import type { Store } from '../../src/main/store';
 import { SHORTCUTS, keysFor } from '../../src/main/shortcuts';
 import { broadcast, handle } from './hub';
+import { incognito } from './incognito';
 
 export interface NativeContext {
   store: Store;
@@ -113,7 +114,8 @@ function registerPeek(ctx: NativeContext) {
     promotePeek: () => void chrome.flechaPrivate.promotePeek(),
   });
 
-  if (!ctx.chromeTabId) return;
+  // The browser keeps one list for every window; an incognito window has no pinned tabs.
+  if (!ctx.chromeTabId || incognito) return;
   let sent = '';
   const apply = () => {
     const { state } = ctx.store;
@@ -175,8 +177,11 @@ function registerFlechinha(ctx: NativeContext) {
     linksSent = enabled;
     void chrome.flechaPrivate.setOpenLinksInFlechinha(enabled);
   };
-  applyLinks();
-  ctx.store.onChange(applyLinks);
+  // The regular shell's choice; links from other apps never go to an incognito window.
+  if (!incognito) {
+    applyLinks();
+    ctx.store.onChange(applyLinks);
+  }
   void chrome.flechaPrivate.getFlechinhas().then((ids) => ids.forEach((id) => flechinhas.add(id)));
   chrome.windows.onRemoved.addListener((id) => flechinhas.delete(id));
 
@@ -238,7 +243,8 @@ function registerSplitRatio(ctx: NativeContext) {
 
 /** Settings' Appearance: Chromium's UI and pages' prefers-color-scheme follow state.theme. */
 function registerTheme(ctx: NativeContext) {
-  if (!has('setTheme')) return;
+  // The theme is the regular profile's; incognito windows are always dark (patch 0032).
+  if (!has('setTheme') || incognito) return;
   let sent: string | undefined;
   const apply = () => {
     const theme = ctx.store.state.theme ?? 'system';
@@ -274,6 +280,8 @@ function registerShortcuts(ctx: NativeContext) {
   // While Settings records a shortcut the keys go to its page, not to Flecha's commands.
   let recording = false;
   const apply = () => {
+    // The browser keeps one map for every window; the regular shell sets it.
+    if (incognito) return;
     const map = recording ? {} : shortcutMap(ctx.store.state);
     const json = JSON.stringify(map);
     if (json === sent) return;
