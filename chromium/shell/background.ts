@@ -194,17 +194,81 @@ async function start() {
 
   async function openChromeTab(id: string, active: boolean) {
     const tab = store.state.tabs[id];
+    const partition = partitionFor(id);
     creating++;
     try {
-      const created = await chrome.tabs.create({ windowId: await mainWindow(), url: tab.url === 'about:blank' ? undefined : tab.url, active });
-      live.set(id, created.id!);
-      if (tab.muted) void chrome.tabs.update(created.id!, { muted: true });
+      const options = { windowId: await mainWindow(), url: tab.url === 'about:blank' ? undefined : tab.url, active };
+      // A Space with separate cookies and logins: its own storage partition (patch 0034).
+      const chromeId = partition
+        ? await chrome.flechaPrivate.createTab({ ...options, partition })
+        : (await chrome.tabs.create(options)).id!;
+      live.set(id, chromeId);
+      livePartition.set(id, partition);
+      if (tab.muted) void chrome.tabs.update(chromeId, { muted: true });
       rememberLive();
-      return created.id!;
+      return chromeId;
     } finally {
       creating--;
     }
   }
+
+  // ---- Spaces with separate cookies and logins, as the spike's sessions.ts ----------
+  // Their tabs live in a storage partition of their own, named after the Space (patch 0034);
+  // favorites and the other Spaces share the profile's. A Chromium tab can't change partition,
+  // so a tab whose Space changes partition (it moved, or its Space was isolated or joined the
+  // rest again) is closed and reopens in the right one, as the spike destroys its view.
+
+  const canIsolate = typeof chrome.flechaPrivate?.createTab === 'function';
+  /** The partition a Flecha tab belongs in: its Space's id if that Space is isolated, else "". */
+  function partitionFor(id: string) {
+    const space = store.locate(id)?.space;
+    return canIsolate && space?.isolated ? space.id : '';
+  }
+  /** The partition each open Chromium tab is in, by Flecha tab, once known. */
+  const livePartition = new Map<string, string>();
+  async function learnPartition(id: string, chromeId: number) {
+    if (!canIsolate) return livePartition.set(id, '');
+    const partition = await chrome.flechaPrivate.getTabPartition(chromeId).catch(() => undefined);
+    if (partition !== undefined && live.get(id) === chromeId) livePartition.set(id, partition);
+  }
+  /** Open tabs in another partition than their Space's. */
+  const inWrongPartition = () =>
+    [...live.keys()].filter((id) => store.state.tabs[id] && livePartition.has(id) && livePartition.get(id) !== partitionFor(id));
+  /**
+   * A tab a page opened is in that page's partition, which may not be its Space's (a favorite's
+   * link, with an isolated Space showing): it then reopens there, at the address it was going to.
+   */
+  async function checkOpenedTab(id: string, chromeId: number) {
+    await learnPartition(id, chromeId);
+    if (!inWrongPartition().includes(id)) return;
+    const tab = await chrome.tabs.get(chromeId).catch(() => undefined);
+    const address = tab && url(tab);
+    if (address && !isStartPage(tab) && store.state.tabs[id]?.url === 'about:blank') store.updateTab(id, { url: address, title: address });
+    sync();
+  }
+  /**
+   * Closes these tabs' Chromium tabs, which are in the wrong partition. Those on screen get
+   * their new one first: closing the active tab first would have Chromium activate another,
+   * which Flecha would take as you picking it.
+   */
+  async function reopenInPartition(ids: string[]) {
+    const shown = new Set(store.visibleTabIds());
+    const old: number[] = [];
+    for (const id of ids) {
+      const chromeId = live.get(id);
+      if (chromeId === undefined || !shown.has(id)) continue;
+      live.delete(id);
+      await openChromeTab(id, id === store.activeTab?.id);
+      old.push(chromeId);
+    }
+    for (const chromeId of old) {
+      ours.add(chromeId);
+      void chrome.tabs.remove(chromeId).catch(() => ours.delete(chromeId));
+    }
+    await unload(ids.filter((id) => !shown.has(id)));
+  }
+  // The tabs that were open before the background (re)started.
+  const partitionsKnown = Promise.all([...live].map(([id, chromeId]) => learnPartition(id, chromeId)));
 
   /**
    * Closes the Chromium tabs of Flecha tabs that were closed or unloaded. Chromium closes a
@@ -213,7 +277,10 @@ async function start() {
    */
   async function unload(ids: string[]) {
     const closing = ids.map((id) => live.get(id)).filter((c): c is number => c !== undefined);
-    for (const id of ids) live.delete(id);
+    for (const id of ids) {
+      live.delete(id);
+      livePartition.delete(id);
+    }
     rememberLive();
     if (!closing.length) return;
     const left = (await chrome.tabs.query({ windowId: await mainWindow() })).filter((t) => !closing.includes(t.id!));
@@ -244,7 +311,10 @@ async function start() {
   function sync() {
     syncing = syncing
       .then(async () => {
+        await partitionsKnown;
         await unload([...live.keys()].filter((id) => !store.state.tabs[id]));
+        // Pages reopen in their Space's partition (separate cookies and logins).
+        await reopenInPartition(inWrongPartition());
         const active = store.activeTab;
         if (!active) return;
         // Both halves of a split are on screen, so both need a page.
@@ -379,6 +449,8 @@ async function start() {
     const added = addTab(url(tab), { activate: tab.active, afterTabId: opener });
     live.set(added.id, tab.id!);
     rememberLive();
+    // Opened from a page, it is in that page's partition, which may not be its Space's.
+    void checkOpenedTab(added.id, tab.id!);
   }
 
   function onUpdated(chromeId: number, info: chrome.tabs.OnUpdatedInfo, tab: chrome.tabs.Tab) {
@@ -412,6 +484,7 @@ async function start() {
     const id = flechaIdFor(chromeId);
     if (!id) return;
     live.delete(id);
+    livePartition.delete(id);
     rememberLive();
     store.closeTab(id);
   }
@@ -491,6 +564,7 @@ async function start() {
       { label: 'New Folder', run: does('newFolder') },
       SEPARATOR,
       { label: 'Separate Cookies and Logins', checked: !!space.isolated, run: does('setSpaceIsolated', spaceId, !space.isolated) },
+      ...(space.isolated && canIsolate ? [{ label: 'Clear Cookies and Site Data…', run: { clearSpaceData: spaceId } }] : []),
       SEPARATOR,
       { label: 'Delete Space…', enabled: store.state.spaces.length > 1, run: { deleteSpace: spaceId } },
     ];
@@ -565,8 +639,21 @@ async function start() {
     },
     closeTabs: (id: string, which: string) => void unload(store.closeTodayTabs(id, which === 'others' ? 'others' : 'below')),
     updateSpace: (id: string, patch: { name?: string; emoji?: string; color?: string }) => store.updateSpace(id, patch ?? {}),
-    // Spaces with their own cookies need a separate Chromium profile; not in this build yet.
-    setSpaceIsolated: () => broadcast('flash', 'Separate cookies aren’t in this build yet'),
+    // Its open tabs reopen in the other partition (sync() finds them in the wrong one).
+    setSpaceIsolated: spacesOnly((id: string, isolated: boolean) => {
+      if (!canIsolate) return broadcast('flash', 'Separate cookies aren’t in this build yet');
+      store.setIsolated(String(id), !!isolated);
+    }),
+    // The spike's clearSpaceData(): signs out of everything in the Space, then reloads its pages.
+    clearSpaceData: spacesOnly(async (id: string) => {
+      const space = store.state.spaces.find((s) => s.id === id);
+      if (!space?.isolated || !canIsolate) return;
+      await chrome.flechaPrivate.clearPartition(space.id);
+      for (const tabId of store.allTabIds(space)) {
+        const chromeId = live.get(tabId);
+        if (chromeId !== undefined && livePartition.get(tabId) === space.id) void chrome.tabs.reload(chromeId);
+      }
+    }),
     deleteSpace: spacesOnly((id: string) => {
       if (store.state.spaces.length > 1) void unload(store.deleteSpace(id));
     }),
@@ -810,6 +897,7 @@ async function start() {
     // Into a Flechinha: the page leaves its Space without closing.
     releaseTab: (id) => {
       live.delete(id);
+      livePartition.delete(id);
       rememberLive();
       store.closeTab(id);
     },
@@ -817,8 +905,10 @@ async function start() {
     adoptTab: (chromeId) => {
       void chrome.tabs.get(chromeId).then((tab) => {
         if (flechaIdFor(chromeId)) return;
-        live.set(addTab(url(tab), { activate: true }).id, chromeId);
+        const id = addTab(url(tab), { activate: true }).id;
+        live.set(id, chromeId);
         rememberLive();
+        void checkOpenedTab(id, chromeId);
       });
     },
   });

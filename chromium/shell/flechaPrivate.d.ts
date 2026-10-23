@@ -123,6 +123,33 @@ declare namespace chrome.flechaPrivate {
   function runInRegularProfile(command: string): Promise<void>;
 
   /**
+   * Spaces with separate cookies and logins (patch 0034), like the spike's
+   * persist:space-<id> session partitions. A tab of such a Space lives in a storage partition
+   * of its own, named by the shell (the Space's id): cookies, localStorage, IndexedDB, service
+   * workers and cache, kept on disk across restarts (in memory in incognito). A tab's
+   * partition is fixed for its life, across every navigation; tabs and Peeks its pages open
+   * inherit it. To move a tab to another partition, close it and create it again.
+   *
+   * createTab(options) is tabs.create() with a `partition` ("" or none: the profile's own
+   * storage); it resolves with the new tab's id (tabs.onCreated fires first).
+   * getTabPartition(tabId) says which partition a tab is in ("" for the profile's own).
+   * clearPartition(partition) removes everything in a Space's partition (the spike's "Clear
+   * Cookies and Site Data…"); its pages keep running, so reload them.
+   */
+  interface CreateTabOptions {
+    /** Default: Flecha's main window. */
+    windowId?: number;
+    /** Default: the new tab page. */
+    url?: string;
+    /** Default: true. */
+    active?: boolean;
+    partition?: string;
+  }
+  function createTab(options: CreateTabOptions): Promise<number>;
+  function getTabPartition(tabId: number): Promise<string>;
+  function clearPartition(partition: string): Promise<void>;
+
+  /**
    * Peek (patch 0026), like the spike's openPeek(): a page in a floating card over the page
    * area, at peekBounds() = page area inset round(8% of its width) on each side, 48 from its
    * top (room for the frame page's Peek toolbar) and 24 from its bottom; 12px corners.
