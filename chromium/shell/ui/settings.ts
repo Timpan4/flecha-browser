@@ -392,7 +392,7 @@ function render(view: SettingsView) {
     ? 'Flecha is your default browser.'
     : canSet
       ? 'Links from other apps open in your current default browser.'
-      : 'Available in the packaged Flecha app, not when running from npm start.';
+      : 'Not available in this build of Flecha.';
 }
 
 makeDefault.addEventListener('click', async () => render(await api.makeDefaultBrowser()));
