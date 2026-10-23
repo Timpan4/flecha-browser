@@ -52,6 +52,28 @@ declare namespace chrome.flechaPrivate {
    */
   function setShortcuts(shortcuts: Record<string, string>): Promise<string[]>;
 
+  /**
+   * The browser's colour scheme (patch 0018), like Electron's nativeTheme.themeSource:
+   * Chromium's own UI (menus, dialogs, find bar, traffic lights) and every page's
+   * prefers-color-scheme follow it, the frame page's included. 'system' follows macOS. Kept in
+   * the profile (Chromium's Settings > Appearance > Mode).
+   */
+  function setTheme(theme: 'system' | 'light' | 'dark'): Promise<void>;
+
+  /**
+   * Split views (patch 0019). In Flecha windows Chromium's split has none of its own chrome:
+   * the panes sit straight in the page area, 8px apart (the spike's GAP, which is also the
+   * drag handle), each with 10px round corners; no inset, padding, outline or mini toolbar.
+   * The left pane is round((width − 8) × ratio) wide, as in Electron's layout().
+   *
+   * setSplitRatio sets the left pane's share (clamped to 0.1–0.9); `tabId` is either tab of
+   * the split. Rejects while the tab isn't in a split yet.
+   */
+  function setSplitRatio(tabId: number, ratio: number): Promise<void>;
+
+  /** The user finished dragging the gap: `tabId` is the left pane's tab. */
+  const onSplitRatioChanged: chrome.events.Event<(tabId: number, ratio: number) => void>;
+
   /** A shortcut from setShortcuts() was pressed in window `windowId`. */
   const onShortcut: chrome.events.Event<(command: string, windowId: number) => void>;
 }

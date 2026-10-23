@@ -17,6 +17,10 @@ export interface NativeContext {
    * `selectSpace:1`…`selectSpace:9` (⌃1…⌃9). `windowId` is the window the key was pressed in.
    */
   run(command: string, windowId?: number): void;
+  /** The Chromium tab of an open Flecha tab (background.ts's `live` map). */
+  chromeTabId?(flechaId: string): number | undefined;
+  /** The Flecha tab of a Chromium tab. */
+  flechaTabId?(chromeId: number): string | undefined;
 }
 
 const api = () => (chrome as { flechaPrivate?: typeof chrome.flechaPrivate }).flechaPrivate;
@@ -35,7 +39,61 @@ if (has('setShortcuts')) chrome.flechaPrivate.onShortcut.addListener(when((ctx, 
 
 export function registerNative(ctx: NativeContext) {
   registerShortcuts(ctx);
+  registerTheme(ctx);
+  registerSplitRatio(ctx);
   resolveCtx(ctx);
+}
+
+// ---- split ratio (patch 0019) ------------------------------------------------------------
+
+if (has('setSplitRatio')) {
+  // Dragging the gap between the panes: the Store keeps the ratio (store.setSplitRatio clamps it).
+  chrome.flechaPrivate.onSplitRatioChanged.addListener(
+    when((ctx, tabId: number, ratio: number) => {
+      const split = ctx.store.activeSpace.split;
+      if (split && ctx.flechaTabId?.(tabId) === split[0]) ctx.store.setSplitRatio(ratio);
+    }),
+  );
+}
+
+/** The active Space's splitRatio on Chromium's split (patch 0019 also draws it flat, 8px apart). */
+function registerSplitRatio(ctx: NativeContext) {
+  if (!has('setSplitRatio') || !ctx.chromeTabId) return;
+  let sent = '';
+  const apply = () => {
+    const space = ctx.store.activeSpace;
+    const left = space.split && ctx.chromeTabId!(space.split[0]);
+    if (left === undefined || !space.split) return;
+    const ratio = space.splitRatio ?? 0.5;
+    const key = `${left}:${ratio}`;
+    if (key === sent) return;
+    // Fails until Chromium has made the split; tabs.onUpdated (splitViewId) tries again.
+    void chrome.flechaPrivate.setSplitRatio(left, ratio).then(
+      () => (sent = key),
+      () => undefined,
+    );
+  };
+  apply();
+  ctx.store.onChange(apply);
+  chrome.tabs.onUpdated.addListener((_id, info) => {
+    if ('splitViewId' in info) apply();
+  });
+}
+
+// ---- theme (patch 0018) ------------------------------------------------------------------
+
+/** Settings' Appearance: Chromium's UI and pages' prefers-color-scheme follow state.theme. */
+function registerTheme(ctx: NativeContext) {
+  if (!has('setTheme')) return;
+  let sent: string | undefined;
+  const apply = () => {
+    const theme = ctx.store.state.theme ?? 'system';
+    if (theme === sent) return;
+    sent = theme;
+    void chrome.flechaPrivate.setTheme(theme);
+  };
+  apply();
+  ctx.store.onChange(apply);
 }
 
 // ---- keyboard shortcuts (patch 0016) ----------------------------------------------------
