@@ -32,7 +32,7 @@ Flecha started as an Electron app; that version is gone from the repo (it's in t
 - Find in page with ⌘F, ⌘G and ⇧⌘G
 - On launch, the window returns to its last position and each tab keeps its back/forward history and scroll position
 - Settings (⌘,): search engine (Google, DuckDuckGo, Bing, Brave, Kagi, Ecosia), downloads folder and "ask where to save", ad blocking, default browser
-- Links from other apps open in a new tab, and launching Flecha again reuses the open window. Making Flecha the default browser only works in a packaged Flecha.app; from `npm start` the button is disabled because macOS would register the generic Electron binary
+- Links from other apps open in a new tab, and launching Flecha again reuses the open window
 
 ### For developers
 
@@ -46,7 +46,7 @@ Flecha started as an Electron app; that version is gone from the repo (it's in t
 - **Command bar shortcuts:** `gh 123`, `gh owner/repo`, `npm react`, `mdn grid`, `caniuse :has`, `so …`, `env`; paste a JWT or a Unix timestamp to decode it
 
 - Chrome extensions: install from the Chrome Web Store (Extensions → Chrome Web Store, then "Add to Chrome"); their buttons appear under the address bar. Manage or remove them from the Extensions menu
-- Built-in ad and tracker blocking (EasyList, EasyPrivacy, uBlock lists), toggled in Settings
+- Built-in ad and tracker blocking (EasyList, EasyPrivacy), toggled in Settings
 
 ### Extension caveats
 
