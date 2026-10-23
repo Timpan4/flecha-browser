@@ -192,3 +192,24 @@
 [data-surface] .shell-dialog .button.danger {
   color: var(--red);
 }
+
+/* ---- incognito windows (incognito.ts) -----------------------------------------
+   One Space of tabs that goes with the window: no favorites, pinned tabs or Space
+   switcher, nothing to archive, and no "where you've been" on the new tab page.
+   The browser draws these pages dark (patch 0032). */
+
+[data-incognito] #favorites,
+[data-incognito] #pinned,
+[data-incognito] .today-header,
+[data-incognito] #spaces,
+[data-incognito] #btn-newspace,
+[data-incognito] #space-isolated,
+[data-incognito] #empty-top,
+[data-incognito] .empty-hints span:nth-child(2) {
+  display: none !important;
+}
+
+/* The Space's name says where you are; it isn't yours to rename. */
+[data-incognito] #space-header {
+  pointer-events: none;
+}

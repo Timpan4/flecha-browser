@@ -6,12 +6,15 @@ import type { FlechaApi, PaletteMode, UiState } from '../../src/shared/types';
 import { spaceTint } from '../../src/main/spaceTint';
 import { cmd, invoke, on } from './client';
 import { confirmDeleteSpace, copy, setupWindowUi, showMenu } from './windowUi';
+import { incognito } from './incognito';
 
 const surface = document.documentElement.dataset.surface;
 const systemDark = matchMedia('(prefers-color-scheme: dark)');
 /** Flecha's own browser draws the window frame from window.html; stock Chromium has the side panel. */
 const framed = typeof chrome.flechaPrivate?.setFrame === 'function';
 if (framed) document.documentElement.dataset.frame = '';
+// An incognito window's pages: one Space of tabs, always dark (shell.css, incognito.ts).
+if (incognito) document.documentElement.dataset.incognito = '';
 
 /**
  * The background sends the Space's light colour; dark mode darkens it here. Pages follow
