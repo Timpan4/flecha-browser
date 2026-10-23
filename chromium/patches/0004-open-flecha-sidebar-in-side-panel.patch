@@ -1,0 +1,68 @@
+--- a/chrome/browser/ui/extensions/extension_side_panel_manager.cc
++++ b/chrome/browser/ui/extensions/extension_side_panel_manager.cc
+@@ -6,9 +6,16 @@
+ 
+ #include <memory>
+ 
++#include "base/functional/bind.h"
++#include "base/memory/weak_ptr.h"
++#include "base/task/sequenced_task_runner.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/extensions/extension_side_panel_coordinator.h"
++#include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
++#include "chrome/browser/ui/side_panel/side_panel_entry_key.h"
++#include "chrome/browser/ui/side_panel/side_panel_registry.h"
++#include "chrome/browser/ui/side_panel/side_panel_ui.h"
+ #include "content/public/browser/browser_context.h"
+ #include "extensions/browser/extension_registry.h"
+ #include "extensions/browser/extension_util.h"
+@@ -18,6 +25,15 @@
+ 
+ namespace extensions {
+ 
++namespace {
++
++// Flecha's shell extension (chromium/shell in the Flecha repo). Its ID is
++// fixed by the "key" in chromium/shell/manifest.json, so it stays the same
++// wherever the unpacked extension is loaded from. Change both together.
++constexpr char kFlechaShellExtensionId[] = "abdiaepfgbbhdjaecjipmaailijaaide";
++
++}  // namespace
++
+ DEFINE_USER_DATA(ExtensionSidePanelManager);
+ 
+ ExtensionSidePanelManager::ExtensionSidePanelManager(
+@@ -105,6 +121,32 @@
+       extension->id(),
+       std::make_unique<ExtensionSidePanelCoordinator>(
+           profile_, browser_, tab_interface_, extension, registry_, for_tab_));
++
++  // Flecha: open Flecha's sidebar in every normal window as soon as both the
++  // window and the extension are there (whichever comes last). Posted so the
++  // window has finished being built.
++  if (!for_tab_ && extension->id() == kFlechaShellExtensionId &&
++      browser_->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL) {
++    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++        FROM_HERE,
++        base::BindOnce(
++            [](base::WeakPtr<BrowserWindowInterface> browser,
++               ExtensionId extension_id) {
++              if (!browser) {
++                return;
++              }
++              auto* manager = ExtensionSidePanelManager::From(browser.get());
++              SidePanelUI* side_panel_ui = SidePanelUI::From(browser.get());
++              const SidePanelEntryKey key(SidePanelEntryId::kExtension,
++                                          extension_id);
++              if (!manager || !side_panel_ui ||
++                  !manager->registry_->GetEntryForKey(key)) {
++                return;
++              }
++              side_panel_ui->Show(key);
++            },
++            browser_->GetWeakPtr(), extension->id()));
++  }
+ }
+ 
+ }  // namespace extensions
