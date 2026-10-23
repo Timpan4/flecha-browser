@@ -12,8 +12,9 @@
 # earlier releases: generate_appcast lists every archive in it in the feed, and makes delta
 # updates from the older ones. Release notes go next to a dmg, with its name and .html or
 # .md (Flecha-0.2.0.md). The dmgs are published at $FLECHA_DOWNLOAD_URL_PREFIX
-# (https://flecha.dev/releases/ by default), and the feed at https://flecha.dev/appcast.xml.
-# Nothing is uploaded: publishing the folder is up to you.
+# (https://dl.flecha.dev/ by default, the flecha-releases R2 bucket), and the feed at
+# https://flecha.dev/appcast.xml, which the site rewrites to dl.flecha.dev. Nothing is
+# uploaded here: publish-release.sh does that.
 set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
 . "$here/scripts/env.sh"
@@ -29,7 +30,7 @@ if [ ! -f "$dmg" ]; then
 fi
 release="${FLECHA_RELEASE_DIR:-$release_out/flecha-release}"
 folder="${2:-$release/appcast}"
-prefix="${FLECHA_DOWNLOAD_URL_PREFIX:-https://flecha.dev/releases/}"
+prefix="${FLECHA_DOWNLOAD_URL_PREFIX:-https://dl.flecha.dev/}"
 sparkle="$("$here/scripts/fetch-sparkle.sh")"
 
 # Sparkle installs what it downloads only if Gatekeeper would open it: a Developer ID
@@ -57,6 +58,6 @@ fi
 echo "== $(basename "$dmg"): $("$sparkle/bin/sign_update" "$folder/$(basename "$dmg")")"
 cat <<EOF
 
-Made $feed. To publish, upload the folder's dmgs to $prefix and $release_feed to
-https://flecha.dev/$release_feed.
+Made $feed. To publish it and the dmg to $prefix:
+  chromium/scripts/publish-release.sh $dmg
 EOF
