@@ -2,11 +2,27 @@
  * window.flecha for the Chromium build: the same API the Electron preload gives the sidebar,
  * over the shell's port. Imported before the sidebar code so it is there when that runs.
  */
-import type { FlechaApi } from '../../src/shared/types';
+import type { FlechaApi, UiState } from '../../src/shared/types';
+import { spaceTint } from '../../src/main/spaceTint';
 import { cmd, invoke, on } from './client';
 
+const surface = document.documentElement.dataset.surface;
+const systemDark = matchMedia('(prefers-color-scheme: dark)');
+
+/** The background sends the Space's light colour; dark mode darkens it here. */
+const stateListeners: Array<(state: UiState) => void> = [];
+let lastState: UiState | undefined;
+function emitState(state: UiState) {
+  lastState = state;
+  const dark = state.theme === 'dark' || (state.theme !== 'light' && systemDark.matches);
+  const shown = { ...state, tint: spaceTint(state.tint, dark) };
+  for (const cb of stateListeners) cb(shown);
+}
+on('state', emitState);
+systemDark.addEventListener('change', () => lastState && emitState(lastState));
+
 const api: FlechaApi = {
-  onState: (cb) => on('state', cb),
+  onState: (cb) => void stateListeners.push(cb),
   onPalette: (cb) => on('palette', cb),
   onEditSpace: (cb) => on('edit-space', cb),
   onRenameTab: (cb) => on('rename-tab', cb),
@@ -21,7 +37,8 @@ const api: FlechaApi = {
   appIcon: async () => undefined,
   detectBrowsers: () => invoke('detectBrowsers'),
   importBrowser: (id) => invoke('importBrowser', id),
-  newTab: cmd('newTab'),
+  // On the new tab page, what you type opens in this tab.
+  newTab: surface === 'newtab' ? cmd('navigate') : cmd('newTab'),
   navigate: cmd('navigate'),
   activate: cmd('activate'),
   close: cmd('close'),
