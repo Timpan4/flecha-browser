@@ -558,6 +558,14 @@ export class Store {
     return space;
   }
 
+  /** Takes over another Flecha's whole state (its Spaces, tabs and settings), as if it had been loaded. */
+  replaceState(state: BrowserState): boolean {
+    if (!state?.spaces?.length || !state.tabs) return false;
+    this.state = state;
+    this.changed();
+    return true;
+  }
+
   saveNow() {
     clearTimeout(this.saveTimer);
     const tabs = Object.fromEntries(
