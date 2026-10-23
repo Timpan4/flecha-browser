@@ -1,5 +1,5 @@
 /**
- * Downloads in the Chromium shell, as the Electron spike's src/main/downloads.ts: this
+ * Downloads in the Chromium shell, as the Electron version did them: this
  * session's downloads for the sidebar's downloads panel, which opens when one starts.
  * Chromium does the downloading; its own download bubble is turned off, since the sidebar
  * shows them.

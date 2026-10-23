@@ -6,7 +6,7 @@
  *
  * Absent in stock Chromium; the shell then falls back to the side panel.
  *
- * Layout, the same numbers as the Electron spike's Browser.layout() (src/main/main.ts):
+ * Layout, the same numbers as the Electron spike's Browser.layout():
  *  - sidebar 'docked':   frame view = left strip SIDEBAR (260) wide; page area = x 260, y 8,
  *                        to 8 from the right and bottom edges. Traffic lights shown at (16, 18).
  *  - sidebar 'hidden':   frame view = left strip EDGE (8) wide, for the hover edge; page area
@@ -75,7 +75,7 @@ declare namespace chrome.flechaPrivate {
   const onSplitRatioChanged: chrome.events.Event<(tabId: number, ratio: number) => void>;
 
   /**
-   * Flechinha (patch 0023), Flecha's small window for one page, like src/main/flechinha.ts:
+   * Flechinha (patch 0023), Flecha's small window for one page, as the Electron version had:
    * a normal Chromium window (900×700 at most, centred on the display under the pointer, each
    * new one a step down and right) whose frame page is window.html?window=<id>&kind=flechinha.
    * The frame draws a toolbar FLECHINHA_TOOLBAR (44) tall across the whole width; the page

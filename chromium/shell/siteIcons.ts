@@ -1,6 +1,6 @@
 /**
  * Icons for sites Chromium has no icon for yet (tabs imported and never opened), fetched
- * straight from the site the way the Electron spike's src/main/favicons.ts does (no
+ * straight from the site the way the Electron version did (no
  * third-party favicon service): the icon the home page declares, else /favicon.ico. Each
  * site is fetched once and cached in extension storage; pages get them as data URLs.
  */

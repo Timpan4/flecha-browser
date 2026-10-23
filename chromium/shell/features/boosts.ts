@@ -1,6 +1,6 @@
 /**
- * Boosts in the Chromium shell: per-site TypeScript and CSS, as in Electron (src/main/boosts.ts),
- * named the same way (`github.com.ts`, `github.com.css`, `all.css`; see src/main/boostFiles.ts).
+ * Boosts in the Chromium shell: per-site TypeScript and CSS, as in Electron,
+ * named the same way (`github.com.ts`, `github.com.css`, `all.css`; see lib/boostFiles.ts).
  *
  * An extension can't read ~/.flecha/boosts, so boosts live in chrome.storage.local and are
  * edited on Flecha's Boosts page (boosts.html) rather than in your editor.

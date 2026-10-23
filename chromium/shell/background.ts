@@ -675,7 +675,7 @@ async function start() {
   };
 
   /**
-   * Runs a command by its id in src/main/shortcuts.ts, plus "tab1"…"tab9" (⌘1…⌘9, 9 is the
+   * Runs a command by its id in lib/shortcuts.ts, plus "tab1"…"tab9" (⌘1…⌘9, 9 is the
    * last tab) and "space1"…"space9" (⌃1…⌃9). "tabN" / "spaceN" take the number as `n`.
    * Returns whether the id is a command.
    */
@@ -788,7 +788,7 @@ const ready = start();
 listen(ready);
 
 /**
- * Runs a Flecha command by id (src/main/shortcuts.ts, plus tab1…tab9 and space1…space9), as
+ * Runs a Flecha command by id (lib/shortcuts.ts, plus tab1…tab9 and space1…space9), as
  * the Electron spike's menu accelerators did: for keyboard shortcuts from the browser
  * (chrome.flechaPrivate.onShortcut). Resolves to whether the id is a command. The same is the
  * hub command "run", for pages.

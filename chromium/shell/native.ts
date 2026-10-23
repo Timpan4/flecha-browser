@@ -12,7 +12,7 @@ import { broadcast, handle } from './hub';
 export interface NativeContext {
   store: Store;
   /**
-   * Runs one of Flecha's commands, by id: every id in src/main/shortcuts.ts (newTab,
+   * Runs one of Flecha's commands, by id: every id in lib/shortcuts.ts (newTab,
    * toggleSidebar, …), plus `selectTab:1`…`selectTab:9` (⌘1…⌘9; 9 is the last tab) and
    * `selectSpace:1`…`selectSpace:9` (⌃1…⌃9). `windowId` is the window the key was pressed in.
    */
@@ -144,7 +144,7 @@ function registerPeek(ctx: NativeContext) {
 // ---- Flechinha (patch 0023) --------------------------------------------------------------
 
 /**
- * Flechinha, the small window for one page (src/main/flechinha.ts). Its frame page is
+ * Flechinha, the small window for one page, as in the Electron version. Its frame page is
  * window.html?window=<id>&kind=flechinha. Hub commands:
  *  - newFlechinha(): an empty one (the new tab page), ⌥⌘N.
  *  - openFlechinha(url?, tabId?): with a Flecha tab id, that tab's page moves into it and the

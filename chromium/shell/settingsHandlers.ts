@@ -1,6 +1,6 @@
 /**
  * Settings in the Chromium shell's background: the same rules as Electron's Settings window
- * (src/main/settingsCore.ts, src/main/tabManager.ts), answering the Settings page over the hub.
+ * (lib/settingsCore.ts, lib/tabManager.ts), answering the Settings page over the hub.
  * Every name starts with `settings:` so it never clashes with the sidebar's.
  */
 import type { SettingsPatch, SettingsView, TabsEdit } from '../shared/types';
@@ -106,7 +106,7 @@ export function registerSettings(ctx: SettingsContext) {
       return view();
     },
     // 'settings:open-boosts' opens the Boosts page; features.ts handles it.
-    // TODO(chromium): the welcome tour (src/renderer/onboarding.ts) isn't in the shell's sidebar yet.
+    // TODO(chromium): the welcome tour (ui/onboarding.ts) isn't in the shell's sidebar yet.
     'settings:show-tour': () => notYet('The welcome tour'),
     // TODO(chromium): there's no extension API for the macOS emoji picker; ⌃⌘Space opens it.
     'settings:emoji-panel': () => notYet('The emoji picker button (press ⌃⌘Space)'),
