@@ -56,7 +56,16 @@ const api: FlechaApi = {
   renameFolder: cmd('renameFolder'),
   moveTab: cmd('moveTab'),
   clearToday: cmd('clearToday'),
-  importMenu: cmd('importMenu'),
+  // Reading other browsers' files needs native help; until then this brings over Flecha's
+  // own Electron state, from the file you pick (~/Library/Application Support/Flecha/flecha-state.json).
+  importMenu: () => {
+    const input = Object.assign(document.createElement('input'), { type: 'file', accept: '.json,application/json' });
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (file) cmd('importFlechaState')(await file.text());
+    };
+    input.click();
+  },
   openPalette: cmd('openPalette'),
   closePalette: cmd('closePalette'),
   toggleSidebar: cmd('toggleSidebar'),
