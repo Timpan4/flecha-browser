@@ -1,0 +1,38 @@
+/* The sidebar page in the Chromium build: one page, shown either as the side panel
+   (just the sidebar, full width) or as the new tab page (just the empty state). */
+
+[data-surface='panel'] #sidebar {
+  width: auto;
+  right: 0;
+}
+
+[data-surface='panel'] #edge,
+[data-surface='panel'] .traffic-lights {
+  display: none;
+}
+
+/* The window's traffic lights sit above the panel, not in it. */
+[data-surface='panel'] .toolbar {
+  -webkit-app-region: no-drag;
+}
+
+[data-surface='newtab'] #sidebar,
+[data-surface='newtab'] #edge {
+  display: none;
+}
+
+[data-surface='newtab'] #empty-state {
+  inset: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+[data-surface='newtab'],
+[data-surface='newtab'] body {
+  background: color-mix(in srgb, var(--surface) 72%, var(--space-color, #cdd9f7));
+}
+
+/* The welcome tour needs the whole window; it runs on the new tab page. */
+[data-surface='panel'] #onboarding {
+  display: none !important;
+}
