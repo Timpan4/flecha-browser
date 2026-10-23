@@ -16,6 +16,7 @@ import type { MenuRun } from './protocol';
 import type { MenuEntry } from './settingsUi';
 import { openSettings, registerSettings } from './settingsHandlers';
 import { registerNativeHost } from './nativeHost';
+import { SiteIcons } from './siteIcons';
 // Loaded on the first turn: its modules add webNavigation and message listeners as they load.
 import { registerFeatures, type Features } from './features';
 // Also loaded on the first turn, for the shortcut event that may have woken the background.
@@ -77,7 +78,12 @@ async function start() {
     return tab;
   }
 
-  const favicons = new Favicons(() => sendStateSoon());
+  // Icons fetched from the sites themselves, for those Chromium has none of yet.
+  const siteIcons = new SiteIcons((icons) => broadcast('site-icons', icons));
+  const favicons = new Favicons(
+    () => sendStateSoon(),
+    (hosts) => void siteIcons.want(hosts),
+  );
   const rememberLive = () => void chrome.storage.session.set({ [LIVE_KEY]: Object.fromEntries(live) });
 
   function uiState(): UiState {
@@ -708,7 +714,10 @@ async function start() {
     },
   });
 
-  onConnect(() => sendState());
+  onConnect(() => {
+    sendState();
+    void siteIcons.all().then((icons) => broadcast('site-icons', icons));
+  });
 
   // Flecha's keyboard shortcuts, taken by the browser before the page (patch 0016).
   registerNative({

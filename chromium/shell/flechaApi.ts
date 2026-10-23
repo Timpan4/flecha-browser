@@ -22,11 +22,18 @@ const stateListeners: Array<(state: UiState) => void> = [];
 let lastState: UiState | undefined;
 function emitState(state: UiState) {
   lastState = state;
-  const shown = { ...state, tint: spaceTint(state.tint, systemDark.matches) };
+  const shown = { ...state, tint: spaceTint(state.tint, systemDark.matches), faviconUrls: siteIcons };
   for (const cb of stateListeners) cb(shown);
   applyFrame();
 }
 on('state', emitState);
+
+/** Icons the background fetched from the sites themselves, by host; they arrive once each. */
+const siteIcons: Record<string, string> = {};
+on('site-icons', (icons: Record<string, string>) => {
+  Object.assign(siteIcons, icons);
+  if (lastState) emitState(lastState);
+});
 
 // The frame page lays its window out: the background says how, this page adds the colour.
 let frameState: { sidebar: chrome.flechaPrivate.SidebarMode; overlay: boolean } | undefined;

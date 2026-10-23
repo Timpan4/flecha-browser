@@ -185,6 +185,8 @@ export interface UiState extends BrowserState {
    * build's `_favicon` endpoint. Absent in Electron, which uses `favicon://`.
    */
   faviconUrl?: string;
+  /** Icons by host as data URLs, for sites the browser has none of (Chromium build). */
+  faviconUrls?: Record<string, string>;
   /** What a coding agent is doing, for the sidebar. */
   agent?: { connected: boolean; tabId?: string; action?: string; busy: boolean };
   /** Current shortcut per command, for display ("⌘T"); empty when removed. */

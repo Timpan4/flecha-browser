@@ -79,7 +79,7 @@ function favicon(tab: TabInfo) {
   }
   // The page's own icon once it has loaded, else the icon Flecha fetched for the site.
   const cached = state?.faviconUrl ? state.faviconUrl.replace('%s', encodeURIComponent(tab.url)) : `favicon://${hostname}`;
-  const src = tab.favicon || (state?.faviconHosts.includes(hostname) ? cached : undefined);
+  const src = tab.favicon || (state?.faviconHosts.includes(hostname) ? cached : state?.faviconUrls?.[hostname]);
   if (!src) return letter();
   const img = h('img', { class: 'favicon', src, draggable: 'false' }) as HTMLImageElement;
   img.onerror = () => img.replaceWith(letter());
