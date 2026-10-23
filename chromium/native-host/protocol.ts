@@ -28,4 +28,4 @@ export type ToHost =
   | { type: 'call'; id: number; method: keyof HostMethods; params: unknown[] }
   /** Starts or stops the agent bridge; the token is checked on every request. */
   | { type: 'agent'; enabled: boolean; token: string }
-  | { type: 'toolResult'; id: number; result: import('../../src/main/agentServer').AgentResult };
+  | { type: 'toolResult'; id: number; result: import('../../src/main/agentTools').AgentResult };
