@@ -1,10 +1,19 @@
-# Flecha release build: one framework, what we ship.
+# Flecha release build: one framework, what we ship. chromium/scripts/build-release.sh
+# writes this to out/Release/args.gn (FLECHA_OFFICIAL=1 adds is_official_build).
 is_debug = false
 is_component_build = false
+dcheck_always_on = false
 symbol_level = 0
 blink_symbol_level = 0
 v8_symbol_level = 0
 target_cpu = "arm64"
-proprietary_codecs = true
-ffmpeg_branding = "Chrome"
+# No H.264/AAC: shipping Chrome's proprietary codecs needs patent licences we don't have.
+proprietary_codecs = false
 use_remoteexec = false
+# Our patches shouldn't fail a 3-6 hour build over a warning.
+treat_warnings_as_errors = false
+# No PGO profiles in this checkout (they come with checkout_pgo_profiles).
+chrome_pgo_phase = 0
+# The shell, staged into the checkout by build-release.sh, goes into the framework's
+# Resources as flecha-shell (patch 0050).
+flecha_shell_dir = "//flecha/shell"

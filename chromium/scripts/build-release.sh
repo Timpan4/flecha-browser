@@ -1,0 +1,114 @@
+#!/bin/bash
+# Builds the release (non-component, optimized) Flecha.app and packages it.
+#
+#   chromium/scripts/build-release.sh [--dmg] [--no-package] [autoninja arguments...]
+#
+# The release flow, each step safe to run again (a full build takes 3-6 hours; when it stops
+# for any reason, run the same command and it carries on where it was):
+#   1. builds the shell (chromium/shell/dist; needs `npm ci` at the repo root once);
+#   2. puts branding and patches on the checkout with apply.sh, unless this same patch set is
+#      already there (out/Release/flecha-applied.sha256): re-applying rewrites every patched
+#      file and so recompiles them. FLECHA_REAPPLY=1 applies anyway;
+#   3. stages the shell in the checkout at //flecha/shell, where the flecha_shell_dir GN arg
+#      (patch 0050) copies it into the framework's Resources/flecha-shell, which is where the
+#      app loads it from without --flecha-shell-dir. It sits inside the checkout because the
+#      build (siso) only tracks files under the source root; it is not part of Chromium's git;
+#   4. writes out/Release/args.gn from chromium/build/release.gn (only when it changes, so a
+#      re-run doesn't regenerate). FLECHA_OFFICIAL=1 adds is_official_build = true: ThinLTO,
+#      slower still, and a full rebuild when switched;
+#   5. autoninja -C out/Release chrome, under caffeinate so the Mac doesn't sleep;
+#   6. package-release.sh: copies the app to out/Release/flecha-release/Flecha, adds the
+#      native host (with its Node) and signs it all, ad hoc unless FLECHA_SIGN_IDENTITY names
+#      an identity; --dmg also makes Flecha-<version>.dmg there. See that script.
+# Then copy Flecha.app to /Applications and run
+#   chromium/scripts/install-native-host.sh --app /Applications/Flecha.app
+#
+# Dev builds (build.sh, out/Dev) share the checkout: don't run both at once. The release app
+# uses the default profile folder, ~/Library/Application Support/Flecha Browser.
+set -euo pipefail
+here="$(cd "$(dirname "$0")/.." && pwd)"
+. "$here/scripts/env.sh"
+root="$(cd "$here/.." && pwd)"
+out="$src/out/Release"
+
+package=1
+package_args=()
+ninja_args=()
+for arg in "$@"; do
+  case "$arg" in
+    --no-package) package=0 ;;
+    --dmg) package_args+=(--dmg) ;;
+    *) ninja_args+=("$arg") ;;
+  esac
+done
+
+step() { printf '\n== %s\n' "$*"; }
+
+step "shell"
+if [ ! -d "$root/node_modules/esbuild" ]; then
+  echo "error: no node_modules in $root; run npm ci there first" >&2
+  exit 1
+fi
+(cd "$root" && node chromium/shell/build.mjs)
+if [ ! -f "$here/shell/dist/manifest.json" ]; then
+  echo "error: the shell build left no $here/shell/dist/manifest.json" >&2
+  exit 1
+fi
+rules="$here/shell/dist/rules/easylist.json"
+if [ ! -f "$rules" ] || [ "$(wc -c <"$rules")" -lt 10000 ]; then
+  echo "warning: the ad blocker's rules look empty (no network for build-adblock.mjs?)" >&2
+fi
+
+step "patches"
+mkdir -p "$out"
+stamp="$out/flecha-applied.sha256"
+want="$(cat "$here"/patches/*.patch "$here/branding/BRANDING" "$here"/branding/mac/* \
+  "$here"/branding/logo/*.png | shasum -a 256 | cut -d' ' -f1)"
+last="$(ls "$here"/patches/*.patch | tail -n 1)"
+if [ "${FLECHA_REAPPLY:-0}" != 1 ] && [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$want" ] &&
+  (cd "$src" && git apply --reverse --check "$last" 2>/dev/null); then
+  echo "already applied (FLECHA_REAPPLY=1 to apply again)"
+else
+  rm -f "$stamp"
+  "$here/scripts/apply.sh"
+  echo "$want" >"$stamp"
+fi
+
+step "stage the shell at //flecha/shell"
+staged="$src/flecha/shell"
+if diff -rq "$here/shell/dist" "$staged" >/dev/null 2>&1; then
+  echo "unchanged"
+else
+  # A fresh folder, so its time is newer than the copy in the app and the build copies it.
+  rm -rf "$staged"
+  mkdir -p "$src/flecha"
+  cp -R "$here/shell/dist" "$staged"
+  echo "staged $staged"
+fi
+
+step "out/Release/args.gn"
+args="$(cat "$here/build/release.gn")"
+if [ "${FLECHA_OFFICIAL:-0}" = 1 ]; then
+  args="$args
+is_official_build = true"
+fi
+if [ -f "$out/args.gn" ] && [ "$(cat "$out/args.gn")" = "$args" ]; then
+  echo "unchanged"
+else
+  printf '%s\n' "$args" >"$out/args.gn"
+  echo "wrote $out/args.gn"
+fi
+
+cd "$src"
+if [ ! -f "$out/build.ninja" ]; then
+  step "gn gen out/Release"
+  gn gen out/Release
+fi
+
+step "autoninja -C out/Release chrome"
+caffeinate -i autoninja -C out/Release chrome ${ninja_args[@]+"${ninja_args[@]}"}
+
+if [ "$package" = 1 ]; then
+  step "package"
+  "$here/scripts/package-release.sh" ${package_args[@]+"${package_args[@]}"}
+fi
