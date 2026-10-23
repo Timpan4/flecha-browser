@@ -21,6 +21,10 @@ export interface SettingsContext {
   load?(tabId: string, url: string): void;
   /** The agent bridge's address while it runs (nativeHost.ts). */
   agentEndpoint?(): string | undefined;
+  /** Whether Flecha is the default browser, and whether it can become it (patch 0027). */
+  defaultBrowser?(): { isDefault: boolean; canSet: boolean };
+  /** Asks macOS to make Flecha the default browser. */
+  makeDefaultBrowser?(): Promise<void>;
 }
 
 /** What a stub answers with, so the page can say so instead of doing nothing. */
@@ -72,8 +76,7 @@ export function registerSettings(ctx: SettingsContext) {
     settingsView(store, {
       // TODO(chromium): Chromium's download folder (prefs download.default_directory) isn't readable from an extension.
       downloadsFolder: store.state.downloadsFolder ?? '~/Downloads',
-      // TODO(chromium): setting the default browser needs native code (shell integration), not an extension API.
-      defaultBrowser: { isDefault: false, canSet: false },
+      defaultBrowser: ctx.defaultBrowser?.() ?? { isDefault: false, canSet: false },
       agentEndpoint: ctx.agentEndpoint?.(),
     });
 
@@ -97,8 +100,11 @@ export function registerSettings(ctx: SettingsContext) {
     },
     // TODO(chromium): needs a native folder picker.
     'settings:choose-downloads-folder': () => ({ ...view(), ...notYet('Choosing the downloads folder') }),
-    // TODO(chromium): needs native code to become the default browser.
-    'settings:make-default-browser': () => ({ ...view(), ...notYet('Making Flecha the default browser') }),
+    'settings:make-default-browser': async () => {
+      if (!ctx.makeDefaultBrowser) return { ...view(), ...notYet('Making Flecha the default browser') };
+      await ctx.makeDefaultBrowser();
+      return view();
+    },
     // 'settings:open-boosts' opens the Boosts page; features.ts handles it.
     // TODO(chromium): the welcome tour (src/renderer/onboarding.ts) isn't in the shell's sidebar yet.
     'settings:show-tour': () => notYet('The welcome tour'),
