@@ -130,5 +130,12 @@ export async function openSettings(pane?: string) {
     if (pane) broadcast('settings:pane', pane);
     return;
   }
-  await chrome.tabs.create({ url: pane ? `${url}#${pane}` : url });
+  // Its own small window, as in Electron, not a tab among the pages; centred on Flecha's window.
+  const main = await chrome.windows.getLastFocused({ windowTypes: ['normal'] }).catch(() => undefined);
+  const size = { width: 780, height: 580 };
+  const at =
+    main?.left !== undefined && main.width !== undefined && main.top !== undefined && main.height !== undefined
+      ? { left: Math.round(main.left + (main.width - size.width) / 2), top: Math.round(main.top + (main.height - size.height) / 3) }
+      : {};
+  await chrome.windows.create({ url: pane ? `${url}#${pane}` : url, type: 'popup', focused: true, ...size, ...at });
 }
