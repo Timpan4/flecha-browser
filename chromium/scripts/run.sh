@@ -5,8 +5,8 @@
 # Extra arguments go to Chromium, e.g. --flecha-show-top-chrome.
 set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
-src="${CHROMIUM_SRC:-/Volumes/EXT_FLASH_1TB/projs/flecha/chromium/src}"
-profile="${FLECHA_PROFILE:-/Volumes/EXT_FLASH_1TB/projs/flecha/profiles/dev}"
+. "$here/scripts/env.sh"
+profile="${FLECHA_PROFILE:-$FLECHA_DISK/profiles/dev}"
 shell_dist="$here/shell/dist"
 
 if [ ! -d "$shell_dist" ]; then

@@ -3,8 +3,7 @@
 # dev (component) app at out/Dev/Flecha.app. Extra arguments go to autoninja.
 set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
-src="${CHROMIUM_SRC:-/Volumes/EXT_FLASH_1TB/projs/flecha/chromium/src}"
-export PATH="${DEPOT_TOOLS:-/Volumes/EXT_FLASH_1TB/projs/flecha/depot_tools}:$PATH"
+. "$here/scripts/env.sh"
 
 "$here/scripts/apply.sh"
 cd "$src"
