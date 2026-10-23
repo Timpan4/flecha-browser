@@ -1,6 +1,6 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
-import { app } from 'electron';
 
 /**
  * Reads Arc's local sidebar file (~/Library/Application Support/Arc/StorableSidebar.json).
@@ -34,8 +34,9 @@ interface ArcSpace {
   customInfo?: { iconType?: { emoji_v2?: string } };
 }
 
+/** Electron's appData on macOS; spelled out so the native messaging host can read it without Electron. */
 export function arcSidebarPath() {
-  return path.join(app.getPath('appData'), 'Arc', 'StorableSidebar.json');
+  return path.join(os.homedir(), 'Library', 'Application Support', 'Arc', 'StorableSidebar.json');
 }
 
 export function readArcSidebar(file = arcSidebarPath()): ArcImport {
