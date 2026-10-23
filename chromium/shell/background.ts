@@ -20,7 +20,7 @@ import { SiteIcons } from './siteIcons';
 // Loaded on the first turn: its modules add webNavigation and message listeners as they load.
 import { registerFeatures, type Features } from './features';
 // Also loaded on the first turn, for the shortcut event that may have woken the background.
-import { isFlechinha, isFlechinhaWindow, registerNative } from './native';
+import { defaultBrowserState, isFlechinha, isFlechinhaWindow, registerNative } from './native';
 import { registerDownloads } from './downloads';
 import { registerSiteControls } from './siteControls';
 import { Favicons } from './favicons';
@@ -48,6 +48,14 @@ async function start() {
   const store = new Store(persistence);
   let nativeHost: ReturnType<typeof registerNativeHost> | undefined;
   let features: Features | undefined;
+  // Asked of macOS on start and whenever a window takes focus (the user may have changed it in System Settings).
+  let defaultBrowser: UiState['defaultBrowser'] = { isDefault: false, canSet: false };
+  const refreshDefaultBrowser = async () => {
+    const next = await defaultBrowserState().catch(() => defaultBrowser);
+    if (next.isDefault === defaultBrowser.isDefault && next.canSet === defaultBrowser.canSet) return;
+    defaultBrowser = next;
+    sendState();
+  };
   const restored = (await chrome.storage.session.get(LIVE_KEY))[LIVE_KEY] as Record<string, number> | undefined;
   const existing = new Set((await chrome.tabs.query({})).map((t) => t.id));
   for (const [id, chromeId] of Object.entries(restored ?? {})) if (existing.has(chromeId) && store.state.tabs[id]) live.set(id, chromeId);
@@ -102,7 +110,7 @@ async function start() {
       faviconHosts: favicons.list(),
       faviconUrl: favicons.url,
       shortcuts: shortcutHints(store.state),
-      defaultBrowser: { isDefault: false, canSet: false },
+      defaultBrowser,
       agent: nativeHost?.agentActivity(),
       nav: navState,
     };
@@ -696,7 +704,14 @@ async function start() {
       if (chromeId !== undefined) void chrome.tabs.update(chromeId, { url });
     },
     agentEndpoint: () => nativeHost?.agentEndpoint(),
+    defaultBrowser: () => defaultBrowser,
+    makeDefaultBrowser: async () => {
+      await call('makeDefaultBrowser');
+      await refreshDefaultBrowser();
+    },
   });
+  void refreshDefaultBrowser();
+  chrome.windows.onFocusChanged.addListener((id) => id !== chrome.windows.WINDOW_ID_NONE && void refreshDefaultBrowser());
 
   // Boosts, environments, local servers, the responsive view, console errors and ad blocking.
   features = registerFeatures({ store, broadcastState: sendState, liveTabId: (id) => live.get(id), activeChromeTabId: activeChromeId });
