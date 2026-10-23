@@ -180,6 +180,11 @@ export interface UiState extends BrowserState {
   boostedHosts: string[];
   /** Hosts whose icon is cached and served as `favicon://<host>`. */
   faviconHosts: string[];
+  /**
+   * Where those icons are served instead, with `%s` for the page's URL (encoded): the Chromium
+   * build's `_favicon` endpoint. Absent in Electron, which uses `favicon://`.
+   */
+  faviconUrl?: string;
   /** What a coding agent is doing, for the sidebar. */
   agent?: { connected: boolean; tabId?: string; action?: string; busy: boolean };
   /** Current shortcut per command, for display ("⌘T"); empty when removed. */

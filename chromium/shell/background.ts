@@ -8,15 +8,21 @@
  */
 import { Store, type StatePersistence } from '../../src/main/store';
 import { resolveInput, searchEngine } from '../../src/main/url';
-import { shortcutHints } from '../../src/main/shortcuts';
+import { shortcutHints, type ShortcutId } from '../../src/main/shortcuts';
 import { describe as describeEnvironment } from '../../src/main/environments';
 import type { BrowserState, DropTarget, SearchEngineId, UiState } from '../../src/shared/types';
-import { broadcast, handle, listen, onConnect } from './hub';
+import { broadcast, call, handle, listen, onConnect } from './hub';
+import type { MenuRun } from './protocol';
+import type { MenuEntry } from './settingsUi';
 import { openSettings, registerSettings } from './settingsHandlers';
+import { registerDownloads } from './downloads';
+import { registerSiteControls } from './siteControls';
+import { Favicons } from './favicons';
 
 const STATE_KEY = 'state';
 /** Flecha tab id ↔ Chromium tab id, for the tabs that are open. Kept across background restarts. */
 const LIVE_KEY = 'live';
+const ARCHIVE_ALARM = 'archive-stale';
 
 const live = new Map<string, number>();
 const flechaIdFor = (chromeId: number) => [...live].find(([, c]) => c === chromeId)?.[0];
@@ -64,6 +70,7 @@ async function start() {
     return tab;
   }
 
+  const favicons = new Favicons(() => sendStateSoon());
   const rememberLive = () => void chrome.storage.session.set({ [LIVE_KEY]: Object.fromEntries(live) });
 
   function uiState(): UiState {
@@ -79,7 +86,8 @@ async function start() {
       localServers: [],
       consoleErrors: {},
       boostedHosts: [],
-      faviconHosts: [],
+      faviconHosts: favicons.list(),
+      faviconUrl: favicons.url,
       shortcuts: shortcutHints(store.state),
       defaultBrowser: { isDefault: false, canSet: false },
       agent: undefined,
@@ -96,15 +104,24 @@ async function start() {
   // ---- the window frame, as the Electron spike's Browser.layout() --------------
   // The frame page applies it (chrome.flechaPrivate.setFrame), since only a page knows
   // whether the system is in dark mode for the background colour.
-  const frame = { paletteOpen: false, sidebarPeek: false, tabDragging: false };
+  const frame = { paletteOpen: false, sidebarPeek: false, tabDragging: false, overlays: new Set<string>() };
   function sendFrame() {
     const sidebar: chrome.flechaPrivate.SidebarMode = store.state.sidebarVisible ? 'docked' : frame.sidebarPeek ? 'floating' : 'hidden';
     // The frame covers the whole window while it draws over the page.
-    const overlay = frame.paletteOpen || frame.tabDragging || !store.state.onboarded;
+    const overlay = frame.paletteOpen || frame.tabDragging || frame.overlays.size > 0 || !store.state.onboarded;
     broadcast('frame', { sidebar, overlay });
   }
   const hasFrame = () => typeof chrome.flechaPrivate?.setFrame === 'function';
+  /** During the welcome tour, a shortcut is reported to it instead of acting. Returns whether it was. */
+  function tourKey(command: string | undefined) {
+    if (store.state.onboarded || !command) return false;
+    broadcast('tour-key', command);
+    return true;
+  }
+
   function openPalette(mode: string) {
+    // The tour asks you to try the real shortcuts and shows what they do.
+    if (tourKey(({ 'new-tab': 'newTab', navigate: 'openLocation', split: 'splitNew' } as Record<string, string>)[mode])) return;
     frame.paletteOpen = true;
     sendFrame();
     broadcast('palette', mode);
@@ -123,6 +140,7 @@ async function start() {
     try {
       const created = await chrome.tabs.create({ windowId: await mainWindow(), url: tab.url === 'about:blank' ? undefined : tab.url, active });
       live.set(id, created.id!);
+      if (tab.muted) void chrome.tabs.update(created.id!, { muted: true });
       rememberLive();
       return created.id!;
     } finally {
@@ -166,16 +184,110 @@ async function start() {
   /** Shows the active Flecha tab, opening its Chromium tab if it has none yet. */
   let syncing = Promise.resolve();
   function sync() {
-    syncing = syncing.then(async () => {
-      await unload([...live.keys()].filter((id) => !store.state.tabs[id]));
-      const active = store.activeTab;
-      if (!active) return;
-      const chromeId = live.get(active.id);
-      if (chromeId === undefined) await openChromeTab(active.id, true);
-      else await chrome.tabs.update(chromeId, { active: true }).catch(() => openChromeTab(active.id, true));
-      dropPlaceholder();
-      await refreshNav();
-    });
+    syncing = syncing
+      .then(async () => {
+        await unload([...live.keys()].filter((id) => !store.state.tabs[id]));
+        const active = store.activeTab;
+        if (!active) return;
+        // Both halves of a split are on screen, so both need a page.
+        for (const id of store.visibleTabIds()) if (id !== active.id && !live.has(id)) await openChromeTab(id, false);
+        const chromeId = live.get(active.id);
+        if (chromeId === undefined) await openChromeTab(active.id, true);
+        await syncSplits();
+        await chrome.tabs.update(live.get(active.id)!, { active: true }).catch(() => openChromeTab(active.id, true));
+        dropPlaceholder();
+        await refreshNav();
+      })
+      .catch((err) => console.error('Flecha shell: sync failed', err));
+  }
+
+  // ---- split view: the Store's splits as Chromium's own split view ---------------
+  // Chromium shows both tabs of a split whenever either is active, which is how a Space's
+  // split behaves in the Store too. Chromium places the halves by tab order.
+  // TODO(chromium): the split ratio (store.splitRatio, the divider) has no extension API; a
+  // native patch would apply it, and report drags of Chromium's own divider back.
+
+  /** Split changes we asked Chromium for, by tab: their events are ours, not the user's. */
+  const ourSplits = new Map<number, 'split' | 'unsplit'>();
+
+  async function syncSplits() {
+    const wanted = new Map<string, [number, number]>();
+    for (const space of store.state.spaces) {
+      const pair = space.split?.map((id) => live.get(id));
+      if (pair?.length === 2 && pair[0] !== undefined && pair[1] !== undefined) wanted.set(pair.join(','), pair as [number, number]);
+    }
+    const tabs = await chrome.tabs.query({ windowId: await mainWindow() });
+    const splits = new Map<number, chrome.tabs.Tab[]>();
+    for (const tab of tabs) {
+      if (tab.splitViewId === undefined || tab.splitViewId < 0) continue;
+      splits.set(tab.splitViewId, [...(splits.get(tab.splitViewId) ?? []), tab]);
+    }
+    const have = new Set<string>();
+    for (const [splitId, members] of splits) {
+      const key = members
+        .sort((a, b) => a.index - b.index)
+        .map((t) => t.id)
+        .join(',');
+      if (wanted.has(key)) have.add(key);
+      else {
+        for (const t of members) ourSplits.set(t.id!, 'unsplit');
+        await chrome.tabs.unsplit(splitId).catch(() => undefined);
+      }
+    }
+    for (const [key, [left, right]] of wanted) {
+      if (have.has(key)) continue;
+      ourSplits.set(left, 'split');
+      ourSplits.set(right, 'split');
+      // Split tabs must be next to each other, left first.
+      await chrome.tabs.move(left, { index: -1 }).catch(() => undefined);
+      await chrome.tabs.move(right, { index: -1 }).catch(() => undefined);
+      await chrome.tabs.createSplit([left, right]).catch((err) => {
+        ourSplits.delete(left);
+        ourSplits.delete(right);
+        console.warn('Flecha shell: split failed', err);
+      });
+    }
+  }
+
+  /** A split made or ended in Chromium itself (its split menu, the close button) goes to the Store. */
+  async function splitChanged(chromeId: number, splitViewId: number) {
+    const ours = ourSplits.get(chromeId);
+    if (ours && ours === (splitViewId < 0 ? 'unsplit' : 'split')) return void ourSplits.delete(chromeId);
+    const id = flechaIdFor(chromeId);
+    const space = store.activeSpace;
+    if (!id) return;
+    if (splitViewId < 0) {
+      if (space.split?.includes(id)) exitSplit();
+      return;
+    }
+    const members = (await chrome.tabs.query({ windowId: await mainWindow() }))
+      .filter((t) => t.splitViewId === splitViewId)
+      .sort((a, b) => a.index - b.index)
+      .map((t) => flechaIdFor(t.id!));
+    const active = space.activeTabId;
+    if (members.length !== 2 || !members.every(Boolean) || !active || !members.includes(active)) return;
+    if (space.split && members.every((m) => space.split!.includes(m!))) return;
+    const other = members.find((m) => m !== active)!;
+    store.splitWith(other, members[0] === other ? 'left' : 'right');
+  }
+
+  function exitSplit() {
+    const mirror = store.unsplit();
+    if (mirror) {
+      store.closeTab(mirror);
+      void unload([mirror]);
+    }
+  }
+
+  /** A tab dropped on the page: show it beside the page, on the side it was dropped. */
+  function dropToSplit(tabId: string, side: 'left' | 'right') {
+    frame.tabDragging = false;
+    sendFrame();
+    const space = store.activeSpace;
+    if (!space.activeTabId || space.activeTabId === tabId) return store.activate(tabId);
+    // A responsive mirror only exists for its split; it goes away when something else takes its place.
+    if (space.splitMode === 'responsive') exitSplit();
+    store.splitWith(tabId, side);
   }
 
   async function refreshNav() {
@@ -186,10 +298,16 @@ async function start() {
   }
 
   let stateTimer: ReturnType<typeof setTimeout> | undefined;
-  store.onChange(() => {
-    sync();
+  const sendStateSoon = () => {
     clearTimeout(stateTimer);
     stateTimer = setTimeout(sendState, 16);
+  };
+  // Icons for tabs that haven't loaded their own yet.
+  const wantFavicons = () => void favicons.want(Object.values(store.state.tabs).filter((t) => !t.favicon).map((t) => t.url));
+  store.onChange(() => {
+    sync();
+    sendStateSoon();
+    wantFavicons();
   });
 
   // ---- Chromium → Flecha ----------------------------------------------------
@@ -219,6 +337,7 @@ async function start() {
     if (info.mutedInfo) patch.muted = info.mutedInfo.muted;
     store.updateTab(id, patch);
     if (info.status === 'complete' && tab.active) void refreshNav().then(sendState);
+    if (info.splitViewId !== undefined) void splitChanged(chromeId, info.splitViewId);
   }
 
   function onActivated({ tabId }: { tabId: number }) {
@@ -249,6 +368,83 @@ async function start() {
       afterTabId: activate ? undefined : store.activeSpace.activeTabId,
     });
 
+  // ---- context menus, as the Electron spike's tabMenu / spaceMenu ----------------
+  // Built here, where the Store is; the page that asked draws them (windowUi.ts).
+
+  const SEPARATOR = { separator: true } as const;
+  const does = (name: string, ...args: unknown[]): MenuRun => ({ cmd: name, args });
+  const spaceLabel = (s: { emoji?: string; name: string }) => `${s.emoji ? s.emoji + '  ' : ''}${s.name}`;
+
+  function tabMenu(tabId: string): MenuEntry<MenuRun>[] | undefined {
+    const tab = store.state.tabs[tabId];
+    const zone = store.locate(tabId)?.zone;
+    if (!tab || !zone) return undefined;
+    const space = store.activeSpace;
+    const split: MenuEntry<MenuRun>[] = [];
+    if (space.split?.includes(tabId)) split.push({ label: 'Exit Split View', run: does('exitSplit') });
+    else if (space.activeTabId && space.activeTabId !== tabId) split.push({ label: 'Open in Split View', run: does('splitWith', tabId) });
+    const name = tab.customTitle ?? tab.title;
+    const otherSpaces = store.state.spaces.filter((s) => s.id !== store.locate(tabId)?.space?.id);
+    return [
+      ...split,
+      ...(split.length ? [SEPARATOR] : []),
+      { label: 'Copy Link', run: { copy: tab.url, message: 'Link copied' } },
+      { label: 'Copy as Markdown Link', run: { copy: `[${name}](${tab.url})`, message: 'Markdown link copied' } },
+      { label: 'Rename…', run: { rename: tabId } },
+      { label: 'Duplicate', run: does('newTab', tab.url) },
+      // A Flechinha window of its own; the window code lives in another shell module.
+      { label: 'Open in Flechinha', run: does('openFlechinha', tab.url, tabId) },
+      SEPARATOR,
+      { label: zone === 'today' ? 'Pin Tab' : 'Unpin Tab', run: does('togglePin', tabId) },
+      { label: zone === 'favorites' ? 'Remove from Favorites' : 'Add to Favorites', run: does('toggleFavorite', tabId) },
+      {
+        label: 'Move to Space',
+        enabled: zone !== 'favorites' && otherSpaces.length > 0,
+        submenu: otherSpaces.map((s) => ({ label: spaceLabel(s), run: does('moveToSpace', tabId, s.id) })),
+      },
+      SEPARATOR,
+      { label: 'Reload', enabled: live.has(tabId), run: does('reloadTab', tabId) },
+      { label: tab.muted ? 'Unmute Tab' : 'Mute Tab', run: does('toggleMute', tabId) },
+      ...(tab.homeUrl && tab.homeUrl !== tab.url ? [{ label: 'Go Back to Pinned URL', run: does('goHome', tabId) }] : []),
+      SEPARATOR,
+      { label: zone === 'today' ? 'Close Tab' : 'Unload Tab', run: does('close', tabId) },
+      ...(zone === 'today'
+        ? [
+            { label: 'Close Tabs Below', run: does('closeTabs', tabId, 'below') },
+            { label: 'Close Other Tabs', run: does('closeTabs', tabId, 'others') },
+          ]
+        : []),
+    ];
+  }
+
+  function spaceMenu(spaceId: string): MenuEntry<MenuRun>[] | undefined {
+    const space = store.state.spaces.find((s) => s.id === spaceId);
+    if (!space) return undefined;
+    return [
+      { label: 'Edit Space…', run: does('editSpace', spaceId) },
+      { label: 'New Folder', run: does('newFolder') },
+      SEPARATOR,
+      { label: 'Separate Cookies and Logins', checked: !!space.isolated, run: does('setSpaceIsolated', spaceId, !space.isolated) },
+      SEPARATOR,
+      { label: 'Delete Space…', enabled: store.state.spaces.length > 1, run: { deleteSpace: spaceId } },
+    ];
+  }
+
+  /** Opens the sidebar's Space editor (name, emoji, colour), in that Space. */
+  function editSpace(spaceId: string) {
+    if (store.state.activeSpaceId !== spaceId) store.switchSpace(spaceId);
+    broadcast('edit-space', spaceId);
+  }
+
+  function toggleMute(tabId: string) {
+    const tab = store.state.tabs[tabId];
+    if (!tab) return;
+    const chromeId = live.get(tabId);
+    // An unloaded tab remembers it, and opens muted.
+    if (chromeId === undefined) store.updateTab(tabId, { muted: !tab.muted });
+    else void chrome.tabs.update(chromeId, { muted: !tab.muted });
+  }
+
   handle({
     ready: sendState,
     newTab: (input: string) => openTab(input),
@@ -266,10 +462,31 @@ async function start() {
     forward: onActive((id) => chrome.tabs.goForward(id).catch(() => undefined)),
     reload: onActive((id) => chrome.tabs.reload(id)),
     switchSpace: (id: string) => store.switchSpace(id),
-    newSpace: () => {
-      const space = store.newSpace();
-      broadcast('edit-space', space.id);
+    newSpace: () => editSpace(store.newSpace().id),
+    editSpace: (id: string) => editSpace(String(id)),
+    newFolder: () => store.newFolder(),
+    tabMenu: (id: string) => tabMenu(String(id)),
+    spaceMenu: (id: string) => spaceMenu(String(id)),
+    setOverlay: (name: string, on: boolean) => {
+      if (on) frame.overlays.add(String(name));
+      else frame.overlays.delete(String(name));
+      sendFrame();
     },
+    togglePin: (id: string) => store.togglePin(id),
+    toggleFavorite: (id: string) => store.toggleFavorite(id),
+    moveToSpace: (id: string, spaceId: string) => store.moveToSpace(id, spaceId),
+    reloadTab: (id: string) => {
+      const chromeId = live.get(id);
+      if (chromeId !== undefined) void chrome.tabs.reload(chromeId);
+    },
+    goHome: (id: string) => {
+      const home = store.state.tabs[id]?.homeUrl;
+      const chromeId = live.get(id);
+      if (!home) return;
+      if (chromeId !== undefined) void chrome.tabs.update(chromeId, { url: home });
+      else store.updateTab(id, { url: home });
+    },
+    closeTabs: (id: string, which: string) => void unload(store.closeTodayTabs(id, which === 'others' ? 'others' : 'below')),
     updateSpace: (id: string, patch: { name?: string; emoji?: string; color?: string }) => store.updateSpace(id, patch ?? {}),
     // Spaces with their own cookies need a separate Chromium profile; not in this build yet.
     setSpaceIsolated: () => broadcast('flash', 'Separate cookies aren’t in this build yet'),
@@ -281,10 +498,7 @@ async function start() {
     moveTab: (id: string, target: DropTarget) => store.moveTab(id, target),
     clearToday: () => void unload(store.clearToday()),
     renameTab: (id: string, title: string) => store.updateTab(id, { customTitle: String(title).trim() || undefined }),
-    toggleMute: (id: string) => {
-      const chromeId = live.get(id);
-      if (chromeId !== undefined) void chrome.tabs.update(chromeId, { muted: !store.state.tabs[id]?.muted });
-    },
+    toggleMute: (id: string) => toggleMute(String(id)),
     flash: (message: string) => broadcast('flash', String(message)),
     openPalette: (mode: string) => openPalette(mode),
     closePalette: () => {
@@ -293,6 +507,7 @@ async function start() {
       if (hasFrame()) void chrome.flechaPrivate.focus('page');
     },
     toggleSidebar: () => {
+      if (tourKey('toggleSidebar')) return;
       frame.sidebarPeek = false;
       store.setSidebarVisible(!store.state.sidebarVisible);
     },
@@ -314,6 +529,8 @@ async function start() {
       });
     },
     splitWith: (id: string) => store.splitWith(id),
+    exitSplit,
+    dropToSplit: (id: string, side: string) => dropToSplit(String(id), side === 'left' ? 'left' : 'right'),
     splitNew: (input: string) => store.splitWith(openTab(input, false).id),
     openSettings: (pane?: string) => openSettings(typeof pane === 'string' ? pane : undefined),
     finishOnboarding: () => store.setOnboarded(true),
@@ -328,10 +545,11 @@ async function start() {
         visits: h.visitCount ?? 0,
         lastVisit: h.lastVisitTime ?? 0,
       })),
-    topSites: async () =>
-      (await chrome.topSites.get())
-        .filter((s) => isWebPage(s.url))
-        .map((s) => ({ url: s.url, title: s.title || s.url, visits: 0, lastVisit: 0 })),
+    topSites: async () => {
+      const sites = (await chrome.topSites.get()).filter((s) => isWebPage(s.url));
+      void favicons.want(sites.map((s) => s.url));
+      return sites.map((s) => ({ url: s.url, title: s.title || s.url, visits: 0, lastVisit: 0 }));
+    },
     detectBrowsers: () => [],
     importFlechaState: (json: string) => {
       let state: BrowserState | undefined;
@@ -349,6 +567,107 @@ async function start() {
     },
   });
 
+  registerSiteControls({ store, activeChromeId, mainWindow });
+
+  // ---- commands by id, for keyboard shortcuts (the Electron spike's buildMenu) ----
+
+  /** Copies through the window's frame page: the background has no document for the clipboard. */
+  async function copyToClipboard(text: string, message: string) {
+    broadcast('clipboard', await mainWindow(), { text, message });
+  }
+
+  /** ⌘1–⌘8 pick a tab by position (favorites, then pinned, then today); ⌘9 the last one. */
+  function selectTabIndex(index: number) {
+    const ids = store.allTabIds(store.activeSpace);
+    const id = index < 0 ? ids[ids.length - 1] : ids[index];
+    if (id) store.activate(id);
+  }
+
+  function cycleTab(step: 1 | -1) {
+    const space = store.activeSpace;
+    const ids = store.allTabIds(space);
+    if (!ids.length) return;
+    const i = space.activeTabId ? ids.indexOf(space.activeTabId) : -1;
+    store.activate(ids[(i + step + ids.length) % ids.length]);
+  }
+
+  function cycleSpace(step: 1 | -1) {
+    const spaces = store.state.spaces;
+    const i = spaces.findIndex((sp) => sp.id === store.state.activeSpaceId);
+    store.switchSpace(spaces[(i + step + spaces.length) % spaces.length].id);
+  }
+
+  /** A command on the active tab, if there is one. */
+  const withTab = (fn: (tab: NonNullable<Store['activeTab']>) => unknown) => () => {
+    const tab = store.activeTab;
+    if (tab) return fn(tab);
+  };
+
+  const commands: Record<ShortcutId | 'closePeek', () => unknown> = {
+    newTab: () => openPalette('new-tab'),
+    openLocation: () => openPalette('navigate'),
+    back: () => call('back'),
+    forward: () => call('forward'),
+    reload: () => call('reload'),
+    hardReload: onActive((id) => chrome.tabs.reload(id, { bypassCache: true })),
+    // TODO(chromium): Chromium's own find bar does find in page; when a native patch routes ⌘F
+    // here instead, whatever module draws Flecha's find bar handles this command.
+    find: () => call('find'),
+    toggleSidebar: () => call('toggleSidebar'),
+    settings: () => openSettings(),
+    newFlechinha: () => call('newFlechinha'),
+    closeTab: withTab((tab) => call('close', tab.id)),
+    reopenTab: () => {
+      const item = store.popArchive();
+      if (item) openTab(item.url);
+    },
+    nextTab: () => cycleTab(1),
+    previousTab: () => cycleTab(-1),
+    pinTab: withTab((tab) => store.togglePin(tab.id)),
+    duplicateTab: withTab((tab) => openTab(tab.url)),
+    muteTab: withTab((tab) => toggleMute(tab.id)),
+    clearToday: () => call('clearToday'),
+    copyLink: withTab((tab) => copyToClipboard(tab.url, 'Link copied')),
+    copyMarkdown: withTab((tab) => copyToClipboard(`[${tab.customTitle ?? tab.title}](${tab.url})`, 'Markdown link copied')),
+    screenshot: () => call('capturePage'),
+    nextSpace: () => cycleSpace(1),
+    previousSpace: () => cycleSpace(-1),
+    newSpace: () => call('newSpace'),
+    splitNew: () => openPalette('split'),
+    exitSplit,
+    zoomIn: () => call('zoom', 1),
+    zoomOut: () => call('zoom', -1),
+    actualSize: () => call('zoom', 0),
+    // Owned by other shell modules, which handle a hub command of the same name.
+    devTools: () => call('devTools'),
+    responsive: () => call('responsive'),
+    nextEnvironment: () => call('nextEnvironment'),
+    editBoost: () => call('editBoost'),
+    closePeek: () => call('closePeek'),
+    viewSource: withTab((tab) => isWebPage(tab.url) && addTab(`view-source:${tab.url}`, { activate: true })),
+    shortcuts: () => openSettings('shortcuts'),
+  };
+
+  /**
+   * Runs a command by its id in src/main/shortcuts.ts, plus "tab1"…"tab9" (⌘1…⌘9, 9 is the
+   * last tab) and "space1"…"space9" (⌃1…⌃9). "tabN" / "spaceN" take the number as `n`.
+   * Returns whether the id is a command.
+   */
+  function runCommand(id: string, n?: number): boolean {
+    const numbered = /^(tab|space)(\d|N)$/.exec(id);
+    if (numbered) {
+      const i = numbered[2] === 'N' ? Number(n) : Number(numbered[2]);
+      if (!Number.isInteger(i) || i < 1 || i > 9) return false;
+      if (numbered[1] === 'tab') selectTabIndex(i === 9 ? -1 : i - 1);
+      else if (store.state.spaces[i - 1]) store.switchSpace(store.state.spaces[i - 1].id);
+      return true;
+    }
+    if (!Object.hasOwn(commands, id)) return false;
+    void Promise.resolve(commands[id as keyof typeof commands]()).catch((err) => console.error(`Flecha shell: "${id}" failed`, err));
+    return true;
+  }
+  handle({ run: (id: string, n?: number) => runCommand(String(id), n) });
+
   registerSettings({
     store,
     unload: (ids) => void unload(ids),
@@ -362,7 +681,13 @@ async function start() {
 
   onConnect(() => sendState());
   sync();
-  return { onCreated, onUpdated, onActivated, onRemoved, openPalette };
+  wantFavicons();
+  // Arc's auto-archive, hourly as in Electron. An alarm, since the background sleeps.
+  // Made once: making it again on every wake would restart the hour.
+  void chrome.alarms.get(ARCHIVE_ALARM).then((alarm) => void (alarm ?? chrome.alarms.create(ARCHIVE_ALARM, { periodInMinutes: 60 })));
+  const archiveStale = () => void unload(store.archiveStale());
+
+  return { onCreated, onUpdated, onActivated, onRemoved, openPalette, runCommand, archiveStale };
 }
 
 const url = (tab: chrome.tabs.Tab) => tab.pendingUrl || tab.url || '';
@@ -376,10 +701,22 @@ const isStartPage = (tab: chrome.tabs.Tab) => /^chrome:\/\/(newtab|new-tab-page)
 // each waits for the saved state to load.
 const ready = start();
 listen(ready);
+
+/**
+ * Runs a Flecha command by id (src/main/shortcuts.ts, plus tab1…tab9 and space1…space9), as
+ * the Electron spike's menu accelerators did: for keyboard shortcuts from the browser
+ * (chrome.flechaPrivate.onShortcut). Resolves to whether the id is a command. The same is the
+ * hub command "run", for pages.
+ */
+export function run(id: string, n?: number): Promise<boolean> {
+  return ready.then((r) => r.runCommand(id, n));
+}
+registerDownloads();
 chrome.tabs.onCreated.addListener((tab) => void ready.then((r) => r.onCreated(tab)));
 chrome.tabs.onUpdated.addListener((id, info, tab) => void ready.then((r) => r.onUpdated(id, info, tab)));
 chrome.tabs.onActivated.addListener((info) => void ready.then((r) => r.onActivated(info)));
 chrome.tabs.onRemoved.addListener((id) => void ready.then((r) => r.onRemoved(id)));
+chrome.alarms.onAlarm.addListener((alarm) => alarm.name === ARCHIVE_ALARM && void ready.then((r) => r.archiveStale()));
 
 // Until the native patch opens it on its own, the toolbar button opens the sidebar.
 void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });

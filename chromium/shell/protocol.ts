@@ -6,3 +6,16 @@ export type Message =
   | { type: 'event'; name: string; args: unknown[] }
   /** Keeps the background awake while a page is open (it sleeps after 30s of silence). */
   | { type: 'ping' };
+
+/**
+ * What a context menu item does once picked, for menus the background builds and a page draws
+ * (settingsUi's popupMenu): a background command, or something only the page can do.
+ */
+export type MenuRun =
+  | { cmd: string; args: unknown[] }
+  /** The page writes the clipboard; the background has no document to do it from. */
+  | { copy: string; message: string }
+  /** The sidebar's inline rename of a tab row. */
+  | { rename: string }
+  /** Asks first, in the page, then deletes the Space. */
+  | { deleteSpace: string };

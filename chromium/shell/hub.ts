@@ -19,6 +19,16 @@ export function handle(handlers: Record<string, Handler>) {
   }
 }
 
+/**
+ * Runs a registered command from the background itself (a keyboard shortcut, say), as if a
+ * page had sent it. A command nobody handles yet is reported, not thrown.
+ */
+export function call(name: string, ...args: unknown[]): unknown {
+  const fn = commands.get(name);
+  if (!fn) return void console.warn(`Flecha shell: "${name}" isn't in the Chromium build yet`);
+  return fn(...args);
+}
+
 /** Sends an event to every open Flecha page. */
 export function broadcast(name: string, ...args: unknown[]) {
   const message: Message = { type: 'event', name, args };
