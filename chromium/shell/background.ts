@@ -45,9 +45,11 @@ async function start() {
     const active = store.activeTab;
     if (isStartPage(tab) && active && !live.has(active.id)) {
       live.set(active.id, tab.id!);
-      if (active.url !== 'about:blank') void chrome.tabs.update(tab.id!, { url: active.url, active: true });
+      // A blank tab reloads the new tab page: Chromium drew its own before the shell was loaded.
+      void chrome.tabs.update(tab.id!, { url: active.url === 'about:blank' ? 'chrome://newtab/' : active.url, active: true });
     } else if (isStartPage(tab) && !active) {
       placeholder = tab.id;
+      void chrome.tabs.update(tab.id!, { url: 'chrome://newtab/' });
     } else if (isStartPage(tab)) {
       ours.add(tab.id!);
       void chrome.tabs.remove(tab.id!);
