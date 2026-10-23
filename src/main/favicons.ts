@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { app, protocol } from 'electron';
 import { writeFileAtomic } from './files';
+import { declaredIcons } from './declaredIcons';
 
 /**
  * Icons for saved tabs that haven't been opened yet (e.g. everything imported from Arc).
@@ -118,22 +119,4 @@ async function resolveIcon(host: string) {
     }
   }
   return undefined;
-}
-
-function declaredIcons(html: string, base: string) {
-  const icons: Array<{ href: string; score: number }> = [];
-  for (const tag of html.match(/<link\b[^>]*>/gi) ?? []) {
-    const attr = (name: string) => tag.match(new RegExp(`${name}\\s*=\\s*["']([^"']+)["']`, 'i'))?.[1];
-    const rel = attr('rel')?.toLowerCase() ?? '';
-    const href = attr('href');
-    if (!href || !rel.includes('icon') || rel.includes('mask')) continue;
-    const size = Number(attr('sizes')?.match(/(\d+)/)?.[1] ?? 0);
-    const score = href.endsWith('.svg') || attr('type')?.includes('svg') ? 1000 : rel.includes('apple-touch') ? 500 : size;
-    try {
-      icons.push({ href: new URL(href, base).href, score });
-    } catch {
-      // Ignore malformed hrefs.
-    }
-  }
-  return icons.sort((a, b) => b.score - a.score).map((i) => i.href);
 }
