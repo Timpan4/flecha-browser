@@ -3,6 +3,7 @@
   "productName": "Flecha",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "description": "An Arc-style browser built on a Chromium fork.",
   "scripts": {
     "shell:build": "node chromium/shell/build.mjs",
