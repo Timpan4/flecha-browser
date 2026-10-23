@@ -61,5 +61,4 @@ Flecha started as an Electron app; that version is gone from the repo (it's in t
 
 ## Next up
 
-Resizable split divider and 3–4 pane splits, Little Arc–style quick windows,
-and packaging with electron-builder.
+Resizable split divider and 3–4 pane splits.
