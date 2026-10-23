@@ -51,7 +51,15 @@ async function start() {
     } else if (isStartPage(tab)) {
       ours.add(tab.id!);
       void chrome.tabs.remove(tab.id!);
-    } else live.set(store.addTab(url(tab) || 'about:blank', { activate: tab.active }).id, tab.id!);
+    } else live.set(addTab(url(tab), { activate: tab.active }).id, tab.id!);
+  }
+
+  /** A Flecha tab for an address; the new tab page and empty addresses make a blank "New Tab". */
+  function addTab(address: string, opts: Parameters<Store['addTab']>[1]) {
+    const blank = !address || address === 'about:blank' || isStartPage({ url: address } as chrome.tabs.Tab);
+    const tab = store.addTab(blank ? 'about:blank' : address, opts);
+    if (blank) store.updateTab(tab.id, { title: 'New Tab' });
+    return tab;
   }
 
   const rememberLive = () => void chrome.storage.session.set({ [LIVE_KEY]: Object.fromEntries(live) });
@@ -166,7 +174,7 @@ async function start() {
   function onCreated(tab: chrome.tabs.Tab) {
     if (creating || flechaIdFor(tab.id!) || tab.id === placeholder || isShellPage(tab)) return;
     const opener = tab.openerTabId !== undefined ? flechaIdFor(tab.openerTabId) : undefined;
-    const added = store.addTab(tab.pendingUrl || tab.url || 'about:blank', { activate: tab.active, afterTabId: opener });
+    const added = addTab(url(tab), { activate: tab.active, afterTabId: opener });
     live.set(added.id, tab.id!);
     rememberLive();
   }
@@ -177,11 +185,12 @@ async function start() {
     const patch: Parameters<Store['updateTab']>[1] = {};
     // Chromium's new tab page is Flecha's empty state: the tab is still a blank one.
     if (info.url) patch.url = isStartPage({ url: info.url } as chrome.tabs.Tab) ? 'about:blank' : info.url;
-    // The new tab page's own title and icon ("Flecha") aren't the blank tab's.
-    const blank = isStartPage(tab);
+    // A blank tab keeps its "New Tab" name: the new tab page's own title and icon aren't its.
+    const blank = (patch.url ?? store.state.tabs[id]?.url) === 'about:blank';
     if (info.title && !blank) patch.title = info.title;
-    else if (blank && info.status === 'complete') patch.title = 'New Tab';
+    if (blank) patch.title = 'New Tab';
     if (info.favIconUrl && !blank) patch.favicon = info.favIconUrl;
+    if (blank) patch.favicon = undefined;
     if (info.status) patch.loading = info.status === 'loading';
     if (info.audible !== undefined) patch.audible = info.audible;
     if (info.mutedInfo) patch.muted = info.mutedInfo.muted;
@@ -212,7 +221,7 @@ async function start() {
     if (chromeId !== undefined) void fn(chromeId);
   };
   const openTab = (input: string, activate = true) =>
-    store.addTab(resolveInput(input, store.state.searchEngine), {
+    addTab(resolveInput(input, store.state.searchEngine), {
       activate,
       afterTabId: activate ? undefined : store.activeSpace.activeTabId,
     });
