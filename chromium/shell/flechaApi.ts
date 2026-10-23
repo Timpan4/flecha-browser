@@ -91,9 +91,14 @@ const api: FlechaApi = {
   renameFolder: cmd('renameFolder'),
   moveTab: cmd('moveTab'),
   clearToday: cmd('clearToday'),
-  // Reading other browsers' files needs native help; until then this brings over Flecha's
-  // own Electron state, from the file you pick (~/Library/Application Support/Flecha/flecha-state.json).
-  importMenu: () => {
+  // Brings over Flecha's own Electron state (~/Library/Application Support/Flecha/flecha-state.json).
+  importMenu: async () => {
+    // Flecha's native host reads it straight from disk; the file picker is for when it isn't installed.
+    const json = await invoke<string | undefined>('nativeHost:flechaState').catch(() => undefined);
+    if (json) {
+      if (confirm('Replace your Spaces and tabs with those of Flecha (Electron)?')) cmd('importFlechaState')(json);
+      return;
+    }
     const input = Object.assign(document.createElement('input'), { type: 'file', accept: '.json,application/json' });
     input.onchange = async () => {
       const file = input.files?.[0];
