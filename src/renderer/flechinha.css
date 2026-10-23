@@ -90,7 +90,8 @@ body {
   align-items: center;
   flex: 1;
   min-width: 0;
-  height: 30px;
+  /* Every toolbar control is 28 tall, 8 from the toolbar's top and bottom: the page's 8px gap. */
+  height: 28px;
   margin: 0 6px;
   padding-right: 2px;
   border-radius: var(--radius-md);
@@ -295,7 +296,7 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
-  height: 30px;
+  height: 28px;
   flex: none;
   padding: 0 12px 0 10px;
   border-radius: var(--radius-md);
@@ -304,7 +305,6 @@ body {
   font-weight: 600;
   font-size: var(--text-sm);
   white-space: nowrap;
-  box-shadow: 0 1px 2px rgba(11, 37, 69, 0.18);
   transition: background var(--fast) var(--ease), transform var(--fast) var(--ease), opacity var(--fast) var(--ease);
 }
 
