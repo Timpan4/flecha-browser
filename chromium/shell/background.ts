@@ -325,3 +325,8 @@ chrome.tabs.onRemoved.addListener((id) => void ready.then((r) => r.onRemoved(id)
 
 // Until the native patch opens it on its own, the toolbar button opens the sidebar.
 void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+
+// ⌘L: the browser sends this instead of focusing its hidden address bar (patch 0009).
+chrome.commands.onCommand.addListener((command) => {
+  if (command === 'flecha-open-location') void ready.then(() => broadcast('palette', 'navigate'));
+});
