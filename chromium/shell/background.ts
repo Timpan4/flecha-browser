@@ -108,7 +108,16 @@ async function start() {
     broadcast('frame', { sidebar, overlay });
   }
   const hasFrame = () => typeof chrome.flechaPrivate?.setFrame === 'function';
+  /** During the welcome tour, a shortcut is reported to it instead of acting. Returns whether it was. */
+  function tourKey(command: string | undefined) {
+    if (store.state.onboarded || !command) return false;
+    broadcast('tour-key', command);
+    return true;
+  }
+
   function openPalette(mode: string) {
+    // The tour asks you to try the real shortcuts and shows what they do.
+    if (tourKey(({ 'new-tab': 'newTab', navigate: 'openLocation', split: 'splitNew' } as Record<string, string>)[mode])) return;
     frame.paletteOpen = true;
     sendFrame();
     broadcast('palette', mode);
@@ -353,7 +362,7 @@ async function start() {
   // Built here, where the Store is; the page that asked draws them (windowUi.ts).
 
   const SEPARATOR = { separator: true } as const;
-  const run = (name: string, ...args: unknown[]): MenuRun => ({ cmd: name, args });
+  const does = (name: string, ...args: unknown[]): MenuRun => ({ cmd: name, args });
   const spaceLabel = (s: { emoji?: string; name: string }) => `${s.emoji ? s.emoji + '  ' : ''}${s.name}`;
 
   function tabMenu(tabId: string): MenuEntry<MenuRun>[] | undefined {
@@ -362,8 +371,8 @@ async function start() {
     if (!tab || !zone) return undefined;
     const space = store.activeSpace;
     const split: MenuEntry<MenuRun>[] = [];
-    if (space.split?.includes(tabId)) split.push({ label: 'Exit Split View', run: run('exitSplit') });
-    else if (space.activeTabId && space.activeTabId !== tabId) split.push({ label: 'Open in Split View', run: run('splitWith', tabId) });
+    if (space.split?.includes(tabId)) split.push({ label: 'Exit Split View', run: does('exitSplit') });
+    else if (space.activeTabId && space.activeTabId !== tabId) split.push({ label: 'Open in Split View', run: does('splitWith', tabId) });
     const name = tab.customTitle ?? tab.title;
     const otherSpaces = store.state.spaces.filter((s) => s.id !== store.locate(tabId)?.space?.id);
     return [
@@ -372,27 +381,27 @@ async function start() {
       { label: 'Copy Link', run: { copy: tab.url, message: 'Link copied' } },
       { label: 'Copy as Markdown Link', run: { copy: `[${name}](${tab.url})`, message: 'Markdown link copied' } },
       { label: 'Rename…', run: { rename: tabId } },
-      { label: 'Duplicate', run: run('newTab', tab.url) },
+      { label: 'Duplicate', run: does('newTab', tab.url) },
       // A Flechinha window of its own; the window code lives in another shell module.
-      { label: 'Open in Flechinha', run: run('openFlechinha', tab.url, tabId) },
+      { label: 'Open in Flechinha', run: does('openFlechinha', tab.url, tabId) },
       SEPARATOR,
-      { label: zone === 'today' ? 'Pin Tab' : 'Unpin Tab', run: run('togglePin', tabId) },
-      { label: zone === 'favorites' ? 'Remove from Favorites' : 'Add to Favorites', run: run('toggleFavorite', tabId) },
+      { label: zone === 'today' ? 'Pin Tab' : 'Unpin Tab', run: does('togglePin', tabId) },
+      { label: zone === 'favorites' ? 'Remove from Favorites' : 'Add to Favorites', run: does('toggleFavorite', tabId) },
       {
         label: 'Move to Space',
         enabled: zone !== 'favorites' && otherSpaces.length > 0,
-        submenu: otherSpaces.map((s) => ({ label: spaceLabel(s), run: run('moveToSpace', tabId, s.id) })),
+        submenu: otherSpaces.map((s) => ({ label: spaceLabel(s), run: does('moveToSpace', tabId, s.id) })),
       },
       SEPARATOR,
-      { label: 'Reload', enabled: live.has(tabId), run: run('reloadTab', tabId) },
-      { label: tab.muted ? 'Unmute Tab' : 'Mute Tab', run: run('toggleMute', tabId) },
-      ...(tab.homeUrl && tab.homeUrl !== tab.url ? [{ label: 'Go Back to Pinned URL', run: run('goHome', tabId) }] : []),
+      { label: 'Reload', enabled: live.has(tabId), run: does('reloadTab', tabId) },
+      { label: tab.muted ? 'Unmute Tab' : 'Mute Tab', run: does('toggleMute', tabId) },
+      ...(tab.homeUrl && tab.homeUrl !== tab.url ? [{ label: 'Go Back to Pinned URL', run: does('goHome', tabId) }] : []),
       SEPARATOR,
-      { label: zone === 'today' ? 'Close Tab' : 'Unload Tab', run: run('close', tabId) },
+      { label: zone === 'today' ? 'Close Tab' : 'Unload Tab', run: does('close', tabId) },
       ...(zone === 'today'
         ? [
-            { label: 'Close Tabs Below', run: run('closeTabs', tabId, 'below') },
-            { label: 'Close Other Tabs', run: run('closeTabs', tabId, 'others') },
+            { label: 'Close Tabs Below', run: does('closeTabs', tabId, 'below') },
+            { label: 'Close Other Tabs', run: does('closeTabs', tabId, 'others') },
           ]
         : []),
     ];
@@ -402,10 +411,10 @@ async function start() {
     const space = store.state.spaces.find((s) => s.id === spaceId);
     if (!space) return undefined;
     return [
-      { label: 'Edit Space…', run: run('editSpace', spaceId) },
-      { label: 'New Folder', run: run('newFolder') },
+      { label: 'Edit Space…', run: does('editSpace', spaceId) },
+      { label: 'New Folder', run: does('newFolder') },
       SEPARATOR,
-      { label: 'Separate Cookies and Logins', checked: !!space.isolated, run: run('setSpaceIsolated', spaceId, !space.isolated) },
+      { label: 'Separate Cookies and Logins', checked: !!space.isolated, run: does('setSpaceIsolated', spaceId, !space.isolated) },
       SEPARATOR,
       { label: 'Delete Space…', enabled: store.state.spaces.length > 1, run: { deleteSpace: spaceId } },
     ];
@@ -488,6 +497,7 @@ async function start() {
       if (hasFrame()) void chrome.flechaPrivate.focus('page');
     },
     toggleSidebar: () => {
+      if (tourKey('toggleSidebar')) return;
       frame.sidebarPeek = false;
       store.setSidebarVisible(!store.state.sidebarVisible);
     },
