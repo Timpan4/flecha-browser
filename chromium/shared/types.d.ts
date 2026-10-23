@@ -217,20 +217,6 @@ export type TabPlacement =
   | { zone: 'today'; spaceId: string; beforeId?: string }
   | { zone: 'pinned'; spaceId: string; folderId?: string; beforeId?: string };
 
-export interface FindResult {
-  active: number;
-  total: number;
-}
-
-/** The find-in-page bar's bridge; it lives in its own small view above the page. */
-export interface FindBarApi {
-  onOpen(cb: () => void): void;
-  onResult(cb: (result: FindResult) => void): void;
-  /** `newSearch` starts over (the text changed); otherwise it moves to the next or previous match. */
-  find(text: string, forward: boolean, newSearch: boolean): void;
-  close(): void;
-}
-
 /** What a Flechinha's toolbar shows. */
 export interface FlechinhaState {
   /** Empty until something has been opened. */
@@ -376,16 +362,6 @@ export interface SettingsApi {
   showTab(tabId: string): Promise<void>;
   /** The macOS emoji picker, for a Space's icon. */
   showEmojiPanel(): Promise<void>;
-}
-
-/** The split divider's bridge; it lives in its own thin view between the panes. */
-export interface DividerApi {
-  start(): void;
-  /** The pointer's x inside the divider view, which grows to cover both panes while dragging. */
-  drag(clientX: number): void;
-  end(): void;
-  /** Double-click: back to half and half. */
-  reset(): void;
 }
 
 export interface FlechaApi {
