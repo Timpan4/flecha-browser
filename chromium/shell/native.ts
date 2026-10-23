@@ -84,6 +84,8 @@ function registerDevToolsAndDefaultBrowser() {
     openDevTools: (options?: { console?: boolean }) => devTools({ console: !!options?.console }),
     devTools: () => devTools({ toggle: true }),
     isDefaultBrowser: () => defaultBrowserState(),
+    // ⌘F: Chromium's find bar, at the page area's top right (patch 0030).
+    ...(has('showFindBar') ? { find: () => chrome.flechaPrivate.showFindBar() } : {}),
     makeDefaultBrowser: () => chrome.flechaPrivate.makeDefaultBrowser(),
   });
 }

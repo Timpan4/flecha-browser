@@ -145,6 +145,12 @@ declare namespace chrome.flechaPrivate {
   }
   function openDevTools(tabId: number, options?: DevToolsOptions): Promise<void>;
 
+  /**
+   * Chromium's find bar (find in page) in `windowId` or the main window (patch 0030). With
+   * the toolbar hidden it floats at the page area's top right, just inside it.
+   */
+  function showFindBar(windowId?: number): Promise<void>;
+
   /** Whether Flecha is the default browser, and whether it can make itself so (patch 0027). */
   interface DefaultBrowserState {
     isDefault: boolean;
