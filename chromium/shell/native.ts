@@ -53,7 +53,41 @@ export function registerNative(ctx: NativeContext) {
   registerSplitRatio(ctx);
   registerFlechinha(ctx);
   registerPeek(ctx);
+  registerDevToolsAndDefaultBrowser();
   resolveCtx(ctx);
+}
+
+// ---- DevTools and the default browser (patch 0027) -----------------------------------------
+
+const activeTabId = async () =>
+  (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0]?.id ??
+  (await chrome.tabs.query({ active: true, windowType: 'normal' }))[0]?.id;
+
+/** { isDefault, canSet }, as UiState.defaultBrowser and Settings want it. */
+export async function defaultBrowserState() {
+  if (!has('isDefaultBrowser')) return { isDefault: false, canSet: false };
+  return chrome.flechaPrivate.isDefaultBrowser();
+}
+
+/**
+ * Hub commands: openDevTools(options?) on the active tab (options.console: the Console
+ * panel), devTools() toggles them (⌥⌘I), makeDefaultBrowser() asks macOS and resolves with the
+ * new state; isDefaultBrowser() resolves with it.
+ */
+function registerDevToolsAndDefaultBrowser() {
+  if (!has('openDevTools')) return;
+  const devTools = async (options: chrome.flechaPrivate.DevToolsOptions) => {
+    const tabId = await activeTabId();
+    if (tabId !== undefined) await chrome.flechaPrivate.openDevTools(tabId, options);
+  };
+  handle({
+    openDevTools: (options?: { console?: boolean }) => devTools({ console: !!options?.console }),
+    devTools: () => devTools({ toggle: true }),
+    isDefaultBrowser: () => defaultBrowserState(),
+    // ⌘F: Chromium's find bar, at the page area's top right (patch 0030).
+    ...(has('showFindBar') ? { find: () => chrome.flechaPrivate.showFindBar() } : {}),
+    makeDefaultBrowser: () => chrome.flechaPrivate.makeDefaultBrowser(),
+  });
 }
 
 // ---- Peek (patch 0026) -------------------------------------------------------------------

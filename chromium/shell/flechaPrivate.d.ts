@@ -135,6 +135,31 @@ declare namespace chrome.flechaPrivate {
   /** A window's Peek opened, moved, navigated or closed (`peek` undefined). */
   const onPeekChanged: chrome.events.Event<(windowId: number, peek?: PeekState) => void>;
 
+  /**
+   * Developer Tools for a tab (patch 0027), docked or in their own window as last time.
+   * `toggle` closes them if open (⌥⌘I); `console` opens them on the Console panel.
+   */
+  interface DevToolsOptions {
+    toggle?: boolean;
+    console?: boolean;
+  }
+  function openDevTools(tabId: number, options?: DevToolsOptions): Promise<void>;
+
+  /**
+   * Chromium's find bar (find in page) in `windowId` or the main window (patch 0030). With
+   * the toolbar hidden it floats at the page area's top right, just inside it.
+   */
+  function showFindBar(windowId?: number): Promise<void>;
+
+  /** Whether Flecha is the default browser, and whether it can make itself so (patch 0027). */
+  interface DefaultBrowserState {
+    isDefault: boolean;
+    canSet: boolean;
+  }
+  function isDefaultBrowser(): Promise<DefaultBrowserState>;
+  /** Asks macOS to make Flecha the default browser (macOS confirms), then reports the result. */
+  function makeDefaultBrowser(): Promise<DefaultBrowserState>;
+
   /** A shortcut from setShortcuts() was pressed in window `windowId`. */
   const onShortcut: chrome.events.Event<(command: string, windowId: number) => void>;
 }
