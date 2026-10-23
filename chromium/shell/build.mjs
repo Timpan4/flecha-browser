@@ -11,7 +11,14 @@ const renderer = path.join(root, 'src/renderer');
 
 function copyStatic() {
   fs.mkdirSync(path.join(out, 'fonts'), { recursive: true });
-  fs.copyFileSync(path.join(here, 'manifest.json'), path.join(out, 'manifest.json'));
+  // A new version on every build: Chromium keeps running the cached background script of an
+  // unpacked extension until its version changes.
+  const manifest = JSON.parse(fs.readFileSync(path.join(here, 'manifest.json'), 'utf8'));
+  const now = new Date();
+  const day = Math.floor((now - new Date(Date.UTC(2026, 0, 1))) / 86_400_000);
+  const halfSeconds = Math.floor((now.getUTCHours() * 3600 + now.getUTCMinutes() * 60 + now.getUTCSeconds()) / 2);
+  manifest.version = `0.${day}.${halfSeconds}`;
+  fs.writeFileSync(path.join(out, 'manifest.json'), JSON.stringify(manifest, null, 2));
   for (const f of fs.readdirSync(renderer)) if (f.endsWith('.css')) fs.copyFileSync(path.join(renderer, f), path.join(out, f));
   fs.copyFileSync(
     path.join(root, 'node_modules/@fontsource-variable/jetbrains-mono/files/jetbrains-mono-latin-wght-normal.woff2'),
