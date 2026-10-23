@@ -1,0 +1,477 @@
+--- /dev/null
++++ b/chrome/browser/ui/views/frame/flecha_frame_view.h
+@@ -0,0 +1,109 @@
++// Copyright 2026 The Flecha Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_FRAME_FLECHA_FRAME_VIEW_H_
++#define CHROME_BROWSER_UI_VIEWS_FRAME_FLECHA_FRAME_VIEW_H_
++
++#include <memory>
++
++#include "base/memory/raw_ptr.h"
++#include "base/scoped_observation.h"
++#include "chrome/browser/flecha/flecha_frame_host.h"
++#include "content/public/browser/web_contents_delegate.h"
++#include "extensions/browser/extension_registry.h"
++#include "extensions/browser/extension_registry_observer.h"
++#include "ui/base/metadata/metadata_header_macros.h"
++#include "ui/views/controls/webview/webview.h"
++#include "ui/views/view_tracker.h"
++
++class BrowserView;
++
++// Flecha's window frame (see flecha_frame_host.h): the shell's frame page,
++// chrome-extension://<shell>/window.html?window=<id>, in a transparent view
++// stacked above the page area of a normal browser window, plus the window
++// background behind the page area. chrome.flechaPrivate.setFrame() says where
++// the sidebar is; the browser view layout puts this view and the page area
++// where the state says (BrowserViewTabbedLayoutImpl).
++//
++// The frame shows only while the shell is loaded; without it the window keeps
++// Chromium's layout (with top chrome hidden, see flecha_top_chrome.h).
++class FlechaFrameView : public views::WebView,
++                        public FlechaFrameHost,
++                        public extensions::ExtensionRegistryObserver {
++  METADATA_HEADER(FlechaFrameView, views::WebView)
++
++ public:
++  // Adds the frame and its background to `browser_view`, if it is a normal
++  // window with top chrome hidden. Returns the frame, owned by `browser_view`.
++  static FlechaFrameView* MaybeCreate(BrowserView* browser_view);
++
++  // The frame of `browser_view`, if it has one.
++  static FlechaFrameView* From(views::View* browser_view);
++
++  explicit FlechaFrameView(BrowserView* browser_view);
++  FlechaFrameView(const FlechaFrameView&) = delete;
++  FlechaFrameView& operator=(const FlechaFrameView&) = delete;
++  ~FlechaFrameView() override;
++
++  // The window background behind the page area. Its insets are the page area's
++  // insets from the window's edges.
++  views::View* background_view() { return background_view_.view(); }
++
++  const FlechaFrameState& state() const { return state_; }
++
++  // Whether the frame lays out the window (the shell is loaded).
++  bool IsActive() const { return GetVisible(); }
++
++  // views::WebView:
++  gfx::Size CalculatePreferredSize(
++      const views::SizeBounds& available_size) const override;
++
++  // FlechaFrameHost:
++  int GetWindowId() const override;
++  content::BrowserContext* GetBrowserContext() override;
++  content::WebContents* GetFrameContents() override;
++  bool IsActiveWindow() const override;
++  void SetFrameState(const FlechaFrameState& state) override;
++  void FocusFrame() override;
++  void FocusPage() override;
++
++  // content::WebContentsDelegate (through views::WebView):
++  content::WebContents* OpenURLFromTab(
++      content::WebContents* source,
++      const content::OpenURLParams& params,
++      base::OnceCallback<void(content::NavigationHandle&)>
++          navigation_handle_callback) override;
++  content::KeyboardEventProcessingResult PreHandleKeyboardEvent(
++      content::WebContents* source,
++      const input::NativeWebKeyboardEvent& event) override;
++  bool HandleKeyboardEvent(content::WebContents* source,
++                           const input::NativeWebKeyboardEvent& event) override;
++
++  // extensions::ExtensionRegistryObserver:
++  void OnExtensionReady(content::BrowserContext* browser_context,
++                        const extensions::Extension* extension) override;
++  void OnExtensionUnloaded(content::BrowserContext* browser_context,
++                           const extensions::Extension* extension,
++                           extensions::UnloadedExtensionReason reason) override;
++
++ private:
++  // Opens the frame page (the shell is loaded), or closes it (it is not).
++  void OpenFramePage();
++  void CloseFramePage();
++
++  // Applies `state_` to the background, the layout and the window controls.
++  void ApplyState();
++
++  raw_ptr<BrowserView> browser_view_;
++  // Owned by `browser_view_`, like this view; it may go first.
++  views::ViewTracker background_view_;
++  std::unique_ptr<content::WebContents> frame_contents_;
++  FlechaFrameState state_;
++
++  base::ScopedObservation<extensions::ExtensionRegistry,
++                          extensions::ExtensionRegistryObserver>
++      registry_observation_{this};
++};
++
++#endif  // CHROME_BROWSER_UI_VIEWS_FRAME_FLECHA_FRAME_VIEW_H_
+--- /dev/null
++++ b/chrome/browser/ui/views/frame/flecha_frame_view.cc
+@@ -0,0 +1,245 @@
++// Copyright 2026 The Flecha Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/views/frame/flecha_frame_view.h"
++
++#include <string>
++#include <utility>
++
++#include "base/strings/string_number_conversions.h"
++#include "chrome/browser/extensions/chrome_extension_web_contents_observer.h"
++#include "chrome/browser/flecha/flecha_shell.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/views/frame/browser_view.h"
++#include "chrome/browser/ui/views/frame/flecha_top_chrome.h"
++#include "content/public/browser/navigation_controller.h"
++#include "content/public/browser/site_instance.h"
++#include "content/public/browser/web_contents.h"
++#include "extensions/browser/view_type_utils.h"
++#include "extensions/common/extension.h"
++#include "extensions/common/mojom/view_type.mojom.h"
++#include "ui/base/metadata/metadata_impl_macros.h"
++#include "ui/views/background.h"
++#include "ui/views/border.h"
++#include "ui/views/controls/webview/web_contents_set_background_color.h"
++
++namespace {
++
++// The window background behind the page area; the frame page draws over it.
++class FlechaFrameBackgroundView : public views::View {
++  METADATA_HEADER(FlechaFrameBackgroundView, views::View)
++
++ public:
++  FlechaFrameBackgroundView() {
++    // Only paints: clicks fall through to the window (and drag it).
++    SetCanProcessEventsWithinSubtree(false);
++    SetVisible(false);
++  }
++};
++
++BEGIN_METADATA(FlechaFrameBackgroundView)
++END_METADATA
++
++// Wide enough to cover any window, for an overlay.
++constexpr int kOverlayWidth = 1 << 20;
++
++}  // namespace
++
++// static
++FlechaFrameView* FlechaFrameView::MaybeCreate(BrowserView* browser_view) {
++  if (!FlechaHidesTopChrome(browser_view->browser()) ||
++      browser_view->browser()->GetProfile()->IsOffTheRecord()) {
++    return nullptr;
++  }
++  return browser_view->AddChildView(
++      std::make_unique<FlechaFrameView>(browser_view));
++}
++
++// static
++FlechaFrameView* FlechaFrameView::From(views::View* browser_view) {
++  if (!browser_view) {
++    return nullptr;
++  }
++  for (views::View* child : browser_view->children()) {
++    if (auto* frame = views::AsViewClass<FlechaFrameView>(child)) {
++      return frame;
++    }
++  }
++  return nullptr;
++}
++
++FlechaFrameView::FlechaFrameView(BrowserView* browser_view)
++    : views::WebView(browser_view->browser()->GetProfile()), browser_view_(browser_view) {
++  // Stays hidden until the shell is loaded and the frame page opens.
++  SetVisible(false);
++  // Under every other view of the window.
++  background_view_.SetView(browser_view->AddChildViewAt(
++      std::make_unique<FlechaFrameBackgroundView>(), 0));
++  if (const auto& state = FlechaFrameHost::DefaultState()) {
++    state_ = *state;
++  }
++  ApplyState();
++
++  auto* registry = extensions::ExtensionRegistry::Get(GetBrowserContext());
++  registry_observation_.Observe(registry);
++  if (registry->ready_extensions().Contains(kFlechaShellExtensionId)) {
++    OpenFramePage();
++  }
++}
++
++FlechaFrameView::~FlechaFrameView() {
++  SetWebContents(nullptr);
++}
++
++gfx::Size FlechaFrameView::CalculatePreferredSize(
++    const views::SizeBounds& available_size) const {
++  // The browser view layout reads the frame's width from here (it doesn't know
++  // this class); the frame is as tall as the window.
++  return gfx::Size(state_.FrameWidth(kOverlayWidth), 0);
++}
++
++int FlechaFrameView::GetWindowId() const {
++  return browser_view_->browser()->GetSessionID().id();
++}
++
++content::BrowserContext* FlechaFrameView::GetBrowserContext() {
++  return browser_view_->browser()->GetProfile();
++}
++
++content::WebContents* FlechaFrameView::GetFrameContents() {
++  return frame_contents_.get();
++}
++
++bool FlechaFrameView::IsActiveWindow() const {
++  return browser_view_->IsActive();
++}
++
++void FlechaFrameView::SetFrameState(const FlechaFrameState& state) {
++  if (state == state_) {
++    return;
++  }
++  state_ = state;
++  ApplyState();
++}
++
++void FlechaFrameView::FocusFrame() {
++  if (frame_contents_) {
++    RequestFocus();
++    frame_contents_->Focus();
++  }
++}
++
++void FlechaFrameView::FocusPage() {
++  if (views::WebView* page = browser_view_->GetActiveContentsWebView()) {
++    page->RequestFocus();
++    if (page->web_contents()) {
++      page->web_contents()->Focus();
++    }
++  }
++}
++
++content::WebContents* FlechaFrameView::OpenURLFromTab(
++    content::WebContents* source,
++    const content::OpenURLParams& params,
++    base::OnceCallback<void(content::NavigationHandle&)>
++        navigation_handle_callback) {
++  // The frame page stays the shell's; anything else it opens goes to a tab.
++  WindowOpenDisposition disposition = params.disposition;
++  if (disposition == WindowOpenDisposition::kCurrentTab) {
++    if (params.url.SchemeIs(extensions::kExtensionScheme) &&
++        IsFlechaShell(params.url.host())) {
++      source->GetController().LoadURLWithParams(
++          content::NavigationController::LoadURLParams(params));
++      return source;
++    }
++    disposition = WindowOpenDisposition::kNewForegroundTab;
++  }
++  browser_view_->browser()->OpenGURL(params.url, disposition);
++  return nullptr;
++}
++
++content::KeyboardEventProcessingResult FlechaFrameView::PreHandleKeyboardEvent(
++    content::WebContents* source,
++    const input::NativeWebKeyboardEvent& event) {
++  // The window's shortcuts (Cmd+T, Cmd+L, ...) work with the frame focused.
++  return browser_view_->PreHandleKeyboardEvent(event);
++}
++
++bool FlechaFrameView::HandleKeyboardEvent(
++    content::WebContents* source,
++    const input::NativeWebKeyboardEvent& event) {
++  return browser_view_->HandleKeyboardEvent(event);
++}
++
++void FlechaFrameView::OnExtensionReady(content::BrowserContext* browser_context,
++                                       const extensions::Extension* extension) {
++  if (IsFlechaShell(extension->id())) {
++    OpenFramePage();
++  }
++}
++
++void FlechaFrameView::OnExtensionUnloaded(
++    content::BrowserContext* browser_context,
++    const extensions::Extension* extension,
++    extensions::UnloadedExtensionReason reason) {
++  if (IsFlechaShell(extension->id())) {
++    CloseFramePage();
++  }
++}
++
++void FlechaFrameView::OpenFramePage() {
++  CloseFramePage();
++
++  const GURL url =
++      extensions::Extension::GetBaseURLFromExtensionId(kFlechaShellExtensionId)
++          .Resolve("window.html?window=" +
++                   base::NumberToString(GetWindowId()));
++  content::BrowserContext* context = GetBrowserContext();
++  frame_contents_ = content::WebContents::Create(content::WebContents::CreateParams(
++      context, content::SiteInstance::CreateForURL(context, url)));
++  // The page area shows through wherever the frame page draws nothing.
++  views::WebContentsSetBackgroundColor::CreateForWebContentsWithColor(
++      frame_contents_.get(), SK_ColorTRANSPARENT);
++  extensions::SetViewType(frame_contents_.get(),
++                          extensions::mojom::ViewType::kComponent);
++  extensions::ChromeExtensionWebContentsObserver::CreateForWebContents(
++      frame_contents_.get());
++  frame_contents_->SetDelegate(this);
++  SetWebContents(frame_contents_.get());
++  frame_contents_->GetController().LoadURL(url, content::Referrer(),
++                                           ui::PAGE_TRANSITION_AUTO_TOPLEVEL,
++                                           std::string());
++
++  SetVisible(true);
++  if (views::View* background = background_view()) {
++    background->SetVisible(true);
++  }
++  ApplyState();
++}
++
++void FlechaFrameView::CloseFramePage() {
++  if (!frame_contents_) {
++    return;
++  }
++  SetVisible(false);
++  if (views::View* background = background_view()) {
++    background->SetVisible(false);
++  }
++  SetWebContents(nullptr);
++  frame_contents_.reset();
++  ApplyState();
++}
++
++void FlechaFrameView::ApplyState() {
++  if (views::View* background = background_view()) {
++    background->SetBackground(views::CreateSolidBackground(state_.background));
++    background->SetBorder(views::CreateEmptyBorder(state_.PageInsets()));
++  }
++  PreferredSizeChanged();
++  browser_view_->InvalidateLayout();
++}
++
++BEGIN_METADATA(FlechaFrameView)
++END_METADATA
+--- a/chrome/browser/ui/views/frame/BUILD.gn
++++ b/chrome/browser/ui/views/frame/BUILD.gn
+@@ -749,6 +749,30 @@
+   ]
+ }
+ 
++# Flecha: the shell's frame page, which draws the window.
++source_set("flecha_frame_view") {
++  sources = [
++    "flecha_frame_view.cc",
++    "flecha_frame_view.h",
++  ]
++  public_deps = [
++    "//base",
++    "//chrome/browser/flecha:flecha_frame_host",
++    "//content/public/browser",
++    "//extensions/browser",
++    "//ui/views",
++    "//ui/views/controls/webview",
++  ]
++  deps = [
++    ":browser_view_header",
++    "//chrome/browser/extensions",
++    "//chrome/browser/profiles:profile",
++    "//chrome/browser/ui/browser_window",
++    "//extensions/common",
++    "//ui/base",
++  ]
++}
++
+ source_set("browser_view") {
+   sources = [ "browser_view.cc" ]
+   public_deps = [ ":browser_view_header" ]
+@@ -756,6 +780,7 @@
+     ":app_menu_button",
+     ":browser_frame_view",
+     ":browser_native_widget",
++    ":flecha_frame_view",
+     ":browser_view_layout",
+     ":browser_view_layout_delegate_impl",
+     ":browser_widget",
+--- a/chrome/browser/ui/views/frame/browser_view.cc
++++ b/chrome/browser/ui/views/frame/browser_view.cc
+@@ -168,6 +168,7 @@
+ #include "chrome/browser/ui/views/frame/contents_separator.h"
+ #include "chrome/browser/ui/views/frame/contents_web_view.h"
+ #include "chrome/browser/ui/views/frame/custom_floating_corner.h"
++#include "chrome/browser/ui/views/frame/flecha_frame_view.h"
+ #include "chrome/browser/ui/views/frame/flecha_top_chrome.h"
+ #include "chrome/browser/ui/views/frame/horizontal_tab_strip_region_view.h"
+ #include "chrome/browser/ui/views/frame/layout/browser_view_layout.h"
+@@ -5152,6 +5153,12 @@
+   layout_views.top_container_separator = top_container_separator_;
+   // LINT.ThenChange(//chrome/browser/ui/views/frame/layout/browser_view_layout.h:BrowserViewLayoutViews)
+ 
++  // Flecha: the shell's frame page draws the window (flecha_frame_view.h).
++  if (FlechaFrameView* flecha_frame = FlechaFrameView::MaybeCreate(this)) {
++    layout_views.flecha_frame = flecha_frame;
++    layout_views.flecha_frame_background = flecha_frame->background_view();
++  }
++
+   SetLayoutManager(BrowserViewLayout::CreateLayout(
+       std::make_unique<BrowserViewLayoutDelegateImpl>(*this), browser(),
+       std::move(layout_views)));
+--- a/chrome/browser/ui/views/frame/layout/browser_view_layout.h
++++ b/chrome/browser/ui/views/frame/layout/browser_view_layout.h
+@@ -91,6 +91,13 @@
+ 
+   // These views are dynamically set.
+   raw_ptr<BookmarkBarView> bookmark_bar = nullptr;
++
++  // Flecha: the window frame and the window background behind the page area
++  // (flecha_frame_view.h), or null. While the frame is visible it lays out
++  // the window: it is as wide as its preferred width, and the page area sits
++  // in the background's insets.
++  raw_ptr<views::View> flecha_frame = nullptr;
++  raw_ptr<views::View> flecha_frame_background = nullptr;
+ };
+ 
+ // The layout manager used in chrome browser.
+--- a/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
++++ b/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+@@ -1445,6 +1445,34 @@
+     }
+     layout.AddChild(views().side_panel_content_transition_scrim, scrim_bounds,
+                     is_scrim_visible);
++  }
++
++  // Flecha: the shell's frame page draws the window, like the Electron spike
++  // (see flecha_frame_view.h). The background fills the window, the page area
++  // sits in its insets, and the frame view covers the window's left part (or
++  // all of it, for an overlay), above the page.
++  if (views().flecha_frame_background &&
++      IsParentedToAndVisible(views().flecha_frame, views().browser_view)) {
++    const gfx::Rect window = browser_params.visual_client_area;
++    layout.AddChild(views().flecha_frame_background, window);
++
++    gfx::Rect page = window;
++    page.Inset(views().flecha_frame_background->GetInsets());
++    if (auto infobar = layout.children.find(
++            static_cast<views::View*>(views().infobar_container.get()));
++        infobar_visible && infobar != layout.children.end()) {
++      const int infobar_height = infobar->second.bounds.height();
++      infobar->second.bounds =
++          gfx::Rect(page.x(), page.y(), page.width(), infobar_height);
++      page.Inset(gfx::Insets::TLBR(infobar_height, 0, 0, 0));
++    }
++    contents_layout.bounds = page;
++
++    const int frame_width = std::min(
++        window.width(), views().flecha_frame->GetPreferredSize().width());
++    layout.AddChild(views().flecha_frame,
++                    gfx::Rect(window.x(), window.y(), frame_width,
++                              window.height()));
+   }
+ 
+   return layout;
