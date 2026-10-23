@@ -1,6 +1,14 @@
 import type { HistoryEntry, ImportResult } from '../shared/types';
-import type { ArcImport, ImportNode } from './arcImport';
 import type { Store } from './store';
+
+export type ImportTab = { url: string; title: string };
+export type ImportNode = ({ kind: 'tab' } & ImportTab) | { kind: 'folder'; name: string; children: ImportNode[] };
+
+/** Arc's sidebar, as arcImport.ts reads it. */
+export interface ArcImport {
+  spaces: Array<{ name: string; emoji?: string; pinned: ImportNode[]; today: ImportTab[] }>;
+  favorites: ImportTab[];
+}
 
 /**
  * What `readBrowser` (browserImport.ts) found in another browser, before any of it is added
