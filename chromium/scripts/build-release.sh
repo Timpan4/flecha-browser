@@ -13,6 +13,8 @@
 #      (patch 0050) copies it into the framework's Resources/flecha-shell, which is where the
 #      app loads it from without --flecha-shell-dir. It sits inside the checkout because the
 #      build (siso) only tracks files under the source root; it is not part of Chromium's git;
+#      Sparkle.framework (fetch-sparkle.sh) is staged the same way, at //flecha/Sparkle.framework,
+#      for the app's Contents/Frameworks (patch 0053);
 #   4. writes out/Release/args.gn from chromium/build/release.gn plus Flecha's version
 #      (package.json) and build number (see below), only when it changes, so a re-run doesn't
 #      regenerate. FLECHA_OFFICIAL=1 adds is_official_build = true: ThinLTO, slower still,
@@ -85,6 +87,22 @@ else
   mkdir -p "$src/flecha"
   cp -R "$here/shell/dist" "$staged"
   echo "staged $staged"
+fi
+
+step "stage Sparkle at //flecha/Sparkle.framework"
+# The official Sparkle 2 release, pinned and checked (fetch-sparkle.sh); the
+# flecha_sparkle_framework GN arg (patch 0053) copies it into Contents/Frameworks.
+sparkle_dir="$("$here/scripts/fetch-sparkle.sh")"
+staged_sparkle="$src/flecha/Sparkle.framework"
+if diff -rq "$sparkle_dir/Sparkle.framework" "$staged_sparkle" >/dev/null 2>&1; then
+  echo "unchanged"
+else
+  rm -rf "$staged_sparkle"
+  mkdir -p "$src/flecha"
+  # cp -R keeps the framework's symlinks (Versions/Current and the top-level links), and,
+  # like the shell's, the fresh copy is newer than the one in the app, so the build copies it.
+  cp -R "$sparkle_dir/Sparkle.framework" "$staged_sparkle"
+  echo "staged $staged_sparkle"
 fi
 
 step "out/Release/args.gn"

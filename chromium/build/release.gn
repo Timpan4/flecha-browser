@@ -17,3 +17,9 @@ chrome_pgo_phase = 0
 # The shell, staged into the checkout by build-release.sh, goes into the framework's
 # Resources as flecha-shell (patch 0050).
 flecha_shell_dir = "//flecha/shell"
+# Sparkle, the auto-updater (patches 0040 and 0053): build-release.sh stages the official
+# Sparkle.framework (fetch-sparkle.sh) here. The public key is the EdDSA key already in the
+# release signer's login Keychain, from `generate_keys -p`; make-appcast.sh signs with it.
+flecha_sparkle_framework = "//flecha/Sparkle.framework"
+flecha_sparkle_feed_url = "https://flecha.dev/appcast.xml"
+flecha_sparkle_public_key = "AHjs14q8ghu3og63BEFxU5uOlOYTcb7GDOSI7+R6j9s="
