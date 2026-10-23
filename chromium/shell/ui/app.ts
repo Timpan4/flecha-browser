@@ -1136,6 +1136,15 @@ $('space-header').oncontextmenu = (e) => {
   e.preventDefault();
   if (state) api.spaceMenu(state.activeSpaceId);
 };
+// As in Arc, right-clicking the sidebar's empty background (between and below the tabs, the
+// toolbar's gaps) opens the current Space's menu. Rows, buttons, fields and popovers aren't
+// background: they have their own menu, the native edit menu, or none.
+$('sidebar').addEventListener('contextmenu', (e) => {
+  if (e.defaultPrevented || !state) return;
+  if ((e.target as Element).closest('button, a, input, textarea, select, label, [contenteditable], .row, .popover, browser-action-list, #urlbar-wrap, #agent-status')) return;
+  e.preventDefault();
+  api.spaceMenu(state.activeSpaceId);
+});
 
 acceptDrops($('favorites'), { zone: 'favorites' });
 acceptDrops($('pinned'), { zone: 'pinned' });
