@@ -20,7 +20,7 @@ import { SiteIcons } from './siteIcons';
 // Loaded on the first turn: its modules add webNavigation and message listeners as they load.
 import { registerFeatures, type Features } from './features';
 // Also loaded on the first turn, for the shortcut event that may have woken the background.
-import { registerNative } from './native';
+import { isFlechinha, isFlechinhaWindow, registerNative } from './native';
 import { registerDownloads } from './downloads';
 import { registerSiteControls } from './siteControls';
 import { Favicons } from './favicons';
@@ -141,10 +141,12 @@ async function start() {
     if (hasFrame()) void chrome.flechaPrivate.focus('frame');
   }
 
-  /** The window Flecha's tabs live in: the last focused normal window. */
+  /** The window Flecha's tabs live in: the last focused normal window that isn't a Flechinha. */
   async function mainWindow() {
-    const win = await chrome.windows.getLastFocused({ windowTypes: ['normal'] }).catch(() => undefined);
-    return win?.id ?? (await chrome.windows.create({ focused: true }))!.id!;
+    const last = await chrome.windows.getLastFocused({ windowTypes: ['normal'] }).catch(() => undefined);
+    if (last?.id !== undefined && !isFlechinha(last.id)) return last.id;
+    const other = (await chrome.windows.getAll({ windowTypes: ['normal'] })).find((w) => !isFlechinha(w.id));
+    return other?.id ?? (await chrome.windows.create({ focused: true }))!.id!;
   }
 
   async function openChromeTab(id: string, active: boolean) {
@@ -325,8 +327,11 @@ async function start() {
 
   // ---- Chromium → Flecha ----------------------------------------------------
 
-  function onCreated(tab: chrome.tabs.Tab) {
+  async function onCreated(tab: chrome.tabs.Tab) {
     if (creating || flechaIdFor(tab.id!) || tab.id === placeholder || isShellPage(tab)) return;
+    // A Flechinha's page isn't one of Flecha's tabs. Asked of the browser: a new Flechinha's
+    // first tab arrives before openFlechinha() has told us its window.
+    if (await isFlechinhaWindow(tab.windowId)) return;
     const opener = tab.openerTabId !== undefined ? flechaIdFor(tab.openerTabId) : undefined;
     const added = addTab(url(tab), { activate: tab.active, afterTabId: opener });
     live.set(added.id, tab.id!);
@@ -724,9 +729,25 @@ async function start() {
     store,
     chromeTabId: (id) => live.get(id),
     flechaTabId: (chromeId) => flechaIdFor(chromeId),
-    run: (command) => {
+    run: (command, windowId) => {
+      // In a Flechinha, its own toolbar answers the few shortcuts it has.
+      if (isFlechinha(windowId)) return broadcast('flechinha:command', windowId, command);
       const numbered = /^select(Tab|Space):(\d)$/.exec(command);
       runCommand(numbered ? `${numbered[1].toLowerCase()}${numbered[2]}` : command);
+    },
+    // Into a Flechinha: the page leaves its Space without closing.
+    releaseTab: (id) => {
+      live.delete(id);
+      rememberLive();
+      store.closeTab(id);
+    },
+    // Back from a Flechinha ("Open in Flecha"): an active Today tab in the current Space.
+    adoptTab: (chromeId) => {
+      void chrome.tabs.get(chromeId).then((tab) => {
+        if (flechaIdFor(chromeId)) return;
+        live.set(addTab(url(tab), { activate: true }).id, chromeId);
+        rememberLive();
+      });
     },
   });
   sync();
