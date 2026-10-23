@@ -13,9 +13,10 @@
 #      (patch 0050) copies it into the framework's Resources/flecha-shell, which is where the
 #      app loads it from without --flecha-shell-dir. It sits inside the checkout because the
 #      build (siso) only tracks files under the source root; it is not part of Chromium's git;
-#   4. writes out/Release/args.gn from chromium/build/release.gn (only when it changes, so a
-#      re-run doesn't regenerate). FLECHA_OFFICIAL=1 adds is_official_build = true: ThinLTO,
-#      slower still, and a full rebuild when switched;
+#   4. writes out/Release/args.gn from chromium/build/release.gn plus Flecha's version
+#      (package.json) and build number (see below), only when it changes, so a re-run doesn't
+#      regenerate. FLECHA_OFFICIAL=1 adds is_official_build = true: ThinLTO, slower still,
+#      and a full rebuild when switched;
 #   5. autoninja -C out/Release chrome, under caffeinate so the Mac doesn't sleep;
 #   6. package-release.sh: copies the app to out/Release/flecha-release/Flecha, adds the
 #      native host (with its Node) and signs it all, ad hoc unless FLECHA_SIGN_IDENTITY names
@@ -88,6 +89,17 @@ fi
 
 step "out/Release/args.gn"
 args="$(cat "$here/build/release.gn")"
+# Flecha's own version (patch 0052): package.json's "version" is the one source of it, the
+# app's CFBundleShortVersionString. Its CFBundleVersion, which Sparkle compares to decide
+# what is newer, is Chromium's BUILD.PATCH plus a build counter: the number of commits in
+# Flecha's history (git rev-list --count HEAD), so it only ever grows, both across Flecha
+# releases on one Chromium and across Chromium updates (whose BUILD grows), and it is
+# already past the 8119.0 the first releases had. FLECHA_BUILD_NUMBER overrides the counter.
+flecha_version="$(node -p 'require(process.argv[1]).version' "$root/package.json")"
+flecha_build_number="${FLECHA_BUILD_NUMBER:-$(git -C "$root" rev-list --count HEAD)}"
+args="$args
+flecha_version = \"$flecha_version\"
+flecha_build_number = \"$flecha_build_number\""
 if [ "${FLECHA_OFFICIAL:-0}" = 1 ]; then
   args="$args
 is_official_build = true"

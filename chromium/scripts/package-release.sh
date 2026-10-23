@@ -174,7 +174,14 @@ codesign --verify --deep --strict --verbose=1 "$app"
 echo "signed $app"
 
 if [ "$dmg" = 1 ]; then
-  version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")"
+  # Flecha's version (package.json, which build-release.sh put in the Info.plist as
+  # CFBundleShortVersionString, patch 0052), not Chromium's.
+  version="$(node -p 'require(process.argv[1]).version' "$here/../package.json")"
+  plist_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")"
+  if [ "$plist_version" != "$version" ]; then
+    echo "error: the app says version $plist_version, package.json $version; rebuild with build-release.sh" >&2
+    exit 1
+  fi
   image="$release/$product-$version.dmg"
   echo "== dmg $image"
   # A read-write image first, laid out like an installer: the app and an Applications

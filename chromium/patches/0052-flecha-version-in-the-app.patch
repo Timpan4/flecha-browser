@@ -1,0 +1,86 @@
+--- a/build/apple/tweak_info_plist.py
++++ b/build/apple/tweak_info_plist.py
+@@ -435,6 +435,19 @@
+         type='string',
+         default=None,
+         help='The id of the privileged helper executable.',
++    )
++    parser.add_option(
++        '--flecha-version',
++        dest='flecha_version',
++        default=None,
++        help='Flecha: the app\'s CFBundleShortVersionString (e.g. 0.1.0).',
++    )
++    parser.add_option(
++        '--flecha-build-number',
++        dest='flecha_build_number',
++        default=None,
++        help='Flecha: its build counter; CFBundleVersion becomes '
++        'BUILD.PATCH.<this>.',
+     )
+     (options, args) = parser.parse_args(argv)
+ 
+@@ -489,6 +502,33 @@
+             'CFBundleShortVersionString': '@MAJOR@.@BUILD@.@PATCH@',
+             'CFBundleVersion': '@MAJOR@.@MINOR@.@BUILD@.@PATCH@',
+         }
++
++    # Flecha: the app carries Flecha's own version (package.json's "version")
++    # as CFBundleShortVersionString, and as CFBundleVersion, the build number
++    # Sparkle compares, Chromium's BUILD.PATCH plus Flecha's build counter
++    # (chromium/scripts/build-release.sh). chrome://version and the user agent
++    # keep Chromium's version: they don't read the Info.plist.
++    if options.flecha_version:
++        if not re.fullmatch(r'\d+(\.\d+){1,2}', options.flecha_version):
++            print(
++                'Invalid --flecha-version: "%s"' % options.flecha_version,
++                file=sys.stderr,
++            )
++            return 1
++        version_format_for_key['CFBundleShortVersionString'] = (
++            options.flecha_version
++        )
++    if options.flecha_build_number:
++        if not options.flecha_build_number.isdigit():
++            print(
++                'Invalid --flecha-build-number: "%s"'
++                % options.flecha_build_number,
++                file=sys.stderr,
++            )
++            return 1
++        version_format_for_key['CFBundleVersion'] = (
++            '@BUILD@.@PATCH@.' + options.flecha_build_number
++        )
+ 
+     if options.use_breakpad:
+         version_format_for_key['BreakpadVersion'] = (
+--- a/chrome/BUILD.gn
++++ b/chrome/BUILD.gn
+@@ -79,6 +79,14 @@
+   # chromium/scripts/build-release.sh stages the shell at //flecha/shell and
+   # sets this. Empty (dev builds, which pass --flecha-shell-dir) copies none.
+   flecha_shell_dir = ""
++
++  # Flecha: the app's own version, its Info.plist CFBundleShortVersionString
++  # (package.json's "version"), and its build counter, which makes
++  # CFBundleVersion Chromium's BUILD.PATCH.<counter> for Sparkle.
++  # build-release.sh sets both; empty keeps Chromium's version (dev builds).
++  # The framework, chrome://version and the user agent always keep Chromium's.
++  flecha_version = ""
++  flecha_build_number = ""
+ }
+ 
+ assert(!is_ios, "Chromium/iOS shouldn't use anything in //chrome")
+@@ -544,6 +552,12 @@
+       }
+     } else {
+       args += [ "--keystone=0" ]
++    }
++    if (flecha_version != "") {
++      args += [ "--flecha-version=$flecha_version" ]
++    }
++    if (flecha_build_number != "") {
++      args += [ "--flecha-build-number=$flecha_build_number" ]
+     }
+   }
+ 
