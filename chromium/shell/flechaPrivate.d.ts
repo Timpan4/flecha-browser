@@ -52,6 +52,14 @@ declare namespace chrome.flechaPrivate {
    */
   function setShortcuts(shortcuts: Record<string, string>): Promise<string[]>;
 
+  /**
+   * The browser's colour scheme (patch 0018), like Electron's nativeTheme.themeSource:
+   * Chromium's own UI (menus, dialogs, find bar, traffic lights) and every page's
+   * prefers-color-scheme follow it, the frame page's included. 'system' follows macOS. Kept in
+   * the profile (Chromium's Settings > Appearance > Mode).
+   */
+  function setTheme(theme: 'system' | 'light' | 'dark'): Promise<void>;
+
   /** A shortcut from setShortcuts() was pressed in window `windowId`. */
   const onShortcut: chrome.events.Event<(command: string, windowId: number) => void>;
 }

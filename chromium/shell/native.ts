@@ -35,7 +35,24 @@ if (has('setShortcuts')) chrome.flechaPrivate.onShortcut.addListener(when((ctx, 
 
 export function registerNative(ctx: NativeContext) {
   registerShortcuts(ctx);
+  registerTheme(ctx);
   resolveCtx(ctx);
+}
+
+// ---- theme (patch 0018) ------------------------------------------------------------------
+
+/** Settings' Appearance: Chromium's UI and pages' prefers-color-scheme follow state.theme. */
+function registerTheme(ctx: NativeContext) {
+  if (!has('setTheme')) return;
+  let sent: string | undefined;
+  const apply = () => {
+    const theme = ctx.store.state.theme ?? 'system';
+    if (theme === sent) return;
+    sent = theme;
+    void chrome.flechaPrivate.setTheme(theme);
+  };
+  apply();
+  ctx.store.onChange(apply);
 }
 
 // ---- keyboard shortcuts (patch 0016) ----------------------------------------------------
