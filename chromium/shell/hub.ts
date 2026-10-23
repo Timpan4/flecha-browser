@@ -19,6 +19,19 @@ export function handle(handlers: Record<string, Handler>) {
   }
 }
 
+/**
+ * Runs a command another module registered, as if a page had sent it (a feature asking for
+ * DevTools, say). Returns false when nothing handles that name yet.
+ */
+export function run(name: string, ...args: unknown[]) {
+  const fn = commands.get(name);
+  if (!fn) return false;
+  void Promise.resolve()
+    .then(() => fn(...args))
+    .catch((err) => console.error(`Flecha shell: "${name}" failed`, err));
+  return true;
+}
+
 /** Sends an event to every open Flecha page. */
 export function broadcast(name: string, ...args: unknown[]) {
   const message: Message = { type: 'event', name, args };
