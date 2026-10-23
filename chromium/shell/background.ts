@@ -13,6 +13,7 @@ import { describe as describeEnvironment } from '../../src/main/environments';
 import { spaceTint } from '../../src/main/spaceTint';
 import type { BrowserState, DropTarget, SearchEngineId, UiState } from '../../src/shared/types';
 import { broadcast, handle, listen, onConnect } from './hub';
+import { openSettings, registerSettings } from './settingsHandlers';
 
 const STATE_KEY = 'state';
 /** Flecha tab id ↔ Chromium tab id, for the tabs that are open. Kept across background restarts. */
@@ -260,6 +261,7 @@ async function start() {
     },
     splitWith: (id: string) => store.splitWith(id),
     splitNew: (input: string) => store.splitWith(openTab(input, false).id),
+    openSettings: (pane?: string) => openSettings(typeof pane === 'string' ? pane : undefined),
     finishOnboarding: () => store.setOnboarded(true),
     setPreferences: (prefs: { theme?: string; searchEngine?: string }) => {
       if (prefs?.theme === 'system' || prefs?.theme === 'light' || prefs?.theme === 'dark') store.setPreferences({ theme: prefs.theme });
@@ -274,6 +276,17 @@ async function start() {
       })),
     topSites: async () => (await chrome.topSites.get()).map((s) => ({ url: s.url, title: s.title || s.url, visits: 0, lastVisit: 0 })),
     detectBrowsers: () => [],
+  });
+
+  registerSettings({
+    store,
+    unload: (ids) => void unload(ids),
+    broadcastState: sendState,
+    isOpen: (id) => live.has(id),
+    load: (id, url) => {
+      const chromeId = live.get(id);
+      if (chromeId !== undefined) void chrome.tabs.update(chromeId, { url });
+    },
   });
 
   onConnect(() => sendState());
