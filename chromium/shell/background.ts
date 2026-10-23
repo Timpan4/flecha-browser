@@ -180,6 +180,7 @@ async function start() {
     // The new tab page's own title and icon ("Flecha") aren't the blank tab's.
     const blank = isStartPage(tab);
     if (info.title && !blank) patch.title = info.title;
+    else if (blank && info.status === 'complete') patch.title = 'New Tab';
     if (info.favIconUrl && !blank) patch.favicon = info.favIconUrl;
     if (info.status) patch.loading = info.status === 'loading';
     if (info.audible !== undefined) patch.audible = info.audible;
