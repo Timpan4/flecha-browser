@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+const randomUUID = () => crypto.randomUUID();
 import type { ActiveEnvironment, Environment, EnvironmentTarget } from '../shared/types';
 
 /**
