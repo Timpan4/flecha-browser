@@ -8,5 +8,6 @@
   "permissions": ["tabs", "storage", "unlimitedStorage", "sidePanel", "history", "topSites", "favicon", "clipboardWrite"],
   "background": { "service_worker": "background.js", "type": "module" },
   "side_panel": { "default_path": "sidebar.html" },
+  "chrome_url_overrides": { "newtab": "newtab.html" },
   "action": { "default_title": "Flecha" }
 }
