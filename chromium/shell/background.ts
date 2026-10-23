@@ -10,7 +10,6 @@ import { Store, type StatePersistence } from '../../src/main/store';
 import { resolveInput, searchEngine } from '../../src/main/url';
 import { shortcutHints } from '../../src/main/shortcuts';
 import { describe as describeEnvironment } from '../../src/main/environments';
-import { spaceTint } from '../../src/main/spaceTint';
 import type { BrowserState, DropTarget, SearchEngineId, UiState } from '../../src/shared/types';
 import { broadcast, handle, listen, onConnect } from './hub';
 import { openSettings, registerSettings } from './settingsHandlers';
@@ -56,7 +55,6 @@ async function start() {
   }
 
   const rememberLive = () => void chrome.storage.session.set({ [LIVE_KEY]: Object.fromEntries(live) });
-  const dark = () => store.state.theme === 'dark';
 
   function uiState(): UiState {
     const tabs = Object.fromEntries(Object.entries(store.state.tabs).map(([id, { history, ...tab }]) => [id, tab]));
@@ -64,7 +62,8 @@ async function start() {
       ...store.state,
       tabs,
       searchEngineName: searchEngine(store.state.searchEngine).name,
-      tint: spaceTint(store.activeSpace.color, dark()),
+      // The light tint; pages darken it themselves, since only they know the system appearance.
+      tint: store.activeSpace.color,
       sidebarMode: 'docked',
       environment: store.activeTab ? describeEnvironment(store.activeTab.url, store.state.environments) : undefined,
       localServers: [],
@@ -176,7 +175,9 @@ async function start() {
     const id = flechaIdFor(chromeId);
     if (!id) return;
     const patch: Parameters<Store['updateTab']>[1] = {};
-    if (info.url) patch.url = info.url;
+    // Chromium's new tab page is Flecha's empty state: the tab is still a blank one.
+    if (info.url) patch.url = isStartPage({ url: info.url } as chrome.tabs.Tab) ? 'about:blank' : info.url;
+    if (patch.url === 'about:blank') delete info.title;
     if (info.title) patch.title = info.title;
     if (info.favIconUrl) patch.favicon = info.favIconUrl;
     if (info.status) patch.loading = info.status === 'loading';
