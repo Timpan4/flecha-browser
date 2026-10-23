@@ -3,6 +3,7 @@
  * opens that boost. Saving applies it at once (styles in place, scripts by reloading the site's
  * tabs), as saving the file did in Electron.
  */
+import './noPageMenu';
 import { invoke, on } from './client';
 import type { BoostFile } from './features/boosts';
 import { compileBoost } from './features/compileBoost';
