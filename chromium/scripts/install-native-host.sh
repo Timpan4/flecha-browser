@@ -10,13 +10,18 @@
 # Chromium looks for user-level hosts in <user data dir>/NativeMessagingHosts
 # (chrome::DIR_USER_NATIVE_MESSAGING in chrome/common/chrome_paths.cc), and the user data dir
 # is ~/Library/Application Support/Flecha Browser unless --user-data-dir says otherwise
-# (patch 0001). Each folder gets the host manifest and a launcher that runs the bundled host
-# from this checkout with this Node, so rebuilding the host needs no reinstall.
+# (patch 0001). Each of those folders gets the host's manifest.
+#
+# The host itself (a launcher and the bundled script) is copied to $FLECHA_HOST_DIR,
+# ~/Library/Application Support/Flecha Browser/native-host by default: Chromium starts hosts
+# disclaiming responsibility for them (launch_context_posix.cc), so macOS privacy rules
+# treat the host as its own app, which may not read ~/Documents, external disks and the
+# like. Run this again after changing the host.
 set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
 name="dev.oprimo.flecha.host"
 origin="chrome-extension://abdiaepfgbbhdjaecjipmaailijaaide/"
-bundle="$here/native-host/dist/flecha-host.cjs"
+host_dir="${FLECHA_HOST_DIR:-$HOME/Library/Application Support/Flecha Browser/native-host}"
 
 # Chromium starts the host without the shell's PATH, so the launcher names Node outright.
 node="${FLECHA_NODE:-$(command -v node || true)}"
@@ -28,8 +33,6 @@ if ! "$node" -e 'require("node:sqlite")' 2>/dev/null; then
   echo "error: $node has no node:sqlite; the host needs Node 22.5 or newer" >&2
   exit 1
 fi
-
-(cd "$here/.." && "$node" chromium/native-host/build.mjs)
 
 targets=()
 default=1
@@ -44,15 +47,20 @@ if [ "${#targets[@]}" = 0 ]; then
   exit 1
 fi
 
+(cd "$here/.." && "$node" chromium/native-host/build.mjs)
+mkdir -p "$host_dir"
+cp "$here/native-host/dist/flecha-host.cjs" "$host_dir/flecha-host.cjs"
+launcher="$host_dir/flecha-host"
+cat >"$launcher" <<EOF
+#!/bin/sh
+exec "$node" "$host_dir/flecha-host.cjs" "\$@"
+EOF
+chmod +x "$launcher"
+echo "host in $host_dir"
+
 for dir in "${targets[@]}"; do
   hosts="$dir/NativeMessagingHosts"
   mkdir -p "$hosts"
-  launcher="$hosts/flecha-host"
-  cat >"$launcher" <<EOF
-#!/bin/sh
-exec "$node" "$bundle" "\$@"
-EOF
-  chmod +x "$launcher"
   cat >"$hosts/$name.json" <<EOF
 {
   "name": "$name",
