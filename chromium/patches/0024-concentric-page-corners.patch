@@ -1,0 +1,42 @@
+--- a/chrome/browser/flecha/flecha_frame_host.h
++++ b/chrome/browser/flecha/flecha_frame_host.h
+@@ -48,9 +48,12 @@
+ inline constexpr int kFlechaTrafficLightsY = 18;
+ // The gap around the page area.
+ inline constexpr int kFlechaGap = 8;
+-// The page area's corner radius: the shell's page-shaped card
+-// (#empty-state in src/renderer/styles.css) has the same.
+-inline constexpr float kFlechaPageCornerRadius = 10;
++// The corner radius of a Flecha window on macOS (measured).
++inline constexpr float kFlechaWindowCornerRadius = 20;
++// The page area's corner radius, concentric with the window's: it sits
++// kFlechaGap in. The shell's CSS has the same (--page-radius).
++inline constexpr float kFlechaPageCornerRadius =
++    kFlechaWindowCornerRadius - kFlechaGap;
+ 
+ // Flechinha (src/main/flechinha.ts): the frame page is a toolbar this tall
+ // across the top, and the page sits under it, kFlechaGap from the other edges.
+--- a/chrome/browser/ui/views/frame/multi_contents_view.h
++++ b/chrome/browser/ui/views/frame/multi_contents_view.h
+@@ -11,6 +11,7 @@
+ #include "base/callback_list.h"
+ #include "base/functional/callback_forward.h"
+ #include "base/gtest_prod_util.h"
++#include "chrome/browser/flecha/flecha_frame_host.h"
+ #include "base/memory/raw_ptr.h"
+ #include "chrome/browser/ui/tabs/split_tab_highlight_controller.h"
+ #include "chrome/browser/ui/ui_features.h"
+@@ -65,9 +66,10 @@
+   };
+ 
+   static constexpr int kSplitViewContentInset = 8;
+-  // Flecha: 10 (was 6), the page area's radius (kFlechaPageCornerRadius), so
+-  // each pane of a split rounds like a single page.
+-  static constexpr float kSplitViewContentCornerRadius = 10;
++  // Flecha: the page area's radius (was 6), so each pane of a split rounds
++  // like a single page.
++  static constexpr float kSplitViewContentCornerRadius =
++      kFlechaPageCornerRadius;
+   static constexpr gfx::RoundedCornersF kSplitViewContentRoundedCorners{
+       kSplitViewContentCornerRadius};
+ 

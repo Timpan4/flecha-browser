@@ -21,6 +21,16 @@ export interface NativeContext {
   chromeTabId?(flechaId: string): number | undefined;
   /** The Flecha tab of a Chromium tab. */
   flechaTabId?(chromeId: number): string | undefined;
+  /**
+   * Forgets a Flecha tab's Chromium tab without closing it (it moved into a Flechinha), then
+   * closes the Flecha tab. background.ts: `live.delete(id); rememberLive(); store.closeTab(id)`.
+   */
+  releaseTab?(flechaId: string): void;
+  /**
+   * A Chromium tab that moved into the main window ("Open in Flecha" from a Flechinha)
+   * becomes an active Today tab in the active Space, like onCreated does for new tabs.
+   */
+  adoptTab?(chromeId: number): void;
 }
 
 const api = () => (chrome as { flechaPrivate?: typeof chrome.flechaPrivate }).flechaPrivate;
@@ -41,7 +51,65 @@ export function registerNative(ctx: NativeContext) {
   registerShortcuts(ctx);
   registerTheme(ctx);
   registerSplitRatio(ctx);
+  registerFlechinha(ctx);
   resolveCtx(ctx);
+}
+
+// ---- Flechinha (patch 0023) --------------------------------------------------------------
+
+/**
+ * Flechinha, the small window for one page (src/main/flechinha.ts). Its frame page is
+ * window.html?window=<id>&kind=flechinha. Hub commands:
+ *  - newFlechinha(): an empty one (the new tab page), ⌥⌘N.
+ *  - openFlechinha(url?, tabId?): with a Flecha tab id, that tab's page moves into it and the
+ *    Flecha tab closes; otherwise it opens `url`.
+ *  - flechinha:openInFlecha(windowId): its page moves back as an active Today tab.
+ * Windows that are Flechinhas aren't Flecha's: isFlechinha(windowId) tells them apart.
+ */
+const flechinhas = new Set<number>();
+/** Whether a window is a Flechinha, from what this module has seen (synchronous, may lag). */
+export const isFlechinha = (windowId: number | undefined) => windowId !== undefined && flechinhas.has(windowId);
+/**
+ * Whether a window is a Flechinha, asking the browser. Use this in tabs.onCreated: the event
+ * for a new Flechinha's first tab arrives before openFlechinha() resolves.
+ */
+export async function isFlechinhaWindow(windowId: number | undefined) {
+  if (windowId === undefined || !has('getFlechinhas')) return false;
+  if (flechinhas.has(windowId)) return true;
+  return (await chrome.flechaPrivate.getFlechinhas()).includes(windowId);
+}
+
+function registerFlechinha(ctx: NativeContext) {
+  if (!has('openFlechinha')) return;
+  // Links from other apps (Flecha as the default browser) go to a Flechinha unless turned off.
+  let linksSent: boolean | undefined;
+  const applyLinks = () => {
+    const enabled = ctx.store.state.openLinksInFlechinha !== false;
+    if (enabled === linksSent) return;
+    linksSent = enabled;
+    void chrome.flechaPrivate.setOpenLinksInFlechinha(enabled);
+  };
+  applyLinks();
+  ctx.store.onChange(applyLinks);
+  void chrome.flechaPrivate.getFlechinhas().then((ids) => ids.forEach((id) => flechinhas.add(id)));
+  chrome.windows.onRemoved.addListener((id) => flechinhas.delete(id));
+
+  async function open(url?: string, flechaId?: string) {
+    const tabId = flechaId !== undefined ? ctx.chromeTabId?.(flechaId) : undefined;
+    const windowId = await chrome.flechaPrivate.openFlechinha(tabId !== undefined ? { tabId } : url ? { url } : {});
+    flechinhas.add(windowId);
+    if (tabId !== undefined && flechaId !== undefined) ctx.releaseTab?.(flechaId);
+    return windowId;
+  }
+
+  handle({
+    newFlechinha: () => open(),
+    openFlechinha: (url?: string, tabId?: string) => open(typeof url === 'string' ? url : undefined, typeof tabId === 'string' ? tabId : undefined),
+    'flechinha:openInFlecha': async (windowId: number) => {
+      const tabId = await chrome.flechaPrivate.openInFlecha(Number(windowId));
+      ctx.adoptTab?.(tabId);
+    },
+  });
 }
 
 // ---- split ratio (patch 0019) ------------------------------------------------------------

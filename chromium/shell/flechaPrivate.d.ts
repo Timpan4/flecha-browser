@@ -74,6 +74,40 @@ declare namespace chrome.flechaPrivate {
   /** The user finished dragging the gap: `tabId` is the left pane's tab. */
   const onSplitRatioChanged: chrome.events.Event<(tabId: number, ratio: number) => void>;
 
+  /**
+   * Flechinha (patch 0023), Flecha's small window for one page, like src/main/flechinha.ts:
+   * a normal Chromium window (900×700 at most, centred on the display under the pointer, each
+   * new one a step down and right) whose frame page is window.html?window=<id>&kind=flechinha.
+   * The frame draws a toolbar FLECHINHA_TOOLBAR (44) tall across the whole width; the page
+   * sits under it at x 8, y 44, to 8 from the right and bottom (round corners). Traffic lights
+   * at (16, 16). setFrame() with overlay: true makes the frame cover the whole window (for
+   * menus); its sidebar mode is ignored. -webkit-app-region: drag moves the window.
+   * Links the page opens in new tabs (target=_blank, ⌘-click) open in Flecha's main window;
+   * real popups stay popups. Not restored with the session.
+   *
+   * openFlechinha({ url }) opens a page (default: the new tab page); openFlechinha({ tabId })
+   * moves that tab into the new window instead. Resolves with the window id.
+   */
+  function openFlechinha(options?: { url?: string; tabId?: number }): Promise<number>;
+
+  /**
+   * "Open in Flecha": moves the Flechinha's page into Flecha's main window (the last active
+   * window that isn't a Flechinha), activates it there and brings that window to the front;
+   * the emptied Flechinha closes. Resolves with the tab id (Chromium fires tabs.onDetached /
+   * onAttached for it, not onCreated).
+   */
+  function openInFlecha(windowId: number): Promise<number>;
+
+  /**
+   * Whether links from other apps (Flecha as the default browser) open in a new Flechinha,
+   * like the spike's state.openLinksInFlechinha. On by default; applies once a Flecha window
+   * is up (a link that launches Flecha opens as a normal tab).
+   */
+  function setOpenLinksInFlechinha(enabled: boolean): Promise<void>;
+
+  /** The open Flechinhas' window ids (e.g. after the background restarts). */
+  function getFlechinhas(): Promise<number[]>;
+
   /** A shortcut from setShortcuts() was pressed in window `windowId`. */
   const onShortcut: chrome.events.Event<(command: string, windowId: number) => void>;
 }

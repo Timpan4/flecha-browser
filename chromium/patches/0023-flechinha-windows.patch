@@ -1,0 +1,638 @@
+--- a/chrome/browser/app_controller_mac.mm
++++ b/chrome/browser/app_controller_mac.mm
+@@ -49,6 +49,7 @@
+ #include "chrome/browser/download/download_core_service.h"
+ #include "chrome/browser/download/download_core_service_factory.h"
+ #include "chrome/browser/enterprise/isolated_mode/isolated_mode_settings_service_factory.h"
++#include "chrome/browser/extensions/api/flecha_private/flecha_private_api.h"
+ #include "chrome/browser/extensions/extension_service.h"
+ #include "chrome/browser/first_run/first_run.h"
+ #include "chrome/browser/global_keyboard_shortcuts_mac.h"
+@@ -2075,7 +2076,20 @@
+     } else {
+       startupTabs.emplace_back(net::GURLWithNSURL(url),
+                                /*is_untrusted_launch=*/false);
++    }
++  }
++
++  // Flecha: links from other apps open in a Flechinha, Flecha's small window
++  // for one page, while Flecha's window is up (see flecha_private_api.h).
++  if (Profile* profile = [self lastProfileIfLoaded]) {
++    StartupTabs rest;
++    for (StartupTab& tab : startupTabs) {
++      if (tab.is_untrusted_launch ||
++          !extensions::MaybeOpenLinkInFlechinha(profile, tab.url)) {
++        rest.push_back(std::move(tab));
++      }
+     }
++    startupTabs = std::move(rest);
+   }
+ 
+   if (!startupTabs.empty()) {
+--- a/chrome/browser/extensions/api/flecha_private/flecha_private_api.cc
++++ b/chrome/browser/extensions/api/flecha_private/flecha_private_api.cc
+@@ -8,7 +8,15 @@
+ #include <string>
+ 
+ #include "base/strings/string_number_conversions.h"
++#include "base/auto_reset.h"
++#include "chrome/browser/extensions/api/tabs/tabs_util.h"
+ #include "chrome/browser/extensions/extension_tab_util.h"
++#include "chrome/browser/ui/browser.h"
++#include "chrome/browser/ui/browser_tabstrip.h"
++#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
++#include "chrome/common/webui_url_constants.h"
++#include "ui/base/base_window.h"
++#include "ui/display/screen.h"
+ #include "chrome/browser/flecha/flecha_accelerator.h"
+ #include "chrome/browser/flecha/flecha_frame_host.h"
+ #include "chrome/browser/profiles/profile.h"
+@@ -235,7 +243,173 @@
+   }
+   tab->GetBrowserWindowInterface()->GetTabStripModel()->UpdateSplitRatio(
+       *tab->GetSplit(), std::clamp(params->ratio, 0.1, 0.9));
++  return RespondNow(NoArguments());
++}
++
++namespace {
++
++// Where a new Flechinha goes, like the Electron spike's Flechinhas.placement():
++// centred on the display under the pointer, at most 900x700, each one a step
++// down and right of the others there.
++gfx::Rect FlechinhaBounds(content::BrowserContext* context) {
++  constexpr int kWidth = 900;
++  constexpr int kHeight = 700;
++  constexpr int kCascade = 26;
++  display::Screen* screen = display::Screen::Get();
++  const display::Display display =
++      screen->GetDisplayNearestPoint(screen->GetCursorScreenPoint());
++  const gfx::Rect area = display.work_area();
++  const int width = std::min(kWidth, area.width() - 40);
++  const int height = std::min(kHeight, area.height() - 40);
++  int others = 0;
++  for (FlechaFrameHost* host : FlechaFrameHost::All()) {
++    if (host->IsFlechinha() && SameProfile(host, context)) {
++      ++others;
++    }
++  }
++  const int room = std::max(
++      1, std::min(area.width() - width, area.height() - height) / 2 / kCascade);
++  const int step = (others % room) * kCascade;
++  return gfx::Rect(area.x() + (area.width() - width) / 2 + step,
++                   area.y() + (area.height() - height) / 2 + step, width,
++                   height);
++}
++
++FlechaFrameHost* FlechinhaHost(int window_id,
++                               content::BrowserContext* context) {
++  FlechaFrameHost* host = HostForWindow(window_id, context);
++  return host && host->IsFlechinha() ? host : nullptr;
++}
++
++// A new Flechinha window, not shown yet and without tabs.
++BrowserWindowInterface* CreateFlechinhaWindow(Profile* profile) {
++  BrowserWindowCreateParams create(BrowserWindowInterface::TYPE_NORMAL,
++                                   *profile, /*from_user_gesture=*/true);
++  create.initial_bounds = FlechinhaBounds(profile);
++  create.omit_from_session_restore = true;
++  create.should_trigger_session_restore = false;
++  create.can_fullscreen = false;
++  base::AutoReset<bool> creating(&FlechaFrameHost::CreatingFlechinha(), true);
++  return CreateBrowserWindow(std::move(create));
++}
++
++}  // namespace
++
++bool& FlechaLinksOpenInFlechinha() {
++  // The spike's default (state.openLinksInFlechinha !== false), until the
++  // shell says otherwise.
++  static bool open_in_flechinha = true;
++  return open_in_flechinha;
++}
++
++bool MaybeOpenLinkInFlechinha(Profile* profile, const GURL& url) {
++  if (!profile || !FlechaLinksOpenInFlechinha() || !url.is_valid()) {
++    return false;
++  }
++  profile = profile->GetOriginalProfile();
++  // Only once Flecha's window is up; at launch the link opens as usual.
++  if (!FlechaFrameHost::Main(profile) ||
++      GetBrowserWindowCreationStatusForProfile(*profile) !=
++          BrowserWindowInterface::CreationStatus::kOk) {
++    return false;
++  }
++  BrowserWindowInterface* browser = CreateFlechinhaWindow(profile);
++  chrome::AddTabAt(browser, url, -1, /*foreground=*/true);
++  browser->GetWindow()->Show();
++  browser->GetWindow()->Activate();
++  return true;
++}
++
++ExtensionFunction::ResponseAction
++FlechaPrivateSetOpenLinksInFlechinhaFunction::Run() {
++  auto params = flecha_private::SetOpenLinksInFlechinha::Params::Create(args());
++  EXTENSION_FUNCTION_VALIDATE(params);
++  FlechaLinksOpenInFlechinha() = params->enabled;
+   return RespondNow(NoArguments());
+ }
+ 
++ExtensionFunction::ResponseAction FlechaPrivateOpenFlechinhaFunction::Run() {
++  auto params = flecha_private::OpenFlechinha::Params::Create(args());
++  EXTENSION_FUNCTION_VALIDATE(params);
++
++  Profile* profile =
++      Profile::FromBrowserContext(browser_context())->GetOriginalProfile();
++  GURL url(chrome::kChromeUINewTabURL);
++  std::optional<int> tab_id;
++  if (params->options) {
++    if (params->options->url) {
++      url = GURL(*params->options->url);
++      if (!url.is_valid()) {
++        return RespondNow(Error("Invalid url: " + *params->options->url));
++      }
++    }
++    tab_id = params->options->tab_id;
++  }
++  if (GetBrowserWindowCreationStatusForProfile(*profile) !=
++      BrowserWindowInterface::CreationStatus::kOk) {
++    return RespondNow(Error("Can't open a window now."));
++  }
++
++  BrowserWindowInterface* browser = CreateFlechinhaWindow(profile);
++
++  if (tab_id) {
++    std::string error;
++    if (tabs_util::MoveTabToWindow(this, *tab_id, browser, 0,
++                                   /*allow_other_window_types=*/true,
++                                   &error) < 0) {
++      browser->GetWindow()->Close();
++      return RespondNow(Error(error));
++    }
++    browser->GetTabStripModel()->ActivateTabAt(0);
++  } else {
++    chrome::AddTabAt(browser, url, -1, /*foreground=*/true);
++  }
++  browser->GetWindow()->Show();
++  return RespondNow(WithArguments(browser->GetSessionID().id()));
++}
++
++ExtensionFunction::ResponseAction FlechaPrivateOpenInFlechaFunction::Run() {
++  auto params = flecha_private::OpenInFlecha::Params::Create(args());
++  EXTENSION_FUNCTION_VALIDATE(params);
++
++  FlechaFrameHost* flechinha =
++      FlechinhaHost(params->window_id, browser_context());
++  if (!flechinha) {
++    return RespondNow(Error("No Flechinha with id *.",
++                            base::NumberToString(params->window_id)));
++  }
++  FlechaFrameHost* main = FlechaFrameHost::Main(flechinha->GetBrowserContext());
++  if (!main) {
++    return RespondNow(Error("Flecha has no main window."));
++  }
++  BrowserWindowInterface* source = flechinha->GetBrowserWindowInterface();
++  BrowserWindowInterface* target = main->GetBrowserWindowInterface();
++  content::WebContents* contents =
++      source->GetTabStripModel()->GetActiveWebContents();
++  if (!contents) {
++    return RespondNow(Error("The Flechinha has no page."));
++  }
++  const int tab_id = ExtensionTabUtil::GetTabId(contents);
++  std::string error;
++  const int index = tabs_util::MoveTabToWindow(
++      this, tab_id, target, -1, /*allow_other_window_types=*/true, &error);
++  if (index < 0) {
++    return RespondNow(Error(error));
++  }
++  target->GetTabStripModel()->ActivateTabAt(index);
++  target->GetWindow()->Activate();
++  // Empty now, so Chromium closes it; any other tabs it had stay with it.
++  return RespondNow(WithArguments(tab_id));
++}
++
++ExtensionFunction::ResponseAction FlechaPrivateGetFlechinhasFunction::Run() {
++  base::ListValue ids;
++  for (FlechaFrameHost* host : FlechaFrameHost::All()) {
++    if (host->IsFlechinha() && SameProfile(host, browser_context())) {
++      ids.Append(host->GetWindowId());
++    }
++  }
++  return RespondNow(WithArguments(std::move(ids)));
++}
++
+ }  // namespace extensions
+--- a/chrome/browser/extensions/api/flecha_private/flecha_private_api.h
++++ b/chrome/browser/extensions/api/flecha_private/flecha_private_api.h
+@@ -7,6 +7,9 @@
+ 
+ #include "extensions/browser/extension_function.h"
+ 
++class GURL;
++class Profile;
++
+ namespace extensions {
+ 
+ // chrome.flechaPrivate: what Flecha's browser gives its shell, and only the
+@@ -67,6 +70,49 @@
+   ResponseAction Run() override;
+ };
+ 
++class FlechaPrivateOpenFlechinhaFunction : public ExtensionFunction {
++ public:
++  DECLARE_EXTENSION_FUNCTION("flechaPrivate.openFlechinha", UNKNOWN)
++
++ protected:
++  ~FlechaPrivateOpenFlechinhaFunction() override = default;
++  ResponseAction Run() override;
++};
++
++class FlechaPrivateOpenInFlechaFunction : public ExtensionFunction {
++ public:
++  DECLARE_EXTENSION_FUNCTION("flechaPrivate.openInFlecha", UNKNOWN)
++
++ protected:
++  ~FlechaPrivateOpenInFlechaFunction() override = default;
++  ResponseAction Run() override;
++};
++
++class FlechaPrivateSetOpenLinksInFlechinhaFunction : public ExtensionFunction {
++ public:
++  DECLARE_EXTENSION_FUNCTION("flechaPrivate.setOpenLinksInFlechinha", UNKNOWN)
++
++ protected:
++  ~FlechaPrivateSetOpenLinksInFlechinhaFunction() override = default;
++  ResponseAction Run() override;
++};
++
++// Whether links from other apps open in a Flechinha (setOpenLinksInFlechinha).
++bool& FlechaLinksOpenInFlechinha();
++
++// Opens `url`, a link from another app, in a new Flechinha if Flecha wants
++// that and its window is up. Returns whether it did.
++bool MaybeOpenLinkInFlechinha(Profile* profile, const GURL& url);
++
++class FlechaPrivateGetFlechinhasFunction : public ExtensionFunction {
++ public:
++  DECLARE_EXTENSION_FUNCTION("flechaPrivate.getFlechinhas", UNKNOWN)
++
++ protected:
++  ~FlechaPrivateGetFlechinhasFunction() override = default;
++  ResponseAction Run() override;
++};
++
+ }  // namespace extensions
+ 
+ #endif  // CHROME_BROWSER_EXTENSIONS_API_FLECHA_PRIVATE_FLECHA_PRIVATE_API_H_
+--- a/chrome/browser/flecha/flecha_frame_host.cc
++++ b/chrome/browser/flecha/flecha_frame_host.cc
+@@ -32,6 +32,37 @@
+   return *shortcuts;
+ }
+ 
++// static
++FlechaFrameHost* FlechaFrameHost::ForWindow(int window_id) {
++  for (FlechaFrameHost* host : Hosts()) {
++    if (host->GetWindowId() == window_id) {
++      return host;
++    }
++  }
++  return nullptr;
++}
++
++// static
++FlechaFrameHost* FlechaFrameHost::Main(content::BrowserContext* context) {
++  FlechaFrameHost* fallback = nullptr;
++  for (FlechaFrameHost* host : Hosts()) {
++    if (host->IsFlechinha() || host->GetBrowserContext() != context) {
++      continue;
++    }
++    if (host->IsActiveWindow()) {
++      return host;
++    }
++    fallback = host;
++  }
++  return fallback;
++}
++
++// static
++bool& FlechaFrameHost::CreatingFlechinha() {
++  static bool creating = false;
++  return creating;
++}
++
+ FlechaFrameHost::FlechaFrameHost() {
+   Hosts().push_back(this);
+ }
+--- a/chrome/browser/flecha/flecha_frame_host.h
++++ b/chrome/browser/flecha/flecha_frame_host.h
+@@ -17,6 +17,8 @@
+ #include "ui/gfx/geometry/point.h"
+ #include "ui/gfx/geometry/rect.h"
+ 
++class BrowserWindowInterface;
++
+ namespace content {
+ class BrowserContext;
+ class WebContents;
+@@ -50,19 +52,27 @@
+ // (#empty-state in src/renderer/styles.css) has the same.
+ inline constexpr float kFlechaPageCornerRadius = 10;
+ 
++// Flechinha (src/main/flechinha.ts): the frame page is a toolbar this tall
++// across the top, and the page sits under it, kFlechaGap from the other edges.
++inline constexpr int kFlechinhaToolbarHeight = 44;
++// Its traffic lights, level with the toolbar's controls.
++inline constexpr int kFlechinhaTrafficLightsX = 16;
++inline constexpr int kFlechinhaTrafficLightsY = 16;
++
+ struct FlechaFrameState {
+   enum class Sidebar { kDocked, kHidden, kFloating };
+ 
+   Sidebar sidebar = Sidebar::kDocked;
+   bool overlay = false;
+   SkColor background = SkColorSetRGB(0xe9, 0xec, 0xf2);
++  // A Flechinha window: the browser sets this, never setFrame().
++  bool flechinha = false;
+ 
+   bool operator==(const FlechaFrameState&) const = default;
+ 
+-  // The frame view's width, from the window's left edge; it is as tall as the
+-  // window.
++  // The frame view's width, from the window's left edge.
+   int FrameWidth(int window_width) const {
+-    if (overlay) {
++    if (overlay || flechinha) {
+       return window_width;
+     }
+     switch (sidebar) {
+@@ -76,18 +86,34 @@
+     }
+   }
+ 
++  // The frame view's height, from the window's top edge.
++  int FrameHeight(int window_height) const {
++    return flechinha && !overlay
++               ? std::min(window_height, kFlechinhaToolbarHeight)
++               : window_height;
++  }
++
+   // The page area, as insets from the window's edges.
+   gfx::Insets PageInsets() const {
++    if (flechinha) {
++      return gfx::Insets::TLBR(kFlechinhaToolbarHeight, kFlechaGap, kFlechaGap,
++                               kFlechaGap);
++    }
+     return gfx::Insets::TLBR(
+         kFlechaGap,
+         sidebar == Sidebar::kDocked ? kFlechaSidebarWidth : kFlechaGap,
+         kFlechaGap, kFlechaGap);
+   }
+ 
+-  bool TrafficLightsVisible() const { return sidebar != Sidebar::kHidden; }
++  bool TrafficLightsVisible() const {
++    return flechinha || sidebar != Sidebar::kHidden;
++  }
+ 
+   // Top-left of the close button, from the window's top-left corner.
+   gfx::Point TrafficLightsOrigin() const {
++    if (flechinha) {
++      return gfx::Point(kFlechinhaTrafficLightsX, kFlechinhaTrafficLightsY);
++    }
+     const int inset = sidebar == Sidebar::kFloating ? kFlechaFloatMargin : 0;
+     return gfx::Point(kFlechaTrafficLightsX + inset,
+                       kFlechaTrafficLightsY + inset);
+@@ -110,6 +136,15 @@
+   // hands them to the shell (chrome.flechaPrivate.onShortcut).
+   static std::map<ui::Accelerator, std::string>& Shortcuts();
+ 
++  // The host of window `window_id`, or null.
++  static FlechaFrameHost* ForWindow(int window_id);
++  // The window Flecha's tabs live in: the last active window of `context`'s
++  // profile that is not a Flechinha, or null.
++  static FlechaFrameHost* Main(content::BrowserContext* context);
++  // True while chrome.flechaPrivate.openFlechinha() creates its window: the
++  // frame made meanwhile is that Flechinha's.
++  static bool& CreatingFlechinha();
++
+   // The extension window ID (the window's session ID) of this host's window.
+   virtual int GetWindowId() const = 0;
+   // The profile of this host's window.
+@@ -123,6 +158,10 @@
+   virtual void FocusPage() = 0;
+   // Takes the keys in Shortcuts() from now on, and lets go of any others.
+   virtual void UpdateShortcuts() = 0;
++  // Whether the window is a Flechinha, Flecha's small window for one page.
++  virtual bool IsFlechinha() const = 0;
++  // The window itself.
++  virtual BrowserWindowInterface* GetBrowserWindowInterface() = 0;
+ 
+  protected:
+   FlechaFrameHost();
+--- a/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc
++++ b/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc
+@@ -19,6 +19,7 @@
+ #include "chrome/browser/custom_handlers/protocol_handler_registry_factory.h"
+ #include "chrome/browser/devtools/devtools_window.h"
+ #include "chrome/browser/file_select_helper.h"
++#include "chrome/browser/flecha/flecha_frame_host.h"
+ #include "chrome/browser/headless/headless_mode_util.h"
+ #include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
+ #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
+@@ -129,6 +130,24 @@
+ DEFINE_USER_DATA(BrowserWebContentsDelegate);
+ 
+ namespace {
++
++// Flecha: whether `disposition` opens a new tab.
++bool IsFlechaNewTab(WindowOpenDisposition disposition) {
++  return disposition == WindowOpenDisposition::kNewForegroundTab ||
++         disposition == WindowOpenDisposition::kNewBackgroundTab ||
++         disposition == WindowOpenDisposition::kSingletonTab;
++}
++
++// Flecha: when `browser` is a Flechinha, the window its new tabs go to.
++BrowserWindowInterface* FlechinhaMainWindow(BrowserWindowInterface& browser) {
++  FlechaFrameHost* host =
++      FlechaFrameHost::ForWindow(browser.GetSessionID().id());
++  if (!host || !host->IsFlechinha()) {
++    return nullptr;
++  }
++  FlechaFrameHost* main = FlechaFrameHost::Main(browser.GetProfile());
++  return main ? main->GetBrowserWindowInterface() : nullptr;
++}
+ 
+ const extensions::Extension* GetExtensionForOrigin(
+     Profile* profile,
+@@ -578,6 +597,13 @@
+     CHECK(window, base::NotFatalUntil::M162);
+     return window->OpenURLFromTab(source, params,
+                                   std::move(navigation_handle_callback));
++  }
++
++  // Flecha: a Flechinha is about its one page; the tabs it opens are Flecha's.
++  if (source && IsFlechaNewTab(params.disposition)) {
++    if (BrowserWindowInterface* main = FlechinhaMainWindow(*browser_)) {
++      return main->OpenURL(params, std::move(navigation_handle_callback));
++    }
+   }
+ 
+   // If the source is already split, navigate the other pane instead of
+@@ -784,6 +810,16 @@
+     }
+   }
+ 
++  // Flecha: a Flechinha's new tabs open in Flecha's main window (real popups,
++  // which need window.opener, stay popups).
++  if (IsFlechaNewTab(disposition)) {
++    if (BrowserWindowInterface* main = FlechinhaMainWindow(*browser_)) {
++      return chrome::AddWebContents(main, source, std::move(new_contents),
++                                    target_url, disposition, window_features,
++                                    window_action, user_gesture);
++    }
++  }
++
+   return chrome::AddWebContents(&*browser_, source, std::move(new_contents),
+                                 target_url, disposition, window_features,
+                                 window_action, user_gesture);
+--- a/chrome/browser/ui/views/frame/flecha_frame_view.cc
++++ b/chrome/browser/ui/views/frame/flecha_frame_view.cc
+@@ -94,6 +94,10 @@
+   if (const auto& state = FlechaFrameHost::DefaultState()) {
+     state_ = *state;
+   }
++  state_.flechinha = FlechaFrameHost::CreatingFlechinha();
++  if (state_.flechinha) {
++    state_.overlay = false;
++  }
+   ApplyState();
+ 
+   auto* registry = extensions::ExtensionRegistry::Get(GetBrowserContext());
+@@ -174,11 +178,22 @@
+ 
+ gfx::Size FlechaFrameView::CalculatePreferredSize(
+     const views::SizeBounds& available_size) const {
+-  // The browser view layout reads the frame's width from here (it doesn't know
+-  // this class); the frame is as tall as the window.
+-  return gfx::Size(state_.FrameWidth(kOverlayWidth), 0);
++  // The browser view layout reads the frame's size from here (it doesn't know
++  // this class); a height of 0 is as tall as the window.
++  return gfx::Size(state_.FrameWidth(kOverlayWidth),
++                   state_.flechinha && !state_.overlay
++                       ? state_.FrameHeight(kOverlayWidth)
++                       : 0);
++}
++
++bool FlechaFrameView::IsFlechinha() const {
++  return state_.flechinha;
+ }
+ 
++BrowserWindowInterface* FlechaFrameView::GetBrowserWindowInterface() {
++  return browser_view_->browser();
++}
++
+ int FlechaFrameView::GetWindowId() const {
+   return browser_view_->browser()->GetSessionID().id();
+ }
+@@ -195,7 +210,9 @@
+   return browser_view_->IsActive();
+ }
+ 
+-void FlechaFrameView::SetFrameState(const FlechaFrameState& state) {
++void FlechaFrameView::SetFrameState(const FlechaFrameState& new_state) {
++  FlechaFrameState state = new_state;
++  state.flechinha = state_.flechinha;
+   if (state == state_) {
+     return;
+   }
+@@ -310,7 +327,8 @@
+   const GURL url =
+       extensions::Extension::GetBaseURLFromExtensionId(kFlechaShellExtensionId)
+           .Resolve("window.html?window=" +
+-                   base::NumberToString(GetWindowId()));
++                   base::NumberToString(GetWindowId()) +
++                   (state_.flechinha ? "&kind=flechinha" : ""));
+   content::BrowserContext* context = GetBrowserContext();
+   frame_contents_ = content::WebContents::Create(content::WebContents::CreateParams(
+       context, content::SiteInstance::CreateForURL(context, url)));
+--- a/chrome/browser/ui/views/frame/flecha_frame_view.h
++++ b/chrome/browser/ui/views/frame/flecha_frame_view.h
+@@ -85,6 +85,8 @@
+   content::BrowserContext* GetBrowserContext() override;
+   content::WebContents* GetFrameContents() override;
+   bool IsActiveWindow() const override;
++  bool IsFlechinha() const override;
++  BrowserWindowInterface* GetBrowserWindowInterface() override;
+   void SetFrameState(const FlechaFrameState& state) override;
+   void FocusFrame() override;
+   void FocusPage() override;
+--- a/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
++++ b/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+@@ -1475,11 +1475,16 @@
+     }
+     contents_layout.bounds = page;
+ 
+-    const int frame_width = std::min(
+-        window.width(), views().flecha_frame->GetPreferredSize().width());
++    // A preferred height of 0 is the whole window's (a Flechinha's toolbar is
++    // shorter).
++    const gfx::Size frame_size = views().flecha_frame->GetPreferredSize();
++    const int frame_width = std::min(window.width(), frame_size.width());
++    const int frame_height = frame_size.height() > 0
++                                 ? std::min(window.height(), frame_size.height())
++                                 : window.height();
+     layout.AddChild(views().flecha_frame,
+                     gfx::Rect(window.x(), window.y(), frame_width,
+-                              window.height()));
++                              frame_height));
+   }
+ 
+   return layout;
+--- a/chrome/common/extensions/api/flecha_private.idl
++++ b/chrome/common/extensions/api/flecha_private.idl
+@@ -46,7 +46,17 @@
+   callback DoneCallback = void();
+   callback WindowIdCallback = void(long windowId);
+   callback RejectedCallback = void(DOMString[] rejected);
++  callback TabIdCallback = void(long tabId);
++  callback WindowIdsCallback = void(long[] windowIds);
+ 
++  // What a new Flechinha shows.
++  dictionary FlechinhaOptions {
++    // A page to open (default: the new tab page).
++    DOMString? url;
++    // A tab to move into the Flechinha instead, from any window.
++    long? tabId;
++  };
++
+   interface Functions {
+     // Lays out a window's frame. Applies to every normal window (and to the
+     // windows opened later) when <code>windowId</code> is omitted.
+@@ -85,6 +95,28 @@
+         long tabId,
+         double ratio,
+         optional DoneCallback callback);
++
++    // Opens a Flechinha, Flecha's small window for one page: a normal window
++    // whose frame page is window.html?window=<id>&kind=flechinha, drawn as a
++    // toolbar across the top. The tabs its page opens go to Flecha's main
++    // window. Calls back with the new window's id.
++    static void openFlechinha(
++        optional FlechinhaOptions options,
++        optional WindowIdCallback callback);
++
++    // "Open in Flecha": moves the Flechinha's page to Flecha's main window
++    // (activated and in front) and closes the Flechinha. Calls back with the
++    // page's tab id.
++    static void openInFlecha(long windowId, optional TabIdCallback callback);
++
++    // Whether links from other apps (Flecha as the default browser) open in
++    // a Flechinha, once Flecha's window is up. On by default.
++    static void setOpenLinksInFlechinha(
++        boolean enabled,
++        optional DoneCallback callback);
++
++    // The open Flechinhas' window ids.
++    static void getFlechinhas(WindowIdsCallback callback);
+   };
+ 
+   interface Events {
