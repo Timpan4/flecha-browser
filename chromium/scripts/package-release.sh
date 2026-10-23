@@ -17,7 +17,9 @@
 #      FLECHA_SIGN_IDENTITY names a keychain identity ("Developer ID Application: …"), which
 #      also gets the hardened runtime, a timestamp and Chromium's entitlements (as
 #      chrome/installer/mac/signing/parts.py does);
-#   5. with --dmg, makes <release>/Flecha-<version>.dmg with hdiutil; with a Developer ID
+#   5. with --dmg, makes <release>/Flecha-<version>.dmg with hdiutil, laid out as an
+#      installer window (the background is chromium/branding/dmg, the .DS_Store is written by
+#      scripts/dmg-layout.py, no Finder scripting); with a Developer ID
 #      identity and FLECHA_NOTARY_PROFILE (a notarytool keychain profile, made once with
 #      xcrun notarytool store-credentials), sends it to Apple's notary service, waits, and
 #      staples the ticket to the dmg and the app.
@@ -175,8 +177,32 @@ if [ "$dmg" = 1 ]; then
   version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")"
   image="$release/$product-$version.dmg"
   echo "== dmg $image"
-  ln -sfn /Applications "$stage/Applications"
-  hdiutil create -quiet -volname "$product" -srcfolder "$stage" -ov -format UDZO "$image"
+  # A read-write image first, laid out like an installer: the app and an Applications
+  # alias side by side over a background (chromium/branding/dmg), a fixed window with no
+  # toolbar or sidebar, Flecha's icon on the volume. Then it's compressed.
+  rw="$work/$product-rw.dmg"
+  mnt="$work/dmg"
+  if [ -d "$mnt" ]; then hdiutil detach -quiet -force "$mnt" 2>/dev/null || true; fi
+  mkdir -p "$mnt"
+  size_mb=$(( $(du -sm "$app" | cut -f1) + 64 ))
+  hdiutil create -quiet -ov -size "${size_mb}m" -fs HFS+ -volname "$product" -type UDIF "$rw"
+  hdiutil attach -quiet -nobrowse -noverify -noautoopen -mountpoint "$mnt" "$rw"
+  ditto "$app" "$mnt/$product.app"
+  ln -s /Applications "$mnt/Applications"
+  mkdir "$mnt/.background"
+  cp "$here/branding/dmg/background.tiff" "$mnt/.background/background.tiff"
+  cp "$here/branding/mac/app.icns" "$mnt/.VolumeIcon.icns"
+  # The volume shows .VolumeIcon.icns once its root has the custom-icon Finder flag.
+  xcrun SetFile -a C "$mnt"
+  python3 "$here/scripts/dmg-layout.py" "$mnt" \
+    --background .background/background.tiff --window 660x420 --icon-size 128 \
+    --icon "$product.app=170,196" --icon "Applications=490,196"
+  # Mounting opens the window (HFS+ only; harmless where bless can't).
+  bless --folder "$mnt" --openfolder "$mnt" 2>/dev/null || true
+  rm -rf "$mnt/.fseventsd"
+  hdiutil detach -quiet "$mnt"
+  hdiutil convert -quiet -ov -format UDZO -imagekey zlib-level=9 "$rw" -o "$image"
+  rm -f "$rw"
   if [ "$identity" != "-" ]; then codesign --force --sign "$identity" --timestamp "$image"; fi
   echo "made $image"
   if [ -n "${FLECHA_NOTARY_PROFILE:-}" ]; then
