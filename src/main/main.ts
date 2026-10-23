@@ -33,6 +33,7 @@ import { detectBrowsers, importBrowser } from './browserImport';
 import { Downloads } from './downloads';
 import { Settings } from './settings';
 import { Flechinhas } from './flechinha';
+import { stateFile } from './files';
 import { canSetDefaultBrowser, deliverLinksTo, isDefaultBrowser, listenForExternalLinks, makeDefaultBrowser } from './defaultBrowser';
 import { WEB_STORE_URL, installedExtensions, removeExtension, setupExtensions, type TabHost } from './extensions';
 import type { ElectronChromeExtensions } from 'electron-chrome-extensions';
@@ -1507,7 +1508,7 @@ function registerIpc(browser: Browser, store: Store, history: History, downloads
 
 app.whenReady().then(async () => {
   if (!isPrimaryInstance) return;
-  const store = new Store(app.getPath('userData'));
+  const store = new Store(stateFile(app.getPath('userData')));
   const history = new History(app.getPath('userData'));
   store.archiveStale();
   let browser: Browser | undefined;

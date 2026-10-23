@@ -1,9 +1,5 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import { randomUUID } from 'node:crypto';
 import type { BrowserState, DropTarget, Environment, PinnedNode, SearchEngineId, Space, TabInfo, TabPlacement, WindowBounds } from '../shared/types';
 import type { ArcImport, ImportNode } from './arcImport';
-import { writeFileAtomic } from './files';
 
 const SPACE_COLORS = ['#cdd9f7', '#f6d6cc', '#d3ecd5', '#e8d6f3', '#f5e7c4', '#cfe8ec'];
 const SPACE_EMOJIS = ['🏠', '💼', '🎨', '📚', '🧪', '🎮'];
@@ -11,14 +7,20 @@ const ARCHIVE_LIMIT = 500;
 
 type Location = { space?: Space; zone: 'today' | 'pinned' | 'favorites' };
 
+/** Where the state lives: a file in Electron, extension storage in the Chromium build. */
+export interface StatePersistence {
+  load(): BrowserState | undefined;
+  save(json: string): void;
+}
+
+const randomUUID = () => crypto.randomUUID();
+
 export class Store {
   state: BrowserState;
-  private file: string;
-  private saveTimer?: NodeJS.Timeout;
+  private saveTimer?: ReturnType<typeof setTimeout>;
   private listeners: Array<() => void> = [];
 
-  constructor(dir: string) {
-    this.file = path.join(dir, 'flecha-state.json');
+  constructor(private persistence: StatePersistence) {
     this.state = this.load() ?? this.initialState();
   }
 
@@ -561,8 +563,7 @@ export class Store {
     const tabs = Object.fromEntries(
       Object.entries(this.state.tabs).map(([id, { loading, audible, ...tab }]) => [id, tab]),
     );
-    fs.mkdirSync(path.dirname(this.file), { recursive: true });
-    writeFileAtomic(this.file, JSON.stringify({ ...this.state, tabs }, null, 2));
+    this.persistence.save(JSON.stringify({ ...this.state, tabs }, null, 2));
   }
 
   private changed() {
@@ -668,12 +669,8 @@ export class Store {
   }
 
   private load(): BrowserState | undefined {
-    try {
-      const state = JSON.parse(fs.readFileSync(this.file, 'utf8')) as BrowserState;
-      return state.spaces?.length ? state : undefined;
-    } catch {
-      return undefined;
-    }
+    const state = this.persistence.load();
+    return state?.spaces?.length ? state : undefined;
   }
 
   private initialState(): BrowserState {
