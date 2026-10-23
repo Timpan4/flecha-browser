@@ -72,7 +72,7 @@ async function start() {
       searchEngineName: searchEngine(store.state.searchEngine).name,
       // The light tint; pages darken it themselves, since only they know the system appearance.
       tint: store.activeSpace.color,
-      sidebarMode: 'docked',
+      sidebarMode: store.state.sidebarVisible ? 'docked' : frame.sidebarPeek ? 'floating' : 'hidden',
       environment: store.activeTab ? describeEnvironment(store.activeTab.url, store.state.environments) : undefined,
       localServers: [],
       consoleErrors: {},
@@ -86,7 +86,28 @@ async function start() {
   }
 
   let navState: UiState['nav'] = { canGoBack: false, canGoForward: false, zoom: 100 };
-  const sendState = () => broadcast('state', uiState());
+  const sendState = () => {
+    broadcast('state', uiState());
+    sendFrame();
+  };
+
+  // ---- the window frame, as the Electron spike's Browser.layout() --------------
+  // The frame page applies it (chrome.flechaPrivate.setFrame), since only a page knows
+  // whether the system is in dark mode for the background colour.
+  const frame = { paletteOpen: false, sidebarPeek: false, tabDragging: false };
+  function sendFrame() {
+    const sidebar: chrome.flechaPrivate.SidebarMode = store.state.sidebarVisible ? 'docked' : frame.sidebarPeek ? 'floating' : 'hidden';
+    // The frame covers the whole window while it draws over the page.
+    const overlay = frame.paletteOpen || frame.tabDragging || !store.state.onboarded;
+    broadcast('frame', { sidebar, overlay });
+  }
+  const hasFrame = () => typeof chrome.flechaPrivate?.setFrame === 'function';
+  function openPalette(mode: string) {
+    frame.paletteOpen = true;
+    sendFrame();
+    broadcast('palette', mode);
+    if (hasFrame()) void chrome.flechaPrivate.focus('frame');
+  }
 
   /** The window Flecha's tabs live in: the last focused normal window. */
   async function mainWindow() {
@@ -263,6 +284,25 @@ async function start() {
       if (chromeId !== undefined) void chrome.tabs.update(chromeId, { muted: !store.state.tabs[id]?.muted });
     },
     flash: (message: string) => broadcast('flash', String(message)),
+    openPalette: (mode: string) => openPalette(mode),
+    closePalette: () => {
+      frame.paletteOpen = false;
+      sendFrame();
+      if (hasFrame()) void chrome.flechaPrivate.focus('page');
+    },
+    toggleSidebar: () => {
+      frame.sidebarPeek = false;
+      store.setSidebarVisible(!store.state.sidebarVisible);
+    },
+    setSidebarPeek: (peek: boolean) => {
+      if (store.state.sidebarVisible || frame.sidebarPeek === !!peek) return;
+      frame.sidebarPeek = !!peek;
+      sendState();
+    },
+    setTabDragging: (dragging: boolean) => {
+      frame.tabDragging = !!dragging;
+      sendFrame();
+    },
     zoom: (step: number) => {
       const chromeId = activeChromeId();
       if (chromeId === undefined) return;
@@ -320,7 +360,7 @@ async function start() {
 
   onConnect(() => sendState());
   sync();
-  return { onCreated, onUpdated, onActivated, onRemoved };
+  return { onCreated, onUpdated, onActivated, onRemoved, openPalette };
 }
 
 const url = (tab: chrome.tabs.Tab) => tab.pendingUrl || tab.url || '';
@@ -344,5 +384,5 @@ void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 
 // ⌘L: the browser sends this instead of focusing its hidden address bar (patch 0009).
 chrome.commands.onCommand.addListener((command) => {
-  if (command === 'flecha-open-location') void ready.then(() => broadcast('palette', 'navigate'));
+  if (command === 'flecha-open-location') void ready.then((r) => r.openPalette('navigate'));
 });
