@@ -98,6 +98,7 @@ function render(s: UiState) {
   ($('btn-forward') as HTMLButtonElement).disabled = !s.nav.canGoForward;
 
   document.body.dataset.sidebar = s.sidebarMode;
+  if (s.sidebarMode !== 'floating') $('sidebar').classList.remove('peek-leaving');
   // Shortcuts can be changed in Settings; key caps and tooltips show the current ones.
   for (const el of document.querySelectorAll<HTMLElement>('[data-shortcut]')) {
     const keys = s.shortcuts[el.dataset.shortcut!] ?? '';
@@ -1065,17 +1066,37 @@ for (const half of splitDrop.querySelectorAll<HTMLElement>('.drop-half')) {
 
 // ---- hidden sidebar: reveal at the edge, hide again when the mouse leaves -------------
 
+// The edge strip stays under the pointer while the floating sidebar is out (it covers the gap
+// between the window's edge and the card, styles.css), so the card sliding in under a pointer
+// resting at the edge never reads as leaving it: the sidebar shows once, and goes only after
+// the pointer has left both the edge and the card for a moment, sliding out to the left.
 let peekCloseTimer: number | undefined;
-$('edge').addEventListener('mouseenter', () => api.setSidebarPeek(true));
-$('sidebar').addEventListener('mouseenter', () => clearTimeout(peekCloseTimer));
-$('sidebar').addEventListener('mouseleave', () => {
-  if (document.body.dataset.sidebar !== 'floating') return;
+const peekSidebar = $('sidebar');
+const peekEdge = $('edge');
+const inPeek = (el: EventTarget | null) => el instanceof Node && (peekSidebar.contains(el) || peekEdge.contains(el));
+function keepPeek() {
+  clearTimeout(peekCloseTimer);
+  peekSidebar.classList.remove('peek-leaving');
+}
+function leavePeek(e: MouseEvent) {
+  if (document.body.dataset.sidebar !== 'floating' || inPeek(e.relatedTarget)) return;
   clearTimeout(peekCloseTimer);
   peekCloseTimer = window.setTimeout(() => {
     // Stay open while something inside it is being used.
     if (!palette.hidden || !spaceEditor.hidden || !downloadsPanel.hidden) return;
-    api.setSidebarPeek(false);
+    peekSidebar.classList.add('peek-leaving');
   }, 300);
+}
+peekEdge.addEventListener('mouseenter', () => {
+  keepPeek();
+  api.setSidebarPeek(true);
+});
+peekSidebar.addEventListener('mouseenter', keepPeek);
+peekEdge.addEventListener('mouseleave', leavePeek);
+peekSidebar.addEventListener('mouseleave', leavePeek);
+// Hidden once it has slid out.
+peekSidebar.addEventListener('animationend', (e) => {
+  if (e.target === peekSidebar && peekSidebar.classList.contains('peek-leaving')) api.setSidebarPeek(false);
 });
 
 // ---- tooltips ---------------------------------------------------------------------
