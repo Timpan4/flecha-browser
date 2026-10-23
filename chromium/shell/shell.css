@@ -50,3 +50,8 @@
 [data-surface='panel'] .palette-footer {
   display: none;
 }
+
+/* With the browser's frame, the tour runs over the whole window there, not on new tab pages. */
+[data-frame][data-surface='newtab'] #onboarding {
+  display: none !important;
+}
