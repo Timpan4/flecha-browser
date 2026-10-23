@@ -56,20 +56,14 @@ Flecha started as an Electron app; that version is gone from the repo (it's in t
 
 ## Layout
 
-- `src/main/main.ts`: window, one `WebContentsView` per tab (created lazily), menus, IPC, permission prompts
-- `src/main/store.ts`: the sidebar model and persistence (`flecha-state.json` in the user data folder)
-- `src/main/arcImport.ts`: Arc sidebar parser
-- `src/main/extensions.ts`, `src/preload/extension-compat.ts`: Chrome extension and Web Store support
-- `src/main/adblock.ts`: built-in ad blocker
-- `src/main/history.ts`, `src/main/downloads.ts`: browsing history and downloads
-- `src/main/settings.ts`, `src/renderer/settings.*`, `src/preload/settings-preload.ts`: the settings window
-- `src/main/defaultBrowser.ts`: links from other apps and the default-browser setting
-- `src/main/agentBridge.ts`: the MCP server for coding agents
-- `src/main/environments.ts`, `src/main/localServers.ts`, `src/main/sessions.ts`, `src/main/boosts.ts`: environments, local dev servers, per-Space sessions and boosts
-- `src/renderer/devCommands.ts`: command bar shortcuts
-- `src/renderer/find.*`, `src/preload/find-preload.ts`: the find-in-page bar
-- `src/renderer/`: sidebar and command bar UI
-- `src/preload/preload.ts`: the bridge between the sidebar UI and the main process
+- `chromium/patches/`, `chromium/branding/`, `chromium/build/`: the changes to Chromium, its branding and the GN args
+- `chromium/scripts/`: apply the patches, build, run, install the native host, build and package a release
+- `chromium/shell/`: the shell extension (MV3), which draws the sidebar, command bar and settings; built by `build.mjs`
+  - `background.ts`: the service worker that owns the Store and the tabs; `features/`: ad blocking, boosts, console errors, local servers, responsive view
+  - `ui/`: the sidebar, command bar, settings and Flechinha pages (TypeScript, HTML, CSS), on `flechaApi.ts`, `settingsApi.ts` and `flechinhaApi.ts`
+  - `lib/`: URLs and search engines, shortcuts, environments, settings rules, the tab manager, boost names
+- `chromium/native-host/`: the native messaging host (Node): importing bookmarks and history from other browsers and Arc, reading the Electron version's saved state, the MCP server for coding agents; built by `build.mjs`
+- `chromium/shared/`: what the shell and the native host share: the types, the sidebar model (`store.ts`), import and agent tool definitions
 
 ## Next up
 
