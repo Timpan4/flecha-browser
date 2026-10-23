@@ -34,6 +34,7 @@ import { Downloads } from './downloads';
 import { Settings } from './settings';
 import { Flechinhas } from './flechinha';
 import { stateFile } from './files';
+import { spaceTint } from './spaceTint';
 import { canSetDefaultBrowser, deliverLinksTo, isDefaultBrowser, listenForExternalLinks, makeDefaultBrowser } from './defaultBrowser';
 import { WEB_STORE_URL, installedExtensions, removeExtension, setupExtensions, type TabHost } from './extensions';
 import type { ElectronChromeExtensions } from 'electron-chrome-extensions';
@@ -104,7 +105,7 @@ class Browser implements TabHost {
       minHeight: 420,
       titleBarStyle: 'hidden',
       trafficLightPosition: TRAFFIC_LIGHTS,
-      backgroundColor: spaceTint(store.activeSpace.color),
+      backgroundColor: spaceTint(store.activeSpace.color, nativeTheme.shouldUseDarkColors),
     });
 
     this.ui = new WebContentsView({
@@ -123,7 +124,7 @@ class Browser implements TabHost {
     // A drag that never got its mouse-up (e.g. the window lost focus) must not leave the divider covering the pages.
     this.win.on('blur', () => this.draggingDivider && this.dragDivider('end'));
     nativeTheme.on('updated', () => {
-      this.win.setBackgroundColor(spaceTint(this.store.activeSpace.color));
+      this.win.setBackgroundColor(spaceTint(this.store.activeSpace.color, nativeTheme.shouldUseDarkColors));
       this.sendState();
     });
     const saveBounds = () => this.saveBounds();
@@ -728,7 +729,7 @@ class Browser implements TabHost {
       if (active.session === session.defaultSession) this.extensions.selectTab(active);
       this.lastSelected = active;
     }
-    this.win.setBackgroundColor(spaceTint(this.store.activeSpace.color));
+    this.win.setBackgroundColor(spaceTint(this.store.activeSpace.color, nativeTheme.shouldUseDarkColors));
     this.layout();
     this.sendState();
   }
@@ -845,7 +846,7 @@ class Browser implements TabHost {
       ...this.store.state,
       tabs,
       searchEngineName: searchEngine(this.store.state.searchEngine).name,
-      tint: spaceTint(this.store.activeSpace.color),
+      tint: spaceTint(this.store.activeSpace.color, nativeTheme.shouldUseDarkColors),
       sidebarMode: this.store.state.sidebarVisible ? 'docked' : this.sidebarPeek ? 'floating' : 'hidden',
       environment: this.store.activeTab ? describeEnvironment(this.store.activeTab.url, this.store.state.environments) : undefined,
       localServers: this.localServers,
@@ -1094,15 +1095,6 @@ function emulatePhone(wc: WebContents) {
   send('Emulation.setDeviceMetricsOverride', { width: PHONE.width, height: 0, deviceScaleFactor: 3, mobile: true });
   send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
   send('Emulation.setEmitTouchEventsForMouse', { enabled: true, configuration: 'mobile' });
-}
-
-/** Space colours are pastels; in dark mode they become a deep tint of the same hue. */
-function spaceTint(color: string) {
-  if (!nativeTheme.shouldUseDarkColors) return color;
-  const base = [17, 24, 36];
-  const rgb = [1, 3, 5].map((i) => parseInt(color.slice(i, i + 2), 16));
-  const mixed = rgb.map((c, i) => Math.round(c * 0.16 + base[i] * 0.84));
-  return '#' + mixed.map((c) => c.toString(16).padStart(2, '0')).join('');
 }
 
 function snapshotHistory(wc: WebContents): TabInfo['history'] {
@@ -1561,7 +1553,7 @@ app.whenReady().then(async () => {
   const flechinhas = new Flechinhas({
     resolve: (input) => resolveInput(input, store.state.searchEngine),
     searchEngineName: () => searchEngine(store.state.searchEngine).name,
-    tint: () => spaceTint(store.activeSpace.color),
+    tint: () => spaceTint(store.activeSpace.color, nativeTheme.shouldUseDarkColors),
     space: () => ({ name: store.activeSpace.name, emoji: store.activeSpace.emoji }),
     openTab: (url, background) => {
       browser!.openTab(url, { activate: !background });
