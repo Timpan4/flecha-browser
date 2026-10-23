@@ -67,7 +67,11 @@ export async function showMenu(name: 'tabMenu' | 'spaceMenu', id: string) {
 async function runMenuItem(run: MenuRun) {
   if ('cmd' in run) cmd(run.cmd)(...run.args);
   else if ('copy' in run) await copy(run.copy, run.message);
-  else if ('rename' in run) hooks?.rename(run.rename);
+  else if ('rename' in run) {
+    // The keys go to the sidebar's rename field, so the frame page takes keyboard focus.
+    if (windowId) await chrome.flechaPrivate.focus('frame', await windowId);
+    hooks?.rename(run.rename);
+  }
   else if ('deleteSpace' in run) await confirmDeleteSpace(run.deleteSpace);
 }
 
