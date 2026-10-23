@@ -16,6 +16,7 @@ import type { MenuRun } from './protocol';
 import type { MenuEntry } from './settingsUi';
 import { openSettings, registerSettings } from './settingsHandlers';
 import { registerDownloads } from './downloads';
+import { registerSiteControls } from './siteControls';
 
 const STATE_KEY = 'state';
 /** Flecha tab id ↔ Chromium tab id, for the tabs that are open. Kept across background restarts. */
@@ -544,6 +545,8 @@ async function start() {
       broadcast('flash', `Imported ${state.spaces.length} Spaces and ${tabs} tabs`);
     },
   });
+
+  registerSiteControls({ store, activeChromeId, mainWindow });
 
   registerSettings({
     store,
