@@ -55,3 +55,115 @@ It is a Chromium 158 fork rather than an Electron app because Google blocks sign
 
 Not there yet in the Chromium build: choosing the downloads folder from Settings, the welcome tour, and a resizable split divider.
 
+## Install
+
+1. Download the latest `Flecha-<version>.dmg` from [Releases](https://github.com/lucianodiisouza/flecha-browser/releases). Releases are signed with a Developer ID and notarized by Apple. They are **Apple Silicon (arm64) only** for now; Intel is planned.
+2. Open the dmg and drag Flecha onto Applications.
+
+<p align="center"><img src="docs/screenshots/installer.png" alt="The Flecha disk image: the app beside the Applications folder" width="560"></p>
+
+3. Optional, but needed for importing from other browsers and Arc, and for the coding-agent MCP server:
+
+```bash
+git clone https://github.com/lucianodiisouza/flecha-browser.git && cd flecha-browser
+chromium/scripts/install-native-host.sh --app /Applications/Flecha.app
+```
+
+Browsers can't read other browsers' files or open a local port, so Flecha ships a small native messaging host (a bundled Node, in the app). The script registers it with Chromium for Flecha's profile folder. It allows only Flecha's own shell extension to talk to it. Run it again if you move the app.
+
+## Build from source
+
+You need:
+
+- macOS on Apple Silicon, with Xcode (and its command line tools)
+- [depot_tools](https://commondatastorage.googleapis.com/chrome-infra-docs/flat/depot_tools/docs/html/depot_tools_tutorial.html) on your `PATH`
+- a Chromium checkout at the version Flecha targets (158), with plenty of disk (100 GB or more) and several hours for a first build
+- Node 22.5 or newer (the native host uses `node:sqlite`) and `npm ci` at the repo root
+
+Fetching the Chromium checkout isn't scripted here; follow Chromium's [macOS build instructions](https://chromium.googlesource.com/chromium/src/+/main/docs/mac_build_instructions.md). Build on a case-sensitive APFS volume: `env.sh` expects the checkout on APFS because siso treats every output as stale on HFS+ (one-second file times) and rebuilds everything.
+
+`chromium/scripts/env.sh` says where things live, and every script reads it. Override with `CHROMIUM_SRC` (the checkout's `src`), `DEPOT_TOOLS`, `FLECHA_DISK`, `FLECHA_VOLUME` and `FLECHA_PROFILE` (the dev profile). Its defaults assume a disk image that it mounts for you, so set these for your own layout.
+
+### The dev loop
+
+```bash
+npm ci
+chromium/scripts/build.sh              # apply.sh (branding and patches), then autoninja -C out/Dev chrome
+chromium/scripts/run.sh                # launch out/Dev/Flecha.app with its own profile
+node chromium/shell/build.mjs          # shell-only change: rebuild, then relaunch run.sh
+npm run typecheck
+```
+
+`apply.sh` is safe to run again: it first resets every file it touches. The dev build is a component build, so a change relinks one small library. `run.sh` loads the shell from `chromium/shell/dist` through `--flecha-shell-dir`, so UI work needs no Chromium build at all (`npm run shell:watch` rebuilds on save).
+
+### Release
+
+```bash
+export FLECHA_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)"
+export FLECHA_NOTARY_PROFILE=flecha-notary   # made once with: xcrun notarytool store-credentials
+chromium/scripts/build-release.sh --dmg
+```
+
+`build-release.sh` builds the shell, applies the patches, stages the shell into the checkout, writes `out/Release/args.gn` from `chromium/build/release.gn`, builds (3 to 6 hours, resumable) and calls `package-release.sh`. That copies the app, adds the native host with its Node, signs everything innermost first (hardened runtime, timestamp and Chromium's entitlements when `FLECHA_SIGN_IDENTITY` is set; ad hoc otherwise), makes the dmg with an installer window, and with `FLECHA_NOTARY_PROFILE` notarizes it and staples the ticket. Releases use `target_cpu = "arm64"` and no proprietary codecs (H.264 and AAC), which need patent licences.
+
+## Repo layout
+
+```
+chromium/
+  patches/       the native changes to Chromium, as numbered unified diffs
+  branding/      app icon, logo, BRANDING, the dmg background
+  build/         dev.gn and release.gn (the GN args)
+  scripts/       apply, build, run, env, build-release, package-release,
+                 install-native-host, dmg-layout.py
+  shell/         the MV3 component extension that draws the window
+    background.ts   service worker: the Store, tabs, windows
+    features/       ad blocking, boosts, console errors, local servers, responsive view
+    ui/             sidebar, command bar, settings and Flechinha pages
+    lib/            URLs, shortcuts, environments, settings rules, tab manager
+  shared/        types and the sidebar model, used by the shell and the host
+  native-host/   the native messaging host (Node)
+```
+
+## Architecture in brief
+
+Flecha is Chromium plus two layers: a small set of patches, and an extension that draws the browser.
+
+```mermaid
+flowchart LR
+  subgraph Chromium["Chromium 158 + Flecha patches"]
+    Frame["Window frame view<br/>(hides tab strip and toolbar)"]
+    API["chrome.flechaPrivate"]
+  end
+  subgraph Shell["Shell (MV3 component extension)"]
+    BG["background.ts<br/>Store, tabs, features"]
+    FP["Frame page<br/>sidebar, command bar"]
+  end
+  Host["Native host (Node)<br/>import, MCP server"]
+  Frame -- "hosts" --> FP
+  FP <--> BG
+  BG <--> API
+  BG <-- "native messaging" --> Host
+```
+
+- **Patches** (`chromium/patches/`) change what only Chromium can: hide the tab strip and toolbar, draw Flecha's own window frame and traffic lights, round the page area, add Peek, Flechinha windows, split ratio, a storage partition per Space, and so on.
+- **The shell** is a Manifest V3 extension loaded as a component extension, so it can't be removed or turned off. Its service worker (`background.ts`) owns the Store and the tabs; everything the user sees is shell HTML and TypeScript.
+- **The frame page** is a shell page that Chromium's frame view hosts around the web contents. It draws the sidebar and command bar, and its drag regions move the window.
+- **`chrome.flechaPrivate`** (`shell/flechaPrivate.d.ts`) is the private extension API the patches add, for what the standard APIs lack: frame state, shortcuts, theme, split ratio, Peek, Flechinha, partitions, DevTools, the find bar and default-browser. It is available to the shell only.
+- **The native host** does what an extension can't: read other browsers' bookmarks and history, and serve MCP to coding agents on 127.0.0.1.
+
+## Status and roadmap
+
+Flecha is early software, used daily by its author. Next:
+
+- Intel (x86_64) builds
+- Auto-update with Sparkle (in progress)
+- Resizable split divider and 3 to 4 pane splits
+- Choosing the downloads folder and the welcome tour in the Chromium build
+
+## Contributing
+
+Bug reports and patches are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md) for setup, how patches work, and the commit style.
+
+## License
+
+Flecha's own code is released under the [MIT license](LICENSE). Flecha is built on [Chromium](https://www.chromium.org/); Chromium and its third-party components keep their own BSD-style and other licenses, and those notices apply to the browser builds. Flecha is not affiliated with or endorsed by Google, Arc or The Browser Company.
