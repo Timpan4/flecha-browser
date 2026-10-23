@@ -8,6 +8,9 @@ import { cmd, invoke, on } from './client';
 
 const surface = document.documentElement.dataset.surface;
 const systemDark = matchMedia('(prefers-color-scheme: dark)');
+/** Flecha's own browser draws the window frame from window.html; stock Chromium has the side panel. */
+const framed = typeof chrome.flechaPrivate?.setFrame === 'function';
+if (framed) document.documentElement.dataset.frame = '';
 
 /**
  * The background sends the Space's light colour; dark mode darkens it here. Pages follow
@@ -20,8 +23,22 @@ function emitState(state: UiState) {
   lastState = state;
   const shown = { ...state, tint: spaceTint(state.tint, systemDark.matches) };
   for (const cb of stateListeners) cb(shown);
+  applyFrame();
 }
 on('state', emitState);
+
+// The frame page lays its window out: the background says how, this page adds the colour.
+let frameState: { sidebar: chrome.flechaPrivate.SidebarMode; overlay: boolean } | undefined;
+const windowId = surface === 'window' && framed ? chrome.flechaPrivate.getWindowId() : undefined;
+function applyFrame() {
+  if (!windowId || !frameState || !lastState) return;
+  const background = spaceTint(lastState.tint, systemDark.matches);
+  void windowId.then((id) => chrome.flechaPrivate.setFrame({ ...frameState!, background }, id));
+}
+on('frame', (state) => {
+  frameState = state;
+  applyFrame();
+});
 
 const paletteListeners: Array<(mode: PaletteMode) => void> = [];
 systemDark.addEventListener('change', () => lastState && emitState(lastState));
@@ -30,7 +47,7 @@ const api: FlechaApi = {
   onState: (cb) => void stateListeners.push(cb),
   // The command bar lives in the sidebar; new tab pages have their own search.
   onPalette: (cb) => {
-    if (surface !== 'panel') return;
+    if (surface !== 'panel' && surface !== 'window') return;
     paletteListeners.push(cb);
     on('palette', cb);
   },
@@ -76,9 +93,9 @@ const api: FlechaApi = {
     };
     input.click();
   },
-  // Electron had to grow its overlay first; here the sidebar just opens it.
-  openPalette: (mode) => paletteListeners.forEach((cb) => cb(mode)),
-  closePalette: () => undefined,
+  // The frame grows over the page first, as in Electron; the side panel just opens it.
+  openPalette: surface === 'window' ? cmd('openPalette') : (mode) => paletteListeners.forEach((cb) => cb(mode)),
+  closePalette: surface === 'window' ? cmd('closePalette') : () => undefined,
   toggleSidebar: cmd('toggleSidebar'),
   setSidebarPeek: cmd('setSidebarPeek'),
   // The page can write the clipboard itself; the background has no document to do it from.
