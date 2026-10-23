@@ -5,7 +5,8 @@
 # stable name the site's download button links to (Flecha.dmg, or Flecha-x64.dmg with
 # FLECHA_ARCH=x64), the delta updates the feed lists, and last the feed itself, so it never
 # lists a file not yet there. Then it deletes what the previous feed listed and the new one
-# doesn't: the older release's dmg and deltas. Older releases stay on GitHub.
+# doesn't: the older release's dmg and deltas. Before any of that, the dmg goes to the
+# GitHub release v<version>, which keeps every release.
 #
 #   FLECHA_ARCH=arm64|x64 chromium/scripts/publish-release.sh <Flecha-<version>[-x64].dmg> [<folder>]
 #
@@ -45,6 +46,38 @@ if ! grep -qx "$name" <<<"$new"; then
 fi
 old="$(curl --fail --silent --location "$prefix$release_feed" | listed || true)"
 
+# GitHub first: its releases are the archive of every version, so a release is never on
+# dl.flecha.dev only. The release v<version> is made if it isn't there yet, from the commit
+# checked out here (which must be pushed), with the notes next to the dmg
+# (Flecha-<version>.md) if there are any.
+version="${name#Flecha-}"
+version="${version%"$release_suffix.dmg"}"
+tag="v$version"
+repo="${FLECHA_GITHUB_REPO:-lucianodiisouza/flecha-browser}"
+sha256="$(shasum -a 256 "$folder/$name" | cut -d' ' -f1)"
+if ! gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
+  commit="$(git -C "$here" rev-parse HEAD)"
+  if [ -z "$(git -C "$here" branch -r --contains "$commit")" ]; then
+    echo "error: $commit, to tag $tag on, is not pushed" >&2
+    exit 1
+  fi
+  notes="$folder/Flecha-$version.md"
+  echo "== GitHub release $tag on $commit"
+  if [ -f "$notes" ]; then
+    gh release create "$tag" --repo "$repo" --target "$commit" --title "Flecha $version" --notes-file "$notes"
+  else
+    gh release create "$tag" --repo "$repo" --target "$commit" --title "Flecha $version" --generate-notes
+  fi
+fi
+digest="$(gh release view "$tag" --repo "$repo" --json assets --jq ".assets[] | select(.name == \"$name\") | .digest")"
+if [ -z "$digest" ]; then
+  echo "== GitHub release $tag: $name"
+  gh release upload "$tag" --repo "$repo" "$folder/$name"
+elif [ "$digest" != "sha256:$sha256" ]; then
+  echo "error: release $tag already has a different $name ($digest)" >&2
+  exit 1
+fi
+
 r2() {
   npx --yes wrangler@4 r2 object "$@" --remote
 }
@@ -75,6 +108,7 @@ done <<<"$old"
 
 cat <<EOF
 
+Published to GitHub, release $tag: $name
 Published to $prefix:
   $name
   $stable (the site's download link)
