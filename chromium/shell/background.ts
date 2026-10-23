@@ -15,6 +15,7 @@ import { broadcast, handle, listen, onConnect } from './hub';
 import type { MenuRun } from './protocol';
 import type { MenuEntry } from './settingsUi';
 import { openSettings, registerSettings } from './settingsHandlers';
+import { registerDownloads } from './downloads';
 
 const STATE_KEY = 'state';
 /** Flecha tab id ↔ Chromium tab id, for the tabs that are open. Kept across background restarts. */
@@ -571,6 +572,7 @@ const isStartPage = (tab: chrome.tabs.Tab) => /^chrome:\/\/(newtab|new-tab-page)
 // each waits for the saved state to load.
 const ready = start();
 listen(ready);
+registerDownloads();
 chrome.tabs.onCreated.addListener((tab) => void ready.then((r) => r.onCreated(tab)));
 chrome.tabs.onUpdated.addListener((id, info, tab) => void ready.then((r) => r.onUpdated(id, info, tab)));
 chrome.tabs.onActivated.addListener((info) => void ready.then((r) => r.onActivated(info)));
