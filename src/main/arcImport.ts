@@ -1,6 +1,7 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
-import { app } from 'electron';
+import type { ArcImport, ImportNode, ImportTab } from './importApply';
 
 /**
  * Reads Arc's local sidebar file (~/Library/Application Support/Arc/StorableSidebar.json).
@@ -12,13 +13,7 @@ import { app } from 'electron';
  * for a tab or `{ list: {} }` for a folder. `topAppsContainerIDs` points at the favorites.
  */
 
-export type ImportTab = { url: string; title: string };
-export type ImportNode = ({ kind: 'tab' } & ImportTab) | { kind: 'folder'; name: string; children: ImportNode[] };
-
-export interface ArcImport {
-  spaces: Array<{ name: string; emoji?: string; pinned: ImportNode[]; today: ImportTab[] }>;
-  favorites: ImportTab[];
-}
+export type { ArcImport, ImportNode, ImportTab } from './importApply';
 
 interface ArcItem {
   id: string;
@@ -34,8 +29,9 @@ interface ArcSpace {
   customInfo?: { iconType?: { emoji_v2?: string } };
 }
 
+/** Electron's appData on macOS; spelled out so the native messaging host can read it without Electron. */
 export function arcSidebarPath() {
-  return path.join(app.getPath('appData'), 'Arc', 'StorableSidebar.json');
+  return path.join(os.homedir(), 'Library', 'Application Support', 'Arc', 'StorableSidebar.json');
 }
 
 export function readArcSidebar(file = arcSidebarPath()): ArcImport {

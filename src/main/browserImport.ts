@@ -3,16 +3,20 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { app } from 'electron';
 import type { DetectedBrowser, HistoryEntry, ImportResult } from '../shared/types';
 import type { History } from './history';
 import type { Store } from './store';
-import { arcSidebarPath, readArcSidebar, type ImportNode } from './arcImport';
+import { arcSidebarPath, readArcSidebar, type ArcImport, type ImportNode } from './arcImport';
+import { applyBrowserImport, type BrowserImportData } from './importApply';
 
 /**
  * Brings bookmarks and history over from the other browsers on this Mac. Their files are
  * only ever read: databases are copied to a temporary folder first, since the browser may
  * have them open and locked. Passwords and cookies are left where they are.
+ *
+ * Reading (`readBrowser`) is kept apart from adding to Flecha (`applyBrowserImport`), so the
+ * Chromium build's native messaging host can read and its shell extension can add. Nothing
+ * here needs Electron.
  */
 
 const run = promisify(execFile);
@@ -37,11 +41,12 @@ interface BrowserSource {
   profiles(): Profile[];
   readBookmarks(profile: Profile): Promise<ImportNode[]>;
   readHistory(profile: Profile): Promise<HistoryEntry[]>;
-  /** For browsers whose sidebar says more than bookmarks do (Arc): imports it in their place. */
-  sidebar?: { exists(): boolean; import(store: Store): { spaces: number; bookmarks: number } };
+  /** For browsers whose sidebar says more than bookmarks do (Arc): imported in their place. */
+  sidebar?: { exists(): boolean; read(): ArcImport };
 }
 
-const appSupport = (...parts: string[]) => path.join(app.getPath('appData'), ...parts);
+/** Electron's appData folder on macOS. */
+const appSupport = (...parts: string[]) => path.join(os.homedir(), 'Library', 'Application Support', ...parts);
 
 // ---- Chromium family -------------------------------------------------------
 
@@ -123,20 +128,8 @@ function chromiumNode(node: any): ImportNode[] {
 function arcSource(): BrowserSource {
   return {
     ...chromiumSource('arc', 'Arc', appSupport('Arc', 'User Data')),
-    sidebar: {
-      exists: () => isFile(arcSidebarPath()),
-      import: (store) => {
-        const data = readArcSidebar();
-        store.importArc(data);
-        const tabs = data.spaces.reduce((n, s) => n + countNodes(s.pinned) + s.today.length, data.favorites.length);
-        return { spaces: data.spaces.length, bookmarks: tabs };
-      },
-    },
+    sidebar: { exists: () => isFile(arcSidebarPath()), read: () => readArcSidebar() },
   };
-}
-
-function countNodes(nodes: ImportNode[]): number {
-  return nodes.reduce((n, node) => n + (node.kind === 'tab' ? 1 : countNodes(node.children)), 0);
 }
 
 // ---- Firefox ---------------------------------------------------------------
@@ -375,12 +368,18 @@ export async function detectBrowsers(): Promise<DetectedBrowser[]> {
  * profile or file become warnings rather than failing the whole import.
  */
 export async function importBrowser(id: string, store: Store, history: History): Promise<ImportResult> {
-  const result: ImportResult = { spaces: 0, bookmarks: 0, history: 0, warnings: [] };
+  return applyBrowserImport(await readBrowser(id), store, history);
+}
+
+/** Reads what `importBrowser` brings over, without adding it anywhere. */
+export async function readBrowser(id: string): Promise<BrowserImportData> {
+  const result: BrowserImportData = { name: id, bookmarkCount: 0, history: [], warnings: [] };
   const source = sources().find((s) => s.id === id);
   if (!source) {
     result.warnings.push(`No data from “${id}” was found on this Mac.`);
     return result;
   }
+  result.name = source.name;
 
   let profiles: Profile[] = [];
   try {
@@ -398,7 +397,7 @@ export async function importBrowser(id: string, store: Store, history: History):
 
   if (source.sidebar) {
     try {
-      Object.assign(result, source.sidebar.import(store));
+      result.arc = source.sidebar.read();
     } catch (err) {
       warn(`${source.name}’s sidebar`, err);
     }
@@ -428,11 +427,10 @@ export async function importBrowser(id: string, store: Store, history: History):
   if (tidy.skipped) result.warnings.push(`Only the first ${MAX_BOOKMARKS} bookmarks were imported; ${tidy.skipped} more were left out.`);
   if (perProfile.length) {
     const nodes = perProfile.length > 1 ? perProfile.map(({ profile, nodes }) => folder(profile.name, nodes)) : perProfile[0].nodes;
-    store.importBookmarks(source.name, nodes);
-    result.spaces = 1;
-    result.bookmarks = tidy.count;
+    result.bookmarks = nodes;
+    result.bookmarkCount = tidy.count;
   }
-  if (visits.length) result.history = history.merge(visits);
+  result.history = visits;
   return result;
 }
 
