@@ -18,6 +18,8 @@ import { openSettings, registerSettings } from './settingsHandlers';
 import { registerNativeHost } from './nativeHost';
 // Loaded on the first turn: its modules add webNavigation and message listeners as they load.
 import { registerFeatures, type Features } from './features';
+// Also loaded on the first turn, for the shortcut event that may have woken the background.
+import { registerNative } from './native';
 import { registerDownloads } from './downloads';
 import { registerSiteControls } from './siteControls';
 import { Favicons } from './favicons';
@@ -685,10 +687,10 @@ async function start() {
     agentEndpoint: () => nativeHost?.agentEndpoint(),
   });
 
-  // Imports and the coding-agent bridge, through Flecha's native messaging host.
   // Boosts, environments, local servers, the responsive view, console errors and ad blocking.
   features = registerFeatures({ store, broadcastState: sendState, liveTabId: (id) => live.get(id), activeChromeTabId: activeChromeId });
 
+  // Imports and the coding-agent bridge, through Flecha's native messaging host.
   nativeHost = registerNativeHost({
     store,
     broadcastState: sendState,
@@ -707,6 +709,15 @@ async function start() {
   });
 
   onConnect(() => sendState());
+
+  // Flecha's keyboard shortcuts, taken by the browser before the page (patch 0016).
+  registerNative({
+    store,
+    run: (command) => {
+      const numbered = /^select(Tab|Space):(\d)$/.exec(command);
+      runCommand(numbered ? `${numbered[1].toLowerCase()}${numbered[2]}` : command);
+    },
+  });
   sync();
   wantFavicons();
   // Arc's auto-archive, hourly as in Electron. An alarm, since the background sleeps.
