@@ -21,6 +21,14 @@
   display: none;
 }
 
+/* With the browser's frame, a blank Space shows the new tab page in the page area itself,
+   so the frame page draws no card of its own. Laid out beside a frame only as wide as the
+   sidebar, that card's 0.5px ring and shadow showed as a stray line down the sidebar's
+   edge, a pixel past the page area's top and bottom. */
+[data-frame][data-surface='window'] #empty-state {
+  display: none;
+}
+
 [data-surface='newtab'] #empty-state {
   inset: 0;
   border-radius: 0;
