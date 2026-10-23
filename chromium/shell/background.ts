@@ -17,6 +17,7 @@ import type { MenuEntry } from './settingsUi';
 import { openSettings, registerSettings } from './settingsHandlers';
 import { registerDownloads } from './downloads';
 import { registerSiteControls } from './siteControls';
+import { Favicons } from './favicons';
 
 const STATE_KEY = 'state';
 /** Flecha tab id ↔ Chromium tab id, for the tabs that are open. Kept across background restarts. */
@@ -69,6 +70,7 @@ async function start() {
     return tab;
   }
 
+  const favicons = new Favicons(() => sendStateSoon());
   const rememberLive = () => void chrome.storage.session.set({ [LIVE_KEY]: Object.fromEntries(live) });
 
   function uiState(): UiState {
@@ -84,7 +86,8 @@ async function start() {
       localServers: [],
       consoleErrors: {},
       boostedHosts: [],
-      faviconHosts: [],
+      faviconHosts: favicons.list(),
+      faviconUrl: favicons.url,
       shortcuts: shortcutHints(store.state),
       defaultBrowser: { isDefault: false, canSet: false },
       agent: undefined,
@@ -295,10 +298,16 @@ async function start() {
   }
 
   let stateTimer: ReturnType<typeof setTimeout> | undefined;
-  store.onChange(() => {
-    sync();
+  const sendStateSoon = () => {
     clearTimeout(stateTimer);
     stateTimer = setTimeout(sendState, 16);
+  };
+  // Icons for tabs that haven't loaded their own yet.
+  const wantFavicons = () => void favicons.want(Object.values(store.state.tabs).filter((t) => !t.favicon).map((t) => t.url));
+  store.onChange(() => {
+    sync();
+    sendStateSoon();
+    wantFavicons();
   });
 
   // ---- Chromium → Flecha ----------------------------------------------------
@@ -536,10 +545,11 @@ async function start() {
         visits: h.visitCount ?? 0,
         lastVisit: h.lastVisitTime ?? 0,
       })),
-    topSites: async () =>
-      (await chrome.topSites.get())
-        .filter((s) => isWebPage(s.url))
-        .map((s) => ({ url: s.url, title: s.title || s.url, visits: 0, lastVisit: 0 })),
+    topSites: async () => {
+      const sites = (await chrome.topSites.get()).filter((s) => isWebPage(s.url));
+      void favicons.want(sites.map((s) => s.url));
+      return sites.map((s) => ({ url: s.url, title: s.title || s.url, visits: 0, lastVisit: 0 }));
+    },
     detectBrowsers: () => [],
     importFlechaState: (json: string) => {
       let state: BrowserState | undefined;
@@ -671,6 +681,7 @@ async function start() {
 
   onConnect(() => sendState());
   sync();
+  wantFavicons();
   // Arc's auto-archive, hourly as in Electron. An alarm, since the background sleeps.
   // Made once: making it again on every wake would restart the hour.
   void chrome.alarms.get(ARCHIVE_ALARM).then((alarm) => void (alarm ?? chrome.alarms.create(ARCHIVE_ALARM, { periodInMinutes: 60 })));
