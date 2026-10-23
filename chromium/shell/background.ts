@@ -169,16 +169,110 @@ async function start() {
   /** Shows the active Flecha tab, opening its Chromium tab if it has none yet. */
   let syncing = Promise.resolve();
   function sync() {
-    syncing = syncing.then(async () => {
-      await unload([...live.keys()].filter((id) => !store.state.tabs[id]));
-      const active = store.activeTab;
-      if (!active) return;
-      const chromeId = live.get(active.id);
-      if (chromeId === undefined) await openChromeTab(active.id, true);
-      else await chrome.tabs.update(chromeId, { active: true }).catch(() => openChromeTab(active.id, true));
-      dropPlaceholder();
-      await refreshNav();
-    });
+    syncing = syncing
+      .then(async () => {
+        await unload([...live.keys()].filter((id) => !store.state.tabs[id]));
+        const active = store.activeTab;
+        if (!active) return;
+        // Both halves of a split are on screen, so both need a page.
+        for (const id of store.visibleTabIds()) if (id !== active.id && !live.has(id)) await openChromeTab(id, false);
+        const chromeId = live.get(active.id);
+        if (chromeId === undefined) await openChromeTab(active.id, true);
+        await syncSplits();
+        await chrome.tabs.update(live.get(active.id)!, { active: true }).catch(() => openChromeTab(active.id, true));
+        dropPlaceholder();
+        await refreshNav();
+      })
+      .catch((err) => console.error('Flecha shell: sync failed', err));
+  }
+
+  // ---- split view: the Store's splits as Chromium's own split view ---------------
+  // Chromium shows both tabs of a split whenever either is active, which is how a Space's
+  // split behaves in the Store too. Chromium places the halves by tab order.
+  // TODO(chromium): the split ratio (store.splitRatio, the divider) has no extension API; a
+  // native patch would apply it, and report drags of Chromium's own divider back.
+
+  /** Split changes we asked Chromium for, by tab: their events are ours, not the user's. */
+  const ourSplits = new Map<number, 'split' | 'unsplit'>();
+
+  async function syncSplits() {
+    const wanted = new Map<string, [number, number]>();
+    for (const space of store.state.spaces) {
+      const pair = space.split?.map((id) => live.get(id));
+      if (pair?.length === 2 && pair[0] !== undefined && pair[1] !== undefined) wanted.set(pair.join(','), pair as [number, number]);
+    }
+    const tabs = await chrome.tabs.query({ windowId: await mainWindow() });
+    const splits = new Map<number, chrome.tabs.Tab[]>();
+    for (const tab of tabs) {
+      if (tab.splitViewId === undefined || tab.splitViewId < 0) continue;
+      splits.set(tab.splitViewId, [...(splits.get(tab.splitViewId) ?? []), tab]);
+    }
+    const have = new Set<string>();
+    for (const [splitId, members] of splits) {
+      const key = members
+        .sort((a, b) => a.index - b.index)
+        .map((t) => t.id)
+        .join(',');
+      if (wanted.has(key)) have.add(key);
+      else {
+        for (const t of members) ourSplits.set(t.id!, 'unsplit');
+        await chrome.tabs.unsplit(splitId).catch(() => undefined);
+      }
+    }
+    for (const [key, [left, right]] of wanted) {
+      if (have.has(key)) continue;
+      ourSplits.set(left, 'split');
+      ourSplits.set(right, 'split');
+      // Split tabs must be next to each other, left first.
+      await chrome.tabs.move(left, { index: -1 }).catch(() => undefined);
+      await chrome.tabs.move(right, { index: -1 }).catch(() => undefined);
+      await chrome.tabs.createSplit([left, right]).catch((err) => {
+        ourSplits.delete(left);
+        ourSplits.delete(right);
+        console.warn('Flecha shell: split failed', err);
+      });
+    }
+  }
+
+  /** A split made or ended in Chromium itself (its split menu, the close button) goes to the Store. */
+  async function splitChanged(chromeId: number, splitViewId: number) {
+    const ours = ourSplits.get(chromeId);
+    if (ours && ours === (splitViewId < 0 ? 'unsplit' : 'split')) return void ourSplits.delete(chromeId);
+    const id = flechaIdFor(chromeId);
+    const space = store.activeSpace;
+    if (!id) return;
+    if (splitViewId < 0) {
+      if (space.split?.includes(id)) exitSplit();
+      return;
+    }
+    const members = (await chrome.tabs.query({ windowId: await mainWindow() }))
+      .filter((t) => t.splitViewId === splitViewId)
+      .sort((a, b) => a.index - b.index)
+      .map((t) => flechaIdFor(t.id!));
+    const active = space.activeTabId;
+    if (members.length !== 2 || !members.every(Boolean) || !active || !members.includes(active)) return;
+    if (space.split && members.every((m) => space.split!.includes(m!))) return;
+    const other = members.find((m) => m !== active)!;
+    store.splitWith(other, members[0] === other ? 'left' : 'right');
+  }
+
+  function exitSplit() {
+    const mirror = store.unsplit();
+    if (mirror) {
+      store.closeTab(mirror);
+      void unload([mirror]);
+    }
+  }
+
+  /** A tab dropped on the page: show it beside the page, on the side it was dropped. */
+  function dropToSplit(tabId: string, side: 'left' | 'right') {
+    frame.tabDragging = false;
+    sendFrame();
+    const space = store.activeSpace;
+    if (!space.activeTabId || space.activeTabId === tabId) return store.activate(tabId);
+    // A responsive mirror only exists for its split; it goes away when something else takes its place.
+    if (space.splitMode === 'responsive') exitSplit();
+    store.splitWith(tabId, side);
   }
 
   async function refreshNav() {
@@ -222,6 +316,7 @@ async function start() {
     if (info.mutedInfo) patch.muted = info.mutedInfo.muted;
     store.updateTab(id, patch);
     if (info.status === 'complete' && tab.active) void refreshNav().then(sendState);
+    if (info.splitViewId !== undefined) void splitChanged(chromeId, info.splitViewId);
   }
 
   function onActivated({ tabId }: { tabId: number }) {
@@ -412,6 +507,8 @@ async function start() {
       });
     },
     splitWith: (id: string) => store.splitWith(id),
+    exitSplit,
+    dropToSplit: (id: string, side: string) => dropToSplit(String(id), side === 'left' ? 'left' : 'right'),
     splitNew: (input: string) => store.splitWith(openTab(input, false).id),
     openSettings: (pane?: string) => openSettings(typeof pane === 'string' ? pane : undefined),
     finishOnboarding: () => store.setOnboarded(true),
