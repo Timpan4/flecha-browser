@@ -43,7 +43,14 @@ window.addEventListener(
   },
   true,
 );
-window.addEventListener('blur', () => (recording = false));
+window.addEventListener('blur', () => setRecording(false));
+
+/** Recording also pauses Flecha's browser-wide shortcuts, so those keys reach this page. */
+function setRecording(on: boolean) {
+  if (recording === on) return;
+  recording = on;
+  cmd('settings:recording')(on);
+}
 
 // The background (Flecha's ⌘F, say) can ask for the search field too.
 on('settings:find', () => {
@@ -70,9 +77,7 @@ const api: SettingsApi = {
     window.addEventListener('hashchange', () => location.hash.length > 1 && cb(location.hash.slice(1)));
   },
   onFind: (cb) => void findListeners.push(cb),
-  recordShortcut: async (on) => {
-    recording = !!on;
-  },
+  recordShortcut: async (on) => setRecording(!!on),
   onKey: (cb) => void keyListeners.push(cb),
   tabs: () => invoke<TabsView>('settings:tabs'),
   editTabs: (edit) => invoke('settings:edit-tabs', edit),
