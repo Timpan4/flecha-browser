@@ -177,9 +177,10 @@ async function start() {
     const patch: Parameters<Store['updateTab']>[1] = {};
     // Chromium's new tab page is Flecha's empty state: the tab is still a blank one.
     if (info.url) patch.url = isStartPage({ url: info.url } as chrome.tabs.Tab) ? 'about:blank' : info.url;
-    if (patch.url === 'about:blank') delete info.title;
-    if (info.title) patch.title = info.title;
-    if (info.favIconUrl) patch.favicon = info.favIconUrl;
+    // The new tab page's own title and icon ("Flecha") aren't the blank tab's.
+    const blank = isStartPage(tab);
+    if (info.title && !blank) patch.title = info.title;
+    if (info.favIconUrl && !blank) patch.favicon = info.favIconUrl;
     if (info.status) patch.loading = info.status === 'loading';
     if (info.audible !== undefined) patch.audible = info.audible;
     if (info.mutedInfo) patch.muted = info.mutedInfo.muted;
@@ -269,13 +270,16 @@ async function start() {
       if (prefs?.searchEngine) store.setSearchEngine(prefs.searchEngine as SearchEngineId);
     },
     searchHistory: async (query: string) =>
-      (await chrome.history.search({ text: String(query), maxResults: 50, startTime: 0 })).map((h) => ({
+      (await chrome.history.search({ text: String(query), maxResults: 50, startTime: 0 })).filter((h) => isWebPage(h.url)).map((h) => ({
         url: h.url ?? '',
         title: h.title || h.url || '',
         visits: h.visitCount ?? 0,
         lastVisit: h.lastVisitTime ?? 0,
       })),
-    topSites: async () => (await chrome.topSites.get()).map((s) => ({ url: s.url, title: s.title || s.url, visits: 0, lastVisit: 0 })),
+    topSites: async () =>
+      (await chrome.topSites.get())
+        .filter((s) => isWebPage(s.url))
+        .map((s) => ({ url: s.url, title: s.title || s.url, visits: 0, lastVisit: 0 })),
     detectBrowsers: () => [],
     importFlechaState: (json: string) => {
       let state: BrowserState | undefined;
@@ -312,6 +316,8 @@ async function start() {
 const url = (tab: chrome.tabs.Tab) => tab.pendingUrl || tab.url || '';
 /** Flecha's own pages (the sidebar opened in a tab while debugging, say) aren't browsing tabs. */
 const isShellPage = (tab: chrome.tabs.Tab) => url(tab).startsWith(chrome.runtime.getURL(''));
+/** Sites worth suggesting: not Flecha's or Chromium's own pages. */
+const isWebPage = (address = '') => /^https?:/.test(address);
 const isStartPage = (tab: chrome.tabs.Tab) => /^chrome:\/\/(newtab|new-tab-page)\/?$/.test(url(tab));
 
 // Listeners go on in the first turn, or Chromium drops the event that woke the background;
