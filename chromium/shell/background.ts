@@ -8,10 +8,10 @@
  */
 import { Store, type StatePersistence } from '../../src/main/store';
 import { resolveInput, searchEngine } from '../../src/main/url';
-import { shortcutHints } from '../../src/main/shortcuts';
+import { shortcutHints, type ShortcutId } from '../../src/main/shortcuts';
 import { describe as describeEnvironment } from '../../src/main/environments';
 import type { BrowserState, DropTarget, SearchEngineId, UiState } from '../../src/shared/types';
-import { broadcast, handle, listen, onConnect } from './hub';
+import { broadcast, call, handle, listen, onConnect } from './hub';
 import type { MenuRun } from './protocol';
 import type { MenuEntry } from './settingsUi';
 import { openSettings, registerSettings } from './settingsHandlers';
@@ -558,6 +558,105 @@ async function start() {
 
   registerSiteControls({ store, activeChromeId, mainWindow });
 
+  // ---- commands by id, for keyboard shortcuts (the Electron spike's buildMenu) ----
+
+  /** Copies through the window's frame page: the background has no document for the clipboard. */
+  async function copyToClipboard(text: string, message: string) {
+    broadcast('clipboard', await mainWindow(), { text, message });
+  }
+
+  /** ⌘1–⌘8 pick a tab by position (favorites, then pinned, then today); ⌘9 the last one. */
+  function selectTabIndex(index: number) {
+    const ids = store.allTabIds(store.activeSpace);
+    const id = index < 0 ? ids[ids.length - 1] : ids[index];
+    if (id) store.activate(id);
+  }
+
+  function cycleTab(step: 1 | -1) {
+    const space = store.activeSpace;
+    const ids = store.allTabIds(space);
+    if (!ids.length) return;
+    const i = space.activeTabId ? ids.indexOf(space.activeTabId) : -1;
+    store.activate(ids[(i + step + ids.length) % ids.length]);
+  }
+
+  function cycleSpace(step: 1 | -1) {
+    const spaces = store.state.spaces;
+    const i = spaces.findIndex((sp) => sp.id === store.state.activeSpaceId);
+    store.switchSpace(spaces[(i + step + spaces.length) % spaces.length].id);
+  }
+
+  /** A command on the active tab, if there is one. */
+  const withTab = (fn: (tab: NonNullable<Store['activeTab']>) => unknown) => () => {
+    const tab = store.activeTab;
+    if (tab) return fn(tab);
+  };
+
+  const commands: Record<ShortcutId | 'closePeek', () => unknown> = {
+    newTab: () => openPalette('new-tab'),
+    openLocation: () => openPalette('navigate'),
+    back: () => call('back'),
+    forward: () => call('forward'),
+    reload: () => call('reload'),
+    hardReload: onActive((id) => chrome.tabs.reload(id, { bypassCache: true })),
+    // TODO(chromium): Chromium's own find bar does find in page; when a native patch routes ⌘F
+    // here instead, whatever module draws Flecha's find bar handles this command.
+    find: () => call('find'),
+    toggleSidebar: () => call('toggleSidebar'),
+    settings: () => openSettings(),
+    newFlechinha: () => call('newFlechinha'),
+    closeTab: withTab((tab) => call('close', tab.id)),
+    reopenTab: () => {
+      const item = store.popArchive();
+      if (item) openTab(item.url);
+    },
+    nextTab: () => cycleTab(1),
+    previousTab: () => cycleTab(-1),
+    pinTab: withTab((tab) => store.togglePin(tab.id)),
+    duplicateTab: withTab((tab) => openTab(tab.url)),
+    muteTab: withTab((tab) => toggleMute(tab.id)),
+    clearToday: () => call('clearToday'),
+    copyLink: withTab((tab) => copyToClipboard(tab.url, 'Link copied')),
+    copyMarkdown: withTab((tab) => copyToClipboard(`[${tab.customTitle ?? tab.title}](${tab.url})`, 'Markdown link copied')),
+    screenshot: () => call('capturePage'),
+    nextSpace: () => cycleSpace(1),
+    previousSpace: () => cycleSpace(-1),
+    newSpace: () => call('newSpace'),
+    splitNew: () => openPalette('split'),
+    exitSplit,
+    zoomIn: () => call('zoom', 1),
+    zoomOut: () => call('zoom', -1),
+    actualSize: () => call('zoom', 0),
+    // Owned by other shell modules, which handle a hub command of the same name.
+    devTools: () => call('devTools'),
+    responsive: () => call('responsive'),
+    nextEnvironment: () => call('nextEnvironment'),
+    editBoost: () => call('editBoost'),
+    closePeek: () => call('closePeek'),
+    viewSource: withTab((tab) => isWebPage(tab.url) && addTab(`view-source:${tab.url}`, { activate: true })),
+    shortcuts: () => openSettings('shortcuts'),
+  };
+
+  /**
+   * Runs a command by its id in src/main/shortcuts.ts, plus "tab1"…"tab9" (⌘1…⌘9, 9 is the
+   * last tab) and "space1"…"space9" (⌃1…⌃9). "tabN" / "spaceN" take the number as `n`.
+   * Returns whether the id is a command.
+   */
+  function runCommand(id: string, n?: number): boolean {
+    const numbered = /^(tab|space)(\d|N)$/.exec(id);
+    if (numbered) {
+      const i = numbered[2] === 'N' ? Number(n) : Number(numbered[2]);
+      if (!Number.isInteger(i) || i < 1 || i > 9) return false;
+      if (numbered[1] === 'tab') selectTabIndex(i === 9 ? -1 : i - 1);
+      else if (store.state.spaces[i - 1]) store.switchSpace(store.state.spaces[i - 1].id);
+      return true;
+    }
+    if (!Object.hasOwn(commands, id)) return false;
+    void Promise.resolve(commands[id as keyof typeof commands]()).catch((err) => console.error(`Flecha shell: "${id}" failed`, err));
+    return true;
+  }
+  handle({ run: (id: string, n?: number) => runCommand(String(id), n) });
+
   registerSettings({
     store,
     unload: (ids) => void unload(ids),
@@ -571,7 +670,7 @@ async function start() {
 
   onConnect(() => sendState());
   sync();
-  return { onCreated, onUpdated, onActivated, onRemoved, openPalette };
+  return { onCreated, onUpdated, onActivated, onRemoved, openPalette, runCommand };
 }
 
 const url = (tab: chrome.tabs.Tab) => tab.pendingUrl || tab.url || '';
@@ -585,6 +684,16 @@ const isStartPage = (tab: chrome.tabs.Tab) => /^chrome:\/\/(newtab|new-tab-page)
 // each waits for the saved state to load.
 const ready = start();
 listen(ready);
+
+/**
+ * Runs a Flecha command by id (src/main/shortcuts.ts, plus tab1…tab9 and space1…space9), as
+ * the Electron spike's menu accelerators did: for keyboard shortcuts from the browser
+ * (chrome.flechaPrivate.onShortcut). Resolves to whether the id is a command. The same is the
+ * hub command "run", for pages.
+ */
+export function run(id: string, n?: number): Promise<boolean> {
+  return ready.then((r) => r.runCommand(id, n));
+}
 registerDownloads();
 chrome.tabs.onCreated.addListener((tab) => void ready.then((r) => r.onCreated(tab)));
 chrome.tabs.onUpdated.addListener((id, info, tab) => void ready.then((r) => r.onUpdated(id, info, tab)));
