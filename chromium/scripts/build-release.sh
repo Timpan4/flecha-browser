@@ -26,13 +26,16 @@
 # Then copy Flecha.app to /Applications and run
 #   chromium/scripts/install-native-host.sh --app /Applications/Flecha.app
 #
+# FLECHA_ARCH=x64 builds for Intel Macs instead, into out/Release-x64 (see env.sh); its
+# package step needs an Intel Node in FLECHA_NODE.
+#
 # Dev builds (build.sh, out/Dev) share the checkout: don't run both at once. The release app
 # uses the default profile folder, ~/Library/Application Support/Flecha Browser.
 set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
 . "$here/scripts/env.sh"
 root="$(cd "$here/.." && pwd)"
-out="$src/out/Release"
+out="$release_out"
 
 package=1
 package_args=()
@@ -105,8 +108,11 @@ else
   echo "staged $staged_sparkle"
 fi
 
-step "out/Release/args.gn"
-args="$(cat "$here/build/release.gn")"
+step "$(basename "$out")/args.gn"
+# release.gn is the arm64 build; FLECHA_ARCH=x64 (env.sh) swaps the CPU and the feed.
+args="$(sed -e "s/^target_cpu = .*/target_cpu = \"$FLECHA_ARCH\"/" \
+  -e "s|^flecha_sparkle_feed_url = \"https://flecha.dev/appcast.xml\"|flecha_sparkle_feed_url = \"https://flecha.dev/$release_feed\"|" \
+  "$here/build/release.gn")"
 # Flecha's own version (patch 0052): package.json's "version" is the one source of it, the
 # app's CFBundleShortVersionString. Its CFBundleVersion, which Sparkle compares to decide
 # what is newer, is Chromium's BUILD.PATCH plus a build counter: the number of commits in
@@ -131,12 +137,12 @@ fi
 
 cd "$src"
 if [ ! -f "$out/build.ninja" ]; then
-  step "gn gen out/Release"
-  gn gen out/Release
+  step "gn gen $out"
+  gn gen "$out"
 fi
 
-step "autoninja -C out/Release chrome"
-caffeinate -i autoninja -C out/Release chrome ${ninja_args[@]+"${ninja_args[@]}"}
+step "autoninja -C $out chrome"
+caffeinate -i autoninja -C "$out" chrome ${ninja_args[@]+"${ninja_args[@]}"}
 
 if [ "$package" = 1 ]; then
   step "package"
