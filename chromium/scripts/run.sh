@@ -13,6 +13,9 @@ if [ ! -d "$shell_dist" ]; then
   echo "note: $shell_dist does not exist yet; build the shell first" >&2
 fi
 mkdir -p "$profile"
+# Chromium keeps running the cached background script of an unpacked extension across
+# launches, even after its files and version change; drop the cache so the new shell runs.
+rm -rf "$profile/Default/Service Worker"
 
 # Newer Chromium ignores --load-extension unless this feature is off.
 exec "$src/out/Dev/Flecha.app/Contents/MacOS/Flecha" \
