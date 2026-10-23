@@ -24,8 +24,14 @@ export class Favicons {
   private hosts = new Set<string>();
   private tried = new Map<string, number>();
 
-  /** Called when hosts were found, so the sidebar can show their icons. */
-  constructor(private onFound: () => void) {}
+  /**
+   * onFound: hosts were found, so the sidebar can show their icons. onMissing: hosts Chromium
+   * has no icon for (never visited in this profile), for siteIcons.ts to fetch from the site.
+   */
+  constructor(
+    private onFound: () => void,
+    private onMissing: (hosts: string[]) => void = () => undefined,
+  ) {}
 
   /** The `faviconUrl` for UiState. */
   readonly url = TEMPLATE;
@@ -53,6 +59,7 @@ export class Favicons {
     const globe = await this.globe.catch(() => undefined);
     if (!globe) return;
     let found = false;
+    const missing: string[] = [];
     await Promise.all(
       [...pages].map(async ([host, url]) => {
         this.tried.set(host, now);
@@ -60,9 +67,10 @@ export class Favicons {
         if (bytes?.length && !same(bytes, globe)) {
           this.hosts.add(host);
           found = true;
-        }
+        } else missing.push(host);
       }),
     );
     if (found) this.onFound();
+    if (missing.length) this.onMissing(missing);
   }
 }
