@@ -1,9 +1,16 @@
 /**
- * What Electron draws natively for Settings and an extension page has to draw itself: the
- * Tabs & Spaces menus, the "Delete …?" questions, and a note for what isn't ported yet.
- * Styles are in settings-shell.css.
+ * What Electron draws natively and an extension page has to draw itself: context menus (the
+ * Tabs & Spaces menus in Settings, the sidebar's tab and Space menus in the window), the
+ * "Delete …?" questions, and a note for what isn't ported yet. Styles are in shell.css.
  */
-import type { AskOptions, TabsMenuItem } from '../../src/main/tabManager';
+import type { AskOptions } from '../../src/main/tabManager';
+
+/** A menu as data, like Electron's menu templates: items carry whatever `run` the caller picks. */
+export type MenuEntry<T> =
+  | { label: string; run: T; enabled?: boolean; checked?: boolean }
+  | { label: string; submenu: MenuEntry<T>[]; enabled?: boolean }
+  | { separator: true };
+type Picked<T> = { label: string; run: T };
 
 // Menus open where the pointer last was, as native context menus do.
 let pointer = { x: 0, y: 0 };
@@ -14,12 +21,12 @@ for (const type of ['pointerdown', 'contextmenu'] as const) {
 let closeOpenMenu: (() => void) | undefined;
 
 /** Shows the menu at the pointer; resolves with the item picked, or undefined if dismissed. */
-export function popupMenu(items: TabsMenuItem[]): Promise<Extract<TabsMenuItem, { run: unknown }> | undefined> {
+export function popupMenu<T>(items: MenuEntry<T>[]): Promise<Picked<T> | undefined> {
   closeOpenMenu?.();
   return new Promise((resolve) => {
     const layer = document.createElement('div');
     layer.className = 'shell-menu-layer';
-    const close = (picked?: Extract<TabsMenuItem, { run: unknown }>) => {
+    const close = (picked?: Picked<T>) => {
       layer.remove();
       window.removeEventListener('keydown', onKey, true);
       window.removeEventListener('blur', dismiss);
@@ -42,7 +49,7 @@ export function popupMenu(items: TabsMenuItem[]): Promise<Extract<TabsMenuItem, 
     window.addEventListener('blur', dismiss);
     closeOpenMenu = dismiss;
 
-    const build = (entries: TabsMenuItem[]): HTMLElement => {
+    const build = (entries: MenuEntry<T>[]): HTMLElement => {
       const menu = document.createElement('div');
       menu.className = 'shell-menu';
       menu.setAttribute('role', 'menu');
@@ -53,6 +60,16 @@ export function popupMenu(items: TabsMenuItem[]): Promise<Extract<TabsMenuItem, 
         }
         const row = Object.assign(document.createElement('button'), { className: 'shell-menu-item', textContent: item.label });
         row.setAttribute('role', 'menuitem');
+        if (item.enabled === false) {
+          row.disabled = true;
+          menu.append(row);
+          continue;
+        }
+        if ('checked' in item && item.checked !== undefined) {
+          row.setAttribute('role', 'menuitemcheckbox');
+          row.setAttribute('aria-checked', String(item.checked));
+          row.classList.add('checkable');
+        }
         if ('submenu' in item) {
           row.classList.add('has-submenu');
           const sub = build(item.submenu);
@@ -77,7 +94,7 @@ export function popupMenu(items: TabsMenuItem[]): Promise<Extract<TabsMenuItem, 
     const { width, height } = menu.getBoundingClientRect();
     menu.style.left = `${Math.max(4, Math.min(pointer.x, innerWidth - width - 4))}px`;
     menu.style.top = `${Math.max(4, Math.min(pointer.y, innerHeight - height - 4))}px`;
-    menu.querySelector<HTMLButtonElement>('.shell-menu-item')?.focus();
+    menu.querySelector<HTMLButtonElement>('.shell-menu-item:not(:disabled)')?.focus();
   });
 }
 
