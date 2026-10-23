@@ -42,7 +42,7 @@ Flecha started as an Electron app; that version is gone from the repo (it's in t
 - **Console error badge:** local tabs show how many console errors they have; clicking it opens the Console
 - **Separate cookies per Space:** right-click a Space → Separate Cookies and Logins, to be signed in as different users side by side
 - **Responsive view (⌥⌘M):** the page as a phone (393px, touch, mobile user agent) next to desktop, following its navigation
-- **Boosts:** per-site TypeScript and CSS in `~/.flecha/boosts` (`github.com.ts`, `github.com.css`, `all.css`), compiled with esbuild; CSS applies live, scripts reload the page. Type `boost` in the command bar or press ⌥⌘B
+- **Boosts:** per-site TypeScript and CSS (`github.com.ts`, `github.com.css`, `all.css`), kept in Flecha and edited on the Boosts page; CSS applies live, scripts reload the page. Type `boost` in the command bar or press ⌥⌘B
 - **Command bar shortcuts:** `gh 123`, `gh owner/repo`, `npm react`, `mdn grid`, `caniuse :has`, `so …`, `env`; paste a JWT or a Unix timestamp to decode it
 
 - Chrome extensions: install from the Chrome Web Store (Extensions → Chrome Web Store, then "Add to Chrome"); their buttons appear under the address bar. Manage or remove them from the Extensions menu
