@@ -3,6 +3,8 @@
 import { build, context } from 'esbuild';
 import fs from 'node:fs';
 import path from 'node:path';
+import { featureEntries, copyFeatureStatic } from './build-features.mjs';
+import { buildAdblock } from './build-adblock.mjs';
 
 const here = path.dirname(new URL(import.meta.url).pathname);
 const root = path.resolve(here, '../..');
@@ -28,10 +30,11 @@ function copyStatic() {
   }
   fs.copyFileSync(path.join(here, 'shell.css'), path.join(out, 'shell.css'));
   for (const f of ['settings.html', 'settings-shell.css']) fs.copyFileSync(path.join(here, f), path.join(out, f));
+  copyFeatureStatic(out);
 }
 
 const options = {
-  entryPoints: { background: path.join(here, 'background.ts'), sidebar: path.join(here, 'sidebar.ts'), settings: path.join(here, 'settings.ts') },
+  entryPoints: { background: path.join(here, 'background.ts'), sidebar: path.join(here, 'sidebar.ts'), settings: path.join(here, 'settings.ts'), ...featureEntries },
   bundle: true,
   format: 'esm',
   target: 'chrome140',
@@ -39,6 +42,8 @@ const options = {
   logLevel: 'warning',
   plugins: [{ name: 'static', setup: (b) => b.onEnd(copyStatic) }],
 };
+
+await buildAdblock(out);
 
 if (process.argv.includes('--watch')) {
   const ctx = await context(options);
