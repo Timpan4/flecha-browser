@@ -16,6 +16,8 @@ import type { MenuRun } from './protocol';
 import type { MenuEntry } from './settingsUi';
 import { openSettings, registerSettings } from './settingsHandlers';
 import { registerNativeHost } from './nativeHost';
+// Loaded on the first turn: its modules add webNavigation and message listeners as they load.
+import { registerFeatures, type Features } from './features';
 import { registerDownloads } from './downloads';
 import { registerSiteControls } from './siteControls';
 import { Favicons } from './favicons';
@@ -42,6 +44,7 @@ async function start() {
   };
   const store = new Store(persistence);
   let nativeHost: ReturnType<typeof registerNativeHost> | undefined;
+  let features: Features | undefined;
   const restored = (await chrome.storage.session.get(LIVE_KEY))[LIVE_KEY] as Record<string, number> | undefined;
   const existing = new Set((await chrome.tabs.query({})).map((t) => t.id));
   for (const [id, chromeId] of Object.entries(restored ?? {})) if (existing.has(chromeId) && store.state.tabs[id]) live.set(id, chromeId);
@@ -85,9 +88,9 @@ async function start() {
       tint: store.activeSpace.color,
       sidebarMode: store.state.sidebarVisible ? 'docked' : frame.sidebarPeek ? 'floating' : 'hidden',
       environment: store.activeTab ? describeEnvironment(store.activeTab.url, store.state.environments) : undefined,
-      localServers: [],
-      consoleErrors: {},
-      boostedHosts: [],
+      localServers: features?.localServers() ?? [],
+      consoleErrors: features?.consoleErrors() ?? {},
+      boostedHosts: features?.boostedHosts() ?? [],
       faviconHosts: favicons.list(),
       faviconUrl: favicons.url,
       shortcuts: shortcutHints(store.state),
@@ -536,9 +539,10 @@ async function start() {
     splitNew: (input: string) => store.splitWith(openTab(input, false).id),
     openSettings: (pane?: string) => openSettings(typeof pane === 'string' ? pane : undefined),
     finishOnboarding: () => store.setOnboarded(true),
-    setPreferences: (prefs: { theme?: string; searchEngine?: string }) => {
+    setPreferences: (prefs: { theme?: string; searchEngine?: string; adBlock?: boolean }) => {
       if (prefs?.theme === 'system' || prefs?.theme === 'light' || prefs?.theme === 'dark') store.setPreferences({ theme: prefs.theme });
       if (prefs?.searchEngine) store.setSearchEngine(prefs.searchEngine as SearchEngineId);
+      if (typeof prefs?.adBlock === 'boolean') store.setAdBlock(prefs.adBlock);
     },
     searchHistory: async (query: string) =>
       (await chrome.history.search({ text: String(query), maxResults: 50, startTime: 0 })).filter((h) => isWebPage(h.url)).map((h) => ({
@@ -682,6 +686,9 @@ async function start() {
   });
 
   // Imports and the coding-agent bridge, through Flecha's native messaging host.
+  // Boosts, environments, local servers, the responsive view, console errors and ad blocking.
+  features = registerFeatures({ store, broadcastState: sendState, liveTabId: (id) => live.get(id), activeChromeTabId: activeChromeId });
+
   nativeHost = registerNativeHost({
     store,
     broadcastState: sendState,
