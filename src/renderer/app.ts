@@ -11,6 +11,8 @@ declare global {
 }
 
 const api = window.flecha;
+/** Where this page is shown: the Electron window (unset), or the Chromium build's side panel or new tab page. */
+const surface = document.documentElement.dataset.surface as 'panel' | 'newtab' | undefined;
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const DRAG_TYPE = 'application/x-flecha-tab';
 
@@ -106,7 +108,9 @@ function render(s: UiState) {
   const toggle = $('btn-sidebar');
   toggle.dataset.tip = s.sidebarMode === 'floating' ? 'Keep sidebar open' : 'Hide sidebar';
   renderUrlbar(s, active);
-  renderEmptyState(s, space, !active);
+  // In the Chromium build the sidebar and the new tab page are separate pages: the sidebar
+  // never draws the empty state, the new tab page always does.
+  renderEmptyState(s, space, surface === 'newtab' || (!active && surface !== 'panel'));
 
   $('favorites').replaceChildren(
     ...s.favorites
