@@ -5,6 +5,7 @@
 import type { FlechaApi, PaletteMode, UiState } from '../../src/shared/types';
 import { spaceTint } from '../../src/main/spaceTint';
 import { cmd, invoke, on } from './client';
+import { confirmDeleteSpace, copy, setupWindowUi, showMenu } from './windowUi';
 
 const surface = document.documentElement.dataset.surface;
 const systemDark = matchMedia('(prefers-color-scheme: dark)');
@@ -41,6 +42,8 @@ on('frame', (state) => {
 });
 
 const paletteListeners: Array<(mode: PaletteMode) => void> = [];
+const renameListeners: Array<(tabId: string) => void> = [];
+setupWindowUi({ rename: (tabId) => renameListeners.forEach((cb) => cb(tabId)), state: () => lastState });
 systemDark.addEventListener('change', () => lastState && emitState(lastState));
 
 const api: FlechaApi = {
@@ -52,7 +55,10 @@ const api: FlechaApi = {
     on('palette', cb);
   },
   onEditSpace: (cb) => on('edit-space', cb),
-  onRenameTab: (cb) => on('rename-tab', cb),
+  onRenameTab: (cb) => {
+    renameListeners.push(cb);
+    on('rename-tab', cb);
+  },
   onPeek: (cb) => on('peek', cb),
   onDownloads: (cb) => on('downloads', cb),
   onTourKey: (cb) => on('tour-key', cb),
@@ -76,9 +82,11 @@ const api: FlechaApi = {
   newSpace: cmd('newSpace'),
   updateSpace: cmd('updateSpace'),
   setSpaceIsolated: cmd('setSpaceIsolated'),
-  deleteSpace: cmd('deleteSpace'),
-  tabMenu: cmd('tabMenu'),
-  spaceMenu: cmd('spaceMenu'),
+  // Electron asks first, in a message box; the page asks in its own dialog.
+  deleteSpace: (id) => void confirmDeleteSpace(id),
+  // Electron pops native menus; the page draws them, from items the background builds.
+  tabMenu: (id) => void showMenu('tabMenu', id),
+  spaceMenu: (id) => void showMenu('spaceMenu', id),
   toggleFolder: cmd('toggleFolder'),
   renameFolder: cmd('renameFolder'),
   moveTab: cmd('moveTab'),
@@ -99,9 +107,7 @@ const api: FlechaApi = {
   toggleSidebar: cmd('toggleSidebar'),
   setSidebarPeek: cmd('setSidebarPeek'),
   // The page can write the clipboard itself; the background has no document to do it from.
-  copyText: (text) => {
-    void navigator.clipboard.writeText(String(text)).then(() => cmd('flash')('Link copied'));
-  },
+  copyText: (text) => void copy(String(text), 'Link copied'),
   renameTab: cmd('renameTab'),
   toggleMute: cmd('toggleMute'),
   capturePage: cmd('capturePage'),
