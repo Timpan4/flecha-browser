@@ -15,6 +15,7 @@ import { broadcast, call, handle, listen, onConnect } from './hub';
 import type { MenuRun } from './protocol';
 import type { MenuEntry } from './settingsUi';
 import { openSettings, registerSettings } from './settingsHandlers';
+import { registerNativeHost } from './nativeHost';
 import { registerDownloads } from './downloads';
 import { registerSiteControls } from './siteControls';
 import { Favicons } from './favicons';
@@ -40,6 +41,7 @@ async function start() {
     save: (json) => void chrome.storage.local.set({ [STATE_KEY]: json }),
   };
   const store = new Store(persistence);
+  let nativeHost: ReturnType<typeof registerNativeHost> | undefined;
   const restored = (await chrome.storage.session.get(LIVE_KEY))[LIVE_KEY] as Record<string, number> | undefined;
   const existing = new Set((await chrome.tabs.query({})).map((t) => t.id));
   for (const [id, chromeId] of Object.entries(restored ?? {})) if (existing.has(chromeId) && store.state.tabs[id]) live.set(id, chromeId);
@@ -90,7 +92,7 @@ async function start() {
       faviconUrl: favicons.url,
       shortcuts: shortcutHints(store.state),
       defaultBrowser: { isDefault: false, canSet: false },
-      agent: undefined,
+      agent: nativeHost?.agentActivity(),
       nav: navState,
     };
   }
@@ -550,7 +552,6 @@ async function start() {
       void favicons.want(sites.map((s) => s.url));
       return sites.map((s) => ({ url: s.url, title: s.title || s.url, visits: 0, lastVisit: 0 }));
     },
-    detectBrowsers: () => [],
     importFlechaState: (json: string) => {
       let state: BrowserState | undefined;
       try {
@@ -676,6 +677,25 @@ async function start() {
     load: (id, url) => {
       const chromeId = live.get(id);
       if (chromeId !== undefined) void chrome.tabs.update(chromeId, { url });
+    },
+    agentEndpoint: () => nativeHost?.agentEndpoint(),
+  });
+
+  // Imports and the coding-agent bridge, through Flecha's native messaging host.
+  nativeHost = registerNativeHost({
+    store,
+    broadcastState: sendState,
+    tabs: {
+      open: (url, background) => openTab(url, !background).id,
+      chromeTab: async (id) => {
+        await syncing;
+        return live.get(id) ?? (store.state.tabs[id] ? openChromeTab(id, false) : undefined);
+      },
+      activate: (id) => store.activate(id),
+      close: (id) => {
+        store.closeTab(id);
+        void unload([id]);
+      },
     },
   });
 
