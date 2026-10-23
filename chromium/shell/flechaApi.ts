@@ -125,7 +125,13 @@ const api: FlechaApi = {
   dropToSplit: cmd('dropToSplit'),
   splitNew: cmd('splitNew'),
   closePeek: cmd('closePeek'),
-  openDownload: cmd('openDownload'),
+  // Chromium opens a download only in answer to a click, which a message to the background loses.
+  openDownload: (id) => {
+    if (typeof chrome.downloads?.open !== 'function') return cmd('openDownload')(id);
+    void chrome.downloads.search({ id: Number(id) }).then(([item]) => {
+      if (item?.state === 'complete') return chrome.downloads.open(item.id);
+    });
+  },
   revealDownload: cmd('revealDownload'),
   cancelDownload: cmd('cancelDownload'),
   clearDownloads: cmd('clearDownloads'),
