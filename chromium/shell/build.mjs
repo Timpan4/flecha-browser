@@ -20,10 +20,11 @@ function copyStatic() {
   // The Electron sidebar page, pointed at the shell's bundle.
   const html = fs.readFileSync(path.join(renderer, 'index.html'), 'utf8').replace('src="app.js"', 'src="sidebar.js"');
   fs.writeFileSync(path.join(out, 'sidebar.html'), html);
+  for (const f of ['settings.html', 'settings-shell.css']) fs.copyFileSync(path.join(here, f), path.join(out, f));
 }
 
 const options = {
-  entryPoints: { background: path.join(here, 'background.ts'), sidebar: path.join(here, 'sidebar.ts') },
+  entryPoints: { background: path.join(here, 'background.ts'), sidebar: path.join(here, 'sidebar.ts'), settings: path.join(here, 'settings.ts') },
   bundle: true,
   format: 'esm',
   target: 'chrome140',
