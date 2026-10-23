@@ -1,0 +1,134 @@
+/**
+ * Settings in the Chromium shell's background: the same rules as Electron's Settings window
+ * (src/main/settingsCore.ts, src/main/tabManager.ts), answering the Settings page over the hub.
+ * Every name starts with `settings:` so it never clashes with the sidebar's.
+ */
+import type { SettingsPatch, SettingsView, TabsEdit } from '../../src/shared/types';
+import type { Store } from '../../src/main/store';
+import { applySettings, renewAgentToken, settingsView } from '../../src/main/settingsCore';
+import { TabManager, type AskOptions, type TabsMenuRequest, type TabsMenuRun } from '../../src/main/tabManager';
+import { broadcast, handle } from './hub';
+
+export interface SettingsContext {
+  store: Store;
+  /** Closes the Chromium tabs of these Flecha tabs; they reopen from the Store when next shown. */
+  unload(tabIds: string[]): void;
+  /** Sends every page the new state, as after any change from the sidebar. */
+  broadcastState(): void;
+  /** Whether a Flecha tab has a live Chromium tab. Without it, Tabs & Spaces shows every tab as closed. */
+  isOpen?(tabId: string): boolean;
+  /** Navigates a Flecha tab's live Chromium tab. Without it, the tab is unloaded and reopens at the new address. */
+  load?(tabId: string, url: string): void;
+}
+
+/** What a stub answers with, so the page can say so instead of doing nothing. */
+export interface NotYet {
+  notYet: string;
+}
+
+const notYet = (what: string): NotYet => ({ notYet: `${what} isn't in the Chromium build yet.` });
+
+export function registerSettings(ctx: SettingsContext) {
+  const { store } = ctx;
+
+  // Questions go to the open Settings page, which answers with the button's index.
+  const questions = new Map<number, (response: number) => void>();
+  let nextQuestion = 1;
+  const ask = (options: AskOptions) =>
+    new Promise<number>((resolve) => {
+      const id = nextQuestion++;
+      // A page that closes without answering counts as Cancel.
+      const timer = setTimeout(() => answer(options.cancelId), 10 * 60_000);
+      const answer = (response: number) => {
+        clearTimeout(timer);
+        questions.delete(id);
+        resolve(response);
+      };
+      questions.set(id, answer);
+      broadcast('settings:ask', id, options);
+    });
+
+  const tabs = new TabManager(store, {
+    isOpen: (tabId) => ctx.isOpen?.(tabId) ?? false,
+    load: (tabId, url) => (ctx.load ? ctx.load(tabId, url) : ctx.unload([tabId])),
+    destroyView: (tabId) => ctx.unload([tabId]),
+    show: (tabId) => {
+      // The background follows the Store's active tab into Chromium.
+      store.activate(tabId);
+      ctx.broadcastState();
+    },
+    // TODO(chromium): site icons come from chrome://favicon2 / _favicon, not a favicon:// cache; tabs use their own favicon URL for now.
+    faviconHosts: () => [],
+    // Chromium's profile has one cookie jar; a Space with separate cookies and logins isn't wired yet.
+    // TODO(chromium): give isolated Spaces their own storage partition, then key this on it.
+    sessionOf: (space) => (space?.isolated ? space.id : 'default'),
+    ask,
+    push: (view) => broadcast('settings:tabs', view),
+  });
+
+  const view = (): SettingsView =>
+    settingsView(store, {
+      // TODO(chromium): Chromium's download folder (prefs download.default_directory) isn't readable from an extension.
+      downloadsFolder: store.state.downloadsFolder ?? '~/Downloads',
+      // TODO(chromium): setting the default browser needs native code (shell integration), not an extension API.
+      defaultBrowser: { isDefault: false, canSet: false },
+      // TODO(chromium): the MCP bridge for coding agents runs a local HTTP server, which an extension can't.
+      agentEndpoint: undefined,
+    });
+
+  handle({
+    'settings:get': view,
+    'settings:set': async (patch: SettingsPatch) => {
+      const notice = await applySettings(store, patch && typeof patch === 'object' ? patch : {}, {
+        // TODO(chromium): Chromium's own light/dark mode isn't settable from an extension; Flecha's pages follow the system.
+        theme: () => {},
+        // TODO(chromium): no agent bridge yet; the choice is kept for when there is one.
+        agent: async () => {},
+        // TODO(chromium): ad blocking needs declarativeNetRequest rules from the filter lists; the choice is kept.
+        adBlock: async () => {},
+      });
+      ctx.broadcastState();
+      return { ...view(), notice };
+    },
+    'settings:new-agent-token': () => {
+      renewAgentToken(store);
+      return view();
+    },
+    // TODO(chromium): needs a native folder picker.
+    'settings:choose-downloads-folder': () => ({ ...view(), ...notYet('Choosing the downloads folder') }),
+    // TODO(chromium): needs native code to become the default browser.
+    'settings:make-default-browser': () => ({ ...view(), ...notYet('Making Flecha the default browser') }),
+    // TODO(chromium): Boosts live in ~/.flecha/boosts, which an extension can't open in Finder.
+    'settings:open-boosts': () => notYet('Opening the Boosts folder'),
+    // TODO(chromium): the welcome tour (src/renderer/onboarding.ts) isn't in the shell's sidebar yet.
+    'settings:show-tour': () => notYet('The welcome tour'),
+    // TODO(chromium): there's no extension API for the macOS emoji picker; ⌃⌘Space opens it.
+    'settings:emoji-panel': () => notYet('The emoji picker button (press ⌃⌘Space)'),
+
+    'settings:tabs': () => tabs.view(),
+    'settings:edit-tabs': (edit: TabsEdit) => tabs.edit(edit),
+    'settings:tabs-menu': (request: TabsMenuRequest) => tabs.menu(request),
+    'settings:tabs-menu-run': (run: TabsMenuRun) => (run && typeof run === 'object' ? tabs.run(run) : undefined),
+    'settings:show-tab': (tabId: string) => tabs.show(tabId),
+    'settings:answer': (id: number, response: number) => questions.get(id)?.(Number(response)),
+  });
+
+  return { tabs, view };
+}
+
+/** The Settings page's address; a hash picks the pane (`#shortcuts`). */
+export const SETTINGS_PAGE = 'settings.html';
+
+/** Opens Settings in a tab, or brings the open one forward on the given pane. */
+export async function openSettings(pane?: string) {
+  const url = chrome.runtime.getURL(SETTINGS_PAGE);
+  // Match patterns don't cover chrome-extension:// URLs, so compare addresses instead.
+  const open = (await chrome.tabs.query({})).find((t) => t.url?.startsWith(url));
+  if (open?.id !== undefined) {
+    await chrome.tabs.update(open.id, { active: true });
+    if (open.windowId !== undefined) await chrome.windows.update(open.windowId, { focused: true });
+    if (pane) broadcast('settings:pane', pane);
+    return;
+  }
+  await chrome.tabs.create({ url: pane ? `${url}#${pane}` : url });
+}

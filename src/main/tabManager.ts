@@ -1,20 +1,52 @@
-import { BrowserWindow, Menu, app, dialog, ipcMain, type MenuItemConstructorOptions, type Session, type WebContents } from 'electron';
-import type { FolderPlacement, PinnedNode, TabPlacement, TabsEdit, TabsEditResult, TabsMenuAction, TabsView } from '../shared/types';
+import type { FolderPlacement, PinnedNode, Space, TabPlacement, TabsEdit, TabsEditResult, TabsMenuAction, TabsView } from '../shared/types';
 import { findFolder, pinnedTabIds, type Store } from './store';
-import { sessionForSpace } from './sessions';
 import { webAddress } from './url';
 
-/** What the tab manager needs from the browser window: its tab pages. */
+/** A question with buttons; resolves with the index of the button chosen. */
+export interface AskOptions {
+  message: string;
+  detail: string;
+  buttons: string[];
+  defaultId: number;
+  cancelId: number;
+}
+
+/**
+ * What the tab manager needs from the browser it runs in (Electron's window, or the Chromium
+ * shell's background): its tab pages, a way to ask, and a way to send the pane a fresh view.
+ */
 export interface TabManagerHost {
-  /** The tab's page, only if it is loaded. */
-  loadedContents(tabId: string): WebContents | undefined;
+  /** Whether the tab's page is loaded. */
+  isOpen(tabId: string): boolean;
+  /** Points the tab's page, if it is loaded, at a new address. */
+  load(tabId: string, url: string): void;
   destroyView(tabId: string): void;
   /** Activates the tab and brings the browser window forward. */
   show(tabId: string): void;
   faviconHosts(): string[];
+  /** The cookie jar a Space's tabs use; a tab that lands in another one has to reopen. */
+  sessionOf(space: Space | undefined): unknown;
+  ask(options: AskOptions): Promise<number>;
+  /** Sends the pane a fresh view (when Settings is open). */
+  push(view: TabsView): void;
+}
+
+/** What a menu item does once picked: answer the page, make an edit, or open the tab. */
+export type TabsMenuRun = { answer: TabsMenuAction } | { edit: TabsEdit } | { show: string };
+
+/** The menu for tabs or a folder, as data; each browser draws it its own way. */
+export type TabsMenuItem = { label: string; run: TabsMenuRun } | { label: string; submenu: TabsMenuItem[] } | { separator: true };
+
+/** What the page asks a menu for: a selection of tabs or one folder, from a right-click or a button. */
+export interface TabsMenuRequest {
+  tabIds?: string[];
+  folderId?: string;
+  context?: boolean;
 }
 
 type Folder = Extract<PinnedNode, { kind: 'folder' }>;
+
+const SEPARATOR: TabsMenuItem = { separator: true };
 
 /**
  * Settings → Tabs & Spaces: favorites and every Space's pinned and Today tabs, edited like a
@@ -22,26 +54,12 @@ type Folder = Extract<PinnedNode, { kind: 'folder' }>;
  * pane is sent a fresh view whenever the Store changes for any other reason.
  */
 export class TabManager {
-  private pushTimer?: NodeJS.Timeout;
+  private pushTimer?: ReturnType<typeof setTimeout>;
 
   constructor(
     private store: Store,
     private host: TabManagerHost,
-    private win: () => BrowserWindow | undefined,
   ) {
-    const fromSettings = (event: Electron.IpcMainInvokeEvent) => {
-      const w = this.win();
-      return !!w && !w.isDestroyed() && event.sender === w.webContents;
-    };
-    ipcMain.handle('settings:tabs', (event) => (fromSettings(event) ? this.view() : undefined));
-    ipcMain.handle('settings:edit-tabs', (event, edit: TabsEdit) => (fromSettings(event) ? this.edit(edit) : undefined));
-    ipcMain.handle('settings:tabs-menu', (event, request) => (fromSettings(event) ? this.menu(request) : undefined));
-    ipcMain.handle('settings:show-tab', (event, tabId: string) => {
-      if (fromSettings(event) && this.store.state.tabs[String(tabId)]) this.host.show(String(tabId));
-    });
-    ipcMain.handle('settings:emoji-panel', (event) => {
-      if (fromSettings(event)) app.showEmojiPanel();
-    });
     // Titles and icons change while pages load; one redraw per burst is plenty.
     store.onChange(() => this.refresh());
   }
@@ -49,14 +67,14 @@ export class TabManager {
   /** Sends the pane a fresh view soon; also for changes outside the Store, like newly fetched icons. */
   refresh() {
     clearTimeout(this.pushTimer);
-    this.pushTimer = setTimeout(() => this.push(), 120);
+    this.pushTimer = setTimeout(() => this.host.push(this.view()), 120);
   }
 
   view(): TabsView {
     const s = this.store.state;
     const tabs: TabsView['tabs'] = {};
     for (const [id, t] of Object.entries(s.tabs)) {
-      tabs[id] = { id, url: t.url, title: t.title, customTitle: t.customTitle, favicon: t.favicon, homeUrl: t.homeUrl, open: !!this.host.loadedContents(id) };
+      tabs[id] = { id, url: t.url, title: t.title, customTitle: t.customTitle, favicon: t.favicon, homeUrl: t.homeUrl, open: this.host.isOpen(id) };
     }
     return {
       favorites: s.favorites,
@@ -67,17 +85,25 @@ export class TabManager {
     };
   }
 
-  private push() {
-    const w = this.win();
-    if (w && !w.isDestroyed()) w.webContents.send('settings:tabs', this.view());
+  /** Opens the tab in the browser, if it still exists. */
+  show(tabId: string) {
+    if (this.store.state.tabs[String(tabId)]) this.host.show(String(tabId));
   }
 
-  private async edit(raw: TabsEdit): Promise<TabsEditResult> {
+  async edit(raw: TabsEdit): Promise<TabsEditResult> {
     const result = await this.apply(raw && typeof raw === 'object' ? raw : ({} as TabsEdit)).catch((err) => {
       console.error('Tab manager edit failed', err);
       return {};
     });
     return { ...result, view: this.view() };
+  }
+
+  /** Does what a picked menu item says; resolves with what the page should do, if anything. */
+  run(run: TabsMenuRun): TabsMenuAction | undefined {
+    if ('answer' in run) return run.answer;
+    if ('edit' in run) void this.edit(run.edit);
+    else if ('show' in run) this.show(run.show);
+    return undefined;
   }
 
   private async apply(e: TabsEdit): Promise<Omit<TabsEditResult, 'view'>> {
@@ -95,7 +121,7 @@ export class TabManager {
         // Pinned tabs and favorites start over from the new address.
         const pinned = this.store.locate(id)?.zone !== 'today';
         this.store.updateTab(id, { url, ...(pinned ? { homeUrl: url } : {}), history: undefined });
-        this.host.loadedContents(id)?.loadURL(url);
+        this.host.load(id, url);
         return {};
       }
       case 'move': {
@@ -159,13 +185,13 @@ export class TabManager {
    * they reopen in the right session next time, as with the sidebar's Move to Space.
    */
   private keepingSessions(tabIds: string[], move: () => void) {
-    const before = new Map<string, Session>(tabIds.map((id) => [id, this.sessionOf(id)]));
+    const before = new Map<string, unknown>(tabIds.map((id) => [id, this.sessionOf(id)]));
     move();
     for (const [id, ses] of before) if (this.sessionOf(id) !== ses) this.host.destroyView(id);
   }
 
   private sessionOf(tabId: string) {
-    return sessionForSpace(this.store.locate(tabId)?.space);
+    return this.host.sessionOf(this.store.locate(tabId)?.space);
   }
 
   private async deleteFolder(folderId: string) {
@@ -175,7 +201,7 @@ export class TabManager {
     // An empty folder has nothing to lose, so it goes without asking.
     let keepTabs = true;
     if (count || folder.children.length) {
-      const { response } = await this.ask({
+      const response = await this.host.ask({
         message: `Delete “${folder.name}”?`,
         detail: count
           ? `It holds ${count === 1 ? 'one tab' : `${count} tabs`}. Keep them in its place, or delete them with the folder.`
@@ -193,7 +219,7 @@ export class TabManager {
   private async deleteSpace(spaceId: string) {
     const space = this.store.state.spaces.find((s) => s.id === spaceId);
     if (!space || this.store.state.spaces.length < 2) return;
-    const { response } = await this.ask({
+    const response = await this.host.ask({
       message: `Delete “${space.name}”?`,
       detail: 'Its pinned and today tabs are closed. This can’t be undone.',
       buttons: ['Delete Space', 'Cancel'],
@@ -203,85 +229,71 @@ export class TabManager {
     if (response === 0) for (const id of this.store.deleteSpace(spaceId)) this.host.destroyView(id);
   }
 
-  private ask(options: Electron.MessageBoxOptions) {
-    const w = this.win();
-    return w && !w.isDestroyed() ? dialog.showMessageBox(w, options) : dialog.showMessageBox(options);
-  }
-
-  /** The native menu for a selection of tabs or one folder. Resolves with what the page should do, if anything. */
-  private menu(request: { tabIds?: string[]; folderId?: string; context?: boolean }): Promise<TabsMenuAction | undefined> {
-    const w = this.win();
-    if (!w || w.isDestroyed() || !request || typeof request !== 'object') return Promise.resolve(undefined);
-    return new Promise((resolve) => {
-      const answer = (action: TabsMenuAction) => () => resolve(action);
-      const context = !!request.context;
-      const folder = request.folderId ? this.folder(String(request.folderId)) : undefined;
-      const tabIds = folder ? [] : this.tabIds(request.tabIds);
-      let items: MenuItemConstructorOptions[] = [];
-
-      if (folder) {
-        const moveTo = this.folderDestinations(folder);
-        items = [
-          ...(context
-            ? [
-                { label: 'Rename', click: answer('rename') },
-                { label: 'New Folder Inside', click: () => void this.edit({ op: 'newFolder', spaceId: this.spaceOfFolder(folder.id)!, parentId: folder.id }) },
-                { type: 'separator' as const },
-                { label: 'Move to', submenu: moveTo },
-              ]
-            : moveTo),
-          { type: 'separator' },
-          { label: 'Delete Folder…', click: () => void this.deleteFolder(folder.id) },
-        ];
-      } else if (tabIds.length) {
-        const single = tabIds.length === 1;
-        const moveTo = this.tabDestinations(tabIds);
-        items = [
-          ...(context && single
-            ? [
-                { label: 'Open in Flecha', click: () => this.host.show(tabIds[0]) },
-                { type: 'separator' as const },
-                { label: 'Rename', click: answer('rename') },
-                { label: 'Edit Address…', click: answer('edit') },
-                { type: 'separator' as const },
-              ]
-            : []),
-          ...(context ? [{ label: 'Move to', submenu: moveTo }] : moveTo),
-          { type: 'separator' },
-          { label: single ? 'Delete Tab' : `Delete ${tabIds.length} Tabs`, click: () => void this.edit({ op: 'delete', tabIds }) },
-        ];
-      }
-      if (!items.length) return resolve(undefined);
-      // Clicks can arrive just after the menu closes, so give them a moment before answering "nothing".
-      Menu.buildFromTemplate(items).popup({ window: w, callback: () => setTimeout(() => resolve(undefined), 50) });
-    });
+  /** The menu for a selection of tabs or one folder: Move to…, Delete and, with `context`, Rename and Edit Address. */
+  menu(request: TabsMenuRequest): TabsMenuItem[] {
+    if (!request || typeof request !== 'object') return [];
+    const context = !!request.context;
+    const folder = request.folderId ? this.folder(String(request.folderId)) : undefined;
+    if (folder) {
+      const moveTo = this.folderDestinations(folder);
+      return [
+        ...(context
+          ? [
+              { label: 'Rename', run: { answer: 'rename' as const } },
+              { label: 'New Folder Inside', run: { edit: { op: 'newFolder' as const, spaceId: this.spaceOfFolder(folder.id)!, parentId: folder.id } } },
+              SEPARATOR,
+              { label: 'Move to', submenu: moveTo },
+            ]
+          : moveTo),
+        SEPARATOR,
+        { label: 'Delete Folder…', run: { edit: { op: 'deleteFolder', folderId: folder.id } } },
+      ];
+    }
+    const tabIds = this.tabIds(request.tabIds);
+    if (!tabIds.length) return [];
+    const single = tabIds.length === 1;
+    const moveTo = this.tabDestinations(tabIds);
+    return [
+      ...(context && single
+        ? [
+            { label: 'Open in Flecha', run: { show: tabIds[0] } },
+            SEPARATOR,
+            { label: 'Rename', run: { answer: 'rename' as const } },
+            { label: 'Edit Address…', run: { answer: 'edit' as const } },
+            SEPARATOR,
+          ]
+        : []),
+      ...(context ? [{ label: 'Move to', submenu: moveTo }] : moveTo),
+      SEPARATOR,
+      { label: single ? 'Delete Tab' : `Delete ${tabIds.length} Tabs`, run: { edit: { op: 'delete', tabIds } } },
+    ];
   }
 
   /** Favorites, then each Space's pinned tabs (with its folders) and Today. */
-  private tabDestinations(tabIds: string[]): MenuItemConstructorOptions[] {
-    const move = (to: TabPlacement) => () => void this.edit({ op: 'move', tabIds, to });
+  private tabDestinations(tabIds: string[]): TabsMenuItem[] {
+    const move = (to: TabPlacement): TabsMenuRun => ({ edit: { op: 'move', tabIds, to } });
     return [
-      { label: 'Favorites', click: move({ zone: 'favorites' }) },
-      { type: 'separator' },
+      { label: 'Favorites', run: move({ zone: 'favorites' }) },
+      SEPARATOR,
       ...this.store.state.spaces.map((space) => ({
         label: spaceLabel(space),
         submenu: [
-          { label: 'Pinned', click: move({ zone: 'pinned', spaceId: space.id }) },
+          { label: 'Pinned', run: move({ zone: 'pinned', spaceId: space.id }) },
           ...folderItems(space.pinned, 1, (f) => move({ zone: 'pinned', spaceId: space.id, folderId: f.id })),
-          { type: 'separator' as const },
-          { label: 'Today', click: move({ zone: 'today', spaceId: space.id }) },
+          SEPARATOR,
+          { label: 'Today', run: move({ zone: 'today', spaceId: space.id }) },
         ],
       })),
     ];
   }
 
   /** Each Space's pinned tabs and folders, leaving out the folder itself and what's inside it. */
-  private folderDestinations(folder: Folder): MenuItemConstructorOptions[] {
-    const move = (to: FolderPlacement) => () => void this.edit({ op: 'moveFolder', folderId: folder.id, to });
+  private folderDestinations(folder: Folder): TabsMenuItem[] {
+    const move = (to: FolderPlacement): TabsMenuRun => ({ edit: { op: 'moveFolder', folderId: folder.id, to } });
     return this.store.state.spaces.map((space) => ({
       label: spaceLabel(space),
       submenu: [
-        { label: 'Pinned', click: move({ spaceId: space.id }) },
+        { label: 'Pinned', run: move({ spaceId: space.id }) },
         ...folderItems(space.pinned, 1, (f) => move({ spaceId: space.id, folderId: f.id }), folder.id),
       ],
     }));
@@ -350,10 +362,10 @@ function spaceLabel(space: { name: string; emoji?: string }) {
 }
 
 /** Folders as indented menu items, skipping `except` and everything inside it. */
-function folderItems(nodes: PinnedNode[], depth: number, click: (f: Folder) => () => void, except?: string): MenuItemConstructorOptions[] {
+function folderItems(nodes: PinnedNode[], depth: number, run: (f: Folder) => TabsMenuRun, except?: string): TabsMenuItem[] {
   return nodes.flatMap((n) =>
     n.kind !== 'folder' || n.id === except
       ? []
-      : [{ label: `${'\u2003'.repeat(depth)}${n.name}`, click: click(n) }, ...folderItems(n.children, depth + 1, click, except)],
+      : [{ label: `${' '.repeat(depth)}${n.name}`, run: run(n) }, ...folderItems(n.children, depth + 1, run, except)],
   );
 }
