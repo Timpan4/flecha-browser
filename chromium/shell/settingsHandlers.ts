@@ -19,6 +19,8 @@ export interface SettingsContext {
   isOpen?(tabId: string): boolean;
   /** Navigates a Flecha tab's live Chromium tab. Without it, the tab is unloaded and reopens at the new address. */
   load?(tabId: string, url: string): void;
+  /** The agent bridge's address while it runs (nativeHost.ts). */
+  agentEndpoint?(): string | undefined;
 }
 
 /** What a stub answers with, so the page can say so instead of doing nothing. */
@@ -72,8 +74,7 @@ export function registerSettings(ctx: SettingsContext) {
       downloadsFolder: store.state.downloadsFolder ?? '~/Downloads',
       // TODO(chromium): setting the default browser needs native code (shell integration), not an extension API.
       defaultBrowser: { isDefault: false, canSet: false },
-      // TODO(chromium): the MCP bridge for coding agents runs a local HTTP server, which an extension can't.
-      agentEndpoint: undefined,
+      agentEndpoint: ctx.agentEndpoint?.(),
     });
 
   handle({
