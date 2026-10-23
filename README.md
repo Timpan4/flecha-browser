@@ -48,12 +48,6 @@ Flecha started as an Electron app; that version is gone from the repo (it's in t
 - Chrome extensions: install from the Chrome Web Store (Extensions → Chrome Web Store, then "Add to Chrome"); their buttons appear under the address bar. Manage or remove them from the Extensions menu
 - Built-in ad and tracker blocking (EasyList, EasyPrivacy), toggled in Settings
 
-### Extension caveats
-
-- Electron exposes `declarativeNetRequest` but never enforces it, so MV3 blockers like uBlock Origin Lite install and show their popup but block nothing. That's why blocking is built in.
-- Native messaging is not available, so extensions that talk to a desktop app (1Password's app integration, for example) can't reach it.
-- Extension support comes from `electron-chrome-extensions`, licensed GPL-3.0 here. Distributing Flecha means distributing it under the GPL, unless you buy that library's commercial licence.
-
 ## Layout
 
 - `chromium/patches/`, `chromium/branding/`, `chromium/build/`: the changes to Chromium, its branding and the GN args
