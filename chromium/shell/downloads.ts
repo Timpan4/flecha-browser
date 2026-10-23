@@ -1,5 +1,5 @@
 /**
- * Downloads in the Chromium shell, as the Electron spike's src/main/downloads.ts: this
+ * Downloads in the Chromium shell, as the Electron version did them: this
  * session's downloads for the sidebar's downloads panel, which opens when one starts.
  * Chromium does the downloading; its own download bubble is turned off, since the sidebar
  * shows them.
@@ -11,7 +11,7 @@
  * TODO(chromium): Settings' download folder and "ask where to save" are Chromium prefs
  * (download.default_directory, download.prompt_for_download), which an extension can't set.
  */
-import type { DownloadInfo } from '../../src/shared/types';
+import type { DownloadInfo } from '../shared/types';
 import { broadcast, handle, onConnect } from './hub';
 import { sessionKey } from './incognito';
 

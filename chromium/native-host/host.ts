@@ -2,9 +2,9 @@
  * Flecha's native messaging host: the parts of the Electron spike that need Node, for the
  * Chromium build's shell extension, which can't read files or listen on a port.
  *
- * - Importing from other browsers (src/main/browserImport.ts): the host reads, the shell adds.
+ * - Importing from other browsers (browserImport.ts): the host reads, the shell adds.
  * - The Electron spike's own saved state, for "import from Flecha".
- * - The agent bridge (src/main/agentServer.ts): an MCP server on 127.0.0.1 whose tool calls
+ * - The agent bridge (agentServer.ts): an MCP server on 127.0.0.1 whose tool calls
  *   go to the shell, which runs them with chrome.tabs, chrome.scripting and chrome.debugger.
  *
  * Chromium starts it when the shell calls chrome.runtime.connectNative and stops it (closes
@@ -14,8 +14,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { detectBrowsers, readBrowser } from '../../src/main/browserImport';
-import { AGENT_TOOLS, McpBridge, fail, type AgentResult } from '../../src/main/agentServer';
+import { detectBrowsers, readBrowser } from './browserImport';
+import { AGENT_TOOLS, McpBridge, fail, type AgentResult } from './agentServer';
 import type { HostMethods, ToHost, ToShell } from './protocol';
 
 const SHELL_ORIGIN = 'chrome-extension://abdiaepfgbbhdjaecjipmaailijaaide/';

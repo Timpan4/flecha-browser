@@ -1,13 +1,19 @@
 # Flecha
 
-An Arc-style browser built on Chromium (through Electron). Arc's interface ideas are rebuilt from scratch; no Arc code is used.
+An Arc-style browser built on a Chromium fork. Arc's interface ideas are rebuilt from scratch; no Arc code is used.
 
 ```bash
-npm install
-npm start
+npm ci                                   # esbuild, TypeScript and the shell's libraries
+npm run shell:build                      # the shell extension, into chromium/shell/dist (shell:watch rebuilds on save)
+chromium/scripts/install-native-host.sh  # builds and registers the native messaging host
+chromium/scripts/build.sh                # patches the Chromium checkout and builds out/Dev/Flecha.app
+chromium/scripts/run.sh                  # launches it with its own profile and the shell from chromium/shell/dist
+npm run typecheck
 ```
 
-For a throwaway profile: `FLECHA_USER_DATA=/tmp/flecha-dev npm start`.
+`chromium/scripts/env.sh` says where the Chromium checkout lives. Shell changes need no Chromium build: rebuild the shell and relaunch. `chromium/scripts/build-release.sh` makes the release app and `package-release.sh` signs it and makes the dmg.
+
+Flecha started as an Electron app; that version is gone from the repo (it's in the git history before the move to `chromium/`).
 
 ## What works
 
@@ -26,7 +32,7 @@ For a throwaway profile: `FLECHA_USER_DATA=/tmp/flecha-dev npm start`.
 - Find in page with ⌘F, ⌘G and ⇧⌘G
 - On launch, the window returns to its last position and each tab keeps its back/forward history and scroll position
 - Settings (⌘,): search engine (Google, DuckDuckGo, Bing, Brave, Kagi, Ecosia), downloads folder and "ask where to save", ad blocking, default browser
-- Links from other apps open in a new tab, and launching Flecha again reuses the open window. Making Flecha the default browser only works in a packaged Flecha.app; from `npm start` the button is disabled because macOS would register the generic Electron binary
+- Links from other apps open in a new tab, and launching Flecha again reuses the open window
 
 ### For developers
 
@@ -36,36 +42,23 @@ For a throwaway profile: `FLECHA_USER_DATA=/tmp/flecha-dev npm start`.
 - **Console error badge:** local tabs show how many console errors they have; clicking it opens the Console
 - **Separate cookies per Space:** right-click a Space → Separate Cookies and Logins, to be signed in as different users side by side
 - **Responsive view (⌥⌘M):** the page as a phone (393px, touch, mobile user agent) next to desktop, following its navigation
-- **Boosts:** per-site TypeScript and CSS in `~/.flecha/boosts` (`github.com.ts`, `github.com.css`, `all.css`), compiled with esbuild; CSS applies live, scripts reload the page. Type `boost` in the command bar or press ⌥⌘B
+- **Boosts:** per-site TypeScript and CSS (`github.com.ts`, `github.com.css`, `all.css`), kept in Flecha and edited on the Boosts page; CSS applies live, scripts reload the page. Type `boost` in the command bar or press ⌥⌘B
 - **Command bar shortcuts:** `gh 123`, `gh owner/repo`, `npm react`, `mdn grid`, `caniuse :has`, `so …`, `env`; paste a JWT or a Unix timestamp to decode it
 
 - Chrome extensions: install from the Chrome Web Store (Extensions → Chrome Web Store, then "Add to Chrome"); their buttons appear under the address bar. Manage or remove them from the Extensions menu
-- Built-in ad and tracker blocking (EasyList, EasyPrivacy, uBlock lists), toggled in Settings
-
-### Extension caveats
-
-- Electron exposes `declarativeNetRequest` but never enforces it, so MV3 blockers like uBlock Origin Lite install and show their popup but block nothing. That's why blocking is built in.
-- Native messaging is not available, so extensions that talk to a desktop app (1Password's app integration, for example) can't reach it.
-- Extension support comes from `electron-chrome-extensions`, licensed GPL-3.0 here. Distributing Flecha means distributing it under the GPL, unless you buy that library's commercial licence.
+- Built-in ad and tracker blocking (EasyList, EasyPrivacy), toggled in Settings
 
 ## Layout
 
-- `src/main/main.ts`: window, one `WebContentsView` per tab (created lazily), menus, IPC, permission prompts
-- `src/main/store.ts`: the sidebar model and persistence (`flecha-state.json` in the user data folder)
-- `src/main/arcImport.ts`: Arc sidebar parser
-- `src/main/extensions.ts`, `src/preload/extension-compat.ts`: Chrome extension and Web Store support
-- `src/main/adblock.ts`: built-in ad blocker
-- `src/main/history.ts`, `src/main/downloads.ts`: browsing history and downloads
-- `src/main/settings.ts`, `src/renderer/settings.*`, `src/preload/settings-preload.ts`: the settings window
-- `src/main/defaultBrowser.ts`: links from other apps and the default-browser setting
-- `src/main/agentBridge.ts`: the MCP server for coding agents
-- `src/main/environments.ts`, `src/main/localServers.ts`, `src/main/sessions.ts`, `src/main/boosts.ts`: environments, local dev servers, per-Space sessions and boosts
-- `src/renderer/devCommands.ts`: command bar shortcuts
-- `src/renderer/find.*`, `src/preload/find-preload.ts`: the find-in-page bar
-- `src/renderer/`: sidebar and command bar UI
-- `src/preload/preload.ts`: the bridge between the sidebar UI and the main process
+- `chromium/patches/`, `chromium/branding/`, `chromium/build/`: the changes to Chromium, its branding and the GN args
+- `chromium/scripts/`: apply the patches, build, run, install the native host, build and package a release
+- `chromium/shell/`: the shell extension (MV3), which draws the sidebar, command bar and settings; built by `build.mjs`
+  - `background.ts`: the service worker that owns the Store and the tabs; `features/`: ad blocking, boosts, console errors, local servers, responsive view
+  - `ui/`: the sidebar, command bar, settings and Flechinha pages (TypeScript, HTML, CSS), on `flechaApi.ts`, `settingsApi.ts` and `flechinhaApi.ts`
+  - `lib/`: URLs and search engines, shortcuts, environments, settings rules, the tab manager, boost names
+- `chromium/native-host/`: the native messaging host (Node): importing bookmarks and history from other browsers and Arc, reading the Electron version's saved state, the MCP server for coding agents; built by `build.mjs`
+- `chromium/shared/`: what the shell and the native host share: the types, the sidebar model (`store.ts`), import and agent tool definitions
 
 ## Next up
 
-Resizable split divider and 3–4 pane splits, Little Arc–style quick windows,
-and packaging with electron-builder.
+Resizable split divider and 3–4 pane splits.

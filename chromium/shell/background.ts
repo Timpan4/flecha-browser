@@ -6,11 +6,11 @@
  * pinned tabs costs nothing until you use them. Chromium tabs that pages open themselves
  * (links to a new tab, window.open) become Flecha tabs.
  */
-import { Store, type StatePersistence } from '../../src/main/store';
-import { resolveInput, searchEngine } from '../../src/main/url';
-import { shortcutHints, type ShortcutId } from '../../src/main/shortcuts';
-import { describe as describeEnvironment } from '../../src/main/environments';
-import type { BrowserState, DropTarget, SearchEngineId, UiState } from '../../src/shared/types';
+import { Store, type StatePersistence } from '../shared/store';
+import { resolveInput, searchEngine } from './lib/url';
+import { shortcutHints, type ShortcutId } from './lib/shortcuts';
+import { describe as describeEnvironment } from './lib/environments';
+import type { BrowserState, DropTarget, SearchEngineId, UiState } from '../shared/types';
 import { broadcast, call, handle, listen, onConnect } from './hub';
 import type { MenuRun } from './protocol';
 import type { MenuEntry } from './settingsUi';
@@ -815,7 +815,7 @@ async function start() {
   };
 
   /**
-   * Runs a command by its id in src/main/shortcuts.ts, plus "tab1"…"tab9" (⌘1…⌘9, 9 is the
+   * Runs a command by its id in lib/shortcuts.ts, plus "tab1"…"tab9" (⌘1…⌘9, 9 is the
    * last tab) and "space1"…"space9" (⌃1…⌃9). "tabN" / "spaceN" take the number as `n`.
    * Returns whether the id is a command.
    */
@@ -936,7 +936,7 @@ const ready = start();
 listen(ready);
 
 /**
- * Runs a Flecha command by id (src/main/shortcuts.ts, plus tab1…tab9 and space1…space9), as
+ * Runs a Flecha command by id (lib/shortcuts.ts, plus tab1…tab9 and space1…space9), as
  * the Electron spike's menu accelerators did: for keyboard shortcuts from the browser
  * (chrome.flechaPrivate.onShortcut). Resolves to whether the id is a command. The same is the
  * hub command "run", for pages.

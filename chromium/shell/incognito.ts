@@ -8,7 +8,7 @@
  * Both copies share chrome.storage, so the incognito one keeps its keys apart (sessionKey)
  * and only reads the regular state, for your preferences (theme, search engine, shortcuts…).
  */
-import type { BrowserState } from '../../src/shared/types';
+import type { BrowserState } from '../shared/types';
 
 /** Whether this page or background belongs to the incognito profile. */
 export const incognito = !!chrome.extension?.inIncognitoContext;

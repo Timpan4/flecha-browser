@@ -9,10 +9,10 @@
  *
  * Install the host with chromium/scripts/install-native-host.sh.
  */
-import type { DetectedBrowser, HistoryEntry, ImportResult, UiState } from '../../src/shared/types';
-import type { Store } from '../../src/main/store';
-import type { AgentResult, AgentTab, AgentToolName } from '../../src/main/agentTools';
-import { applyBrowserImport } from '../../src/main/importApply';
+import type { DetectedBrowser, HistoryEntry, ImportResult, UiState } from '../shared/types';
+import type { Store } from '../shared/store';
+import type { AgentResult, AgentTab, AgentToolName } from '../shared/agentTools';
+import { applyBrowserImport } from '../shared/importApply';
 import { HOST_NAME, type HostMethods, type ToHost, type ToShell } from '../native-host/protocol';
 import { handle } from './hub';
 

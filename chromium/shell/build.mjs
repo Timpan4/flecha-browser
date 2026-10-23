@@ -9,19 +9,19 @@ import { buildAdblock } from './build-adblock.mjs';
 const here = path.dirname(new URL(import.meta.url).pathname);
 const root = path.resolve(here, '../..');
 const out = path.join(here, 'dist');
-const renderer = path.join(root, 'src/renderer');
+const ui = path.join(here, 'ui');
 
 function copyStatic() {
   fs.mkdirSync(path.join(out, 'fonts'), { recursive: true });
   fs.copyFileSync(path.join(here, 'manifest.json'), path.join(out, 'manifest.json'));
-  for (const f of fs.readdirSync(renderer)) if (f.endsWith('.css')) fs.copyFileSync(path.join(renderer, f), path.join(out, f));
+  for (const f of fs.readdirSync(ui)) if (f.endsWith('.css')) fs.copyFileSync(path.join(ui, f), path.join(out, f));
   fs.copyFileSync(
     path.join(root, 'node_modules/@fontsource-variable/jetbrains-mono/files/jetbrains-mono-latin-wght-normal.woff2'),
     path.join(out, 'fonts/jetbrains-mono.woff2'),
   );
-  // The Electron sidebar page, pointed at the shell's bundle, once per surface.
+  // The sidebar page (ui/index.html), pointed at the shell's bundle, once per surface.
   const html = fs
-    .readFileSync(path.join(renderer, 'index.html'), 'utf8')
+    .readFileSync(path.join(ui, 'index.html'), 'utf8')
     .replace('src="app.js"', 'src="sidebar.js"')
     .replace('<link rel="stylesheet" href="onboarding.css" />', '$&\n    <link rel="stylesheet" href="shell.css" />');
   const pages = { window: 'window.html', panel: 'sidebar.html', newtab: 'newtab.html' };
@@ -37,7 +37,7 @@ function copyStatic() {
     path.join(out, 'kind.js'),
     "if (new URLSearchParams(location.search).get('kind') === 'flechinha') location.replace('flechinha.html' + location.search);\n",
   );
-  fs.writeFileSync(path.join(out, 'flechinha.html'), fs.readFileSync(path.join(renderer, 'flechinha.html'), 'utf8'));
+  fs.writeFileSync(path.join(out, 'flechinha.html'), fs.readFileSync(path.join(ui, 'flechinha.html'), 'utf8'));
   for (const f of ['settings.html', 'settings-shell.css']) fs.copyFileSync(path.join(here, f), path.join(out, f));
   copyFeatureStatic(out);
 }

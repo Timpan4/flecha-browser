@@ -9,8 +9,8 @@ export const HOST_NAME = 'dev.oprimo.flecha.host';
 
 /** Things only Node can do, which the shell asks for and the host answers with a `reply`. */
 export interface HostMethods {
-  detectBrowsers(): import('../../src/shared/types').DetectedBrowser[];
-  readBrowser(id: string): import('../../src/main/importApply').BrowserImportData;
+  detectBrowsers(): import('../shared/types').DetectedBrowser[];
+  readBrowser(id: string): import('../shared/importApply').BrowserImportData;
   /** The Electron spike's saved state (its flecha-state.json), if it has one. */
   readFlechaState(): string | undefined;
 }
@@ -28,4 +28,4 @@ export type ToHost =
   | { type: 'call'; id: number; method: keyof HostMethods; params: unknown[] }
   /** Starts or stops the agent bridge; the token is checked on every request. */
   | { type: 'agent'; enabled: boolean; token: string }
-  | { type: 'toolResult'; id: number; result: import('../../src/main/agentTools').AgentResult };
+  | { type: 'toolResult'; id: number; result: import('../shared/agentTools').AgentResult };

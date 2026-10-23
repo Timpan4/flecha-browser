@@ -3,7 +3,7 @@
  * Tabs & Spaces menus in Settings, the sidebar's tab and Space menus in the window), the
  * "Delete …?" questions, and a note for what isn't ported yet. Styles are in shell.css.
  */
-import type { AskOptions } from '../../src/main/tabManager';
+import type { AskOptions } from './lib/tabManager';
 
 /** A menu as data, like Electron's menu templates: items carry whatever `run` the caller picks. */
 export type MenuEntry<T> =
