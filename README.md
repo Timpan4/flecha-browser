@@ -2,6 +2,8 @@
 
 An Arc-style browser for developers, built on a Chromium fork. Arc's interface ideas are rebuilt from scratch; no Arc code is used.
 
+<p align="center"><img src="docs/screenshots/main-light.png" alt="Flecha's window: the sidebar with favourites, pinned tabs, Today and Spaces, beside a GitHub page"></p>
+
 ## Why
 
 Arc's vertical sidebar, Spaces and Peek are hard to give up, and Arc is no longer where the work is happening. Flecha is a replacement that keeps those ideas and adds tools for the people who build websites.
@@ -24,6 +26,9 @@ It is a Chromium 158 fork rather than an Electron app because Google blocks sign
 - Switch with ⌃1 to ⌃9, or next and previous Space with ⌥⌘← and ⌥⌘→
 
 **Command bar**
+
+<p align="center"><img src="docs/screenshots/command-bar.png" alt="The command bar suggesting MDN for the query mdn grid" width="720"></p>
+
 - ⌘T for a new tab, ⌘L for the current one; it searches open tabs, the archive and history
 - Developer shortcuts: `gh owner/repo`, `gh 123` (in the current tab's repo), `npm react`, `mdn grid`, `caniuse :has`, `so ...`, and `env`
 - Paste a JWT or a Unix timestamp to decode it in place
@@ -33,6 +38,10 @@ It is a Chromium 158 fork rather than an Electron app because Google blocks sign
 - Peek: links that open a new tab from a pinned tab or favourite show in a floating preview; any link's right-click menu offers it too. Esc or a click outside closes it, Open turns it into a tab
 - Split view: right-click a tab, Open in Split View, or ⌃⇧= to split with a new tab (⌃⇧- exits)
 - Flechinha: a small standalone window for a quick page (⌥⌘N), which can be sent back into the main window
+
+<p align="center"><img src="docs/screenshots/peek.png" alt="An MDN page open in Peek over the current tab" width="720"></p>
+
+<p align="center"><img src="docs/screenshots/split.png" alt="Hacker News and web.dev side by side in split view" width="720"></p>
 
 **Boosts**
 - Per-site TypeScript and CSS (`github.com.ts`, `github.com.css`, `all.css`), kept in Flecha and edited on the Boosts page. CSS applies live; scripts reload the page. ⌥⌘B edits the current site's boost
@@ -46,6 +55,9 @@ It is a Chromium 158 fork rather than an Electron app because Google blocks sign
 - Coding agents (MCP): Settings, Coding agents turns on a local MCP server (127.0.0.1, token required) so Claude Code, Cursor and others can list tabs, read pages and console logs, take screenshots, click, type and run JavaScript. It needs the native host (see Install)
 
 **Privacy and the rest of the browser**
+
+<p align="center"><img src="docs/screenshots/main-dark.png" alt="Flecha in dark mode, with the Space colour turned into a deep tint" width="720"></p>
+
 - Built-in ad and tracker blocking (EasyList and EasyPrivacy as declarativeNetRequest rules, plus element hiding), toggled in Settings
 - Incognito windows get the same Flecha frame, with one in-memory Space that is forgotten when the last incognito window closes
 - Import bookmarks and history from other browsers and from Arc's sidebar (needs the native host)
