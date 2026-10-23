@@ -173,6 +173,8 @@ export function shortcutMap(state: Store['state']): Record<string, string> {
     map[`CmdOrCtrl+${i}`] = `selectTab:${i}`;
     map[`Ctrl+${i}`] = `selectSpace:${i}`;
   }
+  // ⌘O in a Flechinha: Open in Flecha, as in the Electron spike (the toolbar's button says so).
+  map['CmdOrCtrl+O'] = 'openInFlecha';
   for (const { id } of SHORTCUTS) {
     const keys = keysFor(state, id);
     if (keys) map[keys] = id;
