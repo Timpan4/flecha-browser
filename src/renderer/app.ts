@@ -52,6 +52,8 @@ for (const el of document.querySelectorAll<HTMLElement>('i[data-icon]')) el.repl
 
 function host(url: string) {
   try {
+    // Flecha's own pages (Boosts, in the Chromium build) are named, not shown as an extension id.
+    if (url.startsWith(location.origin + '/') && location.protocol === 'chrome-extension:') return 'Flecha';
     return new URL(url).host.replace(/^www\./, '');
   } catch {
     return url;
@@ -581,6 +583,8 @@ document.addEventListener('mousedown', (e) => {
   if (!sitePanel.hidden && !sitePanel.contains(target) && !$('btn-site').contains(target)) toggleSitePanel(false);
 });
 document.addEventListener('keydown', (e) => e.key === 'Escape' && !sitePanel.hidden && toggleSitePanel(false));
+// A click on the page takes the focus from the sidebar's page: that closes the panel too.
+window.addEventListener('blur', () => !sitePanel.hidden && toggleSitePanel(false));
 
 // Confirmations ("Link copied") replace the address for a moment.
 let flashTimer: number | undefined;
