@@ -7,7 +7,7 @@
  */
 import type { Store } from '../../src/main/store';
 import { SHORTCUTS, keysFor } from '../../src/main/shortcuts';
-import { handle } from './hub';
+import { broadcast, handle } from './hub';
 
 export interface NativeContext {
   store: Store;
@@ -52,7 +52,59 @@ export function registerNative(ctx: NativeContext) {
   registerTheme(ctx);
   registerSplitRatio(ctx);
   registerFlechinha(ctx);
+  registerPeek(ctx);
   resolveCtx(ctx);
+}
+
+// ---- Peek (patch 0026) -------------------------------------------------------------------
+
+// The frame pages draw Peek's backdrop and toolbar from the 'peek' event, as in Electron's
+// sendPeek(); while a Peek is open the browser keeps the frame over the whole window.
+if (has('openPeek')) {
+  chrome.flechaPrivate.onPeekChanged.addListener(
+    when((_ctx, windowId: number, peek?: chrome.flechaPrivate.PeekState) => broadcast('peek', peek ?? null, windowId)),
+  );
+}
+
+/**
+ * Hub commands openPeek(url), closePeek(), promotePeek() (the shell then adopts the new tab
+ * through tabs.onCreated). Links leaving pinned tabs and favorites open in Peek while
+ * state.peekPinnedLinks isn't false, natively (setPeekTabs).
+ */
+function registerPeek(ctx: NativeContext) {
+  if (!has('openPeek')) return;
+  handle({
+    openPeek: (url: string) => void chrome.flechaPrivate.openPeek(String(url)),
+    closePeek: () => void chrome.flechaPrivate.closePeek(),
+    promotePeek: () => void chrome.flechaPrivate.promotePeek(),
+  });
+
+  if (!ctx.chromeTabId) return;
+  let sent = '';
+  const apply = () => {
+    const { state } = ctx.store;
+    const ids =
+      state.peekPinnedLinks === false
+        ? []
+        : Object.keys(state.tabs)
+            .filter((id) => {
+              const zone = ctx.store.locate(id)?.zone;
+              return zone === 'pinned' || zone === 'favorites';
+            })
+            .map((id) => ctx.chromeTabId!(id))
+            .filter((id): id is number => id !== undefined)
+            .sort((a, b) => a - b);
+    const key = ids.join(',');
+    if (key === sent) return;
+    sent = key;
+    void chrome.flechaPrivate.setPeekTabs(ids);
+  };
+  apply();
+  ctx.store.onChange(apply);
+  // A pinned tab gets its Chromium tab when it's first opened.
+  const soon = () => setTimeout(apply, 0);
+  chrome.tabs.onCreated.addListener(soon);
+  chrome.tabs.onRemoved.addListener(soon);
 }
 
 // ---- Flechinha (patch 0023) --------------------------------------------------------------

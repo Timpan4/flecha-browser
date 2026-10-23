@@ -108,6 +108,33 @@ declare namespace chrome.flechaPrivate {
   /** The open Flechinhas' window ids (e.g. after the background restarts). */
   function getFlechinhas(): Promise<number[]>;
 
+  /**
+   * Peek (patch 0026), like the spike's openPeek(): a page in a floating card over the page
+   * area, at peekBounds() = page area inset round(8% of its width) on each side, 48 from its
+   * top (room for the frame page's Peek toolbar) and 24 from its bottom; 12px corners.
+   * While a Peek is open the frame view covers the whole window (as with overlay: true), so
+   * the frame page draws the dimmed backdrop and the toolbar from onPeekChanged's bounds; the
+   * page area doesn't move. Escape in the Peek closes it; its links to new tabs open as tabs
+   * of the window; window.open popups stay popups.
+   *
+   * openPeek(url, windowId?) replaces any Peek in that window (default: the main window).
+   * promotePeek() moves the page, as it is, into the window's tab strip as the active tab (the
+   * shell adopts it through tabs.onCreated). setPeekTabs(tabIds): those tabs' links to a new
+   * foreground tab (target=_blank, window.open without a popup) open in Peek instead.
+   */
+  interface PeekState {
+    url: string;
+    title: string;
+    /** Where the Peek's page sits, in the frame page's coordinates. */
+    bounds: { x: number; y: number; width: number; height: number };
+  }
+  function openPeek(url: string, windowId?: number): Promise<void>;
+  function closePeek(windowId?: number): Promise<void>;
+  function promotePeek(windowId?: number): Promise<void>;
+  function setPeekTabs(tabIds: number[]): Promise<void>;
+  /** A window's Peek opened, moved, navigated or closed (`peek` undefined). */
+  const onPeekChanged: chrome.events.Event<(windowId: number, peek?: PeekState) => void>;
+
   /** A shortcut from setShortcuts() was pressed in window `windowId`. */
   const onShortcut: chrome.events.Event<(command: string, windowId: number) => void>;
 }
