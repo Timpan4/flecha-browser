@@ -31,12 +31,19 @@ export function onConnect(fn: (port: chrome.runtime.Port) => void) {
   connectListeners.push(fn);
 }
 
-export function listen() {
-  chrome.runtime.onConnect.addListener((port) => {
+/** Starts taking connections; messages wait until `ready` (handlers registered) resolves. */
+export function listen(ready: Promise<unknown>) {
+  chrome.runtime.onConnect.addListener(async (port) => {
     if (port.name !== 'flecha') return;
+    // Buffer what arrives while the background is still loading.
+    const early: Message[] = [];
+    const buffer = (m: Message) => void early.push(m);
+    port.onMessage.addListener(buffer);
+    await ready;
+    port.onMessage.removeListener(buffer);
     ports.add(port);
     port.onDisconnect.addListener(() => ports.delete(port));
-    port.onMessage.addListener(async (message: Message) => {
+    const dispatch = async (message: Message) => {
       if (message.type === 'ping') return;
       if (message.type !== 'cmd' && message.type !== 'invoke') return;
       const fn = commands.get(message.name);
@@ -52,7 +59,9 @@ export function listen() {
         console.error(`Flecha shell: "${message.name}" failed`, err);
         if (message.type === 'invoke') port.postMessage({ type: 'result', id: message.id, error: String(err) } satisfies Message);
       }
-    });
+    };
+    port.onMessage.addListener(dispatch);
     for (const fn of connectListeners) fn(port);
+    for (const m of early) void dispatch(m);
   });
 }
