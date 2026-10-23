@@ -21,6 +21,7 @@ import { registerSiteControls } from './siteControls';
 const STATE_KEY = 'state';
 /** Flecha tab id ↔ Chromium tab id, for the tabs that are open. Kept across background restarts. */
 const LIVE_KEY = 'live';
+const ARCHIVE_ALARM = 'archive-stale';
 
 const live = new Map<string, number>();
 const flechaIdFor = (chromeId: number) => [...live].find(([, c]) => c === chromeId)?.[0];
@@ -670,7 +671,12 @@ async function start() {
 
   onConnect(() => sendState());
   sync();
-  return { onCreated, onUpdated, onActivated, onRemoved, openPalette, runCommand };
+  // Arc's auto-archive, hourly as in Electron. An alarm, since the background sleeps.
+  // Made once: making it again on every wake would restart the hour.
+  void chrome.alarms.get(ARCHIVE_ALARM).then((alarm) => void (alarm ?? chrome.alarms.create(ARCHIVE_ALARM, { periodInMinutes: 60 })));
+  const archiveStale = () => void unload(store.archiveStale());
+
+  return { onCreated, onUpdated, onActivated, onRemoved, openPalette, runCommand, archiveStale };
 }
 
 const url = (tab: chrome.tabs.Tab) => tab.pendingUrl || tab.url || '';
@@ -699,6 +705,7 @@ chrome.tabs.onCreated.addListener((tab) => void ready.then((r) => r.onCreated(ta
 chrome.tabs.onUpdated.addListener((id, info, tab) => void ready.then((r) => r.onUpdated(id, info, tab)));
 chrome.tabs.onActivated.addListener((info) => void ready.then((r) => r.onActivated(info)));
 chrome.tabs.onRemoved.addListener((id) => void ready.then((r) => r.onRemoved(id)));
+chrome.alarms.onAlarm.addListener((alarm) => alarm.name === ARCHIVE_ALARM && void ready.then((r) => r.archiveStale()));
 
 // Until the native patch opens it on its own, the toolbar button opens the sidebar.
 void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
