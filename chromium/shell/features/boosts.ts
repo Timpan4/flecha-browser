@@ -13,7 +13,7 @@
  *    and run even on pages whose CSP forbids eval; without it they are evaluated on each
  *    load, through the DevTools protocol where the page's CSP forbids eval.
  */
-import { boostHostFor, boostMatches, boostName, parseBoostName, type BoostKind } from '../../../src/main/boostFiles';
+import { boostHostFor, boostMatches, boostName, parseBoostName, type BoostKind } from '../lib/boostFiles';
 import { hold, release, send } from './debuggee';
 
 const STORE_KEY = 'boosts';

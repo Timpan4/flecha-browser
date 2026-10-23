@@ -1,4 +1,4 @@
-import type { HistoryEntry, ImportResult } from '../shared/types';
+import type { HistoryEntry, ImportResult } from './types';
 import type { Store } from './store';
 
 export type ImportTab = { url: string; title: string };

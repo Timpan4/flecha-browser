@@ -1,5 +1,5 @@
 import { ICONS, type IconName } from './icons.js';
-import type { FlechinhaApi, FlechinhaState } from '../shared/types';
+import type { FlechinhaApi, FlechinhaState } from '../../shared/types';
 
 declare global {
   interface Window {

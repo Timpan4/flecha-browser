@@ -6,10 +6,10 @@
  * The feature modules add their Chromium listeners as they are imported, in the background's
  * first turn, so an event that wakes the background (a page loading, a console error) isn't lost.
  */
-import type { Store } from '../../src/main/store';
-import type { LocalServer } from '../../src/shared/types';
-import type { BoostKind } from '../../src/main/boostFiles';
-import { describe as describeEnvironment } from '../../src/main/environments';
+import type { Store } from '../shared/store';
+import type { LocalServer } from '../shared/types';
+import type { BoostKind } from './lib/boostFiles';
+import { describe as describeEnvironment } from './lib/environments';
 import { broadcast, handle, run } from './hub';
 import * as boosts from './features/boosts';
 import { consoleErrors, watchConsoleErrors } from './features/consoleErrors';

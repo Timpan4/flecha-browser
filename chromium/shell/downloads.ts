@@ -11,7 +11,7 @@
  * TODO(chromium): Settings' download folder and "ask where to save" are Chromium prefs
  * (download.default_directory, download.prompt_for_download), which an extension can't set.
  */
-import type { DownloadInfo } from '../../src/shared/types';
+import type { DownloadInfo } from '../shared/types';
 import { broadcast, handle, onConnect } from './hub';
 
 const SINCE_KEY = 'downloadsSince';

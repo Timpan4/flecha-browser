@@ -6,7 +6,7 @@
  *
  * Only mirror tabs get the protocol attached, and only while they are open.
  */
-import type { Store } from '../../../src/main/store';
+import type { Store } from '../../shared/store';
 import { hold, isHeld, onDebuggerDetach, release, send } from './debuggee';
 
 /** An iPhone-15-wide viewport, as Electron's PHONE. */

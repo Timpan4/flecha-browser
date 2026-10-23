@@ -3,8 +3,8 @@
  * Electron's settings preload exposes, over the hub instead of ipcRenderer. It has to run
  * before src/renderer/settings.ts, which reads `window.settings` as it loads.
  */
-import type { RecordedKey, SettingsApi, SettingsView, TabsMenuAction, TabsView } from '../../src/shared/types';
-import type { AskOptions, TabsMenuItem } from '../../src/main/tabManager';
+import type { RecordedKey, SettingsApi, SettingsView, TabsMenuAction, TabsView } from '../shared/types';
+import type { AskOptions, TabsMenuItem } from './lib/tabManager';
 import { cmd, invoke, on } from './client';
 import type { NotYet } from './settingsHandlers';
 import { askDialog, popupMenu, toast } from './settingsUi';

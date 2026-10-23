@@ -1,5 +1,5 @@
 const randomUUID = () => crypto.randomUUID();
-import type { ActiveEnvironment, Environment, EnvironmentTarget } from '../shared/types';
+import type { ActiveEnvironment, Environment, EnvironmentTarget } from '../../shared/types';
 
 /**
  * Environments group the origins one project lives on (local, staging, production…).

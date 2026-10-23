@@ -5,8 +5,8 @@
  * Every call checks that the API is there, so the shell still runs on a Chromium without the
  * patch (stock Chromium, or a build older than the shell).
  */
-import type { Store } from '../../src/main/store';
-import { SHORTCUTS, keysFor } from '../../src/main/shortcuts';
+import type { Store } from '../shared/store';
+import { SHORTCUTS, keysFor } from './lib/shortcuts';
 import { broadcast, handle } from './hub';
 
 export interface NativeContext {

@@ -5,9 +5,9 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { DetectedBrowser, HistoryEntry, ImportResult } from '../shared/types';
 import type { History } from './history';
-import type { Store } from './store';
+import type { Store } from '../shared/store';
 import { arcSidebarPath, readArcSidebar, type ArcImport, type ImportNode } from './arcImport';
-import { applyBrowserImport, type BrowserImportData } from './importApply';
+import { applyBrowserImport, type BrowserImportData } from '../shared/importApply';
 
 /**
  * Brings bookmarks and history over from the other browsers on this Mac. Their files are

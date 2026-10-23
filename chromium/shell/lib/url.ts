@@ -1,4 +1,4 @@
-import type { SearchEngineId } from '../shared/types';
+import type { SearchEngineId } from '../../shared/types';
 
 export const SEARCH_ENGINES: Record<SearchEngineId, { name: string; url: string }> = {
   google: { name: 'Google', url: 'https://www.google.com/search?q=%s' },

@@ -7,7 +7,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
  * Chromium build's native messaging host. Nothing here needs Electron.
  */
 
-export * from './agentTools';
+export * from '../shared/agentTools';
 
 export const DEFAULT_AGENT_PORT = 7390;
 

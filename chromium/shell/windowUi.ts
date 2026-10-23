@@ -8,7 +8,7 @@
  * a question is up it covers the whole window (an "overlay", like the command bar): clicks
  * on the page dismiss the menu, and the dialog has room.
  */
-import type { UiState } from '../../src/shared/types';
+import type { UiState } from '../shared/types';
 import { cmd, invoke, on } from './client';
 import type { MenuRun } from './protocol';
 import { askDialog, popupMenu, type MenuEntry } from './settingsUi';

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { StatePersistence } from './store';
+import type { StatePersistence } from '../shared/store';
 import type { BrowserState } from '../shared/types';
 
 /**

@@ -4,4 +4,4 @@
  * before src/renderer/settings.ts reads it.
  */
 import './settingsApi';
-import '../../src/renderer/settings';
+import './ui/settings';

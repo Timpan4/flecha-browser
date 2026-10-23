@@ -1,5 +1,5 @@
-import type { FolderPlacement, PinnedNode, Space, TabPlacement, TabsEdit, TabsEditResult, TabsMenuAction, TabsView } from '../shared/types';
-import { findFolder, pinnedTabIds, type Store } from './store';
+import type { FolderPlacement, PinnedNode, Space, TabPlacement, TabsEdit, TabsEditResult, TabsMenuAction, TabsView } from '../../shared/types';
+import { findFolder, pinnedTabIds, type Store } from '../../shared/store';
 import { webAddress } from './url';
 
 /** A question with buttons; resolves with the index of the button chosen. */

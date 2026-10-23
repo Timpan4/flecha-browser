@@ -3,7 +3,7 @@
  * clearSiteData and site permissions: Chromium's browsingData and contentSettings, and a
  * screenshot of the page for the clipboard.
  */
-import type { Store } from '../../src/main/store';
+import type { Store } from '../shared/store';
 import { broadcast, handle } from './hub';
 
 export interface SiteControlsContext {

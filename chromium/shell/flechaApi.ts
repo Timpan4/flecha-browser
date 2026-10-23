@@ -2,8 +2,8 @@
  * window.flecha for the Chromium build: the same API the Electron preload gives the sidebar,
  * over the shell's port. Imported before the sidebar code so it is there when that runs.
  */
-import type { FlechaApi, PaletteMode, UiState } from '../../src/shared/types';
-import { spaceTint } from '../../src/main/spaceTint';
+import type { FlechaApi, PaletteMode, UiState } from '../shared/types';
+import { spaceTint } from './lib/spaceTint';
 import { cmd, invoke, on } from './client';
 import { confirmDeleteSpace, copy, setupWindowUi, showMenu } from './windowUi';
 

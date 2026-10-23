@@ -3,9 +3,9 @@
  * window's own page through chrome.tabs. The toolbar is this window's frame page
  * (window.html?kind=flechinha, sent on to flechinha.html); see native.ts for the window.
  */
-import type { FlechinhaApi, FlechinhaState, UiState } from '../../src/shared/types';
-import { resolveInput } from '../../src/main/url';
-import { spaceTint } from '../../src/main/spaceTint';
+import type { FlechinhaApi, FlechinhaState, UiState } from '../shared/types';
+import { resolveInput } from './lib/url';
+import { spaceTint } from './lib/spaceTint';
 import { cmd, on } from './client';
 
 const windowId = chrome.flechaPrivate.getWindowId();

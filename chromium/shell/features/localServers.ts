@@ -6,7 +6,7 @@
  *
  * Every few seconds while a Flecha window is in front, rarely otherwise, as in Electron.
  */
-import type { LocalServer } from '../../../src/shared/types';
+import type { LocalServer } from '../../shared/types';
 
 /** Default ports of common dev servers: Next/Rails/Express, Vite, Astro, Angular, Storybook, Django, Hugo… */
 export const DEV_PORTS = [

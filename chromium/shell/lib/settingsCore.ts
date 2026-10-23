@@ -2,8 +2,8 @@
  * What Settings shows and how it changes the Store, without Electron or Node, so Electron's
  * Settings window and the Chromium shell's background share one set of rules.
  */
-import type { SettingsPatch, SettingsView } from '../shared/types';
-import type { Store } from './store';
+import type { SettingsPatch, SettingsView } from '../../shared/types';
+import type { Store } from '../../shared/store';
 import { SEARCH_ENGINES } from './url';
 import { sanitize as sanitizeEnvironments } from './environments';
 import { SHORTCUTS, displayKeys, isShortcutId, keysFor, sameKeys, shortcutList } from './shortcuts';

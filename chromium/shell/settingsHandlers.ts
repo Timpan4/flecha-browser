@@ -3,10 +3,10 @@
  * (src/main/settingsCore.ts, src/main/tabManager.ts), answering the Settings page over the hub.
  * Every name starts with `settings:` so it never clashes with the sidebar's.
  */
-import type { SettingsPatch, SettingsView, TabsEdit } from '../../src/shared/types';
-import type { Store } from '../../src/main/store';
-import { applySettings, renewAgentToken, settingsView } from '../../src/main/settingsCore';
-import { TabManager, type AskOptions, type TabsMenuRequest, type TabsMenuRun } from '../../src/main/tabManager';
+import type { SettingsPatch, SettingsView, TabsEdit } from '../shared/types';
+import type { Store } from '../shared/store';
+import { applySettings, renewAgentToken, settingsView } from './lib/settingsCore';
+import { TabManager, type AskOptions, type TabsMenuRequest, type TabsMenuRun } from './lib/tabManager';
 import { broadcast, handle } from './hub';
 
 export interface SettingsContext {

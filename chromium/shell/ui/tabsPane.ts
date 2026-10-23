@@ -1,4 +1,4 @@
-import type { PinnedNode, TabPlacement, TabsEdit, TabsView } from '../shared/types';
+import type { PinnedNode, TabPlacement, TabsEdit, TabsView } from '../../shared/types';
 import type { IconName } from './icons.js';
 import { SPACE_COLORS, SPACE_EMOJIS } from './spaceChoices.js';
 

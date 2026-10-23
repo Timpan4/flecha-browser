@@ -14,8 +14,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { detectBrowsers, readBrowser } from '../../src/main/browserImport';
-import { AGENT_TOOLS, McpBridge, fail, type AgentResult } from '../../src/main/agentServer';
+import { detectBrowsers, readBrowser } from './browserImport';
+import { AGENT_TOOLS, McpBridge, fail, type AgentResult } from './agentServer';
 import type { HostMethods, ToHost, ToShell } from './protocol';
 
 const SHELL_ORIGIN = 'chrome-extension://abdiaepfgbbhdjaecjipmaailijaaide/';

@@ -5,7 +5,7 @@
  * site is fetched once and cached in extension storage; pages get them as data URLs.
  */
 
-import { declaredIcons } from '../../src/main/declaredIcons';
+import { declaredIcons } from './lib/declaredIcons';
 
 const STORAGE_KEY = 'siteIcons';
 const RETRY_MISSES_AFTER = 7 * 24 * 60 * 60 * 1000;

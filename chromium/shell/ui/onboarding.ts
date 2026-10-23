@@ -1,5 +1,5 @@
 import type { IconName } from './icons.js';
-import type { FlechaApi, UiState } from '../shared/types';
+import type { FlechaApi, UiState } from '../../shared/types';
 
 /**
  * The first-run tour, full window: steps on the left, a live miniature Flecha on the right

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { ArcImport, ImportNode, ImportTab } from './importApply';
+import type { ArcImport, ImportNode, ImportTab } from '../shared/importApply';
 
 /**
  * Reads Arc's local sidebar file (~/Library/Application Support/Arc/StorableSidebar.json).
@@ -13,7 +13,7 @@ import type { ArcImport, ImportNode, ImportTab } from './importApply';
  * for a tab or `{ list: {} }` for a folder. `topAppsContainerIDs` points at the favorites.
  */
 
-export type { ArcImport, ImportNode, ImportTab } from './importApply';
+export type { ArcImport, ImportNode, ImportTab } from '../shared/importApply';
 
 interface ArcItem {
   id: string;

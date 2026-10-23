@@ -1,4 +1,4 @@
-import type { BrowserState, ShortcutInfo } from '../shared/types';
+import type { BrowserState, ShortcutInfo } from '../../shared/types';
 
 /**
  * Every command with a keyboard shortcut. Menus, tooltips and Settings all read keys from

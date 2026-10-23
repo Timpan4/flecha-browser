@@ -1,4 +1,4 @@
-import type { RecordedKey, SettingsApi, SettingsView } from '../shared/types';
+import type { RecordedKey, SettingsApi, SettingsView } from '../../shared/types';
 import { ICONS, type IconName } from './icons.js';
 import { setupTabsPane } from './tabsPane.js';
 
