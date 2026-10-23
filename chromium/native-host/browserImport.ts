@@ -3,11 +3,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import type { DetectedBrowser, HistoryEntry, ImportResult } from '../shared/types';
-import type { History } from './history';
-import type { Store } from '../shared/store';
+import type { DetectedBrowser, HistoryEntry } from '../shared/types';
 import { arcSidebarPath, readArcSidebar, type ArcImport, type ImportNode } from './arcImport';
-import { applyBrowserImport, type BrowserImportData } from '../shared/importApply';
+import type { BrowserImportData } from '../shared/importApply';
 
 /**
  * Brings bookmarks and history over from the other browsers on this Mac. Their files are
@@ -362,16 +360,7 @@ export async function detectBrowsers(): Promise<DetectedBrowser[]> {
   });
 }
 
-/**
- * Bookmarks become pinned tabs in a new Space named after the browser (with a folder per
- * profile when several have some), and history is merged into Flecha's. Problems with one
- * profile or file become warnings rather than failing the whole import.
- */
-export async function importBrowser(id: string, store: Store, history: History): Promise<ImportResult> {
-  return applyBrowserImport(await readBrowser(id), store, history);
-}
-
-/** Reads what `importBrowser` brings over, without adding it anywhere. */
+/** Reads what the shell's `importBrowser` brings over, without adding it anywhere. */
 export async function readBrowser(id: string): Promise<BrowserImportData> {
   const result: BrowserImportData = { name: id, bookmarkCount: 0, history: [], warnings: [] };
   const source = sources().find((s) => s.id === id);
