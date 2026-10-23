@@ -62,10 +62,10 @@ It is a Chromium 158 fork rather than an Electron app because Google blocks sign
 - Incognito windows get the same Flecha frame, with one in-memory Space that is forgotten when the last incognito window closes
 - Import bookmarks and history from other browsers and from Arc's sidebar (needs the native host)
 - Chrome extensions: install from the Chrome Web Store; their buttons appear under the address bar
-- Light, dark or system theme; every shortcut can be re-recorded in Settings (⌘/ lists them)
+- Light, dark or system theme; Flecha's shortcuts can be re-recorded in Settings (except a few Chromium keeps, like ⌘T and ⌘W) (⌘/ lists them)
 - Settings (⌘,): search engine (Google, DuckDuckGo, Bing, Brave, Kagi, Ecosia), ad blocking, default browser, Peek behaviour, shortcuts, environments
 
-Not there yet in the Chromium build: choosing the downloads folder from Settings, the welcome tour, and a resizable split divider.
+Not there yet in the Chromium build: choosing the downloads folder from Settings, and the welcome tour.
 
 ## Install
 
