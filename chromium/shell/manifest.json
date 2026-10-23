@@ -9,5 +9,8 @@
   "background": { "service_worker": "background.js", "type": "module" },
   "side_panel": { "default_path": "sidebar.html" },
   "chrome_url_overrides": { "newtab": "newtab.html" },
-  "action": { "default_title": "Flecha" }
+  "action": { "default_title": "Flecha" },
+  "commands": {
+    "flecha-open-location": { "description": "Open the location field (sent by the browser for Cmd+L)" }
+  }
 }
