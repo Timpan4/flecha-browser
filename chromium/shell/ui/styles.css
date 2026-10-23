@@ -1608,18 +1608,50 @@ body[data-sidebar='hidden'] #sidebar {
   display: none;
 }
 
+/* While the floating sidebar is out, the edge strip covers the gap between the window's
+   edge and the card, so the pointer is always over one of them (app.ts). */
+body[data-sidebar='floating'] #edge {
+  display: block;
+  width: 12px;
+}
+
 body[data-sidebar='floating'] #sidebar {
   inset: 10px auto 10px 10px;
   border-radius: var(--float-radius);
   /* Kept within the view's room on the right (main.ts FLOAT_SHADOW) so it never ends in a hard edge. */
   box-shadow: 0 8px 22px rgba(7, 18, 33, 0.24), 0 1px 3px rgba(7, 18, 33, 0.12), 0 0 0 0.5px rgba(11, 37, 69, 0.2);
-  animation: slide-in var(--medium) var(--ease);
+  /* Slides in from the window's edge and back out, as in Arc. */
+  animation: slide-in 180ms var(--ease);
+}
+
+body[data-sidebar='floating'] #sidebar.peek-leaving {
+  animation: slide-out 160ms cubic-bezier(0.4, 0, 1, 1) forwards;
 }
 
 @keyframes slide-in {
   from {
-    opacity: 0;
-    transform: translateX(-16px);
+    transform: translateX(calc(-100% - 12px));
+  }
+}
+
+@keyframes slide-out {
+  to {
+    transform: translateX(calc(-100% - 12px));
+  }
+}
+
+/* ---- fullscreen (the browser says so, patch 0039) -------------------------------------
+   No traffic lights in the sidebar's top row, so the toggle moves to the left; the floating
+   sidebar is a card on the screen's edge, full height, as in Arc. */
+
+@media (display-mode: fullscreen) {
+  .traffic-lights {
+    display: none;
+  }
+
+  body[data-sidebar='floating'] #sidebar {
+    inset: 0 auto 0 0;
+    border-radius: 0 var(--float-radius) var(--float-radius) 0;
   }
 }
 

@@ -21,6 +21,5 @@ rm -rf "$profile/Default/Service Worker"
 
 exec "$src/out/Dev/Flecha.app/Contents/MacOS/Flecha" \
   --user-data-dir="$profile" \
-  --no-first-run \
   --flecha-shell-dir="$shell_dist" \
   "$@"

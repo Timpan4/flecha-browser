@@ -169,12 +169,52 @@ fi
   >/dev/null 2>&1 || true
 sign "$app/Contents/Helpers/flecha-node" "runtime" "$node_entitlements"
 
+# Sparkle (the auto-updater, patch 0053), innermost first, as Sparkle's documentation has
+# it for apps signed with a Developer ID: its XPC services (the Downloader keeping its
+# entitlements), Autoupdate, Updater.app, then the framework, with the hardened runtime
+# and a timestamp.
+sparkle="$app/Contents/Frameworks/Sparkle.framework"
+if [ -d "$sparkle" ]; then
+  sparkle_sign() { # sparkle_sign <path> [codesign arguments...]
+    local path="$1"
+    shift
+    if [ "$identity" = "-" ]; then
+      codesign --force --sign - "$@" "$path"
+    else
+      codesign --force --sign "$identity" --timestamp --options runtime "$@" "$path"
+    fi
+  }
+  sparkle_version_dir="$sparkle/Versions/B"
+  if [ ! -d "$sparkle_version_dir" ]; then
+    echo "error: $sparkle has no Versions/B; check the signing steps for this Sparkle" >&2
+    exit 1
+  fi
+  for xpc in "$sparkle_version_dir"/XPCServices/*.xpc; do
+    case "$(basename "$xpc")" in
+      Downloader.xpc) sparkle_sign "$xpc" --preserve-metadata=entitlements ;;
+      *) sparkle_sign "$xpc" ;;
+    esac
+  done
+  sparkle_sign "$sparkle_version_dir/Autoupdate"
+  sparkle_sign "$sparkle_version_dir/Updater.app"
+  sparkle_sign "$sparkle"
+else
+  echo "note: no Sparkle.framework in the app (no flecha_sparkle_framework); no auto-update" >&2
+fi
+
 sign "$app" "$full_options" "$entitlements/app-entitlements.plist"
 codesign --verify --deep --strict --verbose=1 "$app"
 echo "signed $app"
 
 if [ "$dmg" = 1 ]; then
-  version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")"
+  # Flecha's version (package.json, which build-release.sh put in the Info.plist as
+  # CFBundleShortVersionString, patch 0052), not Chromium's.
+  version="$(node -p 'require(process.argv[1]).version' "$here/../package.json")"
+  plist_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")"
+  if [ "$plist_version" != "$version" ]; then
+    echo "error: the app says version $plist_version, package.json $version; rebuild with build-release.sh" >&2
+    exit 1
+  fi
   image="$release/$product-$version.dmg"
   echo "== dmg $image"
   # A read-write image first, laid out like an installer: the app and an Applications

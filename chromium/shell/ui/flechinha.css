@@ -57,6 +57,13 @@ body {
   flex: none;
 }
 
+/* In fullscreen the traffic lights aren't in the toolbar (patch 0039). */
+@media (display-mode: fullscreen) {
+  .traffic-lights {
+    display: none;
+  }
+}
+
 .icon-button {
   display: grid;
   place-items: center;
