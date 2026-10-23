@@ -1,0 +1,13 @@
+# Flecha dev build: component build, so a change relinks one small library
+# instead of the whole 300MB framework. Use this one day to day.
+is_debug = false
+is_component_build = true
+dcheck_always_on = false
+symbol_level = 0
+blink_symbol_level = 0
+v8_symbol_level = 0
+target_cpu = "arm64"
+proprietary_codecs = true
+ffmpeg_branding = "Chrome"
+use_remoteexec = false
+treat_warnings_as_errors = false

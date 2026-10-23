@@ -1,0 +1,10 @@
+# Flecha release build: one framework, what we ship.
+is_debug = false
+is_component_build = false
+symbol_level = 0
+blink_symbol_level = 0
+v8_symbol_level = 0
+target_cpu = "arm64"
+proprietary_codecs = true
+ffmpeg_branding = "Chrome"
+use_remoteexec = false
