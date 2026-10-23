@@ -17,7 +17,10 @@
 #      FLECHA_SIGN_IDENTITY names a keychain identity ("Developer ID Application: …"), which
 #      also gets the hardened runtime, a timestamp and Chromium's entitlements (as
 #      chrome/installer/mac/signing/parts.py does);
-#   5. with --dmg, makes <release>/Flecha-<version>.dmg with hdiutil.
+#   5. with --dmg, makes <release>/Flecha-<version>.dmg with hdiutil; with a Developer ID
+#      identity and FLECHA_NOTARY_PROFILE (a notarytool keychain profile, made once with
+#      xcrun notarytool store-credentials), sends it to Apple's notary service, waits, and
+#      staples the ticket to the dmg and the app.
 # Everything is redone on each run, so it is safe to run again.
 #
 # Node is $FLECHA_NODE or the node on PATH: 22.5+ (node:sqlite), arm64, and linked only to
@@ -176,6 +179,17 @@ if [ "$dmg" = 1 ]; then
   hdiutil create -quiet -volname "$product" -srcfolder "$stage" -ov -format UDZO "$image"
   if [ "$identity" != "-" ]; then codesign --force --sign "$identity" --timestamp "$image"; fi
   echo "made $image"
+  if [ -n "${FLECHA_NOTARY_PROFILE:-}" ]; then
+    if [ "$identity" = "-" ]; then
+      echo "error: notarizing needs FLECHA_SIGN_IDENTITY (a Developer ID Application)" >&2
+      exit 1
+    fi
+    echo "== notarize $image"
+    xcrun notarytool submit "$image" --keychain-profile "$FLECHA_NOTARY_PROFILE" --wait
+    xcrun stapler staple "$image"
+    xcrun stapler staple "$app"
+    spctl --assess --type open --context context:primary-signature --verbose "$image"
+  fi
 fi
 
 cat <<EOF
