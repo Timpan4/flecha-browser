@@ -13,8 +13,10 @@
  */
 import type { DownloadInfo } from '../../src/shared/types';
 import { broadcast, handle, onConnect } from './hub';
+import { sessionKey } from './incognito';
 
-const SINCE_KEY = 'downloadsSince';
+// Each copy of the shell (regular, incognito) keeps its own.
+const SINCE_KEY = sessionKey('downloadsSince');
 
 const since: Promise<string> = (async () => {
   const saved = (await chrome.storage.session.get(SINCE_KEY))[SINCE_KEY] as string | undefined;

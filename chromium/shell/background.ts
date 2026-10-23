@@ -24,6 +24,7 @@ import { defaultBrowserState, isFlechinha, isFlechinhaWindow, registerNative } f
 import { registerDownloads } from './downloads';
 import { registerSiteControls } from './siteControls';
 import { Favicons } from './favicons';
+import { followedPreferences, incognito, incognitoState, sessionKey } from './incognito';
 
 const STATE_KEY = 'state';
 /** Flecha tab id ↔ Chromium tab id, for the tabs that are open. Kept across background restarts. */
@@ -39,12 +40,28 @@ let creating = 0;
 /** A blank tab that keeps the window open while Flecha has no tab open in it. */
 let placeholder: number | undefined;
 
+const parseState = (json: unknown) => {
+  try {
+    return typeof json === 'string' ? (JSON.parse(json) as BrowserState) : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 async function start() {
   const saved = (await chrome.storage.local.get(STATE_KEY))[STATE_KEY] as string | undefined;
-  const persistence: StatePersistence = {
-    load: () => (saved ? (JSON.parse(saved) as BrowserState) : undefined),
-    save: (json) => void chrome.storage.local.set({ [STATE_KEY]: json }),
-  };
+  // An incognito window's tabs live in session storage, under keys of its own (incognito.ts);
+  // the regular state only gives it your preferences.
+  const own = incognito ? ((await chrome.storage.session.get(sessionKey(STATE_KEY)))[sessionKey(STATE_KEY)] as string | undefined) : saved;
+  const persistence: StatePersistence = incognito
+    ? {
+        load: () => parseState(own) ?? incognitoState(parseState(saved)),
+        save: (json) => void chrome.storage.session.set({ [sessionKey(STATE_KEY)]: json }),
+      }
+    : {
+        load: () => (saved ? (JSON.parse(saved) as BrowserState) : undefined),
+        save: (json) => void chrome.storage.local.set({ [STATE_KEY]: json }),
+      };
   const store = new Store(persistence);
   let nativeHost: ReturnType<typeof registerNativeHost> | undefined;
   let features: Features | undefined;
@@ -56,10 +73,28 @@ async function start() {
     defaultBrowser = next;
     sendState();
   };
-  const restored = (await chrome.storage.session.get(LIVE_KEY))[LIVE_KEY] as Record<string, number> | undefined;
+  const restored = (await chrome.storage.session.get(sessionKey(LIVE_KEY)))[sessionKey(LIVE_KEY)] as Record<string, number> | undefined;
   const existing = new Set((await chrome.tabs.query({})).map((t) => t.id));
   for (const [id, chromeId] of Object.entries(restored ?? {})) if (existing.has(chromeId) && store.state.tabs[id]) live.set(id, chromeId);
   if (!restored) store.archiveStale();
+  // None of an earlier incognito session's tabs are left: this is a new one, which starts empty.
+  if (incognito && !live.size && (Object.keys(store.state.tabs).length || store.state.archive.length)) {
+    store.replaceState(incognitoState(parseState(saved)));
+  }
+  if (incognito) {
+    // Settings change the regular state; incognito windows follow your preferences.
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area !== 'local' || !changes[STATE_KEY]) return;
+      const prefs = followedPreferences(parseState(changes[STATE_KEY].newValue));
+      const keys = Object.keys(prefs) as Array<keyof BrowserState>;
+      if (keys.some((k) => JSON.stringify(prefs[k]) !== JSON.stringify(store.state[k]))) store.replaceState({ ...store.state, ...prefs });
+    });
+    // The last incognito window closed: its tabs are forgotten.
+    chrome.windows.onRemoved.addListener(async () => {
+      if ((await chrome.windows.getAll()).length) return;
+      await chrome.storage.session.remove([sessionKey(STATE_KEY), sessionKey(LIVE_KEY)]);
+    });
+  }
   // Tabs Chromium opened before we were running: its start page shows the active Flecha tab
   // (closing it would close the window), anything else becomes a Flecha tab.
   for (const tab of await chrome.tabs.query({})) {
@@ -92,7 +127,7 @@ async function start() {
     () => sendStateSoon(),
     (hosts) => void siteIcons.want(hosts),
   );
-  const rememberLive = () => void chrome.storage.session.set({ [LIVE_KEY]: Object.fromEntries(live) });
+  const rememberLive = () => void chrome.storage.session.set({ [sessionKey(LIVE_KEY)]: Object.fromEntries(live) });
 
   function uiState(): UiState {
     const tabs = Object.fromEntries(Object.entries(store.state.tabs).map(([id, { history, ...tab }]) => [id, tab]));
@@ -421,14 +456,19 @@ async function start() {
       // A Flechinha window of its own; the window code lives in another shell module.
       { label: 'Open in Flechinha', run: does('openFlechinha', tab.url, tabId) },
       SEPARATOR,
-      { label: zone === 'today' ? 'Pin Tab' : 'Unpin Tab', run: does('togglePin', tabId) },
-      { label: zone === 'favorites' ? 'Remove from Favorites' : 'Add to Favorites', run: does('toggleFavorite', tabId) },
-      {
-        label: 'Move to Space',
-        enabled: zone !== 'favorites' && otherSpaces.length > 0,
-        submenu: otherSpaces.map((s) => ({ label: spaceLabel(s), run: does('moveToSpace', tabId, s.id) })),
-      },
-      SEPARATOR,
+      // An incognito window has just its tabs: nothing to pin, no other Space.
+      ...(incognito
+        ? []
+        : [
+            { label: zone === 'today' ? 'Pin Tab' : 'Unpin Tab', run: does('togglePin', tabId) },
+            { label: zone === 'favorites' ? 'Remove from Favorites' : 'Add to Favorites', run: does('toggleFavorite', tabId) },
+            {
+              label: 'Move to Space',
+              enabled: zone !== 'favorites' && otherSpaces.length > 0,
+              submenu: otherSpaces.map((s) => ({ label: spaceLabel(s), run: does('moveToSpace', tabId, s.id) })),
+            },
+            SEPARATOR,
+          ]),
       { label: 'Reload', enabled: live.has(tabId), run: does('reloadTab', tabId) },
       { label: tab.muted ? 'Unmute Tab' : 'Mute Tab', run: does('toggleMute', tabId) },
       ...(tab.homeUrl && tab.homeUrl !== tab.url ? [{ label: 'Go Back to Pinned URL', run: does('goHome', tabId) }] : []),
@@ -445,7 +485,7 @@ async function start() {
 
   function spaceMenu(spaceId: string): MenuEntry<MenuRun>[] | undefined {
     const space = store.state.spaces.find((s) => s.id === spaceId);
-    if (!space) return undefined;
+    if (!space || incognito) return undefined;
     return [
       { label: 'Edit Space…', run: does('editSpace', spaceId) },
       { label: 'New Folder', run: does('newFolder') },
@@ -471,6 +511,17 @@ async function start() {
     else void chrome.tabs.update(chromeId, { muted: !tab.muted });
   }
 
+  /** Spaces, pins and favorites: an incognito window has none of them, so these do nothing there. */
+  const spacesOnly = <A extends unknown[]>(fn: (...args: A) => unknown) => (incognito ? () => undefined : fn);
+
+  /** Settings show the regular profile's state, so an incognito window opens them over there. */
+  function showSettings(pane?: string) {
+    if (!incognito) return openSettings(pane);
+    if (typeof chrome.flechaPrivate?.runInRegularProfile === 'function') {
+      void chrome.flechaPrivate.runInRegularProfile(pane ? `openSettings:${pane}` : 'settings');
+    }
+  }
+
   handle({
     ready: sendState,
     newTab: (input: string) => openTab(input),
@@ -488,9 +539,9 @@ async function start() {
     forward: onActive((id) => chrome.tabs.goForward(id).catch(() => undefined)),
     reload: onActive((id) => chrome.tabs.reload(id)),
     switchSpace: (id: string) => store.switchSpace(id),
-    newSpace: () => editSpace(store.newSpace().id),
-    editSpace: (id: string) => editSpace(String(id)),
-    newFolder: () => store.newFolder(),
+    newSpace: spacesOnly(() => editSpace(store.newSpace().id)),
+    editSpace: spacesOnly((id: string) => editSpace(String(id))),
+    newFolder: spacesOnly(() => store.newFolder()),
     tabMenu: (id: string) => tabMenu(String(id)),
     spaceMenu: (id: string) => spaceMenu(String(id)),
     setOverlay: (name: string, on: boolean) => {
@@ -498,9 +549,9 @@ async function start() {
       else frame.overlays.delete(String(name));
       sendFrame();
     },
-    togglePin: (id: string) => store.togglePin(id),
-    toggleFavorite: (id: string) => store.toggleFavorite(id),
-    moveToSpace: (id: string, spaceId: string) => store.moveToSpace(id, spaceId),
+    togglePin: spacesOnly((id: string) => store.togglePin(id)),
+    toggleFavorite: spacesOnly((id: string) => store.toggleFavorite(id)),
+    moveToSpace: spacesOnly((id: string, spaceId: string) => store.moveToSpace(id, spaceId)),
     reloadTab: (id: string) => {
       const chromeId = live.get(id);
       if (chromeId !== undefined) void chrome.tabs.reload(chromeId);
@@ -516,9 +567,9 @@ async function start() {
     updateSpace: (id: string, patch: { name?: string; emoji?: string; color?: string }) => store.updateSpace(id, patch ?? {}),
     // Spaces with their own cookies need a separate Chromium profile; not in this build yet.
     setSpaceIsolated: () => broadcast('flash', 'Separate cookies aren’t in this build yet'),
-    deleteSpace: (id: string) => {
+    deleteSpace: spacesOnly((id: string) => {
       if (store.state.spaces.length > 1) void unload(store.deleteSpace(id));
-    },
+    }),
     toggleFolder: (id: string) => store.toggleFolder(id),
     renameFolder: (id: string, name: string) => store.renameFolder(id, name),
     moveTab: (id: string, target: DropTarget) => store.moveTab(id, target),
@@ -558,7 +609,7 @@ async function start() {
     exitSplit,
     dropToSplit: (id: string, side: string) => dropToSplit(String(id), side === 'left' ? 'left' : 'right'),
     splitNew: (input: string) => store.splitWith(openTab(input, false).id),
-    openSettings: (pane?: string) => openSettings(typeof pane === 'string' ? pane : undefined),
+    openSettings: (pane?: string) => showSettings(typeof pane === 'string' ? pane : undefined),
     finishOnboarding: () => store.setOnboarded(true),
     setPreferences: (prefs: { theme?: string; searchEngine?: string; adBlock?: boolean }) => {
       if (prefs?.theme === 'system' || prefs?.theme === 'light' || prefs?.theme === 'dark') store.setPreferences({ theme: prefs.theme });
@@ -572,12 +623,14 @@ async function start() {
         visits: h.visitCount ?? 0,
         lastVisit: h.lastVisitTime ?? 0,
       })),
+    // An incognito window's new tab page doesn't show where you've been.
     topSites: async () => {
+      if (incognito) return [];
       const sites = (await chrome.topSites.get()).filter((s) => isWebPage(s.url));
       void favicons.want(sites.map((s) => s.url));
       return sites.map((s) => ({ url: s.url, title: s.title || s.url, visits: 0, lastVisit: 0 }));
     },
-    importFlechaState: (json: string) => {
+    importFlechaState: spacesOnly((json: string) => {
       let state: BrowserState | undefined;
       try {
         state = JSON.parse(String(json)) as BrowserState;
@@ -590,7 +643,7 @@ async function start() {
       void unload(open);
       const tabs = Object.keys(state.tabs).length;
       broadcast('flash', `Imported ${state.spaces.length} Spaces and ${tabs} tabs`);
-    },
+    }),
   });
 
   registerSiteControls({ store, activeChromeId, mainWindow });
@@ -640,7 +693,7 @@ async function start() {
     // here instead, whatever module draws Flecha's find bar handles this command.
     find: () => call('find'),
     toggleSidebar: () => call('toggleSidebar'),
-    settings: () => openSettings(),
+    settings: () => showSettings(),
     newFlechinha: () => call('newFlechinha'),
     closeTab: withTab((tab) => call('close', tab.id)),
     reopenTab: () => {
@@ -649,7 +702,7 @@ async function start() {
     },
     nextTab: () => cycleTab(1),
     previousTab: () => cycleTab(-1),
-    pinTab: withTab((tab) => store.togglePin(tab.id)),
+    pinTab: spacesOnly(withTab((tab) => store.togglePin(tab.id))),
     duplicateTab: withTab((tab) => openTab(tab.url)),
     muteTab: withTab((tab) => toggleMute(tab.id)),
     clearToday: () => call('clearToday'),
@@ -671,7 +724,7 @@ async function start() {
     editBoost: () => call('editBoost'),
     closePeek: () => call('closePeek'),
     viewSource: withTab((tab) => isWebPage(tab.url) && addTab(`view-source:${tab.url}`, { activate: true })),
-    shortcuts: () => openSettings('shortcuts'),
+    shortcuts: () => showSettings('shortcuts'),
   };
 
   /**
@@ -716,8 +769,9 @@ async function start() {
   // Boosts, environments, local servers, the responsive view, console errors and ad blocking.
   features = registerFeatures({ store, broadcastState: sendState, liveTabId: (id) => live.get(id), activeChromeTabId: activeChromeId });
 
-  // Imports and the coding-agent bridge, through Flecha's native messaging host.
-  nativeHost = registerNativeHost({
+  // Imports and the coding-agent bridge, through Flecha's native messaging host. Both are
+  // about your regular Spaces, so incognito windows have neither.
+  if (!incognito) nativeHost = registerNativeHost({
     store,
     broadcastState: sendState,
     tabs: {
@@ -747,6 +801,9 @@ async function start() {
     run: (command, windowId) => {
       // In a Flechinha, its own toolbar answers the few shortcuts it has.
       if (isFlechinha(windowId)) return broadcast('flechinha:command', windowId, command);
+      // Settings on a pane, asked for by an incognito window (runInRegularProfile).
+      const pane = /^openSettings:(\w+)$/.exec(command);
+      if (pane) return void openSettings(pane[1]);
       const numbered = /^select(Tab|Space):(\d)$/.exec(command);
       runCommand(numbered ? `${numbered[1].toLowerCase()}${numbered[2]}` : command);
     },
@@ -769,7 +826,8 @@ async function start() {
   wantFavicons();
   // Arc's auto-archive, hourly as in Electron. An alarm, since the background sleeps.
   // Made once: making it again on every wake would restart the hour.
-  void chrome.alarms.get(ARCHIVE_ALARM).then((alarm) => void (alarm ?? chrome.alarms.create(ARCHIVE_ALARM, { periodInMinutes: 60 })));
+  // (Incognito tabs are never archived: they go with their window.)
+  if (!incognito) void chrome.alarms.get(ARCHIVE_ALARM).then((alarm) => void (alarm ?? chrome.alarms.create(ARCHIVE_ALARM, { periodInMinutes: 60 })));
   const archiveStale = () => void unload(store.archiveStale());
 
   return { onCreated, onUpdated, onActivated, onRemoved, openPalette, runCommand, archiveStale };

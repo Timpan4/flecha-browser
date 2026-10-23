@@ -109,6 +109,20 @@ declare namespace chrome.flechaPrivate {
   function getFlechinhas(): Promise<number[]>;
 
   /**
+   * Incognito windows (patch 0032). The shell runs in split incognito mode: incognito windows
+   * get their frame page from a second copy of the shell, in the incognito profile, and every
+   * call above made by that copy is about incognito windows and tabs only (and the regular
+   * copy's never reach them). Events go to the copy of the window they're about. The
+   * shortcut map (setShortcuts), setTheme, setPeekTabs and setOpenLinksInFlechinha are the
+   * browser's, one for every window: the regular copy sets them.
+   *
+   * runInRegularProfile(command) is for the incognito copy: the regular copy gets `command`
+   * as onShortcut(command, -1). Settings keep one state, the regular profile's, so incognito
+   * windows open them this way ("settings", or "openSettings:<pane>").
+   */
+  function runInRegularProfile(command: string): Promise<void>;
+
+  /**
    * Peek (patch 0026), like the spike's openPeek(): a page in a floating card over the page
    * area, at peekBounds() = page area inset round(8% of its width) on each side, 48 from its
    * top (room for the frame page's Peek toolbar) and 24 from its bottom; 12px corners.
@@ -160,6 +174,9 @@ declare namespace chrome.flechaPrivate {
   /** Asks macOS to make Flecha the default browser (macOS confirms), then reports the result. */
   function makeDefaultBrowser(): Promise<DefaultBrowserState>;
 
-  /** A shortcut from setShortcuts() was pressed in window `windowId`. */
+  /**
+   * A shortcut from setShortcuts() was pressed in window `windowId` (-1: a command from
+   * runInRegularProfile, no window in particular).
+   */
   const onShortcut: chrome.events.Event<(command: string, windowId: number) => void>;
 }
