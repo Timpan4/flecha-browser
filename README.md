@@ -1,13 +1,19 @@
 # Flecha
 
-An Arc-style browser built on Chromium (through Electron). Arc's interface ideas are rebuilt from scratch; no Arc code is used.
+An Arc-style browser built on a Chromium fork. Arc's interface ideas are rebuilt from scratch; no Arc code is used.
 
 ```bash
-npm install
-npm start
+npm ci                                   # esbuild, TypeScript and the shell's libraries
+npm run shell:build                      # the shell extension, into chromium/shell/dist (shell:watch rebuilds on save)
+chromium/scripts/install-native-host.sh  # builds and registers the native messaging host
+chromium/scripts/build.sh                # patches the Chromium checkout and builds out/Dev/Flecha.app
+chromium/scripts/run.sh                  # launches it with its own profile and the shell from chromium/shell/dist
+npm run typecheck
 ```
 
-For a throwaway profile: `FLECHA_USER_DATA=/tmp/flecha-dev npm start`.
+`chromium/scripts/env.sh` says where the Chromium checkout lives. Shell changes need no Chromium build: rebuild the shell and relaunch. `chromium/scripts/build-release.sh` makes the release app and `package-release.sh` signs it and makes the dmg.
+
+Flecha started as an Electron app; that version is gone from the repo (it's in the git history before the move to `chromium/`).
 
 ## What works
 
