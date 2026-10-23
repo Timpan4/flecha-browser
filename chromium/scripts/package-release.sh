@@ -221,9 +221,10 @@ if [ "$dmg" = 1 ]; then
   # alias side by side over a background (chromium/branding/dmg), a fixed window with no
   # toolbar or sidebar, Flecha's icon on the volume. Then it's compressed.
   rw="$work/$product-rw.dmg"
-  mnt="$work/dmg"
-  if [ -d "$mnt" ]; then hdiutil detach -quiet -force "$mnt" 2>/dev/null || true; fi
-  mkdir -p "$mnt"
+  # macOS won't mount an image inside another mounted image (the build volume), so the
+  # mount point is a temporary folder on the system disk.
+  mnt="$(mktemp -d -t flecha-dmg)"
+  trap 'hdiutil detach -quiet -force "$mnt" 2>/dev/null || true; rmdir "$mnt" 2>/dev/null || true' EXIT
   size_mb=$(( $(du -sm "$app" | cut -f1) + 64 ))
   hdiutil create -quiet -ov -size "${size_mb}m" -fs HFS+ -volname "$product" -type UDIF "$rw"
   hdiutil attach -quiet -nobrowse -noverify -noautoopen -mountpoint "$mnt" "$rw"
