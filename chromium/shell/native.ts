@@ -7,6 +7,7 @@
  */
 import type { Store } from '../../src/main/store';
 import { SHORTCUTS, keysFor } from '../../src/main/shortcuts';
+import { handle } from './hub';
 
 export interface NativeContext {
   store: Store;
@@ -56,8 +57,10 @@ export function shortcutMap(state: Store['state']): Record<string, string> {
 function registerShortcuts(ctx: NativeContext) {
   if (!has('setShortcuts')) return;
   let sent = '';
+  // While Settings records a shortcut the keys go to its page, not to Flecha's commands.
+  let recording = false;
   const apply = () => {
-    const map = shortcutMap(ctx.store.state);
+    const map = recording ? {} : shortcutMap(ctx.store.state);
     const json = JSON.stringify(map);
     if (json === sent) return;
     sent = json;
@@ -67,4 +70,10 @@ function registerShortcuts(ctx: NativeContext) {
   };
   apply();
   ctx.store.onChange(apply);
+  handle({
+    'settings:recording': (on: boolean) => {
+      recording = !!on;
+      apply();
+    },
+  });
 }
