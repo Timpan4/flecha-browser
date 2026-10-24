@@ -90,7 +90,9 @@ if otool -L "$node" | tail -n +2 | awk '{print $1}' | grep -Eqv '^(/usr/lib/|/Sy
   echo "error: $node links libraries outside the system; use an official or nvm Node" >&2
   exit 1
 fi
-(cd "$here/.." && "$node" chromium/native-host/build.mjs)
+# The bundle is made by this Mac's own node on PATH, not the one shipped: esbuild's native
+# binary is this Mac's CPU, so an Intel Node (FLECHA_ARCH=x64) can't load it.
+(cd "$here/.." && node chromium/native-host/build.mjs)
 mkdir -p "$app/Contents/Helpers" "$app/Contents/Resources/native-host"
 cp "$node" "$app/Contents/Helpers/flecha-node"
 chmod 755 "$app/Contents/Helpers/flecha-node"
