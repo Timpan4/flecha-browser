@@ -133,8 +133,12 @@ sign() { # sign <path> [<options> [<entitlements>]]
 }
 
 # Loose code in the framework (dylibs, crashpad handler, app_mode_loader, ...), then its
-# helper apps, then the framework itself.
+# helper apps, then the framework itself. The framework's own binary is left to `sign "$fw"`:
+# codesign takes it as the framework and checks the helpers inside, which on x64 aren't
+# signed yet (the linker ad hoc signs arm64 code, but not x86_64).
+fw_binary="$fw/Versions/Current/$(basename "$fw" .framework)"
 while IFS= read -r -d '' f; do
+  if [ "$f" = "$fw_binary" ]; then continue; fi
   if file -b "$f" | grep -q 'Mach-O'; then sign "$f" "$full_options"; fi
 done < <(find -H "$fw/Versions/Current" -name '*.app' -prune -o -type f -print0)
 while IFS= read -r -d '' helper; do
