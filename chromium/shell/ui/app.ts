@@ -751,6 +751,12 @@ const ACTIONS: Array<{ label: string; keywords: string; icon: IconName; shortcut
     label: 'Import from another browser',
     keywords: 'import migrate bookmarks history arc chrome safari firefox brave edge vivaldi opera',
     icon: 'import',
+    run: () => api.openSettings('import'),
+  },
+  {
+    label: 'Import from Flecha (Electron)',
+    keywords: 'import migrate electron flecha spaces tabs',
+    icon: 'import',
     run: () => api.importMenu(),
   },
   { label: 'Open Boosts Folder', keywords: 'boosts folder scripts css', icon: 'zap', run: () => api.openBoostsFolder() },
