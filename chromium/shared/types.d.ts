@@ -346,6 +346,10 @@ export interface SettingsApi {
   openBoosts(): Promise<void>;
   /** Plays the welcome tour again in the browser window. */
   showTour(): Promise<void>;
+  /** Other browsers on this Mac with bookmarks or history to bring over. */
+  detectBrowsers(): Promise<DetectedBrowser[]>;
+  /** Imports one of the browsers `detectBrowsers` found, by id. */
+  importBrowser(id: string): Promise<ImportResult>;
   onPane(cb: (pane: string) => void): void;
   /** ⌘F while Settings is in front: focus its search field. */
   onFind(cb: () => void): void;
