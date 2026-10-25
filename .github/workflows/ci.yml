@@ -28,3 +28,11 @@ jobs:
       - name: No whitespace errors in the change
         if: github.event_name == 'pull_request'
         run: git diff --check "origin/${{ github.base_ref }}...HEAD" -- . ':!*.patch'
+
+  scripts:
+    name: Shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # ubuntu-latest comes with shellcheck; .shellcheckrc lets it follow `. env.sh`.
+      - run: shellcheck -x -S warning chromium/scripts/*.sh chromium/branding/dmg/render.sh
