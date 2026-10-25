@@ -36,3 +36,10 @@ jobs:
       - uses: actions/checkout@v4
       # ubuntu-latest comes with shellcheck; .shellcheckrc lets it follow `. env.sh`.
       - run: shellcheck -x -S warning chromium/scripts/*.sh chromium/branding/dmg/render.sh
+
+  patches:
+    name: Patches apply to Chromium
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: chromium/scripts/check-patches.sh
