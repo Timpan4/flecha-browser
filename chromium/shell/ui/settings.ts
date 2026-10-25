@@ -1,4 +1,5 @@
-import type { RecordedKey, SettingsApi, SettingsView } from '../../shared/types';
+import type { DetectedBrowser, RecordedKey, SettingsApi, SettingsView } from '../../shared/types';
+import { browserDetail, importSummary } from './browserImport.js';
 import { ICONS, type IconName } from './icons.js';
 import { setupTabsPane } from './tabsPane.js';
 
@@ -214,6 +215,68 @@ document.getElementById('addEnvironment')!.addEventListener('click', () => {
   renderEnvironments();
   environmentList.querySelector<HTMLInputElement>('.env-card:last-child .env-name')?.focus();
 });
+
+// ---- import: the tour's import step, for any time after it -----------------------------
+
+const browserList = document.getElementById('browserList')!;
+let browsers: DetectedBrowser[] | undefined;
+/** What each finished import brought over, by browser id. */
+const imported = new Map<string, string>();
+const importing = new Set<string>();
+
+function textRow(text: string) {
+  const row = document.createElement('div');
+  row.className = 'row';
+  row.append(Object.assign(document.createElement('div'), { className: 'row-text', textContent: text }));
+  return row;
+}
+
+function renderBrowsers() {
+  if (!browsers) return browserList.replaceChildren(textRow('Looking for your browsers…'));
+  if (!browsers.length) return browserList.replaceChildren(textRow('No other browsers with bookmarks or history were found on this Mac.'));
+  browserList.replaceChildren(
+    ...browsers.map((b) => {
+      const done = imported.get(b.id);
+      const busy = importing.has(b.id);
+      const row = document.createElement('div');
+      row.className = 'row';
+      const text = document.createElement('div');
+      text.className = 'row-text';
+      text.append(Object.assign(document.createElement('strong'), { textContent: b.name }), Object.assign(document.createElement('small'), { textContent: done ?? browserDetail(b) }));
+      const info = document.createElement('div');
+      info.className = 'browser-info';
+      info.append(Object.assign(document.createElement('span'), { className: 'browser-badge', textContent: b.name[0] }), text);
+      if (done) {
+        const mark = Object.assign(document.createElement('span'), { className: 'browser-done', textContent: 'Imported' });
+        mark.prepend(icon('check'));
+        row.append(info, mark);
+      } else {
+        const button = Object.assign(document.createElement('button'), { className: 'button', disabled: busy, textContent: busy ? 'Importing…' : 'Import' });
+        button.addEventListener('click', () => runImport(b));
+        row.append(info, button);
+      }
+      return row;
+    }),
+  );
+}
+
+async function runImport(b: DetectedBrowser) {
+  importing.add(b.id);
+  renderBrowsers();
+  try {
+    imported.set(b.id, importSummary(await api.importBrowser(b.id)));
+  } catch {
+    imported.set(b.id, 'Couldn’t import this one');
+  }
+  importing.delete(b.id);
+  renderBrowsers();
+}
+
+renderBrowsers();
+api.detectBrowsers().then(
+  (found) => ((browsers = found), renderBrowsers()),
+  () => ((browsers = []), renderBrowsers()),
+);
 
 // ---- appearance & tabs -------------------------------------------------------------
 
