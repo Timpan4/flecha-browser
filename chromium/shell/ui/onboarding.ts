@@ -243,7 +243,7 @@ export function setupOnboarding(api: FlechaApi, h: H, icon: (name: IconName) => 
     const list = !browsers
       ? h('div', { class: 'tour-note' }, h('span', { class: 'tour-spinner' }), 'Looking for your browsers…')
       : !browsers.length
-        ? h('div', { class: 'tour-note' }, 'No other browsers with data on this Mac. You can import later from File → Import Browser Data.')
+        ? h('div', { class: 'tour-note' }, 'No other browsers with data on this Mac. You can import later from Settings › Import.')
         : h(
             'div',
             { class: 'tour-browsers' },
