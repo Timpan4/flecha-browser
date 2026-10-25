@@ -14,7 +14,7 @@ import { pinnedTabIds, type Store } from '../shared/store';
 import type { AgentResult, AgentTab, AgentToolName } from '../shared/agentTools';
 import { applyBrowserImport, importOptions, previewBrowserImport } from '../shared/importApply';
 import { HOST_NAME, type HostMethods, type ToHost, type ToShell } from '../native-host/protocol';
-import { handle } from './hub';
+import { broadcast, handle } from './hub';
 
 export interface NativeHostContext {
   store: Store;
@@ -33,13 +33,19 @@ export interface NativeHostContext {
 }
 
 const NOT_INSTALLED =
-  'Flecha’s import helper is unavailable. Repair or reinstall Flecha, then try again.';
+  'Flecha’s helper is unavailable, so it can’t import from other browsers or run the agent bridge. Repair or reinstall Flecha, then try again.';
 const IDLE_CLOSE = 60_000;
+/** How long the agent bridge waits before starting the host again, doubling up to a minute. */
+const RETRY_FIRST = 2_000;
+const RETRY_MAX = 60_000;
+
+/** Chromium's reasons for not starting a host at all (native_message_process_host.cc), as opposed to one that stopped. */
+const isMissing = (reason: string) => /host not found|host is forbidden|invalid native messaging host/i.test(reason);
 
 /** Why the helper couldn't be used, in words for the person importing. */
 function helperProblem(err: unknown) {
   const message = String(err instanceof Error ? err.message : err);
-  return /native messaging host|not found|forbidden/i.test(message) ? NOT_INSTALLED : message;
+  return isMissing(message) ? NOT_INSTALLED : message;
 }
 
 export function registerNativeHost(ctx: NativeHostContext) {
@@ -53,6 +59,22 @@ export function registerNativeHost(ctx: NativeHostContext) {
   const chunks = new Map<number, string[]>();
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
   let sentAgent = '';
+  /** Why the host last failed, for Settings; cleared once it answers. */
+  let hostError: string | undefined;
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
+  let retryDelay = RETRY_FIRST;
+
+  /** Tells the sidebar and an open Settings page that the host or bridge changed. */
+  function changed() {
+    ctx.broadcastState();
+    broadcast('settings:changed');
+  }
+
+  function setHostError(error: string | undefined) {
+    if (error === hostError) return;
+    hostError = error;
+    changed();
+  }
 
   function connect() {
     if (port) return port;
@@ -68,7 +90,17 @@ export function registerNativeHost(ctx: NativeHostContext) {
       calls.clear();
       chunks.clear();
       console.warn('Flecha shell: native host disconnected:', reason);
-      ctx.broadcastState();
+      hostError = isMissing(reason) ? NOT_INSTALLED : `Flecha’s helper stopped: ${reason}`;
+      changed();
+      // The bridge should stay up while it's on: start the host again, a little later each time.
+      if (store.state.agent?.enabled) {
+        clearTimeout(retryTimer);
+        retryTimer = setTimeout(() => {
+          sentAgent = '';
+          syncAgent();
+        }, retryDelay);
+        retryDelay = Math.min(retryDelay * 2, RETRY_MAX);
+      }
     });
     return p;
   }
@@ -104,6 +136,7 @@ export function registerNativeHost(ctx: NativeHostContext) {
 
   function receive(message: ToShell) {
     touch();
+    retryDelay = RETRY_FIRST;
     if (message.type === 'chunk') {
       const parts = chunks.get(message.id) ?? [];
       parts[message.index] = message.data;
@@ -113,14 +146,16 @@ export function registerNativeHost(ctx: NativeHostContext) {
       return receive(JSON.parse(parts.join('')) as ToShell);
     }
     if (message.type === 'reply') {
+      setHostError(undefined);
       const pending = calls.get(message.id);
       calls.delete(message.id);
       if (message.error) pending?.reject(new Error(message.error));
       else pending?.resolve(message.value);
     } else if (message.type === 'agent') {
       endpoint = message.endpoint;
+      hostError = message.error ? `The agent bridge couldn’t start: ${message.error}` : undefined;
       if (message.error) console.error('Flecha shell: agent bridge failed:', message.error);
-      ctx.broadcastState();
+      changed();
     } else if (message.type === 'tool') {
       void runTool(message.name as AgentToolName, message.args ?? {}).then((result) => {
         try {
@@ -196,10 +231,12 @@ export function registerNativeHost(ctx: NativeHostContext) {
       return;
     }
     sentAgent = wanted;
+    if (!agent?.enabled) clearTimeout(retryTimer);
     try {
       post({ type: 'agent', enabled: !!agent?.enabled, token: agent?.token ?? '' });
     } catch (err) {
       console.warn('Flecha shell: no agent bridge:', err);
+      setHostError(NOT_INSTALLED);
     }
   }
   store.onChange(syncAgent);
@@ -496,6 +533,8 @@ export function registerNativeHost(ctx: NativeHostContext) {
     },
     /** The bridge's address while it runs, for Settings. */
     agentEndpoint: () => endpoint,
+    /** Why the host last failed to start or stopped, for Settings; undefined once it works. */
+    hostError: () => hostError,
   };
 }
 
