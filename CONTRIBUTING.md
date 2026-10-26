@@ -4,16 +4,43 @@ Thanks for looking. Flecha is a young project with a strong opinion about how it
 
 ## Reporting bugs
 
-Open an issue with: what you did, what you expected, what happened, your macOS version and the Flecha version. A screenshot or a short screen recording helps a lot for anything visual. For a crash, say what the page or action was.
+Open an issue with: what you did, what you expected, what happened, your operating system and version, and the Flecha version. A screenshot or a short screen recording helps a lot for anything visual. For a crash, say what the page or action was.
 
 ## Setup
 
-You need macOS on Apple Silicon, Node 22.5 or newer, and for native changes a Chromium checkout. [README.md](README.md#build-from-source) has the full list.
+Shell and import-helper development needs Node 22.5 or newer. Native setup depends on the platform. The shared Linux build is described below; [README.md](README.md#build-from-source) documents the upstream Apple Silicon macOS setup.
 
 ```bash
 npm ci
 npm run typecheck
 ```
+
+The shell and native host can also be checked with the pinned [tsrs compiler](https://github.com/oxc-project/tsrs):
+
+```bash
+npm run typecheck:tsrs
+```
+
+Run this additional check on Linux or Apple Silicon macOS. The published tsrs 0.18 package has no Windows or Intel macOS binary, so `npm run typecheck` remains the required cross-platform check. tsrs uses a TypeScript 7.1 development snapshot; its default mode is used here. It checks the TypeScript projects without emitting files and does not change Chromium's C++ toolchain.
+
+## Reuse the Linux build across worktrees
+
+The compiled Chromium 158 snapshot lives outside worktrees at `~/flecha-builds/chromium-158-linux/out/Dev`. From a checkout containing this launcher:
+
+```bash
+npm ci
+npm run browser:linux
+```
+
+The launcher rebuilds only that checkout's TypeScript shell and import helper, installs the helper into its `.flecha-profile`, and launches the shared browser with that shell. Each checkout has a separate profile. It refuses a locked profile rather than changing a running session. The shared native output is never built or modified by the launcher.
+
+Use `FLECHA_CHROMIUM_OUT` or `--out` to select another compiled output, and `--profile` for an explicit profile. Both paths must be absolute. For example:
+
+```bash
+npm run browser:linux -- --out /absolute/path/to/out/Dev --profile /absolute/path/to/user-data
+```
+
+Worktrees with native C++ patch changes need a matching native build. Keep using the preserved, already-patched source tree for those incremental builds; the shared snapshot is a runtime and backup, not a replacement source checkout. Do not run the upstream macOS reset/apply scripts against that extracted Linux tree. Windows and macOS need native binaries for their own OS; this snapshot and launcher are Linux-only.
 
 ## Two kinds of change
 

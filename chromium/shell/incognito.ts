@@ -32,8 +32,10 @@ export function followedPreferences(regular: BrowserState | undefined): Partial<
 /** A fresh incognito state: one Space, no tabs, your preferences. */
 export function incognitoState(regular: BrowserState | undefined): BrowserState {
   return {
-    spaces: [{ id: INCOGNITO_SPACE_ID, name: 'Incognito', emoji: '🕶️', color: '#ddd5f3', pinned: [], today: [] }],
-    activeSpaceId: INCOGNITO_SPACE_ID,
+    spaces: [{ id: INCOGNITO_SPACE_ID, name: 'Incognito', emoji: '🕶️', color: '#ddd5f3', pinned: [] }],
+    // Each incognito window gets its own record (a new one shows this Space too).
+    windows: [{ id: crypto.randomUUID(), activeSpaceId: INCOGNITO_SPACE_ID, spaces: {} }],
+    closedWindows: [],
     favorites: [],
     tabs: {},
     archive: [],

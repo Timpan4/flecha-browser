@@ -72,7 +72,7 @@ export function responsive(ctx: ResponsiveContext) {
     }
     // The phone follows the desktop side. Only that way: sites often send phones to an m.
     // domain, which must not drag the desktop side along.
-    for (const space of store.state.spaces) {
+    for (const space of store.state.windows.flatMap((w) => store.windowView(w.id).spaces)) {
       if (space.splitMode !== 'responsive' || !space.split) continue;
       const [sourceId, mirrorId] = space.split;
       const source = store.state.tabs[sourceId];

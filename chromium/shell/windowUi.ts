@@ -8,10 +8,10 @@
  * a question is up it covers the whole window (an "overlay", like the command bar): clicks
  * on the page dismiss the menu, and the dialog has room.
  */
-import type { UiState } from '../shared/types';
+import type { DetectedBrowser, ImportResult, UiState } from '../shared/types';
 import { cmd, invoke, on } from './client';
 import type { MenuRun } from './protocol';
-import { askDialog, popupMenu, type MenuEntry } from './settingsUi';
+import { askDialog, popupMenu, type MenuEntry, type MenuOptions } from './settingsUi';
 
 const framed = typeof chrome.flechaPrivate?.setFrame === 'function';
 const surface = document.documentElement.dataset.surface;
@@ -48,6 +48,8 @@ async function overWindow<T>(name: string, fn: () => Promise<T>): Promise<T> {
 export interface WindowUiHooks {
   /** Starts the sidebar's inline rename of a tab. */
   rename(tabId: string): void;
+  /** Starts the sidebar's inline edit of a pinned tab's or favorite's URL. */
+  editHomeUrl(tabId: string): void;
   state(): UiState | undefined;
 }
 
@@ -64,16 +66,56 @@ export async function showMenu(name: 'tabMenu' | 'spaceMenu', id: string) {
   if (picked) await runMenuItem(picked.run);
 }
 
+/** A menu of the page's own (the window menu on Linux and Windows), over the window. */
+export function showPageMenu<T>(items: MenuEntry<T>[], options: MenuOptions) {
+  return overWindow('menu', () => popupMenu(items, options));
+}
+
 async function runMenuItem(run: MenuRun) {
   if ('cmd' in run) cmd(run.cmd)(...run.args);
   else if ('copy' in run) await copy(run.copy, run.message);
-  else if ('rename' in run) {
-    // The keys go to the sidebar's rename field, so the frame page takes keyboard focus.
+  else if ('rename' in run || 'editHomeUrl' in run) {
+    // The keys go to the sidebar's field, so the frame page takes keyboard focus.
     if (windowId) await chrome.flechaPrivate.focus('frame', await windowId);
-    hooks?.rename(run.rename);
+    if ('rename' in run) hooks?.rename(run.rename);
+    else hooks?.editHomeUrl(run.editHomeUrl);
   }
   else if ('deleteSpace' in run) await confirmDeleteSpace(run.deleteSpace);
   else if ('clearSpaceData' in run) await confirmClearSpaceData(run.clearSpaceData);
+}
+
+/**
+ * Import from another browser, from the window menu or the command bar: one of the browsers the
+ * import helper finds (as the onboarding tour lists them), then what came over.
+ */
+export async function importFromBrowser() {
+  await overWindow('dialog', async () => {
+    const note = (message: string, detail: string) => askDialog({ message, detail, buttons: ['OK'], defaultId: 0, cancelId: 0 });
+    let browsers: DetectedBrowser[];
+    try {
+      browsers = await invoke<DetectedBrowser[]>('detectBrowsers');
+    } catch (error) {
+      return note('Couldn’t look for your browsers', error instanceof Error ? error.message : 'Browser discovery failed.');
+    }
+    if (!browsers.length) {
+      return note('No browsers to import from', 'No supported browser data found in the standard profile folders on this computer. Custom locations and sandboxed installations may not be detected.');
+    }
+    const picked = browsers[await askDialog({
+      message: 'Import from which browser?',
+      detail: 'Its bookmarks and history come over to Flecha.',
+      buttons: [...browsers.map((b) => b.name), 'Cancel'],
+      defaultId: 0,
+      cancelId: browsers.length,
+    })];
+    if (!picked) return;
+    try {
+      const r = await invoke<ImportResult>('importBrowser', picked.id);
+      const parts = [r.bookmarks && `${r.bookmarks.toLocaleString()} bookmark${r.bookmarks === 1 ? '' : 's'}`, r.history && `${r.history.toLocaleString()} page${r.history === 1 ? '' : 's'}`].filter(Boolean);
+      return note(`Imported from ${picked.name}`, [...parts, ...r.warnings].join(' · ') || 'Nothing to import');
+    } catch {
+      return note(`Couldn’t import ${picked.name}`, 'Try again.');
+    }
+  });
 }
 
 /** Electron's "Sign out of everything in “Space”?" message box, in the page. */

@@ -1,0 +1,113 @@
+# Flecha: on Linux and Windows (Aura), the frame page's -webkit-app-region: drag areas move the window: the window keeps a press there instead of passing it to the page, so it hit-tests as the caption (drag to move, double-click to maximize), as a PWA's draggable regions do. chrome.flechaPrivate.quit() and print(tabId) give the window menu Quit (every window comes back next time) and Print.
+--- a/chrome/common/extensions/api/flecha_private.idl
++++ b/chrome/common/extensions/api/flecha_private.idl
+@@ -327,6 +327,15 @@
+         long tabId,
+         boolean managed,
+         optional DoneCallback callback);
++
++    // Quits the browser as the macOS app menu's Quit does, so every window
++    // comes back next time (isQuitting() is true for them). For the window
++    // menu on Linux and Windows, which have no menu bar.
++    static void quit(optional DoneCallback callback);
++
++    // Prints a tab with the browser's print preview, as Ctrl+P does on the
++    // active tab of its window.
++    static void print(long tabId, optional DoneCallback callback);
+   };
+ 
+   interface Events {
+--- a/chrome/browser/extensions/api/flecha_private/flecha_private_api.h
++++ b/chrome/browser/extensions/api/flecha_private/flecha_private_api.h
+@@ -354,6 +354,24 @@
+   ResponseAction Run() override;
+ };
+ 
++class FlechaPrivateQuitFunction : public ExtensionFunction {
++ public:
++  DECLARE_EXTENSION_FUNCTION("flechaPrivate.quit", UNKNOWN)
++
++ protected:
++  ~FlechaPrivateQuitFunction() override = default;
++  ResponseAction Run() override;
++};
++
++class FlechaPrivatePrintFunction : public ExtensionFunction {
++ public:
++  DECLARE_EXTENSION_FUNCTION("flechaPrivate.print", UNKNOWN)
++
++ protected:
++  ~FlechaPrivatePrintFunction() override = default;
++  ResponseAction Run() override;
++};
++
+ }  // namespace extensions
+ 
+ #endif  // CHROME_BROWSER_EXTENSIONS_API_FLECHA_PRIVATE_FLECHA_PRIVATE_API_H_
+--- a/chrome/browser/extensions/api/flecha_private/flecha_private_api.cc
++++ b/chrome/browser/extensions/api/flecha_private/flecha_private_api.cc
+@@ -34,6 +34,9 @@
+ #include "chrome/browser/extensions/extension_tab_util.h"
+ #include "chrome/browser/ui/browser.h"
+ #include "chrome/browser/ui/browser_commands.h"
++#include "chrome/browser/lifetime/application_lifetime.h"
++#include "base/functional/bind.h"
++#include "base/task/sequenced_task_runner.h"
+ #include "chrome/browser/ui/browser_tabstrip.h"
+ #include "chrome/browser/ui/browser_window/public/create_browser_window.h"
+ #include "chrome/common/webui_url_constants.h"
+@@ -1016,4 +1019,31 @@
+   return RespondNow(NoArguments());
+ }
+ 
++ExtensionFunction::ResponseAction FlechaPrivateQuitFunction::Run() {
++  // After answering: quitting closes this function's renderer too.
++  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE, base::BindOnce(&chrome::AttemptUserExit));
++  return RespondNow(NoArguments());
++}
++
++ExtensionFunction::ResponseAction FlechaPrivatePrintFunction::Run() {
++  auto params = flecha_private::Print::Params::Create(args());
++  EXTENSION_FUNCTION_VALIDATE(params);
++  content::WebContents* contents = nullptr;
++  if (!ExtensionTabUtil::GetTabById(params->tab_id, browser_context(),
++                                    /*include_incognito=*/false, &contents)) {
++    return RespondNow(Error(kNoTabError, base::NumberToString(params->tab_id)));
++  }
++  // Chromium's Print prints the active tab of a window, as Ctrl+P does.
++  tabs::TabInterface* tab = tabs::TabInterface::MaybeGetFromContents(contents);
++  BrowserWindowInterface* window =
++      tab ? tab->GetBrowserWindowInterface() : nullptr;
++  if (!window ||
++      window->GetTabStripModel()->GetActiveWebContents() != contents) {
++    return RespondNow(Error("The tab is not the active tab of its window"));
++  }
++  chrome::Print(window);
++  return RespondNow(NoArguments());
++}
++
+ }  // namespace extensions
+--- a/chrome/browser/ui/views/frame/browser_view.cc
++++ b/chrome/browser/ui/views/frame/browser_view.cc
+@@ -4556,6 +4556,20 @@
+ bool BrowserView::ShouldDescendIntoChildForEventHandling(
+     gfx::NativeView child,
+     const gfx::Point& location) {
++  // Flecha: the frame page's -webkit-app-region: drag areas move the window.
++  // The page is a child window, which would take a press there as a click;
++  // the window takes it instead, so it hit-tests as the caption: drag to move,
++  // double-click to maximize (WindowEventFilterLinux), as a PWA's draggable
++  // regions do below.
++  if (FlechaFrameView* flecha_frame = FlechaFrameView::From(this)) {
++    gfx::Point point_in_browser_view(location);
++    views::View::ConvertPointToTarget(GetWidget()->GetRootView(), this,
++                                      &point_in_browser_view);
++    if (flecha_frame->NonClientHitTest(point_in_browser_view) == HTCAPTION) {
++      return false;
++    }
++  }
++
+   // Window for PWAs with window-controls-overlay display override should claim
+   // mouse events that fall within the draggable region.
+   web_app::AppBrowserController* controller =

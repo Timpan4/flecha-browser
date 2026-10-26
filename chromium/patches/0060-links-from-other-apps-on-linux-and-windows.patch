@@ -1,0 +1,46 @@
+# Flecha: on Linux and Windows, a link from another app (a second launch with its address) opens in a Flechinha while Flecha's window is up, as app_controller_mac.mm does on macOS.
+--- a/chrome/browser/ui/startup/startup_browser_creator.cc
++++ b/chrome/browser/ui/startup/startup_browser_creator.cc
+@@ -43,6 +43,7 @@
+ #include "chrome/browser/apps/platform_apps/platform_app_launch.h"
+ #include "chrome/browser/browser_features.h"
+ #include "chrome/browser/browser_process.h"
++#include "chrome/browser/extensions/api/flecha_private/flecha_private_api.h"
+ #include "chrome/browser/extensions/startup_helper.h"
+ #include "chrome/browser/first_run/first_run.h"
+ #include "chrome/browser/global_features.h"
+@@ -1589,6 +1590,34 @@
+     return;
+   }
+ 
++#if !BUILDFLAG(IS_MAC)
++  // Flecha: links from other apps (Flecha as the default browser, passed on by
++  // a second launch) open in a Flechinha while Flecha's window is up, as on
++  // macOS (app_controller_mac.mm). Only a plain link launch: one asking for a
++  // new or incognito window, or an app, gets Chromium's handling, and so do
++  // links wrapped in another app's scheme (untrusted launches).
++  if (profile && mode == StartupProfileMode::kBrowserWindow &&
++      !command_line.HasSwitch(switches::kOpenInNewWindow) &&
++      !command_line.HasSwitch(switches::kIncognito) &&
++      !command_line.HasSwitch(switches::kApp) &&
++      !command_line.HasSwitch(switches::kAppId)) {
++    const StartupTabs tabs = StartupTabProviderImpl().GetCommandLineTabs(
++        command_line, cur_dir, profile);
++    const bool links_only =
++        !tabs.empty() &&
++        std::ranges::none_of(tabs, &StartupTab::is_untrusted_launch);
++    // Each link gets its own Flechinha; whether they go there at all is the
++    // same for every one (the setting and Flecha's window).
++    if (links_only &&
++        extensions::MaybeOpenLinkInFlechinha(profile, tabs[0].url)) {
++      for (size_t i = 1; i < tabs.size(); ++i) {
++        extensions::MaybeOpenLinkInFlechinha(profile, tabs[i].url);
++      }
++      return;
++    }
++  }
++#endif  // !BUILDFLAG(IS_MAC)
++
+   Profiles last_opened_profiles;
+ #if !BUILDFLAG(IS_CHROMEOS)
+   // On ChromeOS multiple profiles doesn't apply.

@@ -1,0 +1,182 @@
+# Flecha: chrome.flechaPrivate.onShortcutReleased reports when a shortcut's held modifier keys are released, for Control-Tab's recent-tab switching.
+--- a/chrome/common/extensions/api/flecha_private.idl
++++ b/chrome/common/extensions/api/flecha_private.idl
+@@ -252,6 +252,12 @@
+     // from runInRegularProfile(), no window in particular).
+     static void onShortcut(DOMString command, long windowId);
+ 
++    // The modifier keys (Control, Alt, Command) held for a shortcut from
++    // setShortcuts() were released, or the window lost focus first. Shortcuts
++    // pressed while the same modifiers stay held share one release, which
++    // names the first: Control-Tab, Control-Tab, Control-Shift-Tab, then
++    // Control released, is three onShortcut events and one onShortcutReleased.
++    static void onShortcutReleased(DOMString command, long windowId);
+ 
+     // The user finished dragging the gap between the panes of a split:
+     // <code>tabId</code> is the first (left) pane's tab, <code>ratio</code>
+--- a/chrome/browser/ui/views/frame/flecha_frame_view.h
++++ b/chrome/browser/ui/views/frame/flecha_frame_view.h
+@@ -186,6 +186,13 @@
+   };
+   void UnregisterShortcuts();
+ 
++  // Watches for the release of a shortcut's modifier key, for
++  // chrome.flechaPrivate.onShortcutReleased (flecha_frame_view.cc).
++  class ShortcutRelease;
++  friend class ShortcutRelease;
++  void WatchShortcutRelease(const std::string& command, int modifiers);
++  void EndShortcutRelease();
++  std::unique_ptr<ShortcutRelease> shortcut_release_;
+ 
+   // The Peek's page and its delegate (flecha_frame_view.cc).
+   class Peek;
+--- a/chrome/browser/ui/views/frame/flecha_frame_view.cc
++++ b/chrome/browser/ui/views/frame/flecha_frame_view.cc
+@@ -36,6 +36,7 @@
+ #include "ui/gfx/image/image_skia_rep.h"
+ #include "ui/views/controls/menu/menu_runner.h"
+ #include "ui/views/event_monitor.h"
++#include "ui/views/widget/widget_observer.h"
+ #include "ui/events/event_observer.h"
+ #include "content/public/browser/web_contents_observer.h"
+ #include "third_party/blink/public/mojom/window_features/window_features.mojom.h"
+@@ -288,6 +289,76 @@
+                             const FlechaFrameState* state) {}
+ #endif
+ 
++// A shortcut's modifier key is held: its release (or the window losing focus
++// first) ends a run of the shortcut, like a recent-tabs switcher's.
++class FlechaFrameView::ShortcutRelease : public ui::EventObserver,
++                                         public views::WidgetObserver {
++ public:
++  ShortcutRelease(FlechaFrameView* frame,
++                  const std::string& command,
++                  int modifiers)
++      : frame_(frame), command_(command), modifiers_(modifiers) {
++    views::Widget* widget = frame->GetWidget();
++    monitor_ = views::EventMonitor::CreateWindowMonitor(
++        this, widget->GetNativeWindow(), {ui::EventType::kKeyReleased});
++    widget_observation_.Observe(widget);
++  }
++
++  const std::string& command() const { return command_; }
++  int modifiers() const { return modifiers_; }
++
++  // ui::EventObserver:
++  void OnEvent(const ui::Event& event) override {
++    if (!event.IsKeyEvent()) {
++      return;
++    }
++    const ui::KeyboardCode key = event.AsKeyEvent()->key_code();
++    const bool released =
++        ((modifiers_ & ui::EF_CONTROL_DOWN) &&
++         (key == ui::VKEY_CONTROL || key == ui::VKEY_LCONTROL ||
++          key == ui::VKEY_RCONTROL)) ||
++        ((modifiers_ & ui::EF_ALT_DOWN) &&
++         (key == ui::VKEY_MENU || key == ui::VKEY_LMENU ||
++          key == ui::VKEY_RMENU)) ||
++        ((modifiers_ & ui::EF_COMMAND_DOWN) &&
++         (key == ui::VKEY_COMMAND || key == ui::VKEY_RWIN));
++    if (released) {
++      End();
++    }
++  }
++
++  // views::WidgetObserver:
++  void OnWidgetActivationChanged(views::Widget* widget, bool active) override {
++    if (!active) {
++      End();
++    }
++  }
++  void OnWidgetDestroying(views::Widget* widget) override {
++    widget_observation_.Reset();
++    monitor_.reset();
++  }
++
++ private:
++  // Not from inside the monitor's own dispatch: the frame deletes this soon.
++  void End() {
++    if (ended_) {
++      return;
++    }
++    ended_ = true;
++    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++        FROM_HERE, base::BindOnce(&FlechaFrameView::EndShortcutRelease,
++                                  frame_->weak_factory_.GetWeakPtr()));
++  }
++
++  raw_ptr<FlechaFrameView> frame_;
++  const std::string command_;
++  const int modifiers_;
++  bool ended_ = false;
++  std::unique_ptr<views::EventMonitor> monitor_;
++  base::ScopedObservation<views::Widget, views::WidgetObserver>
++      widget_observation_{this};
++};
++
+ class FlechaFrameView::PopupPressMonitor : public ui::EventObserver {
+  public:
+   explicit PopupPressMonitor(FlechaFrameView* frame) : frame_(frame) {
+@@ -376,6 +447,7 @@
+ 
+ FlechaFrameView::~FlechaFrameView() {
+   popup_press_monitor_.reset();
++  shortcut_release_.reset();
+   action_menu_runner_.reset();
+   UnregisterShortcuts();
+   if (auto* peek_view = views::AsViewClass<views::WebView>(peek_view_.view())) {
+@@ -681,6 +753,7 @@
+ 
+ void FlechaFrameView::RemovedFromWidget() {
+   popup_press_monitor_.reset();
++  shortcut_release_.reset();
+   UnregisterShortcuts();
+   views::WebView::RemovedFromWidget();
+ }
+@@ -705,6 +778,38 @@
+   }
+ }
+ 
++void FlechaFrameView::WatchShortcutRelease(const std::string& command,
++                                           int modifiers) {
++  constexpr int kHeldModifiers =
++      ui::EF_CONTROL_DOWN | ui::EF_ALT_DOWN | ui::EF_COMMAND_DOWN;
++  if (!(modifiers & kHeldModifiers) || !GetWidget()) {
++    return;
++  }
++  // Another shortcut on the same held modifiers (Control-Tab, then
++  // Control-Shift-Tab) continues the run; its release names the first.
++  if (shortcut_release_ &&
++      shortcut_release_->modifiers() == (modifiers & kHeldModifiers)) {
++    return;
++  }
++  EndShortcutRelease();
++  shortcut_release_ = std::make_unique<ShortcutRelease>(
++      this, command, modifiers & kHeldModifiers);
++}
++
++void FlechaFrameView::EndShortcutRelease() {
++  if (!shortcut_release_) {
++    return;
++  }
++  const std::string command = shortcut_release_->command();
++  shortcut_release_.reset();
++  base::ListValue args;
++  args.Append(command);
++  args.Append(GetWindowId());
++  DispatchFlechaShellEvent(Profile::FromBrowserContext(GetBrowserContext()),
++                           "flechaPrivate.onShortcutReleased",
++                           std::move(args));
++}
++
+ bool FlechaFrameView::ShortcutTarget::AcceleratorPressed(
+     const ui::Accelerator& accelerator) {
+   const auto& shortcuts = FlechaFrameHost::Shortcuts();
+@@ -730,6 +835,7 @@
+   event->user_gesture = extensions::EventRouter::UserGestureState::kEnabled;
+   extensions::EventRouter::Get(profile)->DispatchEventToExtension(
+       kFlechaShellExtensionId, std::move(event));
++  frame_->WatchShortcutRelease(it->second, accelerator.modifiers());
+   return true;
+ }
+ 

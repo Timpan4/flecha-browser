@@ -1,6 +1,6 @@
-import type { FolderPlacement, PinnedNode, Space, TabPlacement, TabsEdit, TabsEditResult, TabsMenuAction, TabsView } from '../../shared/types';
+import type { FolderPlacement, PinnedNode, SavedSpace, TabPlacement, TabsEdit, TabsEditResult, TabsMenuAction, TabsView } from '../../shared/types';
 import { findFolder, pinnedTabIds, type Store } from '../../shared/store';
-import { webAddress } from './url';
+import { pinnableAddress } from './url';
 
 /** A question with buttons; resolves with the index of the button chosen. */
 export interface AskOptions {
@@ -25,7 +25,7 @@ export interface TabManagerHost {
   show(tabId: string): void;
   faviconHosts(): string[];
   /** The cookie jar a Space's tabs use; a tab that lands in another one has to reopen. */
-  sessionOf(space: Space | undefined): unknown;
+  sessionOf(space: SavedSpace | undefined): unknown;
   ask(options: AskOptions): Promise<number>;
   /** Sends the pane a fresh view (when Settings is open). */
   push(view: TabsView): void;
@@ -58,6 +58,8 @@ export class TabManager {
 
   constructor(
     private store: Store,
+    /** The window whose Today tabs the pane shows (the one Settings is in); the focused one when undefined. */
+    private windowId: () => string | undefined,
     private host: TabManagerHost,
   ) {
     // Titles and icons change while pages load; one redraw per burst is plenty.
@@ -76,10 +78,11 @@ export class TabManager {
     for (const [id, t] of Object.entries(s.tabs)) {
       tabs[id] = { id, url: t.url, title: t.title, customTitle: t.customTitle, favicon: t.favicon, homeUrl: t.homeUrl, open: this.host.isOpen(id) };
     }
+    const { activeSpaceId, spaces } = this.store.windowView(this.windowId());
     return {
       favorites: s.favorites,
-      spaces: s.spaces.map(({ id, name, emoji, color, pinned, today, isolated }) => ({ id, name, emoji, color, pinned, today, isolated })),
-      activeSpaceId: s.activeSpaceId,
+      spaces: spaces.map(({ id, name, emoji, color, pinned, today, isolated }) => ({ id, name, emoji, color, pinned, today, isolated })),
+      activeSpaceId,
       tabs,
       faviconHosts: this.host.faviconHosts(),
     };
@@ -116,7 +119,7 @@ export class TabManager {
       case 'setUrl': {
         const id = this.tabId(e.tabId);
         if (!id) return {};
-        const url = address(e.url);
+        const url = pinnableAddress(e.url);
         if (!url) return { error: 'Enter a web address, like example.com.' };
         // Pinned tabs and favorites start over from the new address.
         const pinned = this.store.locate(id)?.zone !== 'today';
@@ -131,7 +134,7 @@ export class TabManager {
         // Moving the tab it's dropped before would lose the spot; the end of the list it is, then.
         if (to.beforeId && ids.includes(to.beforeId)) delete to.beforeId;
         this.keepingSessions(ids, () => {
-          for (const id of ids) this.store.placeTab(id, to);
+          for (const id of ids) this.store.placeTab(id, to, this.windowId());
         });
         return {};
       }
@@ -140,10 +143,10 @@ export class TabManager {
         return {};
       case 'add': {
         const to = tabPlacement(e.to);
-        const url = address(e.url);
+        const url = pinnableAddress(e.url);
         if (!url) return { error: 'Enter a web address, like example.com.' };
         if (!to) return {};
-        return { created: this.store.createTab(url, String(e.title ?? '').trim().slice(0, 200), to)?.id };
+        return { created: this.store.createTab(url, String(e.title ?? '').trim().slice(0, 200), to, this.windowId())?.id };
       }
       case 'newFolder':
         return { created: this.store.newFolder('New Folder', { spaceId: String(e.spaceId), parentId: optionalId(e.parentId) }) };
@@ -319,17 +322,6 @@ export class TabManager {
 
   private spaceOfFolder(folderId: string) {
     return this.store.state.spaces.find((s) => findFolder(s.pinned, folderId))?.id;
-  }
-}
-
-/** A URL to keep: typed like the address bar (`github.com` works), never a search. */
-function address(raw: unknown): string | undefined {
-  const url = webAddress(String(raw ?? ''));
-  if (!url) return undefined;
-  try {
-    return /^(https?|file|about):$/.test(new URL(url).protocol) ? url : undefined;
-  } catch {
-    return undefined;
   }
 }
 

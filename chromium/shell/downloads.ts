@@ -8,8 +8,10 @@
  * background going to sleep). Clearing erases finished downloads from Chromium's list; the
  * files stay on disk, as in Electron.
  *
- * TODO(chromium): Settings' download folder and "ask where to save" are Chromium prefs
- * (download.default_directory, download.prompt_for_download), which an extension can't set.
+ * With Chromium's bubble off, the sidebar also asks about downloads Chromium holds back: a
+ * dangerous file, or one sent over plain HTTP (patch 0058 reports and settles both; without it,
+ * dangerous files only). The download folder and "ask where to save" are Chromium prefs, which
+ * Settings changes through the same patch (settingsHandlers.ts).
  */
 import type { DownloadInfo } from '../shared/types';
 import { broadcast, handle, onConnect } from './hub';
@@ -28,7 +30,15 @@ const since: Promise<string> = (async () => {
 
 const basename = (file: string) => file.split('/').pop() ?? file;
 
-function toInfo(item: chrome.downloads.DownloadItem): DownloadInfo {
+const native = typeof chrome.flechaPrivate?.getDownloadWarnings === 'function';
+
+/** The held downloads, by id: what the browser reports, or dangerous files from chrome.downloads. */
+async function heldDownloads(found: chrome.downloads.DownloadItem[]): Promise<Map<number, DownloadInfo['warning']>> {
+  if (native) return new Map((await chrome.flechaPrivate.getDownloadWarnings()).map((w) => [w.id, w.kind]));
+  return new Map(found.filter((d) => d.state === 'in_progress' && d.danger !== 'safe' && d.danger !== 'accepted').map((d) => [d.id, 'dangerous']));
+}
+
+function toInfo(item: chrome.downloads.DownloadItem, warning?: DownloadInfo['warning']): DownloadInfo {
   const name = basename(item.filename) || basename(new URL(item.finalUrl || item.url).pathname) || 'download';
   return {
     id: String(item.id),
@@ -40,12 +50,15 @@ function toInfo(item: chrome.downloads.DownloadItem): DownloadInfo {
     state:
       item.state === 'complete' ? 'completed' : item.state === 'in_progress' ? 'progressing' : item.error === 'USER_CANCELED' ? 'cancelled' : 'interrupted',
     startedAt: Date.parse(item.startTime),
+    warning,
+    canResume: item.canResume,
   };
 }
 
 async function items(): Promise<DownloadInfo[]> {
   const found = await chrome.downloads.search({ startedAfter: await since, orderBy: ['-startTime'] });
-  return found.map(toInfo);
+  const held = await heldDownloads(found);
+  return found.map((item) => toInfo(item, held.get(item.id)));
 }
 
 let progressTimer: ReturnType<typeof setInterval> | undefined;
@@ -76,6 +89,21 @@ export function registerDownloads() {
     openDownload: (value: string) => chrome.downloads.open(id(value)),
     revealDownload: (value: string) => chrome.downloads.show(id(value)),
     cancelDownload: (value: string) => chrome.downloads.cancel(id(value)),
+    // A click in the sidebar decides, as Chromium's bubble would ask.
+    keepDownload: (value: string) => (native ? chrome.flechaPrivate.keepDownload(id(value)) : chrome.downloads.acceptDanger(id(value))).then(() => emit()),
+    discardDownload: async (value: string) => {
+      if (native) await chrome.flechaPrivate.discardDownload(id(value));
+      else {
+        await chrome.downloads.cancel(id(value));
+        await chrome.downloads.erase({ id: id(value) });
+      }
+      void emit();
+    },
+    resumeDownload: (value: string) => chrome.downloads.resume(id(value)).then(() => emit()),
+    retryDownload: async (value: string) => {
+      const [item] = await chrome.downloads.search({ id: id(value) });
+      if (item) await chrome.downloads.download({ url: item.finalUrl || item.url });
+    },
     clearDownloads: async () => {
       for (const d of await items()) if (d.state !== 'progressing') await chrome.downloads.erase({ id: id(d.id) });
       void emit();

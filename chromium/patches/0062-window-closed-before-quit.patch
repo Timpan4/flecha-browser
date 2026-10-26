@@ -1,0 +1,103 @@
+# Flecha: chrome.flechaPrivate.isQuitting(windowId) answers false for a window you closed before a quit began, so a quit right after closing a window doesn't bring it back.
+--- a/chrome/common/extensions/api/flecha_private.idl
++++ b/chrome/common/extensions/api/flecha_private.idl
+@@ -291,8 +291,10 @@
+         DownloadSettingsCallback callback);
+ 
+     // Whether the browser is quitting, which closes every window: they are
+-    // not being closed one by one, and should all come back next time.
+-    static void isQuitting(QuittingCallback callback);
++    // not being closed one by one, and should all come back next time. With
++    // `windowId`, of a window that has closed: whether quitting closed it,
++    // false if you closed it before the quit began.
++    static void isQuitting(optional long windowId, QuittingCallback callback);
+   };
+ 
+   interface Events {
+--- a/chrome/browser/flecha/flecha_frame_host.h
++++ b/chrome/browser/flecha/flecha_frame_host.h
+@@ -196,6 +196,11 @@
+   // (chrome.flechaPrivate.setPeekTabs()).
+   static std::set<int>& PeekTabs();
+ 
++  // Windows (GetWindowId()) that closed while the browser was not quitting,
++  // until chrome.flechaPrivate.isQuitting() is asked about them: a quit that
++  // starts before the shell hears of the close doesn't bring them back.
++  static std::set<int>& ClosedBeforeQuit();
++
+   // Peek: a page in a floating card over the page area (the spike's
+   // openPeek()). Opening one replaces the one before.
+   // `source` is the page whose link it is, if any: the Peek opens in its
+--- a/chrome/browser/flecha/flecha_frame_host.cc
++++ b/chrome/browser/flecha/flecha_frame_host.cc
+@@ -81,6 +81,12 @@
+ }
+ 
+ // static
++std::set<int>& FlechaFrameHost::ClosedBeforeQuit() {
++  static base::NoDestructor<std::set<int>> windows;
++  return *windows;
++}
++
++// static
+ bool FlechaFrameHost::IsPeek(const content::WebContents* contents) {
+   if (!contents) {
+     return false;
+--- a/chrome/browser/ui/views/frame/flecha_frame_view.h
++++ b/chrome/browser/ui/views/frame/flecha_frame_view.h
+@@ -200,6 +200,8 @@
+   std::unique_ptr<Peek> peek_;
+ 
+   raw_ptr<BrowserView> browser_view_;
++  // GetWindowId(), kept for the destructor: the browser may be gone by then.
++  const int window_id_;
+   // Owned by `browser_view_`, like this view; it may go first.
+   views::ViewTracker background_view_;
+   views::ViewTracker peek_view_;
+--- a/chrome/browser/ui/views/frame/flecha_frame_view.cc
++++ b/chrome/browser/ui/views/frame/flecha_frame_view.cc
+@@ -14,6 +14,7 @@
+ #include "build/build_config.h"
+ #include "chrome/browser/extensions/chrome_extension_web_contents_observer.h"
+ #include "chrome/browser/flecha/flecha_shell.h"
++#include "chrome/browser/lifetime/browser_shutdown.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+@@ -419,7 +420,9 @@
+ }
+ 
+ FlechaFrameView::FlechaFrameView(BrowserView* browser_view)
+-    : views::WebView(browser_view->browser()->GetProfile()), browser_view_(browser_view) {
++    : views::WebView(browser_view->browser()->GetProfile()),
++      browser_view_(browser_view),
++      window_id_(browser_view->browser()->GetSessionID().id()) {
+   // Stays hidden until the shell is loaded and the frame page opens.
+   SetVisible(false);
+   // Under every other view of the window.
+@@ -446,6 +449,10 @@
+ }
+ 
+ FlechaFrameView::~FlechaFrameView() {
++  // Closed by you rather than by quitting (isQuitting() answers for it).
++  if (!state_.flechinha && !browser_shutdown::IsTryingToQuit()) {
++    FlechaFrameHost::ClosedBeforeQuit().insert(window_id_);
++  }
+   popup_press_monitor_.reset();
+   shortcut_release_.reset();
+   action_menu_runner_.reset();
+--- a/chrome/browser/extensions/api/flecha_private/flecha_private_api.cc
++++ b/chrome/browser/extensions/api/flecha_private/flecha_private_api.cc
+@@ -907,6 +907,12 @@
+ }
+ 
+ ExtensionFunction::ResponseAction FlechaPrivateIsQuittingFunction::Run() {
++  auto params = flecha_private::IsQuitting::Params::Create(args());
++  EXTENSION_FUNCTION_VALIDATE(params);
++  if (params->window_id &&
++      FlechaFrameHost::ClosedBeforeQuit().erase(*params->window_id)) {
++    return RespondNow(WithArguments(false));
++  }
+   return RespondNow(WithArguments(browser_shutdown::IsTryingToQuit()));
+ }
+ 

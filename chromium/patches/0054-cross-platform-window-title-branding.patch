@@ -1,0 +1,30 @@
+# Flecha: brand native Linux/Windows window titles, including their accessible names.
+--- a/chrome/app/chromium_strings.grd
++++ b/chrome/app/chromium_strings.grd
+@@ -452,7 +452,7 @@
+           </then>
+           <else>
+             <message name="IDS_BROWSER_WINDOW_TITLE_FORMAT" desc="The format for titles displayed in tabs and popup windows">
+-              <ph name="PAGE_TITLE">$1<ex>Google</ex></ph> - Chromium
++              <ph name="PAGE_TITLE">$1<ex>Google</ex></ph> - Flecha
+             </message>
+           </else>
+         </if>
+@@ -466,7 +466,7 @@
+       <if expr="not is_chromeos and not is_macosx">
+         <!-- Captive Portal Browser Window Title Format -->
+         <message name="IDS_CAPTIVE_PORTAL_BROWSER_WINDOW_TITLE_FORMAT" desc="The format for titles displayed in captive portal popup windows">
+-          <ph name="PAGE_TITLE">$1<ex>Google</ex></ph> - Network Sign-in - Chromium
++          <ph name="PAGE_TITLE">$1<ex>Google</ex></ph> - Network Sign-in - Flecha
+         </message>
+       </if>
+       <if expr="is_chromeos">
+@@ -491,7 +491,7 @@
+         </then>
+         <else>
+           <message name="IDS_ACCESSIBLE_BROWSER_WINDOW_TITLE_FORMAT" desc="The format for the accessible name of a tabbed browser window">
+-            <ph name="PAGE_TITLE">$1<ex>Google</ex></ph> - Chromium
++            <ph name="PAGE_TITLE">$1<ex>Google</ex></ph> - Flecha
+           </message>
+         </else>
+       </if>

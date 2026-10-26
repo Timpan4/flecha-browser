@@ -2,6 +2,13 @@ import { devSuggestions } from './devCommands.js';
 import { ICONS, type IconName } from './icons.js';
 import { setupOnboarding } from './onboarding.js';
 import { SPACE_COLORS, SPACE_EMOJIS } from './spaceChoices.js';
+import { displayKeys } from '../lib/shortcuts';
+import { isMac } from '../lib/platform';
+import { suggestable, suggestionRequests } from '../lib/suggest';
+import { searchUrl } from '../lib/url';
+import type { MenuEntry } from '../settingsUi';
+import { importFromBrowser, showPageMenu } from '../windowUi';
+import { SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH } from '../../shared/sidebarWidth';
 import type { DownloadInfo, DropTarget, FlechaApi, HistoryEntry, PaletteMode, PeekState, PinnedNode, Space, TabInfo, UiState } from '../../shared/types';
 
 declare global {
@@ -99,6 +106,7 @@ function render(s: UiState) {
 
   document.body.dataset.sidebar = s.sidebarMode;
   if (s.sidebarMode !== 'floating') $('sidebar').classList.remove('peek-leaving');
+  $('sidebar-resize').setAttribute('aria-valuenow', String(s.sidebarWidth ?? SIDEBAR_DEFAULT_WIDTH));
   // Shortcuts can be changed in Settings; key caps and tooltips show the current ones.
   for (const el of document.querySelectorAll<HTMLElement>('[data-shortcut]')) {
     const keys = s.shortcuts[el.dataset.shortcut!] ?? '';
@@ -231,7 +239,7 @@ function renderUrlbar(s: UiState, active: TabInfo | undefined) {
   $('urlbar-text').textContent = url ? host(url) : 'Search or enter URL';
   $('urlbar').classList.toggle('empty', !url);
   $('urlbar-env').replaceChildren(
-    ...(s.environment ? [h('span', { class: `env-badge ${s.environment.tone}`, title: `${s.environment.name} · ⌥⌘E to switch` }, s.environment.label)] : []),
+    ...(s.environment ? [h('span', { class: `env-badge ${s.environment.tone}`, title: `${s.environment.name} · ${state?.shortcuts.nextEnvironment ?? displayKeys('Alt+CmdOrCtrl+E')} to switch` }, s.environment.label)] : []),
   );
 }
 
@@ -409,7 +417,8 @@ function isBoosted(url: string) {
 function isDevUrl(url: string) {
   try {
     const { hostname } = new URL(url);
-    return /^(localhost|127\.0\.0\.1|\[::1\])$|\.(localhost|local|test)$/.test(hostname);
+    // The hosts manifest.json's console scripts run on: *.local and *.test include bare local and test.
+    return /^(localhost|local|test|127\.0\.0\.1|\[::1\])$|\.(localhost|local|test)$/.test(hostname);
   } catch {
     return false;
   }
@@ -425,6 +434,22 @@ function renameTab(tabId: string) {
   const tab = state?.tabs[tabId];
   if (!row || !tab) return;
   editInline(row, tabTitle(tab), (title) => api.renameTab(tabId, title));
+}
+
+/** Inline edit of the URL a pinned tab or favorite goes back to, started from the tab's context menu. */
+function editHomeUrl(tabId: string) {
+  const tab = state?.tabs[tabId];
+  if (!tab?.homeUrl) return;
+  const commit = (input: string) => api.setHomeUrl(tabId, input);
+  const title = document.querySelector<HTMLElement>(`#pinned .row[data-tab-id="${CSS.escape(tabId)}"] .title`);
+  // The title comes back whether or not the URL was taken (a bad one only shows a message).
+  if (title) return editInline(title, tab.homeUrl, commit, () => state && render(state));
+  // A favorite is just an icon, so its URL gets a field of its own under the favorites.
+  if (!state?.favorites.includes(tabId)) return;
+  document.querySelector('.url-edit')?.remove();
+  const field = h('div', { class: 'url-edit', role: 'textbox', 'aria-label': `URL of ${tabTitle(tab)}` });
+  $('favorites').after(field);
+  editInline(field, tab.homeUrl, commit, () => field.remove());
 }
 
 function wireTab(el: HTMLElement, tab: TabInfo, target: DropTarget) {
@@ -467,7 +492,8 @@ function acceptDrops(el: HTMLElement, target: DropTarget, hoverClass = 'drag-ove
   });
 }
 
-function editInline(el: HTMLElement, current: string, commit: (value: string) => void) {
+/** Without `done`, the next state draws what was saved, and a cancel redraws now. */
+function editInline(el: HTMLElement, current: string, commit: (value: string) => void, done?: () => void) {
   el.contentEditable = 'true';
   el.textContent = current;
   el.focus();
@@ -477,8 +503,10 @@ function editInline(el: HTMLElement, current: string, commit: (value: string) =>
     el.removeEventListener('blur', onBlur);
     el.contentEditable = 'false';
     const value = el.textContent?.trim() ?? '';
-    if (save && value && value !== current) commit(value);
-    else if (state) render(state);
+    const changed = save && !!value && value !== current;
+    if (changed) commit(value);
+    if (done) done();
+    else if (!changed && state) render(state);
   };
   const onKey = (e: KeyboardEvent) => {
     if (e.key === 'Enter') e.preventDefault(), finish(true);
@@ -727,15 +755,17 @@ function openPalette(mode: PaletteMode) {
   historyResults = [];
   updatePalette();
   refreshHistory();
+  refreshSuggestions();
 }
 
 function closePalette() {
   if (palette.hidden) return;
   palette.hidden = true;
+  requestSuggestions(undefined);
   api.closePalette();
 }
 
-type PaletteGroup = '' | 'Developer' | 'Actions' | 'Tabs' | 'History' | 'Archive';
+type PaletteGroup = '' | 'Suggestions' | 'Developer' | 'Actions' | 'Tabs' | 'History' | 'Archive';
 
 /** Commands the bar can run, found by typing any word of their label or keywords. */
 const ACTIONS: Array<{ label: string; keywords: string; icon: IconName; shortcut?: string; run: () => void }> = [
@@ -747,12 +777,14 @@ const ACTIONS: Array<{ label: string; keywords: string; icon: IconName; shortcut
   { label: 'Toggle Sidebar', keywords: 'sidebar hide show', icon: 'sidebar', shortcut: 'toggleSidebar', run: () => api.toggleSidebar() },
   { label: 'Clear Today Tabs', keywords: 'clear archive today close', icon: 'archive', shortcut: 'clearToday', run: () => api.clearToday() },
   { label: 'Show Downloads', keywords: 'downloads files', icon: 'download', run: () => (downloadsPanel.hidden = false) },
+  { label: 'Show History', keywords: 'history visited pages clear', icon: 'history', shortcut: 'history', run: () => api.openHistory() },
   {
     label: 'Import from another browser',
     keywords: 'import migrate bookmarks history arc chrome safari firefox brave edge vivaldi opera',
     icon: 'import',
-    run: () => api.importMenu(),
+    run: () => void importFromBrowser(),
   },
+  { label: 'Import from Flecha (Electron)', keywords: 'import migrate electron flecha state', icon: 'import', run: () => api.importMenu() },
   { label: 'Open Boosts Folder', keywords: 'boosts folder scripts css', icon: 'zap', run: () => api.openBoostsFolder() },
 ];
 
@@ -819,9 +851,15 @@ function updatePalette() {
     for (const action of matchingActions(q).slice(0, 4)) {
       items.push({ group: 'Actions', icon: action.icon, label: action.label, sub: '', hint: action.shortcut && state.shortcuts[action.shortcut], run: action.run });
     }
+    // The engine's suggestions for exactly what is typed now, under the typed search.
+    const engine = state.searchEngine;
+    const suggested: PaletteItem[] =
+      !isUrl && suggestions?.query === q
+        ? suggestions.list.map((text) => ({ group: 'Suggestions', icon: 'search', label: text, sub: '', run: () => open(searchUrl(text, engine)) }))
+        : [];
     // A matching shortcut or action is what was meant (`gh 12`, `settings`); otherwise searching is.
-    if (items.length && !isUrl) items.push(searchItem);
-    else items.unshift(searchItem);
+    if (items.length && !isUrl) items.push(searchItem, ...suggested);
+    else items.unshift(searchItem, ...suggested);
   }
 
   const openTabs = Object.values(state.tabs)
@@ -911,10 +949,30 @@ function refreshHistory() {
   });
 }
 
+// Search suggestions, for the query they were asked for only; requests for older queries are aborted.
+let suggestions: { query: string; list: string[] } | undefined;
+const requestSuggestions = suggestionRequests(
+  (query, signal) => api.searchSuggestions(query, signal),
+  (query, list) => {
+    if (palette.hidden || paletteInput.value.trim() !== query) return;
+    // They go in above items that may be selected; the selection stays on the same item.
+    const before = paletteItems[selected];
+    suggestions = { query, list };
+    updatePalette();
+    const after = paletteItems.findIndex((item) => item.group === before?.group && item.label === before.label && item.sub === before.sub);
+    if (after >= 0 && after !== selected) (selected = after), updatePalette();
+  },
+);
+function refreshSuggestions() {
+  const q = paletteInput.value.trim();
+  requestSuggestions(q && !looksLikeUrl(q) && suggestable(q) ? q : undefined);
+}
+
 paletteInput.addEventListener('input', () => {
   selected = 0;
   updatePalette();
   refreshHistory();
+  refreshSuggestions();
 });
 paletteInput.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') closePalette();
@@ -968,9 +1026,11 @@ function formatBytes(n: number) {
 }
 
 function downloadStatus(d: DownloadInfo) {
+  if (d.warning === 'dangerous') return 'This file may harm your computer';
+  if (d.warning === 'insecure') return 'Sent without encryption (HTTP)';
   if (d.state === 'completed') return formatBytes(d.received);
   if (d.state === 'cancelled') return 'Cancelled';
-  if (d.state === 'interrupted') return 'Failed';
+  if (d.state === 'interrupted') return d.canResume ? 'Stopped' : 'Failed';
   return d.total ? `${formatBytes(d.received)} of ${formatBytes(d.total)}` : formatBytes(d.received);
 }
 
@@ -993,26 +1053,38 @@ function renderDownloads(items: DownloadInfo[], started?: DownloadInfo) {
         },
         h('span', { class: 'name' }, d.filename),
         h('span', { class: 'status' }, downloadStatus(d)),
-        d.state === 'progressing'
+        d.state === 'progressing' && !d.warning
           ? h('span', { class: 'bar' }, h('span', { class: 'fill', style: `width: ${Math.round(progress * 100)}%` }))
           : null,
-        h(
-          'button',
-          {
-            class: 'icon-button',
-            title: d.state === 'progressing' ? 'Cancel' : 'Show in Finder',
-            onclick: (e: Event) => {
-              e.stopPropagation();
-              if (d.state === 'progressing') api.cancelDownload(d.id);
-              else api.revealDownload(d.id);
-            },
-          },
-          d.state === 'progressing' ? icon('close') : icon('folder'),
-        ),
+        downloadActions(d),
       );
     }),
   );
   if (!items.length) $('downloads-list').append(h('li', { class: 'empty' }, 'No downloads yet'));
+}
+
+/** What a download's row offers: a decision for a held one, resume or retry for a stopped one. */
+function downloadActions(d: DownloadInfo) {
+  const button = (label: string, run: () => void, kind = 'text-button') =>
+    h('button', { class: kind, onclick: (e: Event) => (e.stopPropagation(), run()) }, label);
+  if (d.warning) return h('span', { class: 'actions' }, button('Discard', () => api.discardDownload(d.id)), button('Keep', () => api.keepDownload(d.id), 'text-button keep'));
+  if (d.state === 'interrupted') {
+    return h('span', { class: 'actions' }, d.canResume ? button('Resume', () => api.resumeDownload(d.id)) : button('Retry', () => api.retryDownload(d.id)));
+  }
+  const progressing = d.state === 'progressing';
+  return h(
+    'button',
+    {
+      class: 'icon-button',
+      title: progressing ? 'Cancel' : isMac ? 'Show in Finder' : 'Show in Folder',
+      onclick: (e: Event) => {
+        e.stopPropagation();
+        if (progressing) api.cancelDownload(d.id);
+        else api.revealDownload(d.id);
+      },
+    },
+    progressing ? icon('close') : icon('folder'),
+  );
 }
 
 $('btn-downloads').onclick = () => (downloadsPanel.hidden = !downloadsPanel.hidden);
@@ -1068,6 +1140,33 @@ for (const half of splitDrop.querySelectorAll<HTMLElement>('.drop-half')) {
 
 // The edge strip stays under the pointer while the floating sidebar is out (it covers the gap
 // between the window's edge and the card, styles.css), so the card sliding in under a pointer
+// ---- resizing the sidebar --------------------------------------------------------
+// Drag its right edge: the window's layout follows as you go, and the width is kept for every
+// window when you let go.
+const resizeHandle = $('sidebar-resize');
+resizeHandle.setAttribute('aria-valuemin', String(SIDEBAR_MIN_WIDTH));
+resizeHandle.setAttribute('aria-valuemax', String(SIDEBAR_MAX_WIDTH));
+resizeHandle.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  resizeHandle.setPointerCapture(e.pointerId);
+  const start = { x: e.clientX, width: $('sidebar').offsetWidth };
+  let width = start.width;
+  const move = (ev: PointerEvent) => {
+    width = start.width + ev.clientX - start.x;
+    api.resizeSidebar(width, false);
+  };
+  const end = () => {
+    resizeHandle.removeEventListener('pointermove', move);
+    resizeHandle.removeEventListener('pointerup', end);
+    resizeHandle.removeEventListener('pointercancel', end);
+    api.resizeSidebar(width, true);
+  };
+  resizeHandle.addEventListener('pointermove', move);
+  resizeHandle.addEventListener('pointerup', end);
+  resizeHandle.addEventListener('pointercancel', end);
+});
+
 // resting at the edge never reads as leaving it: the sidebar shows once, and goes only after
 // the pointer has left both the edge and the card for a moment, sliding out to the left.
 let peekCloseTimer: number | undefined;
@@ -1141,6 +1240,93 @@ document.addEventListener('pointerdown', hideTip, true);
 document.addEventListener('scroll', hideTip, true);
 window.addEventListener('blur', hideTip);
 
+// ---- window controls and menu (Linux, Windows) ------------------------------------
+// Flecha's own window has no title bar there: its close, minimize and maximize circles sit
+// where macOS draws the traffic lights, and the menu button holds what the macOS menu bar
+// does (styles.css, "window controls and menu").
+
+document.documentElement.dataset.platform = isMac ? 'mac' : 'other';
+const ownWindow = !isMac && document.documentElement.dataset.frame !== undefined && typeof chrome.flechaPrivate?.getWindowId === 'function';
+
+if (ownWindow) {
+  const root = document.documentElement;
+  const windowId = chrome.flechaPrivate.getWindowId();
+  const maximize = $('wc-maximize');
+  const showState = (win: chrome.windows.Window) => {
+    root.dataset.windowState = win.state ?? 'normal';
+    maximize.setAttribute('aria-label', win.state === 'maximized' ? 'Restore' : 'Maximize');
+  };
+  const showFocused = async (focusedId: number) => (root.dataset.windowFocused = String(focusedId === (await windowId)));
+  void windowId.then((id) => chrome.windows.get(id)).then(showState);
+  void chrome.windows.getLastFocused().then((win) => showFocused(win.id ?? chrome.windows.WINDOW_ID_NONE));
+  chrome.windows.onBoundsChanged.addListener(async (win) => win.id === (await windowId) && showState(win));
+  chrome.windows.onFocusChanged.addListener((id) => void showFocused(id));
+  $('wc-close').onclick = async () => chrome.windows.remove(await windowId);
+  $('wc-minimize').onclick = async () => chrome.windows.update(await windowId, { state: 'minimized' });
+  maximize.onclick = async () => {
+    const id = await windowId;
+    const win = await chrome.windows.get(id);
+    showState(await chrome.windows.update(id, { state: win.state === 'maximized' ? 'normal' : 'maximized' }));
+  };
+
+  const menuButton = $('btn-menu');
+  const openMenu = async (keyboard: boolean) => {
+    menuButton.setAttribute('aria-expanded', 'true');
+    try {
+      const picked = await showPageMenu(windowMenu(), { anchor: menuButton, keyboard });
+      if (picked) picked.run();
+      else menuButton.focus();
+    } finally {
+      menuButton.setAttribute('aria-expanded', 'false');
+    }
+  };
+  // A click from the keyboard (Enter, Space) has no pointer position: detail 0.
+  menuButton.onclick = (e) => void openMenu(e.detail === 0);
+  menuButton.onkeydown = (e) => {
+    if (e.key !== 'ArrowDown') return;
+    e.preventDefault();
+    void openMenu(true);
+  };
+}
+
+/**
+ * What the macOS app menu and menu bar give you that Linux and Windows would otherwise have no
+ * way to reach. The rest of the menu bar is elsewhere already: editing in the page's own menu
+ * and keys, tabs and Spaces in the sidebar's menus, the window's own controls beside this.
+ */
+function windowMenu(): MenuEntry<() => void>[] {
+  const keys = (id: string) => state?.shortcuts[id] || undefined;
+  const item = (label: string, run: () => void, accel?: string) => ({ label, run, accel });
+  const regular = !chrome.extension.inIncognitoContext;
+  const canQuit = typeof chrome.flechaPrivate?.quit === 'function';
+  return [
+    // An incognito window can't open a regular one from here; Chromium's own Ctrl+N does.
+    ...(regular ? [item('New window', () => api.newWindow(), 'Ctrl+N')] : []),
+    item('New incognito window', () => api.newIncognitoWindow(), 'Ctrl+Shift+N'),
+    item('New Flechinha window', () => api.newFlechinha(), keys('newFlechinha')),
+    { separator: true },
+    item('History', () => api.openHistory(), keys('history')),
+    item('Downloads', () => ($('downloads-panel').hidden = false)),
+    item('Boosts', () => api.openSettings('boosts')),
+    ...(regular ? [item('Extensions', () => api.openExtensions())] : []),
+    { separator: true },
+    item('Find in page…', () => api.runCommand('find'), keys('find')),
+    {
+      label: 'Zoom',
+      submenu: [item('Zoom in', () => api.zoom(1), keys('zoomIn')), item('Zoom out', () => api.zoom(-1), keys('zoomOut')), item('Actual size', () => api.zoom(0), keys('actualSize'))],
+    },
+    item('Print…', () => api.print(), 'Ctrl+P'),
+    item('Developer tools', () => api.openDevTools(), keys('devTools')),
+    { separator: true },
+    item('Import from another browser…', () => void importFromBrowser()),
+    item('Settings', () => api.openSettings(), keys('settings')),
+    { label: 'Help', submenu: [item('Keyboard shortcuts', () => api.openSettings('shortcuts'), keys('shortcuts')), item('Flecha help', () => api.openHelp())] },
+    item('About Flecha', () => api.openAbout()),
+    // Quitting so that every window comes back takes the browser's own Quit (patch 0070).
+    ...(canQuit ? [{ separator: true } as const, item('Quit Flecha', () => api.quit(), keys('quit'))] : []),
+  ];
+}
+
 // ---- wiring ---------------------------------------------------------------------
 
 $('btn-sidebar').onclick = () => api.toggleSidebar();
@@ -1162,7 +1348,7 @@ $('space-header').oncontextmenu = (e) => {
 // background: they have their own menu, the native edit menu, or none.
 $('sidebar').addEventListener('contextmenu', (e) => {
   if (e.defaultPrevented || !state) return;
-  if ((e.target as Element).closest('button, a, input, textarea, select, label, [contenteditable], .row, .popover, browser-action-list, #urlbar-wrap, #agent-status')) return;
+  if ((e.target as Element).closest('button, a, input, textarea, select, label, [contenteditable], .row, .popover, #extensions, #urlbar-wrap, #agent-status')) return;
   e.preventDefault();
   api.spaceMenu(state.activeSpaceId);
 });
@@ -1180,6 +1366,7 @@ api.onState((s) => {
 api.onPalette(openPalette);
 api.onEditSpace(openSpaceEditor);
 api.onRenameTab(renameTab);
+api.onEditHomeUrl(editHomeUrl);
 api.onPeek(renderPeek);
 api.onDownloads(renderDownloads);
 api.ready();

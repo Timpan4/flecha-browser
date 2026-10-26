@@ -4,7 +4,8 @@ import path from 'node:path';
 import type { ArcImport, ImportNode, ImportTab } from '../shared/importApply';
 
 /**
- * Reads Arc's local sidebar file (~/Library/Application Support/Arc/StorableSidebar.json).
+ * Reads Arc's local sidebar file: ~/Library/Application Support/Arc/StorableSidebar.json on
+ * macOS, and on Windows the same file in Arc's package folder (browserImport.ts arcWindowsDir).
  *
  * Shape, as observed on disk: `sidebar.containers[n]` holds `spaces` and `items`, both
  * flat arrays alternating `"<id>", { ...object }`. Each space lists

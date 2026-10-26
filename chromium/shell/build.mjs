@@ -1,5 +1,7 @@
-// Builds the shell extension into chromium/shell/dist. `node build.mjs --watch` rebuilds on
-// save; reload the extension (or the sidebar) to see the change. No Chromium build involved.
+// Builds the shell extension into chromium/shell/dist, or the absolute directory in
+// FLECHA_SHELL_OUT, so a test shell never replaces the one a running browser loads.
+// `node build.mjs --watch` rebuilds on save; reload the extension (or the sidebar) to see the
+// change. No Chromium build involved.
 import { build, context } from 'esbuild';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -8,11 +10,17 @@ import { buildAdblock } from './build-adblock.mjs';
 
 const here = path.dirname(new URL(import.meta.url).pathname);
 const root = path.resolve(here, '../..');
-const out = path.join(here, 'dist');
+const out = process.env.FLECHA_SHELL_OUT || path.join(here, 'dist');
+if (!path.isAbsolute(out)) throw new Error('FLECHA_SHELL_OUT must be an absolute path.');
 const ui = path.join(here, 'ui');
 
 function copyStatic() {
   fs.mkdirSync(path.join(out, 'fonts'), { recursive: true });
+  // The shell's own icon, which Chromium shows beside its context menu items (Open in Peek).
+  fs.mkdirSync(path.join(out, 'icons'), { recursive: true });
+  for (const size of [16, 48, 128]) {
+    fs.copyFileSync(path.join(root, `chromium/branding/logo/product_logo_${size}.png`), path.join(out, `icons/${size}.png`));
+  }
   fs.copyFileSync(path.join(here, 'manifest.json'), path.join(out, 'manifest.json'));
   for (const f of fs.readdirSync(ui)) if (f.endsWith('.css')) fs.copyFileSync(path.join(ui, f), path.join(out, f));
   fs.copyFileSync(

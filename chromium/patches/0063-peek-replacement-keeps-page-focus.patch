@@ -1,0 +1,13 @@
+# Flecha: a Peek that replaces another (a link opened in Peek from inside a Peek) gives focus back to the page first, as closing one does, so the page keeps its focused field and scroll position.
+--- a/chrome/browser/ui/views/frame/flecha_frame_view.cc
++++ b/chrome/browser/ui/views/frame/flecha_frame_view.cc
+@@ -483,6 +483,9 @@
+     return;
+   }
+   if (peek_) {
++    // As in ClosePeek(): the page takes focus back before the Peek it replaces
++    // goes, so that the page keeps its focused field and scroll position.
++    FocusPage();
+     peek_view->SetWebContents(nullptr);
+     peek_.reset();
+   }

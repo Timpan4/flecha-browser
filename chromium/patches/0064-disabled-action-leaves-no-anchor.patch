@@ -1,0 +1,27 @@
+# Flecha: a sidebar action button that won't open a popup (none on this tab, or the action is disabled and shows its menu) leaves no anchor for a later chrome.action.openPopup() or shortcut.
+--- a/chrome/browser/ui/views/frame/flecha_frame_view.cc
++++ b/chrome/browser/ui/views/frame/flecha_frame_view.cc
+@@ -649,8 +649,10 @@
+     action->HidePopup();
+     return true;
+   }
+-  // Only a popup points at the button. An action without one (on this tab) leaves no anchor
+-  // behind for a later chrome.action.openPopup().
++  // Only a popup points at the button. An action that won't open one on this
++  // tab (none set, or disabled, which shows its menu instead) leaves no anchor
++  // behind for a later chrome.action.openPopup(). These are the conditions
++  // ExtensionActionViewModel::TriggerPopup() requires.
+   const extensions::Extension* extension =
+       extensions::ExtensionRegistry::Get(GetBrowserContext())
+           ->enabled_extensions()
+@@ -661,7 +663,9 @@
+                 : nullptr;
+   const int tab_id = extensions::ExtensionTabUtil::GetTabId(
+       browser_view_->GetActiveWebContents());
+-  SetActionAnchor(id, extension_action && extension_action->HasPopup(tab_id)
++  SetActionAnchor(id, extension_action &&
++                              extension_action->GetIsVisible(tab_id) &&
++                              extension_action->HasPopup(tab_id)
+                           ? anchor
+                           : gfx::Rect());
+   action->ExecuteUserAction(

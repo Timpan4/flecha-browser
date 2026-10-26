@@ -34,6 +34,20 @@ body {
   background: var(--space-color, #cdd9f7);
 }
 
+/* The sidebar's right edge, dragged to resize it (app.ts); as wide as the sidebar's padding
+   there, so it covers none of its controls. Only Flecha's own window can be resized this way. */
+#sidebar-resize {
+  position: absolute;
+  inset: 0 0 0 auto;
+  width: 6px;
+  cursor: col-resize;
+  -webkit-app-region: no-drag;
+}
+
+:root:not([data-frame]) #sidebar-resize {
+  display: none;
+}
+
 .toolbar {
   display: flex;
   align-items: center;
@@ -59,6 +73,128 @@ body {
 
 .traffic-lights {
   width: 70px;
+}
+
+/* ---- window controls and menu (Linux, Windows) ------------------------------------------
+   macOS draws its traffic lights (patch 0012) in the room .traffic-lights keeps. Elsewhere
+   Flecha's own window has no title bar of the platform's, so the same room holds Flecha's
+   close, minimize and maximize circles, and the menu button after the sidebar toggle holds
+   what the macOS menu bar does (app.ts). */
+
+.window-controls,
+#btn-menu {
+  display: none;
+}
+
+:root[data-frame]:not([data-platform='mac']) .traffic-lights {
+  display: none;
+}
+
+:root[data-frame]:not([data-platform='mac']) .window-controls {
+  display: flex;
+  align-items: center;
+  width: 70px;
+  padding-left: 4px;
+}
+
+:root[data-frame]:not([data-platform='mac']) #btn-menu {
+  display: grid;
+}
+
+.toolbar-nav {
+  display: flex;
+  gap: inherit;
+}
+
+/* The circles can't shrink as the traffic lights' empty room did, so in a sidebar too narrow
+   for the whole row (Chromium's limit is 126px) back, forward and reload go to a second line,
+   on the right, rather than shrinking or spilling out of the sidebar. */
+:root[data-frame]:not([data-platform='mac']) .toolbar {
+  flex-wrap: wrap;
+  height: auto;
+  min-height: 28px;
+  row-gap: 4px;
+}
+
+:root[data-frame]:not([data-platform='mac']) .toolbar > * {
+  flex-shrink: 0;
+}
+
+:root[data-frame]:not([data-platform='mac']) .toolbar-nav {
+  margin-left: auto;
+}
+
+/* A 12px circle in a 20px target, so neighbouring circles sit 8px apart as macOS's do. */
+.window-control {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: 50%;
+}
+
+.window-control::before {
+  content: '';
+  position: absolute;
+  inset: 4px;
+  border-radius: 50%;
+  background: var(--control);
+  box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.18);
+  transition: filter var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+
+.window-control.close {
+  --control: #ff5f57;
+}
+
+.window-control.minimize {
+  --control: #febc2e;
+}
+
+.window-control.maximize {
+  --control: #28c840;
+}
+
+/* The window isn't the focused one: grey, until the pointer comes. */
+:root[data-window-focused='false'] .window-controls:not(:hover) .window-control::before {
+  background: var(--control-idle, rgba(11, 37, 69, 0.18));
+}
+
+.window-control svg {
+  position: relative;
+  width: 10px;
+  height: 10px;
+  fill: none;
+  stroke: rgba(0, 0, 0, 0.62);
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0;
+}
+
+.window-controls:hover svg,
+.window-control:focus-visible svg {
+  opacity: 1;
+}
+
+.window-control:active::before {
+  filter: brightness(0.82);
+}
+
+.window-control:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.window-control .shrink,
+:root[data-window-state='maximized'] .window-control .grow {
+  display: none;
+}
+
+:root[data-window-state='maximized'] .window-control .shrink {
+  display: inline;
 }
 
 .spacer {
@@ -254,14 +390,27 @@ body {
   margin: -4px 0;
 }
 
-#extensions::part(action) {
+/* 28px: the size patch 0056 draws each action's icon and badge at. */
+.ext-action {
+  display: grid;
+  place-items: center;
   width: 28px;
   height: 28px;
+  padding: 0;
   border-radius: var(--radius-sm);
   background-color: transparent;
 }
 
-#extensions::part(action):hover {
+.ext-action img {
+  width: 28px;
+  height: 28px;
+}
+
+.ext-action.disabled img {
+  opacity: 0.45;
+}
+
+.ext-action:hover {
   background-color: var(--fill-hover);
 }
 
@@ -616,6 +765,13 @@ body {
 .new-tab kbd {
   opacity: 0;
   transition: opacity var(--fast) var(--ease);
+  /* In a narrow sidebar the shortcut gives way to the label. */
+  min-width: 0;
+  overflow: hidden;
+}
+
+.new-tab .title {
+  flex: 1 0 auto;
 }
 
 .new-tab:hover kbd {
@@ -826,6 +982,18 @@ footer {
   font-weight: 600;
 }
 
+/* In a narrow sidebar the title gives way, so the button stays inside the popover. */
+.popover-header > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.popover-header > button {
+  flex: none;
+}
+
 #downloads-list {
   list-style: none;
   margin: 0;
@@ -835,7 +1003,8 @@ footer {
 
 .download {
   display: grid;
-  grid-template-columns: 1fr auto;
+  /* The name gives way first; in a narrow sidebar the actions then wrap (below). */
+  grid-template-columns: minmax(0, 1fr) auto;
   grid-template-areas: 'name action' 'status action' 'bar bar';
   column-gap: 6px;
   padding: 7px 4px 7px 8px;
@@ -866,9 +1035,36 @@ footer {
   text-decoration: line-through;
 }
 
-.download .icon-button {
+.download .icon-button,
+.download .actions {
   grid-area: action;
   align-self: center;
+}
+
+.download .actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 2px;
+}
+
+/* A download waiting on you (Keep or Discard, Resume or Retry) has its buttons on a line of
+   their own, so the name and status keep the row's width in a narrow sidebar. */
+.download:has(> .actions) {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: 'name' 'status' 'action' 'bar';
+}
+
+.download:has(> .actions) .actions {
+  justify-self: end;
+}
+
+.download .text-button.keep {
+  color: var(--text);
+}
+
+.download.interrupted .name:has(~ .actions) {
+  text-decoration: none;
 }
 
 .download .bar {
@@ -1645,7 +1841,8 @@ body[data-sidebar='floating'] #sidebar.peek-leaving {
    sidebar is a card on the screen's edge, full height, as in Arc. */
 
 @media (display-mode: fullscreen) {
-  .traffic-lights {
+  .traffic-lights,
+  :root[data-frame]:not([data-platform='mac']) .window-controls {
     display: none;
   }
 
@@ -1875,7 +2072,8 @@ body[data-sidebar='floating'] #sidebar.peek-leaving {
 }
 
 .folder-name[contenteditable='true'],
-.row .title[contenteditable='true'] {
+.row .title[contenteditable='true'],
+.url-edit {
   outline: none;
   padding: 0 4px;
   border-radius: 4px;
@@ -1884,6 +2082,14 @@ body[data-sidebar='floating'] #sidebar.peek-leaving {
   text-overflow: clip;
   user-select: text;
   -webkit-user-select: text;
+}
+
+/* A favorite's URL, edited under the favorites (they are only icons). */
+.url-edit {
+  margin-top: 8px;
+  padding: 4px 6px;
+  white-space: nowrap;
+  overflow: hidden;
 }
 
 /* ---- drop a tab on the page to split ------------------------------------- */

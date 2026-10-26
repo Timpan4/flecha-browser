@@ -7,6 +7,7 @@
  * Absent in stock Chromium; the shell then falls back to the side panel.
  *
  * Layout, the same numbers as the Electron spike's Browser.layout():
+ *  SIDEBAR is FrameState.sidebarWidth, 260 by default.
  *  - sidebar 'docked':   frame view = left strip SIDEBAR (260) wide; page area = x 260, y 8,
  *                        to 8 from the right and bottom edges. Traffic lights shown at (16, 18).
  *  - sidebar 'hidden':   frame view = left strip EDGE (8) wide, for the hover edge; page area
@@ -27,6 +28,11 @@ declare namespace chrome.flechaPrivate {
     overlay: boolean;
     /** The window's colour behind the page area (the Space tint), as #rrggbb. */
     background: string;
+    /**
+     * The docked or floating sidebar's width (SIDEBAR above); the browser keeps it within
+     * Chromium's vertical tab strip limits, 126 to 400 (patch 0061). 260 if left out.
+     */
+    sidebarWidth?: number;
   }
 
   /** Lays out a window's frame. Applies to every normal window when windowId is omitted. */
@@ -158,7 +164,9 @@ declare namespace chrome.flechaPrivate {
    * page area doesn't move. Escape in the Peek closes it; its links to new tabs open as tabs
    * of the window; window.open popups stay popups.
    *
-   * openPeek(url, windowId?) replaces any Peek in that window (default: the main window).
+   * openPeek(url, windowId?, sourceTabId?) replaces any Peek in that window (default: the main
+   * window); with `sourceTabId`, the tab whose link it is, the Peek opens in that tab's Space
+   * partition (patch 0055; older builds reject the third argument).
    * promotePeek() moves the page, as it is, into the window's tab strip as the active tab (the
    * shell adopts it through tabs.onCreated). setPeekTabs(tabIds): those tabs' links to a new
    * foreground tab (target=_blank, window.open without a popup) open in Peek instead.
@@ -169,7 +177,7 @@ declare namespace chrome.flechaPrivate {
     /** Where the Peek's page sits, in the frame page's coordinates. */
     bounds: { x: number; y: number; width: number; height: number };
   }
-  function openPeek(url: string, windowId?: number): Promise<void>;
+  function openPeek(url: string, windowId?: number, sourceTabId?: number): Promise<void>;
   function closePeek(windowId?: number): Promise<void>;
   function promotePeek(windowId?: number): Promise<void>;
   function setPeekTabs(tabIds: number[]): Promise<void>;
@@ -202,8 +210,112 @@ declare namespace chrome.flechaPrivate {
   function makeDefaultBrowser(): Promise<DefaultBrowserState>;
 
   /**
+   * Extension toolbar actions (patch 0056): the window's hidden toolbar buttons, pinned ones
+   * first, as they look on its active tab. `icon` is a PNG data URL of the 28px button image,
+   * badge included, drawn for 2x. runExtensionAction() acts like a click on the button: a popup
+   * opens below `anchor` (the sidebar button, in the frame page's coordinates), and running
+   * it again while the popup is open closes it. Keyboard shortcuts and chrome.action.openPopup()
+   * open popups at the page area's top right instead. Bubbles that would point at the hidden
+   * toolbar (permissions, passwords, app install) drop into the page area from its top edge.
+   */
+  interface ExtensionAction {
+    id: string;
+    name: string;
+    tooltip: string;
+    icon: string;
+    enabled: boolean;
+    pinned: boolean;
+  }
+  interface Bounds {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }
+  function getExtensionActions(windowId: number): Promise<ExtensionAction[]>;
+  function runExtensionAction(windowId: number, id: string, anchor: Bounds): Promise<void>;
+  function showExtensionActionMenu(windowId: number, id: string, anchor: Bounds): Promise<void>;
+  /**
+   * Chromium's extensions menu (every extension, with pinning and site access), below `anchor`
+   * (the sidebar's puzzle button); called again while it is open, it closes it (patch 0071).
+   * A popup started from it drops from `anchor` too, and a disabled action's button (no popup
+   * to run) shows the extension's menu at that button.
+   */
+  function showExtensionsMenu(windowId: number, anchor: Bounds): Promise<void>;
+  /** A window's actions were added, removed, or changed icon, badge or title. */
+  const onExtensionActionsChanged: chrome.events.Event<(windowId: number) => void>;
+
+  /**
+   * Downloads Chromium holds for a decision (patch 0058): a dangerous file, or one sent over
+   * plain HTTP (`insecure`, which chrome.downloads doesn't report). keepDownload() lets one
+   * finish; discardDownload() cancels it and deletes what it saved. Chromium's download bubble,
+   * which would ask, is off.
+   */
+  interface DownloadWarning {
+    id: number;
+    kind: 'dangerous' | 'insecure';
+  }
+  function getDownloadWarnings(): Promise<DownloadWarning[]>;
+  function keepDownload(id: number): Promise<void>;
+  function discardDownload(id: number): Promise<void>;
+  /** Where downloads go and whether Chromium asks each time (download.default_directory, download.prompt_for_download). */
+  interface DownloadSettings {
+    folder: string;
+    askWhereToSave: boolean;
+  }
+  function getDownloadSettings(): Promise<DownloadSettings>;
+  /** The platform's folder chooser, over the last active window; resolves with the settings after (unchanged if cancelled). */
+  function chooseDownloadsFolder(): Promise<DownloadSettings>;
+  function setAskWhereToSave(ask: boolean): Promise<DownloadSettings>;
+
+  /**
+   * Whether the browser is quitting, which closes every window at once (patch 0059). With the
+   * id of a window that has closed: whether quitting closed it, false if you closed it before
+   * the quit began (patch 0062).
+   */
+  function isQuitting(windowId?: number): Promise<boolean>;
+
+  /**
+   * Votes for the browser to freeze a tab, or takes the vote back (patch 0066). A frozen page
+   * keeps its memory and state but runs nothing; the browser won't freeze one that plays sound,
+   * captures or holds a call. The vote ends with the tab.
+   */
+  function setTabFreezing(tabId: number, canFreeze: boolean): Promise<void>;
+
+  /**
+   * Discards a background tab the way Memory Saver does (patch 0067): only if none of the
+   * browser's protections apply (visible, audible, capturing, form input, PDF, notifications,
+   * DevTools, not auto-discardable...). Resolves whether it was discarded.
+   */
+  function discardTab(tabId: number): Promise<boolean>;
+
+  /** Milliseconds of a clock that doesn't advance while the device is suspended (patch 0067). */
+  function getLiveTicks(): Promise<number>;
+
+  /**
+   * Marks a tab as Flecha's tab sleep's to discard, or takes the mark back (patch 0069): Memory
+   * Saver leaves a marked tab alone. The mark ends with the page (a discard ends it).
+   */
+  function setTabSleepManaged(tabId: number, managed: boolean): Promise<void>;
+
+  /**
+   * Quits the browser as the macOS app menu's Quit does, so every window comes back next time
+   * (patch 0070; isQuitting() is true for them). Absent from older browsers.
+   */
+  function quit(): Promise<void>;
+
+  /** Prints a tab with Chromium's print preview, as Ctrl+P does (patch 0070). */
+  function print(tabId: number): Promise<void>;
+
+  /**
    * A shortcut from setShortcuts() was pressed in window `windowId` (-1: a command from
    * runInRegularProfile, no window in particular).
    */
   const onShortcut: chrome.events.Event<(command: string, windowId: number) => void>;
+  /**
+   * The modifier keys held for a shortcut (Control, Alt, Command) were released, or the window
+   * lost focus first (patch 0057). Shortcuts pressed while the same modifiers stay held share
+   * one release, which names the first of them. Older builds don't have it.
+   */
+  const onShortcutReleased: chrome.events.Event<(command: string, windowId: number) => void> | undefined;
 }

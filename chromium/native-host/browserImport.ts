@@ -8,7 +8,7 @@ import { arcSidebarPath, readArcSidebar, type ArcImport, type ImportNode } from 
 import type { BrowserImportData } from '../shared/importApply';
 
 /**
- * Brings bookmarks and history over from the other browsers on this Mac. Their files are
+ * Brings bookmarks and history over from other browsers on this computer. Their files are
  * only ever read: databases are copied to a temporary folder first, since the browser may
  * have them open and locked. Passwords and cookies are left where they are.
  *
@@ -48,14 +48,15 @@ const appSupport = (...parts: string[]) => path.join(os.homedir(), 'Library', 'A
 
 // ---- Chromium family -------------------------------------------------------
 
-const CHROMIUM: Array<[id: string, name: string, dir: string]> = [
-  ['chrome', 'Chrome', 'Google/Chrome'],
-  ['brave', 'Brave', 'BraveSoftware/Brave-Browser'],
-  ['edge', 'Edge', 'Microsoft Edge'],
-  ['vivaldi', 'Vivaldi', 'Vivaldi'],
-  ['opera', 'Opera', 'com.operasoftware.Opera'],
-  ['opera-gx', 'Opera GX', 'com.operasoftware.OperaGX'],
-  ['chromium', 'Chromium', 'Chromium'],
+const CHROMIUM: Array<[id: string, name: string, mac: string, linux: string | undefined, windows: string, roaming?: boolean]> = [
+  ['chrome', 'Chrome', 'Google/Chrome', 'google-chrome', 'Google/Chrome/User Data'],
+  ['brave', 'Brave', 'BraveSoftware/Brave-Browser', 'BraveSoftware/Brave-Browser', 'BraveSoftware/Brave-Browser/User Data'],
+  ['edge', 'Edge', 'Microsoft Edge', 'microsoft-edge', 'Microsoft/Edge/User Data'],
+  ['vivaldi', 'Vivaldi', 'Vivaldi', 'vivaldi', 'Vivaldi/User Data'],
+  ['opera', 'Opera', 'com.operasoftware.Opera', 'opera', 'Opera Software/Opera Stable', true],
+  ['opera-gx', 'Opera GX', 'com.operasoftware.OperaGX', undefined, 'Opera Software/Opera GX Stable', true],
+  ['helium', 'Helium', 'net.imput.helium', 'net.imput.helium', 'imput/Helium/User Data'],
+  ['chromium', 'Chromium', 'Chromium', 'chromium', 'Chromium/User Data'],
 ];
 
 function chromiumSource(id: string, name: string, root: string): BrowserSource {
@@ -122,19 +123,37 @@ function chromiumNode(node: any): ImportNode[] {
   return [];
 }
 
-/** Arc is Chromium underneath, but its Spaces and pinned tabs live in its own sidebar file. */
-function arcSource(): BrowserSource {
+/**
+ * Arc is Chromium underneath, but its Spaces and pinned tabs live in its own sidebar file,
+ * StorableSidebar.json, next to its User Data folder.
+ */
+function arcSource(dir: string): BrowserSource {
+  const sidebar = path.join(dir, 'StorableSidebar.json');
   return {
-    ...chromiumSource('arc', 'Arc', appSupport('Arc', 'User Data')),
-    sidebar: { exists: () => isFile(arcSidebarPath()), read: () => readArcSidebar() },
+    ...chromiumSource('arc', 'Arc', path.join(dir, 'User Data')),
+    sidebar: { exists: () => isFile(sidebar), read: () => readArcSidebar(sidebar) },
   };
+}
+
+/**
+ * Arc for Windows is a Microsoft Store (MSIX) app, so its data is redirected into its package
+ * folder: Packages\TheBrowserCompany.Arc_<publisher id>\LocalCache\Local\Arc. The publisher id
+ * is matched rather than spelled out; it isn't documented by The Browser Company.
+ */
+function arcWindowsDir(local: string): string {
+  const packages = path.join(local, 'Packages');
+  const dirs = listDirs(packages)
+    .filter((d) => d.startsWith('TheBrowserCompany.Arc_'))
+    .map((d) => path.join(packages, d, 'LocalCache', 'Local', 'Arc'));
+  // A package folder an earlier install left behind can be empty: take the one with Arc's data.
+  const withData = dirs.find((dir) => isFile(path.join(dir, 'StorableSidebar.json')) || listDirs(path.join(dir, 'User Data')).length > 0);
+  return withData ?? dirs[0] ?? path.join(packages, 'TheBrowserCompany.Arc', 'LocalCache', 'Local', 'Arc');
 }
 
 // ---- Firefox ---------------------------------------------------------------
 
 /** Bookmarks and history both live in each profile's places.sqlite. */
-function firefoxSource(): BrowserSource {
-  const root = appSupport('Firefox', 'Profiles');
+function firefoxSource(root: string): BrowserSource {
   return {
     id: 'firefox',
     name: 'Firefox',
@@ -329,18 +348,49 @@ function decodeXml(s: string) {
 
 // ---- detecting and importing -------------------------------------------------
 
-function sources(): BrowserSource[] {
-  return [
-    ...CHROMIUM.map(([id, name, dir]) => chromiumSource(id, name, appSupport(dir))),
-    arcSource(),
-    firefoxSource(),
-    safariSource(),
-  ];
+function sources(platform: NodeJS.Platform): BrowserSource[] {
+  if (platform === 'darwin') {
+    return [
+      ...CHROMIUM.map(([id, name, dir]) => chromiumSource(id, name, appSupport(dir))),
+      arcSource(path.dirname(arcSidebarPath())),
+      firefoxSource(appSupport('Firefox', 'Profiles')),
+      safariSource(),
+    ];
+  }
+  if (platform === 'linux') {
+    // Chrome documents CHROME_CONFIG_HOME before XDG_CONFIG_HOME. Relative XDG paths
+    // are invalid, so fall back to ~/.config instead of reading from the host's cwd.
+    const config = process.env.XDG_CONFIG_HOME && path.isAbsolute(process.env.XDG_CONFIG_HOME) ? process.env.XDG_CONFIG_HOME : path.join(os.homedir(), '.config');
+    const overrides: Record<string, string | undefined> = {
+      chrome: process.env.CHROME_CONFIG_HOME,
+      chromium: process.env.CHROME_CONFIG_HOME,
+      helium: process.env.HELIUM_CONFIG_HOME,
+    };
+    return [
+      ...CHROMIUM.flatMap(([id, name, , dir]) => {
+        if (!dir) return [];
+        const override = overrides[id];
+        const root = override && path.isAbsolute(override) ? override : config;
+        return [chromiumSource(id, name, path.join(root, dir))];
+      }),
+      firefoxSource(path.join(os.homedir(), '.mozilla', 'firefox')),
+    ];
+  }
+  if (platform === 'win32') {
+    const local = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+    const roaming = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+    return [
+      ...CHROMIUM.map(([id, name, , , dir, useRoaming]) => chromiumSource(id, name, path.join(useRoaming ? roaming : local, dir))),
+      arcSource(arcWindowsDir(local)),
+      firefoxSource(path.join(roaming, 'Mozilla', 'Firefox', 'Profiles')),
+    ];
+  }
+  return [];
 }
 
-/** Browsers on this Mac that have bookmarks or history to bring over. Only checks which files exist. */
-export async function detectBrowsers(): Promise<DetectedBrowser[]> {
-  return sources().flatMap((source) => {
+/** Browsers on this computer with bookmarks or history. Only checks which files exist. */
+export async function detectBrowsers(platform: NodeJS.Platform = process.platform): Promise<DetectedBrowser[]> {
+  return sources(platform).flatMap((source) => {
     try {
       const profiles = source.profiles();
       const sidebar = !!source.sidebar?.exists();
@@ -361,11 +411,11 @@ export async function detectBrowsers(): Promise<DetectedBrowser[]> {
 }
 
 /** Reads what the shell's `importBrowser` brings over, without adding it anywhere. */
-export async function readBrowser(id: string): Promise<BrowserImportData> {
+export async function readBrowser(id: string, platform: NodeJS.Platform = process.platform): Promise<BrowserImportData> {
   const result: BrowserImportData = { name: id, bookmarkCount: 0, history: [], warnings: [] };
-  const source = sources().find((s) => s.id === id);
+  const source = sources(platform).find((s) => s.id === id);
   if (!source) {
-    result.warnings.push(`No data from “${id}” was found on this Mac.`);
+    result.warnings.push(`No supported data from “${id}” was found on this computer.`);
     return result;
   }
   result.name = source.name;

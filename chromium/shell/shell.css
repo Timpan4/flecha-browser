@@ -103,10 +103,18 @@
   outline: none;
 }
 
+/* The arrow is drawn only; aria-haspopup tells a screen reader there's a submenu. */
 .shell-menu-item.has-submenu::after {
-  content: '›';
+  content: '›' / '';
   float: right;
   margin-left: 16px;
+  opacity: 0.6;
+}
+
+/* An item's shortcut, on its right, as native menus show it. */
+.shell-menu-accel {
+  float: right;
+  margin-left: 24px;
   opacity: 0.6;
 }
 

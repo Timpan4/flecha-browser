@@ -76,6 +76,7 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
+    --control-idle: rgba(230, 236, 243, 0.22);
     --text: #e6ecf3;
     --text-2: rgba(230, 236, 243, 0.62);
     --text-3: rgba(230, 236, 243, 0.4);
