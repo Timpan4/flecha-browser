@@ -11,7 +11,7 @@
  * moves there, page and all, from whichever window had it.
  */
 import { Store, type StatePersistence } from '../shared/store';
-import { decodeState, loadSavedState, STATE_KEY } from '../shared/savedState';
+import { decodeState, loadSavedState, setAsideBeforeImport, stateBeforeImport, STATE_KEY } from '../shared/savedState';
 import { pinnableAddress, resolveInput, sameAddress, searchEngine } from './lib/url';
 import { shortcutHints, type ShortcutId } from './lib/shortcuts';
 import { describe as describeEnvironment } from './lib/environments';
@@ -876,6 +876,23 @@ async function start() {
   /** Spaces, pins and favorites: an incognito window has none of them, so these do nothing there. */
   const spacesOnly = <A extends unknown[]>(fn: (...args: A) => unknown) => (incognito ? () => undefined : fn);
 
+  /** Replaces the whole state with an imported (or restored) one, and fits the open windows to it. */
+  function takeOverState(state: BrowserState): boolean {
+    // The tab ids change, so every open Chromium tab is closed and reopens on demand.
+    const open = [...live.keys()];
+    if (!store.replaceState(state)) return false;
+    // The imported windows are taken by the open Chromium windows, in order; the rest open. Open
+    // Chromium windows beyond the imported ones get a new window each.
+    const chromeWindows = [...windowMap.keys()];
+    windowMap.clear();
+    state.windows.forEach((win, i) => chromeWindows[i] !== undefined && windowMap.set(chromeWindows[i], win.id));
+    for (const chromeId of chromeWindows.slice(state.windows.length)) attachWindow(chromeId);
+    rememberWindows();
+    for (const win of state.windows) if (chromeWindowOf(win.id) === undefined) void chromeWindowFor(win.id);
+    void unload(open);
+    return true;
+  }
+
   /** Settings show the regular profile's state, so an incognito window opens them over there. */
   function showSettings(pane?: string) {
     if (!incognito) return openSettings(pane);
@@ -1090,23 +1107,20 @@ async function start() {
       void favicons.want(sites.map((s) => s.url));
       return sites.map((s) => ({ url: s.url, title: s.title || s.url, visits: 0, lastVisit: 0 }));
     },
-    importFlechaState: spacesOnly((json: string) => {
+    importFlechaState: spacesOnly(async (json: string) => {
       const chromeWindowId = hereChrome();
       const state = decodeState(String(json));
-      // The tab ids change, so every open Chromium tab is closed and reopens on demand.
-      const open = [...live.keys()];
-      if (!state || !store.replaceState(state)) return broadcastTo(chromeWindowId, 'flash', 'That isn’t a Flecha state file');
-      // The imported windows are taken by the open Chromium windows, in order; the rest open. Open
-      // Chromium windows beyond the imported ones get a new window each.
-      const chromeWindows = [...windowMap.keys()];
-      windowMap.clear();
-      state.windows.forEach((win, i) => chromeWindows[i] !== undefined && windowMap.set(chromeWindows[i], win.id));
-      for (const chromeId of chromeWindows.slice(state.windows.length)) attachWindow(chromeId);
-      rememberWindows();
-      for (const win of state.windows) if (chromeWindowOf(win.id) === undefined) void chromeWindowFor(win.id);
-      void unload(open);
-      const tabs = Object.keys(state.tabs).length;
-      broadcastTo(chromeWindowId, 'flash', `Imported ${state.spaces.length} Spaces and ${tabs} tabs`);
+      if (!state) return broadcastTo(chromeWindowId, 'flash', 'That isn’t a Flecha state file');
+      // Yours is kept first, so restoreBeforeImport can bring it back.
+      await setAsideBeforeImport(chrome.storage.local, store.serialize());
+      if (!takeOverState(state)) return broadcastTo(chromeWindowId, 'flash', 'That isn’t a Flecha state file');
+      broadcastTo(chromeWindowId, 'flash', `Imported ${state.spaces.length} Spaces and ${Object.keys(state.tabs).length} tabs`);
+    }),
+    restoreBeforeImport: spacesOnly(async () => {
+      const chromeWindowId = hereChrome();
+      const state = await stateBeforeImport(chrome.storage.local);
+      if (!state || !takeOverState(state)) return broadcastTo(chromeWindowId, 'flash', 'There are no Spaces from before an import');
+      broadcastTo(chromeWindowId, 'flash', `Restored ${state.spaces.length} Spaces and ${Object.keys(state.tabs).length} tabs`);
     }),
   });
 

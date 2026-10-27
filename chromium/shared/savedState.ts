@@ -18,6 +18,8 @@ export const STATE_KEY = 'state';
 export const LAST_GOOD_KEY = 'state:last-good';
 /** The most recent blob that failed to load, kept only for recovery by hand. */
 export const DAMAGED_KEY = 'state:damaged';
+/** The state the last import replaced, kept so it can be restored. */
+export const BEFORE_IMPORT_KEY = 'state:before-import';
 
 /** The part of chrome.storage.StorageArea that loading needs. */
 export interface StateArea {
@@ -55,6 +57,16 @@ export async function loadSavedState(area: StateArea): Promise<LoadedState> {
   if (!fallback) return { state: undefined, recovered: 'fresh', started: async () => {} };
   await write({ [STATE_KEY]: lastGood });
   return { state: fallback, recovered: 'last-good', started: async () => {} };
+}
+
+/** Keeps the current state (`Store.serialize`) before an import replaces it. */
+export async function setAsideBeforeImport(area: StateArea, current: string) {
+  await area.set({ [BEFORE_IMPORT_KEY]: current });
+}
+
+/** The state the last import replaced, or undefined when there is none that reads. */
+export async function stateBeforeImport(area: StateArea): Promise<BrowserState | undefined> {
+  return decodeState((await area.get([BEFORE_IMPORT_KEY]))[BEFORE_IMPORT_KEY]);
 }
 
 /**

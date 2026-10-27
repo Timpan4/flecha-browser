@@ -808,10 +808,15 @@ export class Store {
 
   saveNow() {
     clearTimeout(this.saveTimer);
+    return this.persistence.save(this.serialize());
+  }
+
+  /** The state as it is saved, without what only a live page has (loading, audible). */
+  serialize(): string {
     const tabs = Object.fromEntries(
       Object.entries(this.state.tabs).map(([id, { loading, audible, ...tab }]) => [id, tab]),
     );
-    return this.persistence.save(JSON.stringify({ version: STATE_VERSION, ...this.state, tabs }, null, 2));
+    return JSON.stringify({ version: STATE_VERSION, ...this.state, tabs }, null, 2);
   }
 
   // ---- internals ------------------------------------------------------------------

@@ -859,6 +859,12 @@ const ACTIONS: Array<{ label: string; keywords: string; icon: IconName; shortcut
     run: () => void importFromBrowser(),
   },
   { label: 'Import from Flecha (Electron)', keywords: 'import migrate electron flecha state', icon: 'import', run: () => api.importMenu() },
+  {
+    label: 'Restore Spaces From Before Import',
+    keywords: 'undo restore revert backup import flecha electron state',
+    icon: 'import',
+    run: () => api.restoreBeforeImport(),
+  },
   { label: 'Open Boosts Folder', keywords: 'boosts folder scripts css', icon: 'zap', run: () => api.openBoostsFolder() },
 ];
 

@@ -461,6 +461,8 @@ export interface FlechaApi {
   clearToday(): void;
   /** Pops up a menu of the other browsers to import from. */
   importMenu(): void;
+  /** Puts back the Spaces and tabs the last Flecha state import replaced. */
+  restoreBeforeImport(): void;
   openPalette(mode: PaletteMode): void;
   closePalette(): void;
   toggleSidebar(): void;
