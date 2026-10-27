@@ -46,6 +46,8 @@ interface UndoStep {
   dropped: ArchivedTab[];
   /** Tabs (`t:<id>`) and folders (`f:<id>`) it moved or deleted. */
   touched: Set<string>;
+  /** The splits it ended, as `<window>:<space>`. */
+  endedSplits: Set<string>;
 }
 
 /** Where the state lives: a file in Electron, extension storage in the Chromium build. */
@@ -80,8 +82,8 @@ export class Store {
   private listeners: Array<(change: StoreChange) => void> = [];
   /** In memory only: a restart starts without undo. */
   private undoSteps: UndoStep[] = [];
-  /** While an undoable change runs: the archive entries it makes, by tab. */
-  private recording?: Map<string, ArchivedTab>;
+  /** While an undoable change runs: the archive entries it makes, by tab, and what it moves. */
+  private recording?: { archived: Map<string, ArchivedTab>; moved: Set<string> };
 
   constructor(private persistence: StatePersistence) {
     this.state = this.load() ?? this.initialState();
@@ -553,6 +555,7 @@ export class Store {
     const list = to.folderId ? findFolder(space.pinned, to.folderId)?.children : space.pinned;
     if (!list) return false;
     found.parent.splice(found.parent.indexOf(found.folder), 1);
+    this.recording?.moved.add(`f:${folderId}`);
     const i = to.beforeId ? list.findIndex((n) => nodeId(n) === to.beforeId) : -1;
     list.splice(i < 0 ? list.length : i, 0, found.folder);
     this.forgetMissingActive();
@@ -861,20 +864,26 @@ export class Store {
     // Moving a tab to Today forgets its home, so keep each one.
     const homes = Object.fromEntries(Object.entries(tabs).map(([id, tab]) => [id, tab.homeUrl]));
     const archive = [...this.state.archive];
-    const archived = (this.recording = new Map());
+    const { archived, moved } = (this.recording = { archived: new Map(), moved: new Set() });
     let result: T;
     try {
       result = change();
     } finally {
       this.recording = undefined;
     }
-    const touched = changedPlaces(listsOf(before), listsOf(this.state));
+    const touched = changedPlaces(listsOf(before), listsOf(this.state), moved);
     const spaceGone = before.spaces.some((s) => !this.savedSpace(s.id));
     if (touched.size || spaceGone) {
       const removed = Object.fromEntries(Object.entries(tabs).filter(([id]) => !this.state.tabs[id]));
       const kept = new Set(this.state.archive);
       const dropped = archive.filter((a) => !kept.has(a));
-      this.undoSteps.push({ label, before, removed, homes, archived, dropped, touched });
+      const endedSplits = new Set<string>();
+      for (const win of [...before.windows, ...before.closedWindows]) {
+        for (const [spaceId, ws] of Object.entries(win.spaces)) {
+          if (ws.split && !windowIn(this.state, win.id)?.spaces[spaceId]?.split) endedSplits.add(`${win.id}:${spaceId}`);
+        }
+      }
+      this.undoSteps.push({ label, before, removed, homes, archived, dropped, touched, endedSplits });
       this.undoSteps.splice(0, this.undoSteps.length - UNDO_LIMIT);
       this.changed();
     }
@@ -936,8 +945,7 @@ export class Store {
         if (!current) continue;
         const shown = this.hasWindow(win.id) ? this.allTabIds({ id: spaceId, pinned: this.savedSpace(spaceId)?.pinned ?? [] }, win.id) : current.today;
         if (!current.activeTabId && ws.activeTabId && shown.includes(ws.activeTabId)) current.activeTabId = ws.activeTabId;
-        // A split the change ended by taking one of its halves away.
-        if (!current.split && ws.split?.some((id) => step.touched.has(`t:${id}`)) && ws.split.every((id) => shown.includes(id))) {
+        if (step.endedSplits.has(`${win.id}:${spaceId}`) && !current.split && ws.split?.every((id) => shown.includes(id))) {
           current.split = ws.split;
           if (ws.splitMode) current.splitMode = ws.splitMode;
         }
@@ -1087,6 +1095,7 @@ export class Store {
       const i = list.indexOf(tabId);
       if (i >= 0) list.splice(i, 1);
     };
+    this.recording?.moved.add(`t:${tabId}`);
     drop(this.state.favorites);
     for (const space of this.state.spaces) removePinned(space.pinned, tabId);
     for (const win of [...this.state.windows, ...this.state.closedWindows]) for (const ws of Object.values(win.spaces)) drop(ws.today);
@@ -1142,7 +1151,7 @@ export class Store {
     if (!tab || tab.url === 'about:blank') return;
     const entry = { url: tab.url, title: tab.title, closedAt: Date.now() };
     this.state.archive.unshift(entry);
-    this.recording?.set(tab.id, entry);
+    this.recording?.archived.set(tab.id, entry);
     this.state.archive.length = Math.min(this.state.archive.length, ARCHIVE_LIMIT);
   }
 
@@ -1214,10 +1223,10 @@ function listsOf(layout: Layout): Map<string, string[]> {
 }
 
 /**
- * The items that left their list, or were moved within it: the fewest items whose moving explains
- * the new order, so items a move only shifted aren't counted.
+ * The items that left their list, and the `moved` ones that changed places within it. Items a
+ * move only shifted aren't counted: the order alone can't tell which of two swapped tabs moved.
  */
-function changedPlaces(before: Map<string, string[]>, after: Map<string, string[]>): Set<string> {
+function changedPlaces(before: Map<string, string[]>, after: Map<string, string[]>, moved: Set<string>): Set<string> {
   const listOf = new Map<string, string>();
   for (const [name, keys] of after) for (const key of keys) listOf.set(key, name);
   const changed = new Set<string>();
@@ -1225,30 +1234,9 @@ function changedPlaces(before: Map<string, string[]>, after: Map<string, string[
     const stayed = keys.filter((key) => listOf.get(key) === name);
     const order = (after.get(name) ?? []).filter((key) => stayed.includes(key));
     for (const key of keys) if (listOf.get(key) !== name) changed.add(key);
-    const kept = new Set(longestCommonOrder(stayed, order));
-    for (const key of stayed) if (!kept.has(key)) changed.add(key);
+    stayed.forEach((key, i) => key !== order[i] && moved.has(key) && changed.add(key));
   }
   return changed;
-}
-
-/** The longest run of items that `a` and `b`, the same items reordered, have in the same order. */
-function longestCommonOrder(a: string[], b: string[]): string[] {
-  const position = new Map(a.map((key, i) => [key, i]));
-  const at = b.map((key) => position.get(key)!);
-  // For each item of b: the longest run ending there, and the item before it in that run.
-  const length = at.map(() => 1);
-  const previous = at.map(() => -1);
-  at.forEach((p, i) => {
-    for (let j = 0; j < i; j++) {
-      if (at[j] < p && length[j] + 1 > length[i]) {
-        length[i] = length[j] + 1;
-        previous[i] = j;
-      }
-    }
-  });
-  const run: string[] = [];
-  for (let i = length.indexOf(Math.max(0, ...length)); i >= 0; i = previous[i]) run.unshift(b[i]);
-  return run;
 }
 
 function removePinned(nodes: PinnedNode[], tabId: string) {

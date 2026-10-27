@@ -198,3 +198,27 @@ test('undo brings back archive entries the change pushed out', () => {
   store.undo();
   assert.deepEqual(store.state.archive, old);
 });
+
+test('undoing a swap moves back the tab that was moved, not the one it passed', () => {
+  const { store, first, personal, work } = twoWindows();
+  for (const n of ['a', 'b']) store.addTab(`https://example.com/${n}`, { windowId: first });
+  const [top, moved] = today(store, first, personal);
+  store.undoable('Move Tab', () => store.moveTab(moved, { zone: 'today', beforeTabId: top }, first));
+  store.moveToSpace(top, work);
+  store.undo();
+  assert.deepEqual(today(store, first, work), [top]);
+  assert.deepEqual(today(store, first, personal), [moved]);
+});
+
+test('undo leaves ended a split you ended after the change', () => {
+  const { store, first, personal } = twoWindows();
+  const left = store.addTab('https://example.com/left', { windowId: first });
+  const right = store.addTab('https://example.com/right', { windowId: first, activate: false });
+  store.splitWith(right.id, 'right', first);
+  store.undoable('Move Tab', () => store.moveTab(left.id, { zone: 'today', beforeTabId: right.id }, first));
+  const ws = () => store.state.windows.find((w) => w.id === first).spaces[personal];
+  assert.deepEqual(ws().split, [left.id, right.id]);
+  store.unsplit(first);
+  store.undo();
+  assert.equal(ws().split, undefined);
+});
