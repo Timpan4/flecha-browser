@@ -48,6 +48,8 @@ interface UndoStep {
   touched: Set<string>;
   /** The splits it ended, as `<window>:<space>`. */
   endedSplits: Set<string>;
+  /** The closed windows it dropped, as it deleted their last tabs. */
+  droppedWindows: Set<string>;
 }
 
 /** Where the state lives: a file in Electron, extension storage in the Chromium build. */
@@ -883,7 +885,8 @@ export class Store {
           if (ws.split && !windowIn(this.state, win.id)?.spaces[spaceId]?.split) endedSplits.add(`${win.id}:${spaceId}`);
         }
       }
-      this.undoSteps.push({ label, before, removed, homes, archived, dropped, touched, endedSplits });
+      const droppedWindows = new Set(before.closedWindows.filter((w) => !windowIn(this.state, w.id)).map((w) => w.id));
+      this.undoSteps.push({ label, before, removed, homes, archived, dropped, touched, endedSplits, droppedWindows });
       this.undoSteps.splice(0, this.undoSteps.length - UNDO_LIMIT);
       this.changed();
     }
@@ -909,7 +912,9 @@ export class Store {
     });
     const windowNow = (id: string) => [...this.state.windows, ...this.state.closedWindows].find((w) => w.id === id);
     // A closed window the change dropped, unless it has been reopened since.
-    for (const win of before.closedWindows) if (!windowNow(win.id)) this.state.closedWindows.push({ ...win, spaces: {} });
+    for (const win of before.closedWindows) {
+      if (step.droppedWindows.has(win.id) && !windowNow(win.id)) this.state.closedWindows.push({ ...win, spaces: {} });
+    }
     this.state.closedWindows.sort((a, b) => b.closedAt - a.closedAt);
     for (const win of [...before.windows, ...before.closedWindows]) {
       const now = windowNow(win.id);
@@ -938,12 +943,17 @@ export class Store {
     this.state.archive.push(...step.dropped.filter((a) => !archive.has(a)));
     this.state.archive.length = Math.min(this.state.archive.length, ARCHIVE_LIMIT);
 
+    // Where each window was, unless a tab has gone on screen in another window since (claim).
+    const heldElsewhere = (tabId: string, windowId: string) =>
+      this.state.windows.some((w) => w.id !== windowId && Object.values(w.spaces).some((ws) => ws.activeTabId === tabId || ws.split?.includes(tabId)));
     for (const win of [...before.windows, ...before.closedWindows]) {
       const now = windowNow(win.id);
       for (const [spaceId, ws] of Object.entries(win.spaces)) {
         const current = now?.spaces[spaceId];
         if (!current) continue;
-        const shown = this.hasWindow(win.id) ? this.allTabIds({ id: spaceId, pinned: this.savedSpace(spaceId)?.pinned ?? [] }, win.id) : current.today;
+        const shown = (this.hasWindow(win.id) ? this.allTabIds({ id: spaceId, pinned: this.savedSpace(spaceId)?.pinned ?? [] }, win.id) : current.today).filter(
+          (id) => !heldElsewhere(id, win.id),
+        );
         if (!current.activeTabId && ws.activeTabId && shown.includes(ws.activeTabId)) current.activeTabId = ws.activeTabId;
         if (step.endedSplits.has(`${win.id}:${spaceId}`) && !current.split && ws.split?.every((id) => shown.includes(id))) {
           current.split = ws.split;
@@ -977,7 +987,7 @@ export class Store {
       const tab = this.state.tabs[id];
       if (!tab) return;
       this.detachEverywhere(id);
-      if (pinned || kind === 'favorites') tab.homeUrl = homes[id] ?? tab.homeUrl ?? tab.url;
+      if (pinned || kind === 'favorites') tab.homeUrl ??= homes[id] ?? tab.url;
       else delete tab.homeUrl;
       node = { kind: 'tab', tabId: id };
     } else {

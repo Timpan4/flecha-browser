@@ -222,3 +222,41 @@ test('undo leaves ended a split you ended after the change', () => {
   store.undo();
   assert.equal(ws().split, undefined);
 });
+
+test('undo keeps a home you set after the change', () => {
+  const { store, first, work } = twoWindows();
+  const tab = store.addTab('https://home.example/', { windowId: first });
+  store.togglePin(tab.id, first);
+  store.undoable('Move Tab', () => store.moveToSpace(tab.id, work));
+  store.updateTab(tab.id, { homeUrl: 'https://home.example/new' });
+  store.undo();
+  assert.equal(store.state.tabs[tab.id].homeUrl, 'https://home.example/new');
+});
+
+test('undo brings back no closed window the change did not drop', () => {
+  const { store, first, second } = twoWindows();
+  const other = store.addTab('https://example.com/other', { windowId: second });
+  const gone = store.addTab('https://example.com/gone', { windowId: first });
+  store.closeWindow(second);
+  store.removeTabs([gone.id]);
+  store.reopenWindow();
+  store.closeTab(other.id);
+  store.closeWindow(second);
+  store.undo();
+  assert.deepEqual(store.state.closedWindows, []);
+});
+
+test('undo puts no tab on screen in two windows', () => {
+  const { store, first, second, personal } = twoWindows();
+  const pinned = store.addTab('https://example.com/pinned', { windowId: first });
+  store.togglePin(pinned.id, first);
+  const x = store.addTab('https://example.com/x', { windowId: first });
+  store.splitWith(pinned.id, 'right', first);
+  store.removeTabs([x.id]);
+  store.activate(pinned.id, { windowId: second });
+  store.undo();
+  const ws = (windowId) => store.state.windows.find((w) => w.id === windowId).spaces[personal];
+  assert.equal(ws(first).split, undefined);
+  assert.notEqual(ws(first).activeTabId, pinned.id);
+  assert.equal(ws(second).activeTabId, pinned.id);
+});
