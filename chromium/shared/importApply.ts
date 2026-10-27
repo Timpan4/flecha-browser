@@ -13,6 +13,8 @@ export interface ArcProfile {
 
 /** One Arc Space, as arcImport.ts reads it. */
 export interface ArcSpace {
+  /** Arc's id for it, which stays the same when it's renamed or moved. */
+  id?: string;
   name: string;
   emoji?: string;
   /** Its theme colour, #rrggbb. */
@@ -123,9 +125,9 @@ export function previewBrowserImport(
   };
 }
 
-/** The Spaces an import brings, by name and Profile in order: what `isolate`'s indexes point at. */
+/** The Spaces an import brings, in order, by Arc's id, name and Profile: what `isolate`'s indexes point at. */
 function spacesKey(data: BrowserImportData): string {
-  return JSON.stringify(spacesOf(data).map((s) => [s.name, 'profile' in s ? s.profile?.dir ?? '' : '']));
+  return JSON.stringify(spacesOf(data).map((s) => ['id' in s ? s.id ?? '' : '', s.name, 'profile' in s ? s.profile?.dir ?? '' : '']));
 }
 
 /**
@@ -168,11 +170,12 @@ function skippedLines(data: BrowserImportData, pairs: number, archiveDropped: nu
   const arc = data.arc;
   if (!arc) return [];
   const lines: string[] = [];
-  const { 'non-web tab': nonWeb = 0, 'partial split': partial = 0, ...kinds } = arc.skipped;
+  const { 'non-web tab': nonWeb = 0, 'tab without address': noAddress = 0, 'partial split': partial = 0, ...kinds } = arc.skipped;
   if (nonWeb) lines.push(`${plural(nonWeb, 'tab')} with an address other than a web page (such as arc:)`);
+  if (noAddress) lines.push(`${plural(noAddress, 'tab')} with no saved address`);
   for (const [kind, n] of Object.entries(kinds)) lines.push(`${plural(n, 'sidebar item')} of a kind Flecha doesn’t have (Arc calls it “${kind}”)`);
   if (pairs) lines.push(`${plural(pairs, 'split view')} kept as tabs side by side: Flecha shows one split of two tabs per Space`);
-  if (partial) lines.push(`${plural(partial, 'split view')} with a tab that isn’t a web page, kept as the tabs that came over`);
+  if (partial) lines.push(`${plural(partial, 'split view')} that lost a tab, kept as the tabs that came over`);
   if (archiveDropped) lines.push(`${plural(archiveDropped, 'archived tab')}, Arc’s or Flecha’s own, past the ${ARCHIVE_LIMIT} most recent, which is all Flecha’s archive keeps`);
   const profiles = [...new Set(arc.spaces.flatMap((s) => (s.profile ? [s.profile.name] : [])))];
   if (profiles.length) {

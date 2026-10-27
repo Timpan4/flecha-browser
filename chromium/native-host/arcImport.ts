@@ -83,11 +83,15 @@ export function parseArcSidebar(json: any, names: Record<string, string> = {}): 
   for (const entry of main.items) if (isObject(entry) && typeof entry.id === 'string') items.set(entry.id, entry as ArcItem);
   const skipped: Record<string, number> = {};
   const skip = (what: string) => (skipped[what] = (skipped[what] ?? 0) + 1);
+  /** Tabs left behind so far, so a split can tell it lost one. */
+  let lostTabs = 0;
 
   const toTab = (item: ArcItem): ImportTab | undefined => {
     const url = item.data?.tab?.savedURL;
-    if (typeof url !== 'string' || !url) return undefined;
+    lostTabs++;
+    if (typeof url !== 'string' || !url) return void skip('tab without address');
     if (!/^https?:/i.test(url)) return void skip('non-web tab');
+    lostTabs--;
     return { url, title: text(item.title) || text(item.data?.tab?.savedTitle) || url };
   };
 
@@ -106,12 +110,12 @@ export function parseArcSidebar(json: any, names: Record<string, string> = {}): 
         // Arc can keep tabs under a tab; Flecha can't, so they follow it.
         return [...(tab ? [{ kind: 'tab' as const, ...tab }] : []), ...toNodes(item.childrenIds, seen)];
       }
-      const nonWebBefore = skipped['non-web tab'] ?? 0;
+      const lostBefore = lostTabs;
       const children = toNodes(item.childrenIds, seen);
       if (data.splitView) {
         const urls = children.flatMap((n) => (n.kind === 'tab' ? [n.url] : []));
         // A split that lost a tab (an arc: page, say) stays as the tabs that came over.
-        if ((skipped['non-web tab'] ?? 0) > nonWebBefore) skip('partial split');
+        if (lostTabs > lostBefore) skip('partial split');
         else if (urls.length > 1) splits.push(urls);
       } else {
         skip(Object.keys(data)[0] ?? 'unknown');
@@ -136,6 +140,7 @@ export function parseArcSidebar(json: any, names: Record<string, string> = {}): 
     const pinned = toNodes(containerChildren(space, 'pinned'));
     const today = flatTabs(toNodes(containerChildren(space, 'unpinned')));
     return {
+      id: text(space.id),
       name: text(space.title) || 'Space',
       emoji: text(space.customInfo?.iconType?.emoji_v2),
       color: themeColor(space.customInfo?.windowTheme?.primaryColorPalette?.midTone),

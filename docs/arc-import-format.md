@@ -93,18 +93,18 @@ An address archived more than once keeps each archiving, as Flecha's own archive
 | Favorites of every profile | Favorites, each address once |
 | A split of two tabs | The Space's split when both tabs are in the Space after the import and the Space has no split yet |
 | Other splits (a second one in a Space, or more than two tabs) | Their tabs, next to each other where the split was |
-| A split with a tab that isn't a web page (an `arc:` page, say) | The tabs that came over, not a split; the preview and summary count these |
+| A split that lost a tab (an `arc:` page, or a tab with no saved address) | The tabs that came over, not a split; the preview and summary count these |
 | Archived tabs | Archive, with title, address and time |
 | Profile other than Arc's default | Listed in the summary; the preview offers Separate Cookies and Logins for its new Spaces (on by default), since Flecha has no Profiles yet (#9). A Space merged into an existing one keeps that Space's setting |
 | Little Arc, Notes, Easels, Boosts | Not imported; listed in the preview and summary |
 
 Merge and Add as new:
 
-- **Merge into matching Spaces** joins an imported Space to the Flecha Space of the same name (ignoring case and surrounding spaces). A tab is left out when that Space's pinned or Today tabs, or the favorites, already had its address before the import (where a tab is now or the address it started at). An address the import itself repeats stays, as in Add as new. Folders of the same name are joined. The existing Space keeps its own colour, emoji and Separate Cookies and Logins. Imported favorites count too: a Space's tab whose address an imported favorite has is left out.
+- **Merge into matching Spaces** joins an imported Space to the Space of the same name Flecha had before the import (ignoring case and surrounding spaces). Two imported Spaces of the same name are not joined to each other: with no such Space in Flecha, they stay two, each with its own Separate Cookies and Logins choice. A tab is left out when that Space's pinned or Today tabs, or the favorites, already had its address before the import (where a tab is now or the address it started at). An address the import itself repeats stays, as in Add as new. Folders of the same name are joined. The existing Space keeps its own colour, emoji and Separate Cookies and Logins. Imported favorites count too: a Space's tab whose address an imported favorite has is left out.
 - **Add as new Spaces** adds every imported Space, even when the name is taken, as Arc had it.
 - Either way, a favorite is never added twice, and an archive entry with the same address and time is never added twice.
 - A fresh install's Space is replaced by the imported ones only while untouched: still named Personal with its first emoji and colour, with no pinned tabs, folders, Today tabs or favorites.
-- The import reads Arc again after the preview. If the list of Spaces (names and Profiles, in order) changed in between, nothing is imported and the summary asks to look at the preview again.
+- The import reads Arc again after the preview. If the list of Spaces (Arc's ids, names and Profiles, in order) changed in between, nothing is imported and the summary asks to look at the preview again.
 
 ## Known limits
 

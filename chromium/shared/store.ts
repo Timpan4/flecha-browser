@@ -778,8 +778,8 @@ export class Store {
 
   /**
    * Another browser's Spaces (Arc's, or one Space of bookmarks) come over; their Today tabs open
-   * in `windowId`. With `merge`, a Space joins the existing Space of the same name and tabs whose
-   * address that Space (or the favorites) already has are left out; with `append`, each is new.
+   * in `windowId`. With `merge`, a Space joins the Space of the same name Flecha already had, and tabs
+   * whose address that Space (or the favorites) had are left out; with `append`, each is new.
    * Favorites already there are never added twice. A split of two tabs becomes the Space's split
    * when it has none yet; other splits stay as their tabs, side by side.
    */
@@ -800,9 +800,19 @@ export class Store {
       out.tabs++;
     }
 
+    // Merge joins Spaces Flecha had before the import, and leaves out the addresses they had then.
+    // Imported Spaces never join each other, so two of the same name stay two, as in the other browser.
+    const before = new Map<string, { space: SavedSpace; urls: string[] }>();
+    if (opts.mode === 'merge') {
+      for (const sp of s.spaces) {
+        const key = sp.name.trim().toLowerCase();
+        if (!before.has(key)) before.set(key, { space: sp, urls: this.spaceTabUrls(sp) });
+      }
+    }
+
     for (const imported of spaces) {
-      const key = imported.name.trim().toLowerCase();
-      let space = opts.mode === 'merge' ? s.spaces.find((sp) => sp.name.trim().toLowerCase() === key) : undefined;
+      const match = before.get(imported.name.trim().toLowerCase());
+      let space = match?.space;
       if (space) out.merged++;
       else {
         const n = s.spaces.length;
@@ -819,8 +829,8 @@ export class Store {
         out.spaces++;
       }
       first ??= space.id;
-      // Merge leaves out what Flecha already had (and the favorites); repeats within the import stay, as Append keeps them.
-      const known = opts.mode === 'merge' ? new Set([...favoriteUrls, ...this.spaceTabUrls(space)]) : undefined;
+      // Repeats within the import stay, as Append keeps them.
+      const known = opts.mode === 'merge' ? new Set([...favoriteUrls, ...(match?.urls ?? [])]) : undefined;
       const add = (t: ImportTab) => {
         if (known?.has(t.url)) return false;
         out.tabs++;

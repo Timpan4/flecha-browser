@@ -94,16 +94,20 @@ test('a split that lost a tab Flecha can’t open stays as the tabs that came ov
       ...arcTab('a', 'https://a.example.com/'), ...arcTab('arc', 'arc://settings'), 'two', { id: 'two', data: { splitView: {} }, childrenIds: ['a', 'arc'] },
       ...arcTab('b', 'https://b.example.com/'), ...arcTab('c', 'https://c.example.com/'), ...arcTab('arc2', 'arc://history'),
       'three', { id: 'three', data: { splitView: {} }, childrenIds: ['b', 'c', 'arc2'] },
+      // A tab Arc kept no address for.
+      ...arcTab('d', 'https://d.example.com/'), ...arcTab('e', 'https://e.example.com/'), 'blank', { id: 'blank', data: { tab: {} } },
+      'nourl', { id: 'nourl', data: { splitView: {} }, childrenIds: ['d', 'e', 'blank'] },
     ],
-    ['two', 'three'],
+    ['two', 'three', 'nourl'],
   );
   const arc = parseArcSidebar(json);
   assert.deepEqual(arc.spaces[0].splits, []);
-  assert.deepEqual(arc.spaces[0].today.map((t) => t.url), ['https://a.example.com/', 'https://b.example.com/', 'https://c.example.com/']);
+  assert.deepEqual(arc.spaces[0].today.map((t) => t.url), ['https://a.example.com/', 'https://b.example.com/', 'https://c.example.com/', 'https://d.example.com/', 'https://e.example.com/']);
+  assert.equal(arc.skipped['tab without address'], 1);
   const store = new Store({ load: () => undefined, save: () => {} });
   const result = await applyBrowserImport({ name: 'Arc', arc, bookmarkCount: 0, history: [], warnings: [] }, { mode: 'merge', isolate: [] }, store, noHistory);
   assert.equal(store.view(store.state.spaces[0]).split, undefined);
-  assert.ok(result.details.includes('2 split views with a tab that isn’t a web page, kept as the tabs that came over'));
+  assert.ok(result.details.includes('3 split views that lost a tab, kept as the tabs that came over'));
 });
 
 test('titles and emoji that aren’t text fall back instead of breaking the import', async () => {
@@ -146,4 +150,32 @@ test('import options from the page fall back to merging without isolation', asyn
   assert.deepEqual(importOptions({ mode: 'replace', isolate: 'all', spacesKey: 3 }, true), { mode: 'merge', isolate: [], spacesKey: undefined });
   assert.deepEqual(importOptions({ mode: 'append', isolate: [0, -1, 1.5, '2', 3], spacesKey: 'k' }, true), { mode: 'append', isolate: [0, 3], spacesKey: 'k' });
   assert.deepEqual(importOptions({ mode: 'append', isolate: [0] }, false).isolate, []);
+});
+
+test('two Arc Spaces of the same name stay two, each with its own isolation and tabs', async () => {
+  const work = (id, dir) => ({ id, name: 'Work', profile: dir ? { dir, name: dir } : undefined, pinned: [{ kind: 'tab', url: 'https://same.example.com/', title: 'Same' }], today: [], splits: [] });
+  const data = () => ({ name: 'Arc', arc: { spaces: [work('w1'), work('w2', 'Profile 1')], favorites: [], archive: [], skipped: {} }, bookmarkCount: 0, history: [], warnings: [] });
+  const store = new Store({ load: () => undefined, save: () => {} });
+  const preview = previewBrowserImport(data(), store.state, true);
+  assert.deepEqual(preview.spaces.map((s) => s.matches), [false, false]);
+  const result = await applyBrowserImport(data(), { mode: 'merge', isolate: [1], spacesKey: preview.spacesKey }, store, noHistory);
+  assert.deepEqual([result.spaces, result.merged, result.bookmarks], [2, 0, 2]);
+  assert.deepEqual(store.state.spaces.map((s) => [s.name, !!s.isolated, s.pinned.length]), [['Work', false, 1], ['Work', true, 1]]);
+
+  // Both join a Work Space Flecha already had, and each keeps the tab the other brought.
+  const merged = new Store({ load: () => undefined, save: () => {} });
+  merged.updateSpace(merged.state.spaces[0].id, { name: 'Work' });
+  const again = await applyBrowserImport(data(), { mode: 'merge', isolate: [] }, merged, noHistory);
+  assert.deepEqual([again.spaces, again.merged, again.bookmarks], [0, 2, 2]);
+  assert.equal(merged.state.spaces[0].pinned.length, 2);
+});
+
+test('the preview key tells apart Spaces of the same name and Profile by Arc’s id', async () => {
+  const space = (id) => ({ id, name: 'Work', pinned: [], today: [], splits: [] });
+  const data = (ids) => ({ name: 'Arc', arc: { spaces: ids.map(space), favorites: [], archive: [], skipped: {} }, bookmarkCount: 0, history: [], warnings: [] });
+  const store = new Store({ load: () => undefined, save: () => {} });
+  const { spacesKey } = previewBrowserImport(data(['a', 'b']), store.state, true);
+  const result = await applyBrowserImport(data(['b', 'a']), { mode: 'append', isolate: [0], spacesKey }, store, noHistory);
+  assert.equal(result.spaces, 0);
+  assert.match(result.warnings.join(), /changed since the preview/);
 });
