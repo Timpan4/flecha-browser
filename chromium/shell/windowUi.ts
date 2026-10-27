@@ -8,7 +8,8 @@
  * a question is up it covers the whole window (an "overlay", like the command bar): clicks
  * on the page dismiss the menu, and the dialog has room.
  */
-import type { DetectedBrowser, ImportResult, UiState } from '../shared/types';
+import type { DetectedBrowser, ImportOptions, ImportPreview, ImportResult, UiState } from '../shared/types';
+import { hasImport, previewLines, resultLine } from '../shared/importText';
 import { cmd, invoke, on } from './client';
 import type { MenuRun } from './protocol';
 import { askDialog, popupMenu, type MenuEntry, type MenuOptions } from './settingsUi';
@@ -109,9 +110,23 @@ export async function importFromBrowser() {
     })];
     if (!picked) return;
     try {
-      const r = await invoke<ImportResult>('importBrowser', picked.id);
-      const parts = [r.bookmarks && `${r.bookmarks.toLocaleString()} bookmark${r.bookmarks === 1 ? '' : 's'}`, r.history && `${r.history.toLocaleString()} page${r.history === 1 ? '' : 's'}`].filter(Boolean);
-      return note(`Imported from ${picked.name}`, [...parts, ...r.warnings].join(' · ') || 'Nothing to import');
+      const preview = await invoke<ImportPreview>('previewImport', picked.id);
+      if (!hasImport(preview)) return note(`Nothing to import from ${picked.name}`, preview.warnings.join('\n') || 'No bookmarks or history were found.');
+      // Spaces from other Arc Profiles get Separate Cookies and Logins, as the tour offers by default.
+      const isolate = preview.canIsolate ? preview.spaces.flatMap((s, i) => (s.profile ? [i] : [])) : [];
+      const merging = preview.spaces.some((s) => s.matches);
+      const detail = [
+        ...previewLines(preview),
+        ...(isolate.length ? [`Spaces from other Arc Profiles get Separate Cookies and Logins.`] : []),
+        ...(preview.skipped.length ? ['', 'Won’t come over:', ...preview.skipped] : []),
+        ...preview.warnings,
+      ].join('\n');
+      // Merge or add as new only differ when a Space's name is taken.
+      const buttons = merging ? ['Merge', 'Add as New', 'Cancel'] : ['Import', 'Cancel'];
+      const answer = await askDialog({ message: `Import from ${picked.name}?`, detail, buttons, defaultId: 0, cancelId: buttons.length - 1 });
+      if (answer === buttons.length - 1) return;
+      const r = await invoke<ImportResult>('importBrowser', picked.id, { mode: buttons[answer] === 'Add as New' ? 'append' : 'merge', isolate } satisfies ImportOptions);
+      return note(`Imported from ${picked.name}`, [resultLine(r), ...r.warnings, ...r.details].filter(Boolean).join('\n') || 'Nothing to import');
     } catch {
       return note(`Couldn’t import ${picked.name}`, 'Try again.');
     }

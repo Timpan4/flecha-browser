@@ -1,35 +1,147 @@
-// Importing bookmarks replaces a fresh install's empty Space, but never a Space that holds something.
+// Imported Spaces: a fresh install's empty Space gives way, Merge joins Spaces by name without
+// repeating tabs, Append adds new ones, and splits, colours, isolation and the archive come over.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { loadModule } from './load-module.mjs';
 
-const { Store } = await loadModule('chromium/shared/store.ts');
+const { Store, mergeArchive, pinnedTabIds } = await loadModule('chromium/shared/store.ts');
 
 const newStore = () => new Store({ load: () => undefined, save: () => {} });
-const bookmarks = [{ kind: 'tab', url: 'https://example.com/', title: 'Example' }];
+const tab = (url, title = url) => ({ kind: 'tab', url, title });
+const bookmarks = [tab('https://example.com/', 'Example')];
+const bookmarkSpace = (name = 'Imported') => ({ name, pinned: bookmarks, today: [] });
+const urls = (store, ids) => ids.map((id) => store.state.tabs[id].url);
+const spaceNamed = (store, name) => store.state.spaces.find((s) => s.name === name);
 
 test('a fresh install’s empty Space gives way to the imported one', () => {
   const store = newStore();
-  const space = store.importBookmarks('Imported', bookmarks);
-  assert.deepEqual(store.state.spaces.map((s) => s.id), [space.id]);
+  store.importSpaces([bookmarkSpace()], { mode: 'merge' });
+  assert.deepEqual(store.state.spaces.map((s) => s.name), ['Imported']);
+  assert.equal(store.window().activeSpaceId, store.state.spaces[0].id);
 });
 
 test('a Space is kept when a closed window holds its only tabs, so reopening that window brings them back', () => {
   const store = newStore();
   const [original] = store.state.spaces;
   const second = store.openWindow().id;
-  const tab = store.addTab('https://example.org/', { windowId: second });
+  const opened = store.addTab('https://example.org/', { windowId: second });
   store.closeWindow(second);
-  store.importBookmarks('Imported', bookmarks);
+  store.importSpaces([bookmarkSpace()], { mode: 'merge' });
   assert.ok(store.state.spaces.some((s) => s.id === original.id));
   const reopened = store.reopenWindow();
-  assert.equal(store.activeTabIn(reopened.id)?.id, tab.id);
+  assert.equal(store.activeTabIn(reopened.id)?.id, opened.id);
 });
 
 test('a Space is kept when favorites are its only tabs', () => {
   const store = newStore();
   const [original] = store.state.spaces;
   store.toggleFavorite(store.addTab('https://example.org/').id);
-  const space = store.importBookmarks('Imported', bookmarks);
-  assert.deepEqual(store.state.spaces.map((s) => s.id), [original.id, space.id]);
+  store.importSpaces([bookmarkSpace()], { mode: 'append' });
+  assert.deepEqual(store.state.spaces.map((s) => s.id), [original.id, spaceNamed(store, 'Imported').id]);
+});
+
+test('new Spaces take the imported colour and emoji, or Flecha’s next ones', () => {
+  const store = newStore();
+  store.importSpaces([{ ...bookmarkSpace('Arc'), emoji: '🏠', color: '#336699' }, bookmarkSpace('Chrome')], { mode: 'append' });
+  assert.deepEqual([spaceNamed(store, 'Arc').emoji, spaceNamed(store, 'Arc').color], ['🏠', '#336699']);
+  assert.match(spaceNamed(store, 'Chrome').color, /^#[0-9a-f]{6}$/);
+  assert.ok(spaceNamed(store, 'Chrome').emoji);
+});
+
+/** A Flecha with a Work Space: a pinned tab, a Dev folder with one tab, a Today tab and a favorite. */
+function withWork() {
+  const store = newStore();
+  store.importSpaces(
+    [{ name: 'Work', pinned: [tab('https://work.example.com/'), { kind: 'folder', name: 'Dev', children: [tab('https://repo.example.com/')] }], today: [tab('https://news.example.com/')] }],
+    { mode: 'append', favorites: [tab('https://mail.example.com/')] },
+  );
+  return store;
+}
+
+const arcWork = {
+  name: ' work ',
+  pinned: [
+    tab('https://work.example.com/'),
+    { kind: 'folder', name: 'dev', children: [tab('https://repo.example.com/'), tab('https://ci.example.com/')] },
+    { kind: 'folder', name: 'Old', children: [tab('https://news.example.com/')] },
+    tab('https://mail.example.com/'),
+    tab('https://new.example.com/'),
+  ],
+  today: [tab('https://news.example.com/'), tab('https://today.example.com/')],
+};
+
+test('Merge joins the Space of the same name and leaves out tabs it or the favorites already have', () => {
+  const store = withWork();
+  const work = spaceNamed(store, 'Work');
+  const out = store.importSpaces([arcWork], { mode: 'merge', favorites: [tab('https://mail.example.com/'), tab('https://calendar.example.com/')] });
+  assert.deepEqual({ spaces: out.spaces, merged: out.merged, tabs: out.tabs }, { spaces: 0, merged: 1, tabs: 4 });
+  assert.deepEqual(store.state.spaces.map((s) => s.name), ['Work']);
+  // The Dev folder gets the new tab; "Old" held only a tab that's already there, so it isn't added.
+  assert.deepEqual(work.pinned.map((n) => (n.kind === 'tab' ? store.state.tabs[n.tabId].url : `${n.name}: ${urls(store, pinnedTabIds(n.children)).join(' ')}`)), [
+    'https://work.example.com/',
+    'Dev: https://repo.example.com/ https://ci.example.com/',
+    'https://new.example.com/',
+  ]);
+  assert.deepEqual(urls(store, store.view(work).today), ['https://news.example.com/', 'https://today.example.com/']);
+  assert.deepEqual(urls(store, store.state.favorites), ['https://mail.example.com/', 'https://calendar.example.com/']);
+  // Importing the same again adds nothing.
+  assert.equal(store.importSpaces([arcWork], { mode: 'merge' }).tabs, 0);
+});
+
+test('Append adds a new Space even when the name is taken, with every tab', () => {
+  const store = withWork();
+  const out = store.importSpaces([arcWork], { mode: 'append', favorites: [tab('https://mail.example.com/')] });
+  assert.deepEqual({ spaces: out.spaces, merged: out.merged, tabs: out.tabs }, { spaces: 1, merged: 0, tabs: 8 });
+  assert.equal(store.state.spaces.length, 2);
+  // Favorites are shared, so even Append doesn't repeat one.
+  assert.equal(store.state.favorites.length, 1);
+});
+
+test('a two-tab split becomes the Space’s split when both tabs exist; other splits stay as tabs side by side', () => {
+  const store = newStore();
+  const space = {
+    name: 'Split',
+    pinned: [tab('https://left.example.com/'), tab('https://right.example.com/')],
+    today: ['a', 'b', 'c', 'd', 'e'].map((x) => tab(`https://${x}.example.com/`)),
+    splits: [
+      // One of its tabs didn't come over (an arc: page, say).
+      ['https://left.example.com/', 'arc://settings'],
+      ['https://left.example.com/', 'https://right.example.com/'],
+      ['https://a.example.com/', 'https://b.example.com/'],
+      ['https://c.example.com/', 'https://d.example.com/', 'https://e.example.com/'],
+    ],
+  };
+  const out = store.importSpaces([space], { mode: 'append' });
+  assert.deepEqual({ splits: out.splits, pairs: out.pairs }, { splits: 1, pairs: 3 });
+  const view = store.view(spaceNamed(store, 'Split'));
+  assert.deepEqual(urls(store, view.split), ['https://left.example.com/', 'https://right.example.com/']);
+  // The tabs of a split that stays tabs keep their places, next to each other.
+  assert.deepEqual(urls(store, view.today).slice(0, 2), ['https://a.example.com/', 'https://b.example.com/']);
+});
+
+test('a merged split uses the tab Flecha already had', () => {
+  const store = withWork();
+  const existing = store.view(spaceNamed(store, 'Work')).today[0];
+  store.importSpaces([{ name: 'Work', pinned: [], today: [tab('https://news.example.com/'), tab('https://other.example.com/')], splits: [['https://news.example.com/', 'https://other.example.com/']] }], { mode: 'merge' });
+  assert.equal(store.view(spaceNamed(store, 'Work')).split[0], existing);
+});
+
+test('Spaces marked isolated get Separate Cookies and Logins', () => {
+  const store = withWork();
+  store.importSpaces([{ ...bookmarkSpace('Arc Work'), isolated: true }, bookmarkSpace('Arc Home'), { name: 'Work', pinned: [], today: [], isolated: true }], { mode: 'merge' });
+  assert.deepEqual(store.state.spaces.map((s) => [s.name, !!s.isolated]), [['Work', true], ['Arc Work', true], ['Arc Home', false]]);
+});
+
+test('archived tabs keep title, address and time, newest first, each archiving once, within the archive’s limit', () => {
+  const store = newStore();
+  const day = 24 * 60 * 60 * 1000;
+  const archived = Array.from({ length: 600 }, (_, i) => ({ url: `https://archived.example.com/${i}`, title: `Archived ${i}`, closedAt: Date.UTC(2025, 0, 1) + i * day }));
+  const out = store.importSpaces([], { mode: 'merge', archive: archived });
+  assert.deepEqual({ archived: out.archived, dropped: out.archiveDropped }, { archived: 500, dropped: 100 });
+  assert.deepEqual(store.state.archive[0], archived[599]);
+  assert.equal(store.state.archive.at(-1).url, 'https://archived.example.com/100');
+  // No Space was given, so the fresh install's Space stays.
+  assert.equal(store.state.spaces.length, 1);
+  // The same archive again adds nothing.
+  assert.deepEqual(mergeArchive(store.state.archive, archived.slice(100)), { archive: store.state.archive, added: 0, dropped: 0 });
 });

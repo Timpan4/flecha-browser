@@ -245,11 +245,26 @@ try {
   assert.equal(await evaluate(session, "document.querySelector('.tour-browser').classList.contains('done')"), false);
   await fs.writeFile(bookmarkFile, bookmarkData);
   await evaluate(session, "document.querySelector('.tour-browser button').click()");
+  // Nothing is added until the preview is confirmed.
+  await domWhere("() => document.querySelector('.tour-preview .tour-confirm')");
+  assert.deepEqual(await evaluate(session, "[...document.querySelectorAll('.tour-preview-spaces strong')].map(s => s.textContent)"), ['Chrome']);
+  assert.equal(await evaluate(session, "[...document.querySelectorAll('.tour-preview .tour-segmented button')].map(b => b.textContent).join()"), 'Merge,Add as new');
+  assert.equal((await rpc('previewImport', 'chrome')).spaces[0].pinned, 1);
+  assert.equal((await stateWhere('s => s.spaces.length > 0')).spaces.some((sp) => sp.name.includes('Chrome')), false);
+  console.log('PASS onboarding previews an import before adding anything');
+  if (artifacts) {
+    await fs.mkdir(artifacts, { recursive: true });
+    await fs.writeFile(path.join(artifacts, 'onboarding-import-preview.png'), Buffer.from((await send('Page.captureScreenshot', { format: 'png' }, session)).data, 'base64'));
+  }
+  await evaluate(session, "document.querySelector('.tour-preview .tour-confirm').click()");
   await textWhere("text => text.includes('1 bookmark')");
   console.log('PASS failed imports remain retryable and do not show a success check');
   assert.ok((await stateWhere("s => s.spaces.some(sp => sp.name.includes('Chrome'))")).spaces.length);
   console.log('PASS onboarding discovers and imports a synthetic Chrome bookmark through the native helper');
   await evaluate(session, `(${heliumRow}).querySelector('button').click()`);
+  await domWhere("() => document.querySelector('.tour-preview .tour-confirm')");
+  assert.equal(await evaluate(session, "document.querySelector('.tour-preview-extras').textContent"), '1 page of history');
+  await evaluate(session, "document.querySelector('.tour-preview .tour-confirm').click()");
   await domWhere(`() => (${heliumRow}).classList.contains('done')`);
   assert.equal(await evaluate(session, `(${heliumRow}).querySelector('small').textContent`), '1 page');
   assert.equal(await evaluate(session, "chrome.history.search({ text: 'example.org/helium-history', startTime: 0 }).then(items => items.some(item => item.url === 'https://example.org/helium-history'))"), true);

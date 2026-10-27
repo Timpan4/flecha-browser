@@ -319,6 +319,90 @@
   line-height: 1.4;
 }
 
+/* An import's preview and summary, under its browser. */
+.tour-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: -2px 0 4px 12px;
+  padding: 12px;
+  border-radius: 14px;
+  background: var(--tour-fill);
+  box-shadow: inset 0 0 0 1px var(--tour-line);
+  color: var(--tour-text-2);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.tour-preview ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tour-preview .tour-segmented button {
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+.tour-summary {
+  margin-top: -2px;
+  list-style: none;
+}
+
+.tour-preview-spaces li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.tour-preview-swatch {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: var(--swatch, rgba(233, 238, 245, 0.12));
+  font-size: 14px;
+}
+
+.tour-preview-isolate {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--tour-text-2);
+}
+
+.tour-preview-extras,
+.tour-preview-hint {
+  margin: 0;
+}
+
+.tour-preview-hint {
+  color: var(--tour-text-3);
+}
+
+.tour-preview-skipped summary {
+  cursor: default;
+  color: var(--tour-text-2);
+}
+
+.tour-preview-skipped ul {
+  margin-top: 6px;
+  padding-left: 14px;
+  list-style: disc;
+}
+
+.tour-preview-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .tour-challenge.current {
   background: rgba(58, 166, 217, 0.12);
   box-shadow: inset 0 0 0 1.5px #3aa6d9;

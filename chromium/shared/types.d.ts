@@ -104,9 +104,52 @@ export interface DetectedBrowser {
 
 /** What one import brought over. Problems that didn't stop it are listed in `warnings`. */
 export interface ImportResult {
+  /** New Spaces. */
   spaces: number;
+  /** Existing Spaces that imported tabs were merged into. */
+  merged: number;
+  /** Pinned tabs, Today tabs, favorites and bookmarks added; ones Flecha already had aren't counted. */
   bookmarks: number;
   history: number;
+  /** Archived tabs added to Flecha's archive. */
+  archived: number;
+  warnings: string[];
+  /** What came over differently or stayed behind (Profiles, splits, Notes), for the summary. */
+  details: string[];
+}
+
+/** Merge: imported Spaces join existing Spaces of the same name, skipping tabs already there. Append: every imported Space is new. */
+export type ImportMode = 'merge' | 'append';
+
+export interface ImportOptions {
+  mode: ImportMode;
+  /** Imported Spaces (by their index in the preview) that get Separate Cookies and Logins. */
+  isolate: number[];
+}
+
+/** What an import would bring over, shown before anything is added. */
+export interface ImportPreview {
+  name: string;
+  spaces: Array<{
+    name: string;
+    emoji?: string;
+    color?: string;
+    pinned: number;
+    today: number;
+    /** Split views in it. */
+    splits: number;
+    /** A Flecha Space of this name exists, so Merge adds to it. */
+    matches: boolean;
+    /** The Arc Profile it used, when not Arc's default one. */
+    profile?: string;
+  }>;
+  favorites: number;
+  archived: number;
+  history: number;
+  /** What won't come over, one line each. */
+  skipped: string[];
+  /** Whether this build can give a Space its own cookies and logins. */
+  canIsolate: boolean;
   warnings: string[];
 }
 
@@ -439,8 +482,10 @@ export interface FlechaApi {
   onTourKey(cb: (command: string) => void): void;
   /** Other browsers with bookmarks or history to import. */
   detectBrowsers(): Promise<DetectedBrowser[]>;
+  /** What importing one of the browsers `detectBrowsers` found would bring over, without adding anything. */
+  previewImport(id: string): Promise<ImportPreview>;
   /** Imports one of the browsers `detectBrowsers` found, by id. */
-  importBrowser(id: string): Promise<ImportResult>;
+  importBrowser(id: string, options: ImportOptions): Promise<ImportResult>;
   newTab(input: string): void;
   navigate(input: string): void;
   activate(tabId: string): void;
