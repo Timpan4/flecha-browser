@@ -1095,10 +1095,12 @@ async function start() {
       // The tab ids change, so every open Chromium tab is closed and reopens on demand.
       const open = [...live.keys()];
       if (!state || !store.replaceState(state)) return broadcastTo(chromeWindowId, 'flash', 'That isn’t a Flecha state file');
-      // The imported windows are taken by the open Chromium windows, in order; the rest open.
+      // The imported windows are taken by the open Chromium windows, in order; the rest open. Open
+      // Chromium windows beyond the imported ones get a new window each.
       const chromeWindows = [...windowMap.keys()];
       windowMap.clear();
       state.windows.forEach((win, i) => chromeWindows[i] !== undefined && windowMap.set(chromeWindows[i], win.id));
+      for (const chromeId of chromeWindows.slice(state.windows.length)) attachWindow(chromeId);
       rememberWindows();
       for (const win of state.windows) if (chromeWindowOf(win.id) === undefined) void chromeWindowFor(win.id);
       void unload(open);

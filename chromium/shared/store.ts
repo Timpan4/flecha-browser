@@ -914,7 +914,7 @@ export class Store {
   private dropPristineSpace() {
     const s = this.state;
     const only = s.spaces.length === 1 ? s.spaces[0] : undefined;
-    const pristine = !!only && !pinnedTabIds(only.pinned).length && s.windows.every((w) => !w.spaces[only.id]?.today.length);
+    const pristine = !!only && !s.favorites.length && !pinnedTabIds(only.pinned).length && s.windows.every((w) => !w.spaces[only.id]?.today.length);
     if (pristine) {
       s.spaces = [];
       for (const win of s.windows) delete win.spaces[only!.id];
