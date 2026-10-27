@@ -843,8 +843,11 @@ export class Store {
       for (const t of imported.today) if (add(t)) ws.today.push(this.importTab(t, false));
 
       // Each half is a different tab with that address, one this import added when there is one.
+      // A pinned tab or favorite on screen in another window stays there; the split stays as tabs.
+      const shownElsewhere = (id: string) =>
+        s.windows.some((w) => w !== win && Object.values(w.spaces).some((o) => o.activeTabId === id || o.split?.includes(id)));
       const tabByUrl = (url: string, taken?: string) => {
-        const ids = this.allTabIds(space, win.id).filter((id) => id !== taken && s.tabs[id]?.url === url);
+        const ids = this.allTabIds(space, win.id).filter((id) => id !== taken && s.tabs[id]?.url === url && !shownElsewhere(id));
         return ids.find((id) => !had.has(id)) ?? ids[0];
       };
       for (const urls of imported.splits ?? []) {

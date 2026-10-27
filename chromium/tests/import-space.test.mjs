@@ -200,3 +200,14 @@ test('Merge keeps a new Space’s folders of the same name apart, as the other b
   store.importSpaces([{ name: 'Chrome', pinned: [folder('https://a.example.com/'), folder('https://b.example.com/')], today: [] }], { mode: 'merge' });
   assert.deepEqual(spaceNamed(store, 'Chrome').pinned.map((n) => `${n.name}: ${urls(store, pinnedTabIds(n.children))}`), ['Work: https://a.example.com/', 'Work: https://b.example.com/']);
 });
+
+test('a split doesn’t take a pinned tab another window shows', () => {
+  const store = withWork();
+  const work = spaceNamed(store, 'Work');
+  const [pinned] = pinnedTabIds(work.pinned);
+  const other = store.openWindow().id;
+  store.activate(pinned, { windowId: other });
+  const out = store.importSpaces([{ name: 'Work', pinned: [], today: [tab('https://side.example.com/')], splits: [['https://work.example.com/', 'https://side.example.com/']] }], { mode: 'merge', windowId: store.state.windows[0].id });
+  assert.deepEqual({ splits: out.splits, pairs: out.pairs }, { splits: 0, pairs: 1 });
+  assert.equal(store.state.windows.find((w) => w.id === other).spaces[work.id].activeTabId, pinned);
+});
