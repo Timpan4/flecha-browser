@@ -19,3 +19,13 @@ test('Ctrl+A and Ctrl+F select every tab and find on Linux and Windows', () => {
   assert.equal(paneShortcut({ ...keys, ctrlKey: true, key: 'f' }), 'find');
   assert.equal(paneShortcut({ ...keys, metaKey: true, key: 'a' }), undefined);
 });
+
+test('Ctrl+Z undoes on Linux and Windows; Super+Z, Ctrl+Shift+Z and Ctrl+Alt+Z do not', async () => {
+  const { isUndoKey } = await loadModule('chromium/shell/lib/undo.ts');
+  const z = { ...keys, altKey: false, key: 'z' };
+  assert.equal(isUndoKey({ ...z, ctrlKey: true }), true);
+  assert.equal(isUndoKey({ ...z, ctrlKey: true, key: 'Z' }), true);
+  assert.equal(isUndoKey({ ...z, metaKey: true }), false);
+  assert.equal(isUndoKey({ ...z, ctrlKey: true, shiftKey: true }), false);
+  assert.equal(isUndoKey({ ...z, ctrlKey: true, altKey: true }), false);
+});

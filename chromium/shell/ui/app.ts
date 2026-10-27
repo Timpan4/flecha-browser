@@ -5,6 +5,8 @@ import { SPACE_COLORS, SPACE_EMOJIS } from './spaceChoices.js';
 import { displayKeys } from '../lib/shortcuts';
 import { isMac } from '../lib/platform';
 import { isEnter } from '../lib/keys';
+import { isUndoKey } from '../lib/undo';
+import { spaceDropBefore } from '../lib/spaceOrder';
 import { EMPTY_ACTIONS, EMPTY_TABS, type Match, type ResultKind, displayUrl, historyQuery, inlineCompletion, matchQuality, rank, score } from '../lib/commandBar';
 import { suggestable, suggestionRequests } from '../lib/suggest';
 import { searchUrl } from '../lib/url';
@@ -24,6 +26,9 @@ const api = window.flecha;
 const surface = document.documentElement.dataset.surface as 'panel' | 'newtab' | undefined;
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const DRAG_TYPE = 'application/x-flecha-tab';
+const SPACE_DRAG_TYPE = 'application/x-flecha-space';
+/** The Space whose button is being dragged: drag events only say what kind of thing it is. */
+let draggedSpace: string | undefined;
 
 let state: UiState | undefined;
 
@@ -160,11 +165,13 @@ function render(s: UiState) {
         {
           class: `space-dot${sp.id === space.id ? ' active' : ''}`,
           title: sp.name,
+          draggable: 'true',
           onclick: () => api.switchSpace(sp.id),
           oncontextmenu: (e: Event) => {
             e.preventDefault();
             api.spaceMenu(sp.id);
           },
+          ...spaceDrag(s, sp.id),
         },
         sp.emoji ? h('span', { class: 'space-emoji' }, sp.emoji) : h('span', { class: 'space-initial' }, sp.name[0]?.toUpperCase() ?? '•'),
       ),
@@ -455,6 +462,44 @@ function editHomeUrl(tabId: string) {
   editInline(field, tab.homeUrl, commit, { commitBlank: true, done: () => field.remove() });
 }
 
+/** A Space's button drags among the others to reorder the Spaces; the drop's side picks before or after. */
+function spaceDrag(s: UiState, spaceId: string): Props {
+  const order = () => s.spaces.map((sp) => sp.id);
+  const after = (e: DragEvent) => {
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    return e.clientX > r.left + r.width / 2;
+  };
+  const mark = (e: DragEvent, cls?: string) => {
+    const el = e.currentTarget as HTMLElement;
+    el.classList.remove('space-drop-before', 'space-drop-after');
+    if (cls) el.classList.add(cls);
+  };
+  return {
+    ondragstart: (e: DragEvent) => {
+      draggedSpace = spaceId;
+      e.dataTransfer!.setData(SPACE_DRAG_TYPE, spaceId);
+      e.dataTransfer!.effectAllowed = 'move';
+    },
+    ondragend: () => (draggedSpace = undefined),
+    ondragover: (e: DragEvent) => {
+      if (!draggedSpace || !e.dataTransfer?.types.includes(SPACE_DRAG_TYPE)) return;
+      if (spaceDropBefore(order(), draggedSpace, spaceId, after(e)) === null) return mark(e);
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      mark(e, after(e) ? 'space-drop-after' : 'space-drop-before');
+    },
+    ondragleave: (e: DragEvent) => mark(e),
+    ondrop: (e: DragEvent) => {
+      mark(e);
+      if (!draggedSpace) return;
+      e.preventDefault();
+      const before = spaceDropBefore(order(), draggedSpace, spaceId, after(e));
+      if (before !== null) api.moveSpace(draggedSpace, before);
+      draggedSpace = undefined;
+    },
+  };
+}
+
 function wireTab(el: HTMLElement, tab: TabInfo, target: DropTarget) {
   el.dataset.tabId = tab.id;
   el.draggable = true;
@@ -618,6 +663,12 @@ document.addEventListener('mousedown', (e) => {
   if (!sitePanel.hidden && !sitePanel.contains(target) && !$('btn-site').contains(target)) toggleSitePanel(false);
 });
 document.addEventListener('keydown', (e) => e.key === 'Escape' && !sitePanel.hidden && toggleSitePanel(false));
+// ⌘Z (Ctrl+Z) in the sidebar takes back a Space deletion, bulk close or move; text fields keep their own undo.
+document.addEventListener('keydown', (e) => {
+  if (!isUndoKey(e) || (e.target as HTMLElement).closest?.('input, textarea, [contenteditable="true"]')) return;
+  e.preventDefault();
+  api.undo();
+});
 // Scrolling sideways over the sidebar (a trackpad swipe, a mouse's thumb wheel) changes
 // Space, one per gesture: the scroll adds up to a step, then waits for the gesture to end.
 const SPACE_SWIPE_STEP = 60;
@@ -835,7 +886,7 @@ function hidePalette() {
  * Commands the bar can run, found by typing any word of their label or keywords. `emptyBar`
  * ones fill an empty bar after the recent tabs, as Arc's shows two actions there.
  */
-const ACTIONS: Array<{ label: string; keywords: string; icon: IconName; shortcut?: string; emptyBar?: true; run: () => void }> = [
+const ACTIONS: Array<{ label: string; keywords: string; icon: IconName; shortcut?: string; emptyBar?: true; available?: () => boolean; run: () => void }> = [
   { label: 'New Space', keywords: 'space create add', icon: 'space', shortcut: 'newSpace', emptyBar: true, run: () => api.newSpace() },
   { label: 'Edit Space', keywords: 'space rename emoji colour color icon', icon: 'space', run: () => state && openSpaceEditor(state.activeSpaceId) },
   {
@@ -866,13 +917,26 @@ const ACTIONS: Array<{ label: string; keywords: string; icon: IconName; shortcut
     run: () => api.restoreBeforeImport(),
   },
   { label: 'Open Boosts Folder', keywords: 'boosts folder scripts css', icon: 'zap', run: () => api.openBoostsFolder() },
+  {
+    // Names what it takes back: "Undo Delete “Work”".
+    get label() {
+      return `Undo ${state?.undo ?? ''}`.trim();
+    },
+    keywords: 'undo restore deleted closed moved space tabs',
+    icon: 'history',
+    available: () => !!state?.undo,
+    run: () => api.undo(),
+  },
 ];
+
+/** The actions that can run now. */
+const offeredActions = () => ACTIONS.filter((a) => a.available?.() ?? true);
 
 /** Among all results, one letter matches too much to offer actions; on their own (after Tab), it doesn't. */
 function matchingActions(q: string, minLength = 2) {
   const words = q.toLowerCase().split(/\s+/).filter(Boolean);
   if (!words.length || q.length < minLength) return [];
-  return ACTIONS.filter((a) => {
+  return offeredActions().filter((a) => {
     const haystack = `${a.label} ${a.keywords}`.toLowerCase().split(/\s+/);
     return words.every((w) => haystack.some((h) => h.startsWith(w)));
   });
@@ -918,11 +982,11 @@ function emptyBarItems(): PaletteItem[] {
     .sort((a, b) => b.lastActive - a.lastActive)
     .slice(0, EMPTY_TABS)
     .map((tab) => tabItem(tab, 0));
-  return [...recent, ...ACTIONS.filter((a) => a.emptyBar).slice(0, EMPTY_ACTIONS).map((a) => actionItem(a, 0))];
+  return [...recent, ...offeredActions().filter((a) => a.emptyBar).slice(0, EMPTY_ACTIONS).map((a) => actionItem(a, 0))];
 }
 
 function actionItems(q: string, minLength?: number): PaletteItem[] {
-  if (!q) return ACTIONS.map((a) => actionItem(a, 0));
+  if (!q) return offeredActions().map((a) => actionItem(a, 0));
   return rank(matchingActions(q, minLength).map((a) => actionItem(a, score('action', matchQuality(q, a.label) === 'start' ? 'start' : 'word')!)));
 }
 

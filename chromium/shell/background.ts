@@ -221,6 +221,7 @@ async function start() {
       faviconHosts: favicons.list(),
       faviconUrl: favicons.url,
       shortcuts: shortcutHints(store.state),
+      undo: store.undoLabel,
       defaultBrowser,
       agent: nativeHost?.agentActivity(),
       nav: navStates.get(windowId) ?? { canGoBack: true, canGoForward: true, zoom: 100 },
@@ -1030,6 +1031,12 @@ async function start() {
     }),
     deleteSpace: spacesOnly((id: string) => {
       if (store.state.spaces.length > 1) void unload(store.deleteSpace(id));
+    }),
+    moveSpace: spacesOnly((id: string, beforeId?: string) => store.moveSpace(String(id), typeof beforeId === 'string' ? beforeId : undefined)),
+    // Restored tabs open on demand; sync() reopens any whose Space now has other cookies.
+    undo: spacesOnly(() => {
+      const label = store.undo();
+      broadcastTo(hereChrome(), 'flash', label ? `Undid ${label}` : 'Nothing to undo');
     }),
     toggleFolder: (id: string) => store.toggleFolder(id),
     renameFolder: (id: string, name: string) => store.renameFolder(id, name),

@@ -894,6 +894,7 @@ footer {
 }
 
 .space-dot {
+  position: relative;
   display: grid;
   place-items: center;
   width: 28px;
@@ -906,6 +907,26 @@ footer {
 .space-dot:hover {
   opacity: 1;
   background: var(--fill-hover);
+}
+
+/* Where a dragged Space's button would land. */
+.space-drop-before::before,
+.space-drop-after::before {
+  content: '';
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--blue);
+}
+
+.space-drop-before::before {
+  left: -2px;
+}
+
+.space-drop-after::before {
+  right: -2px;
 }
 
 .space-dot.active {

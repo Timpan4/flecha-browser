@@ -124,6 +124,8 @@ const api: FlechaApi = {
   setSpaceIsolated: cmd('setSpaceIsolated'),
   // Electron asks first, in a message box; the page asks in its own dialog.
   deleteSpace: (id) => void confirmDeleteSpace(id),
+  moveSpace: cmd('moveSpace'),
+  undo: cmd('undo'),
   // Electron pops native menus; the page draws them, from items the background builds.
   tabMenu: (id) => void showMenu('tabMenu', id),
   spaceMenu: (id) => void showMenu('spaceMenu', id),

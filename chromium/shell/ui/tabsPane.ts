@@ -3,6 +3,7 @@ import type { IconName } from './icons.js';
 import { SPACE_COLORS, SPACE_EMOJIS } from './spaceChoices.js';
 import { isMac, primaryModifier } from '../lib/platform';
 import { isEnter } from '../lib/keys';
+import { isUndoKey } from '../lib/undo';
 
 /**
  * Settings → Tabs & Spaces: favorites and every Space's pinned tree and Today tabs in one
@@ -615,6 +616,9 @@ export function setupTabsPane(icon: (name: IconName) => SVGSVGElement) {
       e.preventDefault();
       selected = new Set(order.filter((k) => k.startsWith('t:')));
       updateSelection();
+    } else if (isUndoKey(e)) {
+      e.preventDefault();
+      void send({ op: 'undo' });
     } else if (e.key === 'Backspace' || e.key === 'Delete') {
       e.preventDefault();
       deleteSelection();

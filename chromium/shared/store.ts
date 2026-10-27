@@ -1,4 +1,5 @@
 import type {
+  ArchivedTab,
   BrowserState,
   ClosedWindow,
   DropTarget,
@@ -22,9 +23,26 @@ const SPACE_EMOJIS = ['🏠', '💼', '🎨', '📚', '🧪', '🎮'];
 const ARCHIVE_LIMIT = 500;
 /** Closed windows kept for reopening: as many entries as Chromium's tab restore keeps (TabRestoreServiceHelper::kMaxEntries). */
 const CLOSED_WINDOW_LIMIT = 25;
+/** Changes that can be undone, kept as many as closed windows (Chromium's tab restore entries). */
+const UNDO_LIMIT = CLOSED_WINDOW_LIMIT;
 
 /** Where a tab is: a favorite, pinned in a Space, or a Today tab of a Space in one window. */
 type Location = { space?: SavedSpace; zone: 'today' | 'pinned' | 'favorites'; windowId?: string };
+
+/** Where tabs and folders sit, without the tabs themselves. */
+type Layout = Pick<BrowserState, 'spaces' | 'favorites' | 'windows' | 'closedWindows'>;
+
+/** A change one undo takes back whole: delete a Space, close or move several tabs. */
+interface UndoStep {
+  label: string;
+  before: Layout;
+  /** The tabs it deleted, as they were. */
+  removed: Record<string, TabInfo>;
+  /** The archive entries it made for them. */
+  archived: Set<ArchivedTab>;
+  /** Tabs (`t:<id>`) and folders (`f:<id>`) it moved or deleted. */
+  touched: Set<string>;
+}
 
 /** Where the state lives: a file in Electron, extension storage in the Chromium build. */
 export interface StatePersistence {
@@ -56,6 +74,9 @@ export class Store {
   state: BrowserState;
   private saveTimer?: ReturnType<typeof setTimeout>;
   private listeners: Array<(change: StoreChange) => void> = [];
+  /** In memory only: a restart starts without undo. */
+  private undoSteps: UndoStep[] = [];
+  private recording = false;
 
   constructor(private persistence: StatePersistence) {
     this.state = this.load() ?? this.initialState();
@@ -365,15 +386,17 @@ export class Store {
    */
   removeTabs(tabIds: string[]): string[] {
     const removed = tabIds.filter((id) => this.state.tabs[id] && this.locate(id));
-    for (const id of removed) {
-      this.detachEverywhere(id);
-      this.archive(this.state.tabs[id]);
-      delete this.state.tabs[id];
-    }
     if (!removed.length) return [];
-    this.forgetMissingActive();
-    this.changed();
-    return removed;
+    return this.undoable(`Delete ${plural(removed.length, 'Tab')}`, () => {
+      for (const id of removed) {
+        this.detachEverywhere(id);
+        this.archive(this.state.tabs[id]);
+        delete this.state.tabs[id];
+      }
+      this.forgetMissingActive();
+      this.changed();
+      return removed;
+    });
   }
 
   // ---- split view -----------------------------------------------------------------
@@ -451,8 +474,11 @@ export class Store {
     const today = this.windowSpace(loc.space.id, loc.windowId).today;
     const index = today.indexOf(tabId);
     const ids = today.filter((id, i) => (which === 'below' ? i > index : id !== tabId));
-    for (const id of ids) this.closeTab(id);
-    return ids;
+    if (!ids.length) return [];
+    return this.undoable(which === 'below' ? 'Close Tabs Below' : 'Close Other Tabs', () => {
+      for (const id of ids) this.closeTab(id);
+      return ids;
+    });
   }
 
   togglePin(tabId: string, windowId?: string) {
@@ -500,15 +526,17 @@ export class Store {
     const found = this.findFolder(folderId);
     if (!found) return [];
     const { folder, parent } = found;
-    parent.splice(parent.indexOf(folder), 1, ...(keepTabs ? folder.children : []));
-    const removed = keepTabs ? [] : pinnedTabIds(folder.children);
-    for (const id of removed) {
-      this.archive(this.state.tabs[id]);
-      delete this.state.tabs[id];
-    }
-    this.forgetMissingActive();
-    this.changed();
-    return removed;
+    return this.undoable(`Delete “${folder.name}”`, () => {
+      parent.splice(parent.indexOf(folder), 1, ...(keepTabs ? folder.children : []));
+      const removed = keepTabs ? [] : pinnedTabIds(folder.children);
+      for (const id of removed) {
+        this.archive(this.state.tabs[id]);
+        delete this.state.tabs[id];
+      }
+      this.forgetMissingActive();
+      this.changed();
+      return removed;
+    });
   }
 
   /** Moves a folder within the pinned tabs of any Space; never into itself. Returns whether it moved. */
@@ -572,20 +600,22 @@ export class Store {
     if (this.state.spaces.length < 2) return [];
     const space = this.savedSpace(spaceId);
     if (!space) return [];
-    const ids = [...pinnedTabIds(space.pinned)];
-    for (const win of [...this.state.windows, ...this.state.closedWindows]) {
-      ids.push(...(win.spaces[spaceId]?.today ?? []));
-      delete win.spaces[spaceId];
-    }
-    for (const id of ids) {
-      this.archive(this.state.tabs[id]);
-      delete this.state.tabs[id];
-    }
-    this.state.spaces = this.state.spaces.filter((s) => s !== space);
-    for (const win of [...this.state.windows, ...this.state.closedWindows]) if (win.activeSpaceId === spaceId) win.activeSpaceId = this.state.spaces[0].id;
-    this.state.closedWindows = this.state.closedWindows.filter((w) => Object.keys(w.spaces).length);
-    this.changed();
-    return ids;
+    return this.undoable(`Delete “${space.name}”`, () => {
+      const ids = [...pinnedTabIds(space.pinned)];
+      for (const win of [...this.state.windows, ...this.state.closedWindows]) {
+        ids.push(...(win.spaces[spaceId]?.today ?? []));
+        delete win.spaces[spaceId];
+      }
+      for (const id of ids) {
+        this.archive(this.state.tabs[id]);
+        delete this.state.tabs[id];
+      }
+      this.state.spaces = this.state.spaces.filter((s) => s !== space);
+      for (const win of [...this.state.windows, ...this.state.closedWindows]) if (win.activeSpaceId === spaceId) win.activeSpaceId = this.state.spaces[0].id;
+      this.state.closedWindows = this.state.closedWindows.filter((w) => Object.keys(w.spaces).length);
+      this.changed();
+      return ids;
+    });
   }
 
   /** Returns the Space's tab ids in every open window: their pages must be reopened in the new session. */
@@ -607,15 +637,18 @@ export class Store {
   clearToday(windowId?: string): string[] {
     const win = this.window(windowId);
     const ws = this.windowSpace(win.activeSpaceId, win.id);
-    const ids = ws.today.splice(0);
-    for (const id of ids) {
-      this.archive(this.state.tabs[id]);
-      delete this.state.tabs[id];
-    }
-    if (ws.activeTabId && ids.includes(ws.activeTabId)) ws.activeTabId = undefined;
-    this.forgetMissingActive();
-    this.changed();
-    return ids;
+    if (!ws.today.length) return [];
+    return this.undoable('Clear Today Tabs', () => {
+      const ids = ws.today.splice(0);
+      for (const id of ids) {
+        this.archive(this.state.tabs[id]);
+        delete this.state.tabs[id];
+      }
+      if (ws.activeTabId && ids.includes(ws.activeTabId)) ws.activeTabId = undefined;
+      this.forgetMissingActive();
+      this.changed();
+      return ids;
+    });
   }
 
   /** Arc's auto-archive: Today tabs untouched for a while go away on their own, in every open window. */
@@ -802,8 +835,132 @@ export class Store {
   replaceState(state: BrowserState): boolean {
     if (!state?.spaces?.length || !state.tabs || !state.windows?.length) return false;
     this.state = state;
+    // Undo steps name places in the state they came from.
+    this.undoSteps = [];
     this.changed();
     return true;
+  }
+
+  // ---- undo -----------------------------------------------------------------------
+
+  /** What `undo` would take back ("Delete “Work”"), if anything. */
+  get undoLabel(): string | undefined {
+    return this.undoSteps.at(-1)?.label;
+  }
+
+  /** Runs a change that one undo takes back whole. A change inside another one joins it. */
+  undoable<T>(label: string, change: () => T): T {
+    if (this.recording) return change();
+    const before = structuredClone({ spaces: this.state.spaces, favorites: this.state.favorites, windows: this.state.windows, closedWindows: this.state.closedWindows });
+    const tabs = { ...this.state.tabs };
+    const archive = new Set(this.state.archive);
+    this.recording = true;
+    let result: T;
+    try {
+      result = change();
+    } finally {
+      this.recording = false;
+    }
+    const touched = changedPlaces(listsOf(before), listsOf(this.state));
+    const spaceGone = before.spaces.some((s) => !this.savedSpace(s.id));
+    if (touched.size || spaceGone) {
+      const removed = Object.fromEntries(Object.entries(tabs).filter(([id]) => !this.state.tabs[id]));
+      const archived = new Set(this.state.archive.filter((a) => !archive.has(a)));
+      this.undoSteps.push({ label, before, removed, archived, touched });
+      this.undoSteps.splice(0, this.undoSteps.length - UNDO_LIMIT);
+      this.changed();
+    }
+    return result;
+  }
+
+  /**
+   * Takes back the last undoable change: deleted Spaces, folders and tabs come back, and what it
+   * moved goes back, each after what it followed before. Changes made since stay. Returns its label.
+   */
+  undo(): string | undefined {
+    const step = this.undoSteps.pop();
+    if (!step) return undefined;
+    const { before } = step;
+    for (const [id, tab] of Object.entries(step.removed)) this.state.tabs[id] ??= tab;
+    this.state.archive = this.state.archive.filter((a) => !step.archived.has(a));
+
+    const restoredSpaces = new Set<string>();
+    before.spaces.forEach((space, i) => {
+      if (this.savedSpace(space.id)) return;
+      const previous = before.spaces.slice(0, i).map((s) => this.state.spaces.findIndex((n) => n.id === s.id));
+      this.state.spaces.splice(Math.max(-1, ...previous) + 1, 0, { ...space, pinned: [] });
+      restoredSpaces.add(space.id);
+    });
+    for (const win of before.closedWindows) {
+      if (!this.state.closedWindows.some((w) => w.id === win.id)) this.state.closedWindows.push({ ...win, spaces: {} });
+    }
+    this.state.closedWindows.sort((a, b) => b.closedAt - a.closedAt);
+    const windowNow = (id: string) => [...this.state.windows, ...this.state.closedWindows].find((w) => w.id === id);
+    for (const win of [...before.windows, ...before.closedWindows]) {
+      const now = windowNow(win.id);
+      if (!now) continue;
+      for (const [spaceId, { today, activeTabId, split, splitMode, ...rest }] of Object.entries(win.spaces)) {
+        if (this.savedSpace(spaceId)) now.spaces[spaceId] ??= { ...rest, today: [] };
+      }
+      if (restoredSpaces.has(win.activeSpaceId)) now.activeSpaceId = win.activeSpaceId;
+    }
+
+    // Folders, then tabs, back in their lists, in the order they had there.
+    for (const [list, keys] of listsOf(before)) {
+      keys.forEach((key, i) => {
+        if (step.touched.has(key)) this.putBack(key, list, keys.slice(0, i), before);
+      });
+    }
+
+    for (const win of [...before.windows, ...before.closedWindows]) {
+      const now = windowNow(win.id);
+      for (const [spaceId, ws] of Object.entries(win.spaces)) {
+        const current = now?.spaces[spaceId];
+        if (!current || current.activeTabId || !ws.activeTabId) continue;
+        const shown = this.hasWindow(win.id) ? this.allTabIds({ id: spaceId, pinned: this.savedSpace(spaceId)?.pinned ?? [] }, win.id) : current.today;
+        if (shown.includes(ws.activeTabId)) current.activeTabId = ws.activeTabId;
+      }
+    }
+    this.forgetMissingActive();
+    this.changed();
+    return step.label;
+  }
+
+  /** Puts a tab or folder back into `list`, after the last of `previous` that is there now. */
+  private putBack(key: string, list: string, previous: string[], before: Layout) {
+    const [kind, a, b] = list.split(':');
+    const pinned = kind === 'pinned' || kind === 'folder';
+    const target: string[] | PinnedNode[] | undefined =
+      kind === 'favorites'
+        ? this.state.favorites
+        : kind === 'pinned'
+          ? this.savedSpace(a)?.pinned
+          : kind === 'folder'
+            ? this.findFolder(a)?.folder.children
+            : this.savedSpace(b) && windowIn(this.state, a)
+              ? (windowIn(this.state, a)!.spaces[b] ??= { today: [] }).today
+              : undefined;
+    if (!target) return;
+    const id = key.slice(2);
+    let node: PinnedNode;
+    if (key.startsWith('t:')) {
+      const tab = this.state.tabs[id];
+      if (!tab) return;
+      this.detachEverywhere(id);
+      if (pinned || kind === 'favorites') tab.homeUrl ??= tab.url;
+      else delete tab.homeUrl;
+      node = { kind: 'tab', tabId: id };
+    } else {
+      const found = this.findFolder(id);
+      if (found) found.parent.splice(found.parent.indexOf(found.folder), 1);
+      const old = before.spaces.map((s) => findFolder(s.pinned, id)).find(Boolean)!;
+      node = found?.folder ?? { ...old, children: [] };
+    }
+    const keysNow = (target as Array<string | PinnedNode>).map((item) => (typeof item === 'string' ? `t:${item}` : nodeKey(item)));
+    const after = previous.reverse().find((k) => keysNow.includes(k));
+    const at = after ? keysNow.indexOf(after) + 1 : 0;
+    if (pinned) (target as PinnedNode[]).splice(at, 0, node);
+    else (target as string[]).splice(at, 0, id);
   }
 
   saveNow() {
@@ -1004,6 +1161,46 @@ function findParentList(nodes: PinnedNode[], id: string): PinnedNode[] | undefin
 
 function nodeId(node: PinnedNode) {
   return node.kind === 'tab' ? node.tabId : node.id;
+}
+
+const nodeKey = (node: PinnedNode) => (node.kind === 'tab' ? `t:${node.tabId}` : `f:${node.id}`);
+
+const plural = (n: number, one: string) => (n === 1 ? one : `${n} ${one}s`);
+
+function windowIn(layout: Layout, windowId: string) {
+  return [...layout.windows, ...layout.closedWindows].find((w) => w.id === windowId);
+}
+
+/**
+ * Every list of tabs and folders, by name ('favorites', 'pinned:<space>', 'folder:<id>',
+ * 'today:<window>:<space>'), with its items as `t:<tab>` or `f:<folder>`. A folder's own list
+ * comes after the list that holds it.
+ */
+function listsOf(layout: Layout): Map<string, string[]> {
+  const lists = new Map<string, string[]>([['favorites', layout.favorites.map((id) => `t:${id}`)]]);
+  const tree = (name: string, nodes: PinnedNode[]) => {
+    lists.set(name, nodes.map(nodeKey));
+    for (const n of nodes) if (n.kind === 'folder') tree(`folder:${n.id}`, n.children);
+  };
+  for (const space of layout.spaces) tree(`pinned:${space.id}`, space.pinned);
+  for (const win of [...layout.windows, ...layout.closedWindows]) {
+    for (const [spaceId, ws] of Object.entries(win.spaces)) lists.set(`today:${win.id}:${spaceId}`, ws.today.map((id) => `t:${id}`));
+  }
+  return lists;
+}
+
+/** The items that left their list, or changed places among the items that stayed in it. */
+function changedPlaces(before: Map<string, string[]>, after: Map<string, string[]>): Set<string> {
+  const listOf = new Map<string, string>();
+  for (const [name, keys] of after) for (const key of keys) listOf.set(key, name);
+  const changed = new Set<string>();
+  for (const [name, keys] of before) {
+    const stayed = keys.filter((key) => listOf.get(key) === name);
+    const order = (after.get(name) ?? []).filter((key) => stayed.includes(key));
+    for (const key of keys) if (listOf.get(key) !== name) changed.add(key);
+    stayed.forEach((key, i) => key !== order[i] && changed.add(key));
+  }
+  return changed;
 }
 
 function removePinned(nodes: PinnedNode[], tabId: string) {

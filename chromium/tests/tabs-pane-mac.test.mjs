@@ -14,3 +14,10 @@ test('macOS keeps ⌘-click, ⌘A and ⌘F, and leaves Control-click to the cont
   assert.equal(paneShortcut({ ...keys, metaKey: true, key: 'a' }), 'selectAll');
   assert.equal(paneShortcut({ ...keys, ctrlKey: true, key: 'f' }), undefined);
 });
+
+test('⌘Z undoes on macOS; Control+Z does not', async () => {
+  const { isUndoKey } = await loadModule('chromium/shell/lib/undo.ts');
+  const z = { ...keys, altKey: false, key: 'z' };
+  assert.equal(isUndoKey({ ...z, metaKey: true }), true);
+  assert.equal(isUndoKey({ ...z, ctrlKey: true }), false);
+});
