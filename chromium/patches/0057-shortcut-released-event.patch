@@ -16,7 +16,7 @@
      // <code>tabId</code> is the first (left) pane's tab, <code>ratio</code>
 --- a/chrome/browser/ui/views/frame/flecha_frame_view.h
 +++ b/chrome/browser/ui/views/frame/flecha_frame_view.h
-@@ -186,6 +186,13 @@
+@@ -188,6 +188,13 @@
    };
    void UnregisterShortcuts();
  
@@ -125,7 +125,7 @@
    action_menu_runner_.reset();
    UnregisterShortcuts();
    if (auto* peek_view = views::AsViewClass<views::WebView>(peek_view_.view())) {
-@@ -681,6 +753,7 @@
+@@ -695,6 +767,7 @@
  
  void FlechaFrameView::RemovedFromWidget() {
    popup_press_monitor_.reset();
@@ -133,7 +133,7 @@
    UnregisterShortcuts();
    views::WebView::RemovedFromWidget();
  }
-@@ -705,6 +778,38 @@
+@@ -719,6 +792,38 @@
    }
  }
  
@@ -172,7 +172,7 @@
  bool FlechaFrameView::ShortcutTarget::AcceleratorPressed(
      const ui::Accelerator& accelerator) {
    const auto& shortcuts = FlechaFrameHost::Shortcuts();
-@@ -730,6 +835,7 @@
+@@ -744,6 +849,7 @@
    event->user_gesture = extensions::EventRouter::UserGestureState::kEnabled;
    extensions::EventRouter::Get(profile)->DispatchEventToExtension(
        kFlechaShellExtensionId, std::move(event));

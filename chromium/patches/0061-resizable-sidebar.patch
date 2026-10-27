@@ -13,7 +13,7 @@
    callback DoneCallback = void();
 --- a/chrome/browser/flecha/flecha_frame_host.h
 +++ b/chrome/browser/flecha/flecha_frame_host.h
-@@ -41,7 +41,8 @@
+@@ -42,7 +42,8 @@
  // views so that the extension API can reach the frames, which live in the
  // browser views (chrome/browser/ui/views/frame/flecha_frame_view.h).
  
@@ -23,7 +23,7 @@
  inline constexpr int kFlechaSidebarWidth = 260;
  // With the sidebar hidden, this strip at the left edge brings it back on hover.
  inline constexpr int kFlechaEdgeWidth = 8;
-@@ -85,6 +86,9 @@
+@@ -86,6 +87,9 @@
    Sidebar sidebar = Sidebar::kDocked;
    bool overlay = false;
    SkColor background = SkColorSetRGB(0xe9, 0xec, 0xf2);
@@ -33,7 +33,7 @@
    // A Flechinha window: the browser sets this, never setFrame().
    bool flechinha = false;
    // The window is in fullscreen: the browser sets this, never setFrame().
-@@ -99,12 +103,12 @@
+@@ -100,12 +104,12 @@
      }
      switch (sidebar) {
        case Sidebar::kDocked:
@@ -49,7 +49,7 @@
      }
    }
  
-@@ -128,7 +132,7 @@
+@@ -129,7 +133,7 @@
      }
      return gfx::Insets::TLBR(
          kFlechaGap,

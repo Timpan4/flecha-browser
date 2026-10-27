@@ -5,6 +5,7 @@
  */
 import './noPageMenu';
 import { cmd } from './client';
+import { readHistory } from './lib/historyPaging';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const days = $('days');
@@ -15,6 +16,8 @@ const empty = $('empty');
 /** What is shown: the entries read so far for the current search, newest first. */
 let entries: chrome.history.HistoryItem[] = [];
 let exhausted = false;
+/** How many entries the last read asked for. */
+let asked = 0;
 let reading = 0;
 
 const dayLabel = (time: number) => {
@@ -82,23 +85,12 @@ function render() {
   more.hidden = exhausted;
 }
 
-/** chrome.history.search's default maxResults. */
-const PAGE = 100;
-
-/** Reads the next page of entries, from the last one shown back. */
+/** Reads a page more of entries (lib/historyPaging.ts). */
 async function readMore() {
   const call = ++reading;
-  const last = entries.at(-1)?.lastVisitTime;
-  // Up to and including the last one's time, so pages visited in the same instant aren't skipped.
-  // Those shown already come back: ask for as many more, so a page of them can't hide the rest.
-  const again = last === undefined ? 0 : entries.filter((e) => (e.lastVisitTime ?? 0) < last + 1).length;
-  const maxResults = PAGE + again;
-  const found = await chrome.history.search({ text: search.value.trim(), startTime: 0, maxResults, ...(last !== undefined ? { endTime: last + 1 } : {}) });
+  const read = await readHistory((query) => chrome.history.search(query), search.value.trim(), asked);
   if (call !== reading) return;
-  const known = new Set(entries.map((e) => e.id));
-  const fresh = found.filter((e) => !known.has(e.id)).sort((a, b) => (b.lastVisitTime ?? 0) - (a.lastVisitTime ?? 0));
-  exhausted = found.length < maxResults || fresh.length === 0;
-  entries.push(...fresh);
+  ({ entries, exhausted, asked } = read);
   render();
 }
 
@@ -106,6 +98,7 @@ async function readMore() {
 function reload() {
   entries = [];
   exhausted = false;
+  asked = 0;
   void readMore();
 }
 

@@ -740,6 +740,22 @@ try {
   await key('Escape', []);
   await popupGone();
   console.log('PASS an action picked in the extensions menu opens its popup from the puzzle button');
+  // An extension reloaded (as an update does) while its sidebar menu is open: the menu closes with
+  // the extension's action, whose menu model it showed, and the browser keeps running. Without
+  // developer mode, Chromium keeps a reloaded unpacked extension off: Quiet is gone from here on.
+  await rpc('newTab', 'chrome://extensions/');
+  const extensionsPage = await attach((await findTarget(t => t.type === 'page' && t.url.startsWith('chrome://extensions'))).targetId);
+  await loaded(extensionsPage, 'chrome://extensions');
+  const quietId = await evaluate(extensionsPage, "chrome.developerPrivate.getExtensionsInfo().then(list => list.find(e => e.name === 'Quiet Extension').id)");
+  const beforeReload = menuWindows().map(w => w.id);
+  xclick(quiet.x + quiet.width / 2, quiet.y + quiet.height / 2);
+  await until(() => menuWindows().some(w => !beforeReload.includes(w.id)));
+  await evaluate(extensionsPage, `chrome.developerPrivate.reload(${JSON.stringify(quietId)}, { failQuietly: true })`);
+  await until(() => menuWindows().length === beforeReload.length);
+  await domWhere(`() => !${quietButton}`);
+  assert.equal((await send('Browser.getVersion')).product.startsWith('Chrome/'), true);
+  await rpc('close', Object.values((await stateWhere('s => true')).tabs).find((t) => t.url.startsWith('chrome://extensions')).id);
+  console.log('PASS an extension reloaded while its sidebar menu is open closes the menu, and the browser keeps running');
   await rpc('newTab', base + '/plain-page');
   await findTarget(t => t.type === 'page' && t.url === base + '/plain-page');
   const sidebarBefore = pixel(frameWindow.x + 140, frameWindow.y + 64);

@@ -101,6 +101,23 @@ test('a closed window keeps its Today tabs to reopen; the last window stays open
   assert.equal(store.lastClosedWindowAt(), undefined);
 });
 
+test('a closed window\'s Today tabs are not among the tabs to switch to until it reopens', () => {
+  const { store, first, second } = twoWindows();
+  const here = store.addTab('https://example.com/here', { windowId: first });
+  const pinned = store.addTab('https://example.com/pin', { windowId: second });
+  store.togglePin(pinned.id);
+  const gone = store.addTab('https://example.com/gone', { windowId: second });
+  store.closeWindow(second);
+  assert.ok(store.state.tabs[gone.id]);
+  assert.deepEqual(Object.keys(store.openTabs()).sort(), [here.id, pinned.id].sort());
+  // Every tab offered can be switched to; the closed window's can't.
+  for (const id of Object.keys(store.openTabs())) assert.equal(store.activate(id, { windowId: first }), first);
+  assert.equal(store.activate(gone.id, { windowId: first }), undefined);
+  store.reopenWindow();
+  assert.ok(store.openTabs()[gone.id]);
+  assert.equal(store.activate(gone.id), second);
+});
+
 test('a reopened window shows a Today tab of its own when the tab it showed was shared', () => {
   const { store, first, second } = twoWindows();
   const older = store.addTab('https://example.com/older', { windowId: second });

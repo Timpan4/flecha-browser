@@ -200,7 +200,8 @@ async function start() {
 
   /** What the pages of a Flecha window draw. */
   function uiState(windowId: string, chromeWindowId: number | undefined): UiState {
-    const tabs = Object.fromEntries(Object.entries(store.state.tabs).map(([id, { history, ...tab }]) => [id, tab]));
+    // Not closed windows' tabs: the command bar would offer them, and there is no switching to them.
+    const tabs = Object.fromEntries(Object.entries(store.openTabs()).map(([id, { history, ...tab }]) => [id, tab]));
     const { windows: _windows, closedWindows: _closed, spaces: _spaces, ...shared } = store.state;
     const active = store.activeTabIn(windowId);
     const frame = frameOf(chromeWindowId);

@@ -210,6 +210,11 @@ export class Store {
     return undefined;
   }
 
+  /** The tabs a window can show or switch to: all but closed windows' Today tabs, which wait for their window to reopen. */
+  openTabs(): Record<string, TabInfo> {
+    return Object.fromEntries(Object.entries(this.state.tabs).filter(([id]) => this.locate(id)));
+  }
+
   // ---- tabs -----------------------------------------------------------------
 
   addTab(url: string, opts: { activate?: boolean; afterTabId?: string; windowId?: string } = {}): TabInfo {

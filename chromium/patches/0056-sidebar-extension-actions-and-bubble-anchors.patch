@@ -1,7 +1,14 @@
 # Flecha: with the toolbar hidden, the sidebar shows extension actions and runs them (chrome.flechaPrivate.getExtensionActions etc.); their popups and Chromium's own bubbles (permissions, passwords, app install, translate) anchor to the sidebar button or the page area instead of the hidden toolbar.
 --- a/chrome/browser/flecha/flecha_frame_host.h
 +++ b/chrome/browser/flecha/flecha_frame_host.h
-@@ -27,6 +27,10 @@
+@@ -21,12 +21,17 @@
+ 
+ class BrowserWindowInterface;
+ class GURL;
++class ToolbarActionViewModel;
+ 
+ namespace content {
+ class BrowserContext;
  class WebContents;
  }
  
@@ -12,7 +19,7 @@
  // Flecha's window frame: the shell's frame page (window.html) is a transparent
  // view over each normal window, and the browser lays the page area and the
  // window controls out around it, the way the Electron spike's Browser.layout()
-@@ -143,6 +147,19 @@
+@@ -143,6 +148,19 @@
    }
  };
  
@@ -32,7 +39,7 @@
  // One per normal browser window that shows the frame (FlechaFrameView).
  class FlechaFrameHost {
   public:
-@@ -161,6 +178,8 @@
+@@ -161,6 +179,8 @@
  
    // The host of window `window_id`, or null.
    static FlechaFrameHost* ForWindow(int window_id);
@@ -41,7 +48,7 @@
    // The window Flecha's tabs live in: the last active window of `context`'s
    // profile that is not a Flechinha, or null.
    static FlechaFrameHost* Main(content::BrowserContext* context);
-@@ -210,6 +229,25 @@
+@@ -210,6 +230,30 @@
    // The window itself.
    virtual BrowserWindowInterface* GetBrowserWindowInterface() = 0;
  
@@ -63,6 +70,11 @@
 +  // The action's context menu (options, pin, remove...) at `anchor`.
 +  virtual bool ShowExtensionActionMenu(const std::string& id,
 +                                       const gfx::Rect& anchor) = 0;
++  // An action's model in this window is going away (the extension updated or
++  // unloaded); a menu ShowExtensionActionMenu() opened with its menu model
++  // closes first.
++  virtual void OnExtensionActionModelDestroying(
++      const ToolbarActionViewModel* model) = 0;
 +
   protected:
    FlechaFrameHost();
@@ -119,7 +131,7 @@
    METADATA_HEADER(FlechaFrameView, views::WebView)
  
   public:
-@@ -102,6 +106,13 @@
+@@ -102,6 +106,15 @@
    void PromotePeek() override;
    bool HasPeek() const override;
    content::WebContents* GetPeekContents() override;
@@ -130,10 +142,12 @@
 +                          const gfx::Rect& anchor) override;
 +  bool ShowExtensionActionMenu(const std::string& id,
 +                               const gfx::Rect& anchor) override;
++  void OnExtensionActionModelDestroying(
++      const ToolbarActionViewModel* model) override;
  
    // Tells the shell about the Peek (chrome.flechaPrivate.onPeekChanged).
    void SendPeekChanged();
-@@ -136,6 +147,15 @@
+@@ -136,6 +149,15 @@
                             const extensions::Extension* extension,
                             extensions::UnloadedExtensionReason reason) override;
  
@@ -149,7 +163,7 @@
   private:
    // Opens the frame page (the shell is loaded), or closes it (it is not).
    void OpenFramePage();
-@@ -144,6 +164,13 @@
+@@ -144,6 +166,13 @@
    // Applies `state_` to the background, the layout and the window controls.
    void ApplyState();
  
@@ -163,7 +177,7 @@
    // Takes Flecha's shortcuts (FlechaFrameHost::Shortcuts()) at the window's
    // focus manager with high priority, the way extension commands are: on
    // macOS that is before the page and before the main menu's key
-@@ -159,6 +186,7 @@
+@@ -159,6 +188,7 @@
    };
    void UnregisterShortcuts();
  
@@ -171,7 +185,7 @@
    // The Peek's page and its delegate (flecha_frame_view.cc).
    class Peek;
    friend class Peek;
-@@ -168,6 +196,15 @@
+@@ -168,6 +198,18 @@
    // Owned by `browser_view_`, like this view; it may go first.
    views::ViewTracker background_view_;
    views::ViewTracker peek_view_;
@@ -183,11 +197,14 @@
 +  class PopupPressMonitor;
 +  std::unique_ptr<PopupPressMonitor> popup_press_monitor_;
 +  std::string popup_at_press_;
++  // The menu ShowExtensionActionMenu() opened, and the action model whose
++  // menu model it shows: the menu goes before that model does.
 +  std::unique_ptr<views::MenuRunner> action_menu_runner_;
++  raw_ptr<const ToolbarActionViewModel> action_menu_model_ = nullptr;
    std::unique_ptr<content::WebContents> frame_contents_;
    FlechaFrameState state_;
    // The frame page's -webkit-app-region: drag areas, in this view's
-@@ -181,6 +218,8 @@
+@@ -181,6 +223,8 @@
    base::ScopedObservation<extensions::ExtensionRegistry,
                            extensions::ExtensionRegistryObserver>
        registry_observation_{this};
@@ -320,7 +337,7 @@
    UnregisterShortcuts();
    if (auto* peek_view = views::AsViewClass<views::WebView>(peek_view_.view())) {
      peek_view->SetWebContents(nullptr);
-@@ -394,6 +466,182 @@
+@@ -394,6 +466,196 @@
    return peek_ ? peek_->contents() : nullptr;
  }
  
@@ -447,6 +464,10 @@
 +
 +bool FlechaFrameView::ShowExtensionActionMenu(const std::string& id,
 +                                              const gfx::Rect& anchor) {
++  // GetContextMenu() replaces the action's menu model, which the last menu
++  // may still show.
++  action_menu_runner_.reset();
++  action_menu_model_ = nullptr;
 +  ToolbarActionViewModel* action = GetToolbarAction(id);
 +  ui::MenuModel* menu = action ? action->GetContextMenu(
 +                                     extensions::ExtensionContextMenuModel::
@@ -457,12 +478,22 @@
 +  }
 +  gfx::Rect bounds = anchor;
 +  bounds.Offset(GetBoundsInScreen().OffsetFromOrigin());
++  action_menu_model_ = action;
 +  action_menu_runner_ = std::make_unique<views::MenuRunner>(
 +      menu, views::MenuRunner::HAS_MNEMONICS | views::MenuRunner::CONTEXT_MENU);
 +  action_menu_runner_->RunMenuAt(GetWidget(), nullptr, bounds,
 +                                 views::MenuAnchorPosition::kTopLeft,
 +                                 ui::mojom::MenuSourceType::kMouse);
 +  return true;
++}
++
++void FlechaFrameView::OnExtensionActionModelDestroying(
++    const ToolbarActionViewModel* model) {
++  // Its menu model goes with it; an open menu would use it as it closes.
++  if (model == action_menu_model_) {
++    action_menu_runner_.reset();
++    action_menu_model_ = nullptr;
++  }
 +}
 +
 +void FlechaFrameView::SendExtensionActionsChanged() {
@@ -503,7 +534,7 @@
  void FlechaFrameView::SendPeekChanged() {
    base::ListValue args;
    args.Append(GetWindowId());
-@@ -426,11 +674,13 @@
+@@ -426,11 +688,13 @@
  
  void FlechaFrameView::AddedToWidget() {
    views::WebView::AddedToWidget();
@@ -651,6 +682,18 @@
  
    extensions_container_views_->OnPopupShown(model_->GetId(), by_user);
  }
+@@ -119,6 +130,11 @@
+ 
+ void ExtensionActionDelegateDesktop::DetachFromModel() {
+   CHECK(model_);
++  // Flecha: the model is going away, and its context menu model with it; a
++  // sidebar menu showing that closes first.
++  if (FlechaFrameHost* flecha = FlechaFrameHost::ForBrowser(browser_)) {
++    flecha->OnExtensionActionModelDestroying(model_.get());
++  }
+   model_ = nullptr;
+ }
+ 
 --- a/chrome/browser/ui/views/extensions/BUILD.gn
 +++ b/chrome/browser/ui/views/extensions/BUILD.gn
 @@ -716,6 +716,7 @@

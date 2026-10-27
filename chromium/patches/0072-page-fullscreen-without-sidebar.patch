@@ -65,7 +65,7 @@
  }  // namespace extensions
 --- a/chrome/browser/flecha/flecha_frame_host.h
 +++ b/chrome/browser/flecha/flecha_frame_host.h
-@@ -93,14 +93,28 @@
+@@ -94,14 +94,28 @@
    bool flechinha = false;
    // The window is in fullscreen: the browser sets this, never setFrame().
    bool fullscreen = false;
@@ -94,7 +94,7 @@
      switch (sidebar) {
        case Sidebar::kDocked:
          return std::min(window_width, sidebar_width);
-@@ -121,9 +135,11 @@
+@@ -122,9 +136,11 @@
  
    // The page area, as insets from the window's edges.
    gfx::Insets PageInsets() const {
@@ -109,7 +109,7 @@
        return gfx::Insets();
      }
      if (flechinha) {
-@@ -229,6 +245,8 @@
+@@ -230,6 +246,8 @@
    // Whether the window was the last one active (among this profile's).
    virtual bool IsActiveWindow() const = 0;
    virtual void SetFrameState(const FlechaFrameState& state) = 0;
@@ -136,7 +136,7 @@
    void FocusFrame() override;
    void FocusPage() override;
    void UpdateShortcuts() override;
-@@ -141,8 +143,9 @@
+@@ -143,8 +145,9 @@
    blink::mojom::DisplayMode GetDisplayMode(
        const content::WebContents* source) override;
  
@@ -148,8 +148,8 @@
    void OnWindowFullscreenChanged();
  
    // extensions::ExtensionRegistryObserver:
-@@ -229,6 +232,12 @@
-   std::unique_ptr<views::MenuRunner> action_menu_runner_;
+@@ -234,6 +237,12 @@
+   raw_ptr<const ToolbarActionViewModel> action_menu_model_ = nullptr;
    std::unique_ptr<content::WebContents> frame_contents_;
    FlechaFrameState state_;
 +  // A page entering or leaving fullscreen while the window is already in
@@ -172,7 +172,7 @@
  #include "chrome/browser/ui/views/frame/browser_view.h"
  #include "chrome/browser/ui/views/frame/flecha_top_chrome.h"
  #include "chrome/browser/flecha/flecha_spaces.h"
-@@ -846,6 +848,7 @@
+@@ -860,6 +862,7 @@
    popup_press_monitor_ = std::make_unique<PopupPressMonitor>(this);
    ApplyState();
    UpdateShortcuts();
@@ -180,7 +180,7 @@
  }
  
  void FlechaFrameView::RemovedFromWidget() {
-@@ -981,6 +984,8 @@
+@@ -995,6 +998,8 @@
    FlechaFrameState state = new_state;
    state.flechinha = state_.flechinha;
    state.fullscreen = state_.fullscreen;
@@ -189,7 +189,7 @@
    if (state == state_) {
      return;
    }
-@@ -988,6 +993,14 @@
+@@ -1002,6 +1007,14 @@
    ApplyState();
  }
  
@@ -204,7 +204,7 @@
  void FlechaFrameView::FocusFrame() {
    if (frame_contents_) {
      RequestFocus();
-@@ -1059,12 +1072,35 @@
+@@ -1073,12 +1086,35 @@
  }
  
  void FlechaFrameView::OnWindowFullscreenChanged() {
@@ -241,7 +241,7 @@
    // The frame page reads it as (display-mode: fullscreen), from its visual
    // properties.
    if (frame_contents_) {
-@@ -1077,6 +1113,33 @@
+@@ -1091,6 +1127,33 @@
    }
  }
  

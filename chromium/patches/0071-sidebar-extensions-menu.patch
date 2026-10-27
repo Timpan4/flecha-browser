@@ -60,7 +60,7 @@
  namespace {
 --- a/chrome/browser/flecha/flecha_frame_host.h
 +++ b/chrome/browser/flecha/flecha_frame_host.h
-@@ -243,19 +243,31 @@
+@@ -244,14 +244,22 @@
    // Null while the frame page isn't loaded (Chromium's own layout then).
    virtual views::View* GetPageAnchorView() = 0;
    // Where action `action_id`'s popup points: the sidebar button when
@@ -86,8 +86,10 @@
    virtual bool RunExtensionAction(const std::string& id,
                                    const gfx::Rect& anchor) = 0;
    // The action's context menu (options, pin, remove...) at `anchor`.
-   virtual bool ShowExtensionActionMenu(const std::string& id,
-                                        const gfx::Rect& anchor) = 0;
+@@ -262,6 +270,10 @@
+   // closes first.
+   virtual void OnExtensionActionModelDestroying(
+       const ToolbarActionViewModel* model) = 0;
 +  // Opens the extensions menu (the toolbar's puzzle-piece button's) below
 +  // `anchor`, the sidebar's extensions button in the frame page, or closes it
 +  // when it is open. False when the window has no extensions menu.
@@ -113,7 +115,7 @@
  #include "ui/views/controls/webview/webview.h"
  #include "ui/views/view_tracker.h"
  
-@@ -108,11 +110,14 @@
+@@ -108,6 +110,8 @@
    content::WebContents* GetPeekContents() override;
    views::View* GetPageAnchorView() override;
    views::View* GetPopupAnchorView(const std::string& action_id) override;
@@ -122,13 +124,15 @@
    std::vector<FlechaExtensionAction> GetExtensionActions() override;
    bool RunExtensionAction(const std::string& id,
                            const gfx::Rect& anchor) override;
-   bool ShowExtensionActionMenu(const std::string& id,
+@@ -115,6 +119,7 @@
                                 const gfx::Rect& anchor) override;
+   void OnExtensionActionModelDestroying(
+       const ToolbarActionViewModel* model) override;
 +  bool ShowExtensionsMenu(const gfx::Rect& anchor) override;
  
    // Tells the shell about the Peek (chrome.flechaPrivate.onPeekChanged).
    void SendPeekChanged();
-@@ -170,6 +175,9 @@
+@@ -172,6 +177,9 @@
    // `anchor`, in the frame page's coordinates, in the background view's
    // (both sit at the window's top-left).
    void SetActionAnchor(const std::string& id, const gfx::Rect& anchor);
@@ -138,7 +142,7 @@
  
    // Takes Flecha's shortcuts (FlechaFrameHost::Shortcuts()) at the window's
    // focus manager with high priority, the way extension commands are: on
-@@ -213,6 +221,11 @@
+@@ -215,6 +223,11 @@
    class PopupPressMonitor;
    std::unique_ptr<PopupPressMonitor> popup_press_monitor_;
    std::string popup_at_press_;
@@ -147,9 +151,9 @@
 +  std::optional<gfx::Point> extensions_menu_press_;
 +  // True while ShowExtensionsMenu() opens the menu at the sidebar button.
 +  bool opening_extensions_menu_ = false;
+   // The menu ShowExtensionActionMenu() opened, and the action model whose
+   // menu model it shows: the menu goes before that model does.
    std::unique_ptr<views::MenuRunner> action_menu_runner_;
-   std::unique_ptr<content::WebContents> frame_contents_;
-   FlechaFrameState state_;
 --- a/chrome/browser/ui/views/frame/flecha_frame_view.cc
 +++ b/chrome/browser/ui/views/frame/flecha_frame_view.cc
 @@ -8,6 +8,7 @@

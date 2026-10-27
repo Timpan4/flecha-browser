@@ -16,7 +16,7 @@
    interface Events {
 --- a/chrome/browser/flecha/flecha_frame_host.h
 +++ b/chrome/browser/flecha/flecha_frame_host.h
-@@ -196,6 +196,11 @@
+@@ -197,6 +197,11 @@
    // (chrome.flechaPrivate.setPeekTabs()).
    static std::set<int>& PeekTabs();
  
@@ -45,7 +45,7 @@
      return false;
 --- a/chrome/browser/ui/views/frame/flecha_frame_view.h
 +++ b/chrome/browser/ui/views/frame/flecha_frame_view.h
-@@ -200,6 +200,8 @@
+@@ -202,6 +202,8 @@
    std::unique_ptr<Peek> peek_;
  
    raw_ptr<BrowserView> browser_view_;
