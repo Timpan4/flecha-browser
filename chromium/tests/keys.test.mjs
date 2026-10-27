@@ -8,5 +8,7 @@ const { isEnter } = await loadModule('chromium/shell/lib/keys.ts');
 test('Enter commits, except while an IME (Japanese, Chinese, Korean) is composing', () => {
   assert.equal(isEnter({ key: 'Enter', isComposing: false }), true);
   assert.equal(isEnter({ key: 'Enter', isComposing: true }), false);
+  assert.equal(isEnter({ key: 'Enter', isComposing: false, keyCode: 229 }), false);
+  assert.equal(isEnter({ key: 'Enter', isComposing: false, keyCode: 13 }), true);
   assert.equal(isEnter({ key: 'a', isComposing: false }), false);
 });
