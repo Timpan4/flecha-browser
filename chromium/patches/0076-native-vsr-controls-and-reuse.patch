@@ -74,7 +74,7 @@ index be82380..e8d3ef9 100755
  }  // namespace viz
  #endif
 diff --git a/components/viz/service/display_embedder/flecha_video_processor.cc b/components/viz/service/display_embedder/flecha_video_processor.cc
-index 87ebeb0..f200b3b 100644
+index 87ebeb0..2e457dd 100644
 --- a/components/viz/service/display_embedder/flecha_video_processor.cc
 +++ b/components/viz/service/display_embedder/flecha_video_processor.cc
 @@ -6,10 +6,12 @@
@@ -261,7 +261,7 @@ index 87ebeb0..f200b3b 100644
  
  FlechaVideoProcessor::~FlechaVideoProcessor() {
    // Keep the imported storage alive until all compositor sampling has finished.
-@@ -252,14 +311,80 @@ FlechaVideoProcessor::~FlechaVideoProcessor() {
+@@ -252,14 +311,78 @@ FlechaVideoProcessor::~FlechaVideoProcessor() {
    }
    auto* queue = resources_->queue.get();
    queue->GetFenceHelper()->EnqueueCleanupTaskForSubmittedWork(base::BindOnce(
@@ -315,11 +315,9 @@ index 87ebeb0..f200b3b 100644
 +
 +void FlechaVideoProcessorPool::Recycle(
 +    std::unique_ptr<FlechaVideoProcessor::Resources> resources) {
-+  // A slot without a CUDA binding only does GPU scaling. Dropping it lets a
-+  // later Acquire() retry the bridge.
-+  if (!resources->frame) {
-+    return;
-+  }
++  // A slot without a CUDA binding only does GPU scaling. It stays pooled so a
++  // persistent bridge failure costs one setup per size, not one per frame; a
++  // quality change keys a new slot and retries the bridge.
 +  idle_bytes_ += resources->allocation_bytes();
 +  idle_.push_back(std::move(resources));
 +  TrimIdleResources();
@@ -344,7 +342,7 @@ index 87ebeb0..f200b3b 100644
  }
  
  bool FlechaVideoProcessor::Process(
-@@ -287,6 +412,7 @@ bool FlechaVideoProcessor::Process(
+@@ -287,6 +410,7 @@ bool FlechaVideoProcessor::Process(
    if (!context->setBackendTextureState(r.output_texture, external)) {
      return false;
    }
@@ -352,7 +350,7 @@ index 87ebeb0..f200b3b 100644
    GrBackendSemaphore ready = GrBackendSemaphores::MakeVk(r.input_ready);
    GrFlushInfo flush{.fNumSemaphores = 1, .fSignalSemaphores = &ready};
    auto result = context->flush(r.input_surface.get(), flush, &external);
-@@ -294,9 +420,10 @@ bool FlechaVideoProcessor::Process(
+@@ -294,9 +418,10 @@ bool FlechaVideoProcessor::Process(
        !context->submit(GrSyncCpu::kNo)) {
      return false;
    }
@@ -365,7 +363,7 @@ index 87ebeb0..f200b3b 100644
      r.context_lost = true;
      Bridge().disabled.store(true, std::memory_order_relaxed);
      r.context->MarkContextLost();
-@@ -314,10 +441,15 @@ bool FlechaVideoProcessor::Process(
+@@ -314,10 +439,15 @@ bool FlechaVideoProcessor::Process(
      return false;
    }
    if (!processed) {
