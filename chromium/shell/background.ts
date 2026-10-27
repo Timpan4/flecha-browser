@@ -1034,10 +1034,11 @@ async function start() {
     }),
     moveSpace: spacesOnly((id: string, beforeId?: string) => store.moveSpace(String(id), typeof beforeId === 'string' ? beforeId : undefined)),
     // Restored tabs open on demand; sync() reopens any whose Space now has other cookies.
-    undo: spacesOnly(() => {
+    // Incognito too: Clear Today Tabs and closing tabs there record undo steps.
+    undo: () => {
       const label = store.undo();
       broadcastTo(hereChrome(), 'flash', label ? `Undid ${label}` : 'Nothing to undo');
-    }),
+    },
     toggleFolder: (id: string) => store.toggleFolder(id),
     renameFolder: (id: string, name: string) => store.renameFolder(id, name),
     moveTab: (id: string, target: DropTarget) => store.moveTab(id, target, here()),

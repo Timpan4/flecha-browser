@@ -165,3 +165,36 @@ test('undoing a Space deletion brings back its split view', () => {
   assert.deepEqual(ws.split, [left.id, right.id]);
   assert.deepEqual(ws, before);
 });
+
+test('a deleted tab whose window has closed since stays in the archive', () => {
+  const { store, second } = twoWindows();
+  const tab = store.addTab('https://example.com/only', { windowId: second });
+  store.clearToday(second);
+  store.closeWindow(second);
+  assert.equal(store.undo(), 'Clear Today Tabs');
+  assert.equal(store.state.tabs[tab.id], undefined);
+  assert.deepEqual(store.state.archive.map((a) => a.url), ['https://example.com/only']);
+});
+
+test('undoing a move out of pinned gives the tab back its home', () => {
+  const { store, first, personal } = twoWindows();
+  const tab = store.addTab('https://home.example/', { windowId: first });
+  store.togglePin(tab.id, first);
+  store.updateTab(tab.id, { url: 'https://home.example/deep/page' });
+  store.undoable('Move Tab', () => store.placeTab(tab.id, { zone: 'today', spaceId: personal }, first));
+  assert.equal(store.state.tabs[tab.id].homeUrl, undefined);
+  store.undo();
+  assert.equal(store.state.tabs[tab.id].homeUrl, 'https://home.example/');
+});
+
+test('undo brings back archive entries the change pushed out', () => {
+  const { store, first } = twoWindows();
+  const old = Array.from({ length: 500 }, (_, i) => ({ url: `https://old.example/${i}`, title: '', closedAt: i }));
+  store.state.archive = [...old];
+  store.addTab('https://example.com/a', { windowId: first });
+  store.addTab('https://example.com/b', { windowId: first });
+  store.clearToday(first);
+  assert.equal(store.state.archive.at(-1).url, 'https://old.example/497');
+  store.undo();
+  assert.deepEqual(store.state.archive, old);
+});

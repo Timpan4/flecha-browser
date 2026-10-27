@@ -38,8 +38,12 @@ interface UndoStep {
   before: Layout;
   /** The tabs it deleted, as they were. */
   removed: Record<string, TabInfo>;
-  /** The archive entries it made for them. */
-  archived: Set<ArchivedTab>;
+  /** Their homes, which a move to Today forgets. */
+  homes: Record<string, string | undefined>;
+  /** The archive entries it made for the tabs it deleted, by tab. */
+  archived: Map<string, ArchivedTab>;
+  /** Older entries those pushed out of the archive. */
+  dropped: ArchivedTab[];
   /** Tabs (`t:<id>`) and folders (`f:<id>`) it moved or deleted. */
   touched: Set<string>;
 }
@@ -76,7 +80,8 @@ export class Store {
   private listeners: Array<(change: StoreChange) => void> = [];
   /** In memory only: a restart starts without undo. */
   private undoSteps: UndoStep[] = [];
-  private recording = false;
+  /** While an undoable change runs: the archive entries it makes, by tab. */
+  private recording?: Map<string, ArchivedTab>;
 
   constructor(private persistence: StatePersistence) {
     this.state = this.load() ?? this.initialState();
@@ -853,20 +858,23 @@ export class Store {
     if (this.recording) return change();
     const before = structuredClone({ spaces: this.state.spaces, favorites: this.state.favorites, windows: this.state.windows, closedWindows: this.state.closedWindows });
     const tabs = { ...this.state.tabs };
-    const archive = new Set(this.state.archive);
-    this.recording = true;
+    // Moving a tab to Today forgets its home, so keep each one.
+    const homes = Object.fromEntries(Object.entries(tabs).map(([id, tab]) => [id, tab.homeUrl]));
+    const archive = [...this.state.archive];
+    const archived = (this.recording = new Map());
     let result: T;
     try {
       result = change();
     } finally {
-      this.recording = false;
+      this.recording = undefined;
     }
     const touched = changedPlaces(listsOf(before), listsOf(this.state));
     const spaceGone = before.spaces.some((s) => !this.savedSpace(s.id));
     if (touched.size || spaceGone) {
       const removed = Object.fromEntries(Object.entries(tabs).filter(([id]) => !this.state.tabs[id]));
-      const archived = new Set(this.state.archive.filter((a) => !archive.has(a)));
-      this.undoSteps.push({ label, before, removed, archived, touched });
+      const kept = new Set(this.state.archive);
+      const dropped = archive.filter((a) => !kept.has(a));
+      this.undoSteps.push({ label, before, removed, homes, archived, dropped, touched });
       this.undoSteps.splice(0, this.undoSteps.length - UNDO_LIMIT);
       this.changed();
     }
@@ -882,7 +890,6 @@ export class Store {
     if (!step) return undefined;
     const { before } = step;
     for (const [id, tab] of Object.entries(step.removed)) this.state.tabs[id] ??= tab;
-    this.state.archive = this.state.archive.filter((a) => !step.archived.has(a));
 
     const restoredSpaces = new Set<string>();
     before.spaces.forEach((space, i) => {
@@ -907,9 +914,20 @@ export class Store {
     // Folders, then tabs, back in their lists, in the order they had there.
     for (const [list, keys] of listsOf(before)) {
       keys.forEach((key, i) => {
-        if (step.touched.has(key)) this.putBack(key, list, keys.slice(0, i), before);
+        if (step.touched.has(key)) this.putBack(key, list, keys.slice(0, i), before, step.homes);
       });
     }
+
+    // A deleted tab with nowhere to go back to (its window has closed since) stays archived.
+    const placed = new Set([...listsOf(this.state).values()].flat());
+    for (const id of Object.keys(step.removed)) {
+      if (!placed.has(`t:${id}`)) delete this.state.tabs[id];
+      else if (step.archived.has(id)) this.state.archive = this.state.archive.filter((a) => a !== step.archived.get(id));
+    }
+    // And what the step pushed out of the archive comes back, oldest last.
+    const archive = new Set(this.state.archive);
+    this.state.archive.push(...step.dropped.filter((a) => !archive.has(a)));
+    this.state.archive.length = Math.min(this.state.archive.length, ARCHIVE_LIMIT);
 
     for (const win of [...before.windows, ...before.closedWindows]) {
       const now = windowNow(win.id);
@@ -931,7 +949,7 @@ export class Store {
   }
 
   /** Puts a tab or folder back into `list`, after the last of `previous` that is there now. */
-  private putBack(key: string, list: string, previous: string[], before: Layout) {
+  private putBack(key: string, list: string, previous: string[], before: Layout, homes: UndoStep['homes']) {
     const [kind, a, b] = list.split(':');
     const pinned = kind === 'pinned' || kind === 'folder';
     const target: string[] | PinnedNode[] | undefined =
@@ -951,7 +969,7 @@ export class Store {
       const tab = this.state.tabs[id];
       if (!tab) return;
       this.detachEverywhere(id);
-      if (pinned || kind === 'favorites') tab.homeUrl ??= tab.url;
+      if (pinned || kind === 'favorites') tab.homeUrl = homes[id] ?? tab.homeUrl ?? tab.url;
       else delete tab.homeUrl;
       node = { kind: 'tab', tabId: id };
     } else {
@@ -1122,7 +1140,9 @@ export class Store {
 
   private archive(tab: TabInfo | undefined) {
     if (!tab || tab.url === 'about:blank') return;
-    this.state.archive.unshift({ url: tab.url, title: tab.title, closedAt: Date.now() });
+    const entry = { url: tab.url, title: tab.title, closedAt: Date.now() };
+    this.state.archive.unshift(entry);
+    this.recording?.set(tab.id, entry);
     this.state.archive.length = Math.min(this.state.archive.length, ARCHIVE_LIMIT);
   }
 
