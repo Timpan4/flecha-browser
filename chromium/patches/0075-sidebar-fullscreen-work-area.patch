@@ -1,0 +1,326 @@
+diff --git a/chrome/browser/ui/exclusive_access/exclusive_access_context.h b/chrome/browser/ui/exclusive_access/exclusive_access_context.h
+index e1ad5c2..005e858 100755
+--- a/chrome/browser/ui/exclusive_access/exclusive_access_context.h
++++ b/chrome/browser/ui/exclusive_access/exclusive_access_context.h
+@@ -28,6 +28,11 @@ class ExclusiveAccessContext {
+   // Returns whether the window hosting the browser view is fullscreen.
+   virtual bool IsFullscreen() const = 0;
+ 
++  // Flecha: keep page fullscreen inside the window while its sidebar is shown,
++  // leaving the desktop taskbar available. Other hosts retain normal
++  // fullscreen.
++  virtual bool ShouldKeepFullscreenWithinTab() const;
++
+   // Called when we transition between tab and browser fullscreen. This method
+   // updates the UI by showing/hiding the tab strip, toolbar and bookmark bar
+   // in the browser fullscreen. Currently only supported on Mac.
+diff --git a/chrome/browser/ui/exclusive_access/fullscreen_controller.cc b/chrome/browser/ui/exclusive_access/fullscreen_controller.cc
+index 8559775..50b6a52 100755
+--- a/chrome/browser/ui/exclusive_access/fullscreen_controller.cc
++++ b/chrome/browser/ui/exclusive_access/fullscreen_controller.cc
+@@ -396,6 +396,34 @@ void FullscreenController::OnTabDetachedFromView(WebContents* old_contents) {
+   old_contents->Resize(gfx::Rect(old_contents->GetPreferredSize()));
+ }
+ 
++// Flecha: sidebar-visible page fullscreen ends when its tab loses activation.
++// Captured tabs retain Chromium's independent fullscreen-within-tab behavior.
++void FullscreenController::OnTabDeactivated(WebContents* web_contents) {
++  if (IsFullscreenWithinTab(web_contents) &&
++      !web_contents->IsBeingVisiblyCaptured()) {
++    web_contents->ExitFullscreen(/*will_cause_resize=*/false);
++    return;
++  }
++  ExclusiveAccessControllerBase::OnTabDeactivated(web_contents);
++}
++
++void FullscreenController::UpdateFullscreenWithinTab(
++    WebContents* web_contents) {
++  if (!web_contents || !IsFullscreenWithinTab(web_contents) ||
++      web_contents->IsBeingVisiblyCaptured() ||
++      exclusive_access_manager()->context()->ShouldKeepFullscreenWithinTab()) {
++    return;
++  }
++  // The page's fullscreen element stays as it is. Its main frame stands in for
++  // the requesting frame, which the within-tab path does not keep.
++  content::RenderFrameHost* frame = web_contents->GetPrimaryMainFrame();
++  if (!CanEnterFullscreenModeForTab(frame)) {
++    return;
++  }
++  FullscreenWithinTabHelper::RemoveForWebContents(web_contents);
++  EnterFullscreenModeForTab(frame, FullscreenTabParams());
++}
++
+ void FullscreenController::OnTabClosing(WebContents* web_contents) {
+   if (IsFullscreenWithinTab(web_contents)) {
+     web_contents->ExitFullscreen(
+@@ -711,15 +739,23 @@ bool FullscreenController::MaybeToggleFullscreenWithinTab(
+   }
+ 
+   if (enter_fullscreen) {
+-    if (web_contents->IsBeingVisiblyCaptured()) {
++    // Flecha: reuse Chromium's content fullscreen path so keeping the sidebar
++    // also keeps the window inside the desktop work area.
++    if (web_contents->IsBeingVisiblyCaptured() ||
++        exclusive_access_manager()
++            ->context()
++            ->ShouldKeepFullscreenWithinTab()) {
+       FullscreenWithinTabHelper::CreateForWebContents(web_contents);
+       FullscreenWithinTabHelper::FromWebContents(web_contents)
+           ->SetIsFullscreenWithinTab(true);
++      PostFullscreenChangeNotification();
+       return true;
+     }
+   } else {
+     if (IsFullscreenWithinTab(web_contents)) {
+       FullscreenWithinTabHelper::RemoveForWebContents(web_contents);
++      // Flecha: the frame follows page fullscreen even without a window resize.
++      PostFullscreenChangeNotification();
+       return true;
+     }
+   }
+diff --git a/chrome/browser/ui/views/frame/browser_view.cc b/chrome/browser/ui/views/frame/browser_view.cc
+index 15b611e..44c6fce 100755
+--- a/chrome/browser/ui/views/frame/browser_view.cc
++++ b/chrome/browser/ui/views/frame/browser_view.cc
+@@ -680,6 +680,18 @@ class BrowserView::ExclusiveAccessContextImpl
+ 
+   bool IsFullscreen() const override { return browser_view_->IsFullscreen(); }
+ 
++  // Flecha: a page beside the docked sidebar fills its pane, not the desktop.
++  // A hidden or floating sidebar takes no room, so the page gets the screen.
++  bool ShouldKeepFullscreenWithinTab() const override {
++    const auto* frame = FlechaFrameView::From(&browser_view_.get());
++    if (!frame || !frame->IsActive()) {
++      return false;
++    }
++    const auto& state = frame->state();
++    return !state.flechinha && state.sidebar_in_page_fullscreen &&
++           state.sidebar == FlechaFrameState::Sidebar::kDocked;
++  }
++
+   Profile* GetProfile() override { return browser_view_->GetProfile(); }
+ 
+   void UpdateUIForTabFullscreen() override {
+diff --git a/chrome/browser/ui/views/frame/flecha_frame_view.cc b/chrome/browser/ui/views/frame/flecha_frame_view.cc
+index 58222b8..a067129 100755
+--- a/chrome/browser/ui/views/frame/flecha_frame_view.cc
++++ b/chrome/browser/ui/views/frame/flecha_frame_view.cc
+@@ -1005,6 +1005,7 @@ void FlechaFrameView::SetFrameState(const FlechaFrameState& new_state) {
+   }
+   state_ = state;
+   ApplyState();
++  UpdatePageFullscreenWithinWindow();
+ }
+ 
+ void FlechaFrameView::SetSidebarInPageFullscreen(bool show) {
+@@ -1013,6 +1014,15 @@ void FlechaFrameView::SetSidebarInPageFullscreen(bool show) {
+   }
+   state_.sidebar_in_page_fullscreen = show;
+   ApplyState();
++  UpdatePageFullscreenWithinWindow();
++}
++
++void FlechaFrameView::UpdatePageFullscreenWithinWindow() {
++  if (ExclusiveAccessManager* access =
++          ExclusiveAccessManager::From(browser_view_->browser())) {
++    access->fullscreen_controller()->UpdateFullscreenWithinTab(
++        browser_view_->GetActiveWebContents());
++  }
+ }
+ 
+ void FlechaFrameView::FocusFrame() {
+@@ -1090,9 +1100,13 @@ void FlechaFrameView::OnWindowFullscreenChanged() {
+   const bool fullscreen = browser_view_->IsFullscreen();
+   ExclusiveAccessManager* access =
+       ExclusiveAccessManager::From(browser_view_->browser());
++  // Flecha: content fullscreen can leave the native window maximized, with the
++  // desktop taskbar visible. It is independent of the window fullscreen state.
+   const bool page_fullscreen =
+-      fullscreen && access &&
+-      access->fullscreen_controller()->IsWindowFullscreenForTabOrPending();
++      access &&
++      (access->fullscreen_controller()->IsWindowFullscreenForTabOrPending() ||
++       access->fullscreen_controller()->IsFullscreenWithinTab(
++           browser_view_->GetActiveWebContents()));
+   if (fullscreen == state_.fullscreen &&
+       page_fullscreen == state_.page_fullscreen) {
+     return;
+diff --git a/chrome/browser/ui/exclusive_access/fullscreen_controller_state_unittest.cc b/chrome/browser/ui/exclusive_access/fullscreen_controller_state_unittest.cc
+index 1d67a76..4d86e97 100755
+--- a/chrome/browser/ui/exclusive_access/fullscreen_controller_state_unittest.cc
++++ b/chrome/browser/ui/exclusive_access/fullscreen_controller_state_unittest.cc
+@@ -64,6 +64,10 @@ class FullscreenControllerTestWindow : public ExclusiveAccessContext,
+     active_web_contents_ = web_contents;
+   }
+   void set_reentrant(bool reentrant) { reentrant_ = reentrant; }
++  // Flecha: model the host's sidebar-visible page-fullscreen policy.
++  void set_keep_fullscreen_within_tab(bool keep) {
++    keep_fullscreen_within_tab_ = keep;
++  }
+   void set_on_exit_fullscreen_mode_for_tab(base::OnceClosure closure) {
+     on_exit_fullscreen_mode_for_tab_ = std::move(closure);
+   }
+@@ -71,6 +75,9 @@ class FullscreenControllerTestWindow : public ExclusiveAccessContext,
+   // ExclusiveAccessContext Interface:
+   Profile* GetProfile() override { return profile_; }
+   bool IsFullscreen() const override;
++  bool ShouldKeepFullscreenWithinTab() const override {
++    return keep_fullscreen_within_tab_;
++  }
+   void EnterFullscreen(const url::Origin& origin,
+                        ExclusiveAccessBubbleType type,
+                        FullscreenTabParams fullscreen_tab_params) override;
+@@ -140,6 +147,7 @@ class FullscreenControllerTestWindow : public ExclusiveAccessContext,
+   bool IsTransitionReentrant(bool new_fullscreen);
+ 
+   WindowState state_ = kNormal;
++  bool keep_fullscreen_within_tab_ = false;
+   base::OnceClosure on_exit_fullscreen_mode_for_tab_;
+   raw_ptr<Profile> profile_ = nullptr;
+   raw_ptr<content::WebContents> active_web_contents_ = nullptr;
+@@ -436,6 +444,84 @@ void FullscreenControllerStateUnitTest::AttachTab(
+   }
+ }
+ 
++// Flecha: page fullscreen beside the sidebar must not fullscreen the OS window.
++TEST_F(FullscreenControllerStateUnitTest,
++       FlechaSidebarKeepsPageFullscreenWithinWindow) {
++  AddTab();
++  window_->set_keep_fullscreen_within_tab(true);
++  ASSERT_TRUE(InvokeEvent(ENTER_TAB_FULLSCREEN));
++  EXPECT_TRUE(GetTab(0)->IsFullscreen());
++  EXPECT_EQ(
++      content::FullscreenMode::kPseudoContent,
++      GetFullscreenController()->GetFullscreenState(GetTab(0)).target_mode);
++  EXPECT_EQ(FullscreenControllerTestWindow::kNormal, window_->state());
++  EXPECT_FALSE(GetFullscreenController()->IsWindowFullscreenForTabOrPending());
++
++  EXPECT_TRUE(GetFullscreenController()->HandleUserPressedEscape());
++  EXPECT_FALSE(GetTab(0)->IsFullscreen());
++  EXPECT_EQ(FullscreenControllerTestWindow::kNormal, window_->state());
++}
++
++TEST_F(FullscreenControllerStateUnitTest,
++       FlechaSidebarFullscreenExitsWhenSwitchingTabs) {
++  auto* old_tab = AddTab();
++  AddTab();
++  ActivateTab(0);
++  window_->set_keep_fullscreen_within_tab(true);
++  ASSERT_TRUE(InvokeEvent(ENTER_TAB_FULLSCREEN));
++  ASSERT_TRUE(old_tab->IsFullscreen());
++  ActivateTab(1);
++  EXPECT_FALSE(old_tab->IsFullscreen());
++  EXPECT_FALSE(GetFullscreenController()->IsFullscreenWithinTab(old_tab));
++  EXPECT_FALSE(GetFullscreenController()->IsFullscreenWithinTab(GetTab(1)));
++  EXPECT_EQ(FullscreenControllerTestWindow::kNormal, window_->state());
++}
++
++TEST_F(FullscreenControllerStateUnitTest,
++       FlechaHiddenSidebarRetainsNativePageFullscreen) {
++  AddTab();
++  ASSERT_TRUE(InvokeEvent(ENTER_TAB_FULLSCREEN));
++  ASSERT_TRUE(InvokeEvent(WINDOW_CHANGE));
++  EXPECT_TRUE(window_->IsFullscreen());
++  EXPECT_TRUE(GetFullscreenController()->IsWindowFullscreenForTabOrPending());
++  ASSERT_TRUE(InvokeEvent(EXIT_TAB_FULLSCREEN));
++  ASSERT_TRUE(InvokeEvent(WINDOW_CHANGE));
++  EXPECT_FALSE(window_->IsFullscreen());
++}
++
++TEST_F(FullscreenControllerStateUnitTest,
++       FlechaHidingSidebarMovesPageFullscreenToWindow) {
++  AddTab();
++  window_->set_keep_fullscreen_within_tab(true);
++  ASSERT_TRUE(InvokeEvent(ENTER_TAB_FULLSCREEN));
++  ASSERT_EQ(FullscreenControllerTestWindow::kNormal, window_->state());
++  window_->set_keep_fullscreen_within_tab(false);
++  GetFullscreenController()->UpdateFullscreenWithinTab(GetTab(0));
++  ASSERT_TRUE(InvokeEvent(WINDOW_CHANGE));
++  EXPECT_TRUE(window_->IsFullscreen());
++  EXPECT_TRUE(GetTab(0)->IsFullscreen());
++  EXPECT_FALSE(GetFullscreenController()->IsFullscreenWithinTab(GetTab(0)));
++  EXPECT_TRUE(GetFullscreenController()->IsWindowFullscreenForTabOrPending());
++  ASSERT_TRUE(InvokeEvent(EXIT_TAB_FULLSCREEN));
++  ASSERT_TRUE(InvokeEvent(WINDOW_CHANGE));
++  EXPECT_FALSE(window_->IsFullscreen());
++}
++
++TEST_F(FullscreenControllerStateUnitTest,
++       FlechaPageFullscreenPreservesExplicitBrowserFullscreen) {
++  AddTab();
++  window_->set_keep_fullscreen_within_tab(true);
++  ASSERT_TRUE(InvokeEvent(TOGGLE_FULLSCREEN));
++  ASSERT_TRUE(InvokeEvent(WINDOW_CHANGE));
++  ASSERT_TRUE(window_->IsFullscreen());
++  ASSERT_TRUE(InvokeEvent(ENTER_TAB_FULLSCREEN));
++  ASSERT_TRUE(InvokeEvent(EXIT_TAB_FULLSCREEN));
++  EXPECT_TRUE(window_->IsFullscreen());
++  EXPECT_TRUE(GetFullscreenController()->IsFullscreenForBrowser());
++  ASSERT_TRUE(InvokeEvent(TOGGLE_FULLSCREEN));
++  ASSERT_TRUE(InvokeEvent(WINDOW_CHANGE));
++}
++
+ // Soak tests ------------------------------------------------------------------
+ 
+ // Tests all states with all permutations of multiple events to detect lingering
+diff --git a/chrome/browser/ui/exclusive_access/BUILD.gn b/chrome/browser/ui/exclusive_access/BUILD.gn
+index 8b99441..d98fd74 100755
+--- a/chrome/browser/ui/exclusive_access/BUILD.gn
++++ b/chrome/browser/ui/exclusive_access/BUILD.gn
+@@ -15,6 +15,7 @@ source_set("exclusive_access") {
+     "exclusive_access_bubble_hide_callback.h",
+     "exclusive_access_bubble_type.cc",
+     "exclusive_access_bubble_type.h",
++    "exclusive_access_context.cc",
+     "exclusive_access_context.h",
+     "exclusive_access_controller_base.cc",
+     "exclusive_access_controller_base.h",
+diff --git a/chrome/browser/ui/exclusive_access/exclusive_access_context.cc b/chrome/browser/ui/exclusive_access/exclusive_access_context.cc
+new file mode 100644
+index 0000000..a39528f
+--- /dev/null
++++ b/chrome/browser/ui/exclusive_access/exclusive_access_context.cc
+@@ -0,0 +1,6 @@
++// Flecha: hosts opt into keeping page fullscreen inside the window.
++#include "chrome/browser/ui/exclusive_access/exclusive_access_context.h"
++
++bool ExclusiveAccessContext::ShouldKeepFullscreenWithinTab() const {
++  return false;
++}
+diff --git a/chrome/browser/ui/exclusive_access/fullscreen_controller.h b/chrome/browser/ui/exclusive_access/fullscreen_controller.h
+index 6c4711d..7f2dd97 100755
+--- a/chrome/browser/ui/exclusive_access/fullscreen_controller.h
++++ b/chrome/browser/ui/exclusive_access/fullscreen_controller.h
+@@ -125,6 +125,10 @@ class FullscreenController : public ExclusiveAccessControllerBase {
+   // tab. See 'FullscreenWithinTab Note'.
+   bool IsFullscreenWithinTab(const content::WebContents* web_contents) const;
+ 
++  // Flecha: a page kept in fullscreen inside the window takes the window's
++  // fullscreen once the context stops keeping it there (its sidebar hidden).
++  void UpdateFullscreenWithinTab(content::WebContents* web_contents);
++
+   // True if fullscreen was entered because of tab fullscreen (was not
+   // previously in user-initiated fullscreen).
+   bool IsFullscreenCausedByTab() const;
+@@ -162,6 +166,7 @@ class FullscreenController : public ExclusiveAccessControllerBase {
+   // Platform Fullscreen ///////////////////////////////////////////////////////
+ 
+   // Override from ExclusiveAccessControllerBase.
++  void OnTabDeactivated(content::WebContents* web_contents) override;
+   void OnTabDetachedFromView(content::WebContents* web_contents) override;
+   void OnTabClosing(content::WebContents* web_contents) override;
+   bool HandleUserPressedEscape() override;
+diff --git a/chrome/browser/ui/views/frame/flecha_frame_view.h b/chrome/browser/ui/views/frame/flecha_frame_view.h
+index 65093e5..44ccbca 100644
+--- a/chrome/browser/ui/views/frame/flecha_frame_view.h
++++ b/chrome/browser/ui/views/frame/flecha_frame_view.h
+@@ -243,6 +243,9 @@ class FlechaFrameView : public views::WebView,
+   void WatchPageFullscreen();
+   base::CallbackListSubscription page_fullscreen_subscription_;
+   void TellPageItLeftFullscreen();
++  // A page kept in fullscreen beside the sidebar takes the screen once the
++  // sidebar no longer stays beside it.
++  void UpdatePageFullscreenWithinWindow();
+   // The frame page's -webkit-app-region: drag areas, in this view's
+   // coordinates.
+   SkRegion draggable_region_;
