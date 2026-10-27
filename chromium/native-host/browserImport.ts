@@ -4,7 +4,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { DetectedBrowser, HistoryEntry } from '../shared/types';
-import { arcSidebarPath, readArcSidebar, type ArcImport, type ImportNode } from './arcImport';
+import { arcDir, readArc, type ArcImport, type ImportNode } from './arcImport';
 import type { BrowserImportData } from '../shared/importApply';
 
 /**
@@ -40,7 +40,7 @@ interface BrowserSource {
   readBookmarks(profile: Profile): Promise<ImportNode[]>;
   readHistory(profile: Profile): Promise<HistoryEntry[]>;
   /** For browsers whose sidebar says more than bookmarks do (Arc): imported in their place. */
-  sidebar?: { exists(): boolean; read(): ArcImport };
+  sidebar?: { exists(): boolean; read(): { arc: ArcImport; warnings: string[] } };
 }
 
 /** Electron's appData folder on macOS. */
@@ -125,13 +125,12 @@ function chromiumNode(node: any): ImportNode[] {
 
 /**
  * Arc is Chromium underneath, but its Spaces and pinned tabs live in its own sidebar file,
- * StorableSidebar.json, next to its User Data folder.
+ * StorableSidebar.json, next to its User Data folder, and archived tabs in StorableArchiveItems.json.
  */
 function arcSource(dir: string): BrowserSource {
-  const sidebar = path.join(dir, 'StorableSidebar.json');
   return {
     ...chromiumSource('arc', 'Arc', path.join(dir, 'User Data')),
-    sidebar: { exists: () => isFile(sidebar), read: () => readArcSidebar(sidebar) },
+    sidebar: { exists: () => isFile(path.join(dir, 'StorableSidebar.json')), read: () => readArc(dir) },
   };
 }
 
@@ -352,7 +351,7 @@ function sources(platform: NodeJS.Platform): BrowserSource[] {
   if (platform === 'darwin') {
     return [
       ...CHROMIUM.map(([id, name, dir]) => chromiumSource(id, name, appSupport(dir))),
-      arcSource(path.dirname(arcSidebarPath())),
+      arcSource(arcDir()),
       firefoxSource(appSupport('Firefox', 'Profiles')),
       safariSource(),
     ];
@@ -436,7 +435,9 @@ export async function readBrowser(id: string, platform: NodeJS.Platform = proces
 
   if (source.sidebar) {
     try {
-      result.arc = source.sidebar.read();
+      const { arc, warnings } = source.sidebar.read();
+      result.arc = arc;
+      result.warnings.push(...warnings);
     } catch (err) {
       warn(`${source.name}’s sidebar`, err);
     }

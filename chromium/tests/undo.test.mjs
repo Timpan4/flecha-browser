@@ -309,7 +309,7 @@ test('undo brings back no Space an import removed since', () => {
   const first = store.focusedWindowId;
   store.addTab('https://example.com/x', { windowId: first });
   store.clearToday(first);
-  store.importBookmarks('Chrome', []);
+  store.importSpaces([{ name: 'Chrome', pinned: [{ kind: 'tab', url: 'https://example.com/', title: 'Example' }], today: [] }], { mode: 'append' });
   store.undo();
   assert.deepEqual(store.state.spaces.map((s) => s.name), ['Chrome']);
 });

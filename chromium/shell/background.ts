@@ -1295,6 +1295,7 @@ async function start() {
   // about your regular Spaces, so incognito windows have neither.
   if (!incognito) nativeHost = registerNativeHost({
     store,
+    canIsolate,
     broadcastState: sendState,
     tabs: {
       open: (url, background) => openTab(url, !background).id,

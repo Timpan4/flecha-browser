@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { loadModule } from './load-module.mjs';
+import { writeArc } from './arc-fixture.mjs';
 
 const { detectBrowsers, readBrowser } = await loadModule('chromium/native-host/browserImport.ts');
 
@@ -136,6 +137,52 @@ test('Arc for Windows is found in its package folder, sidebar and all', async ()
     assert.equal(imported.arc.spaces[0].name, 'Work');
     assert.deepEqual(imported.arc.spaces[0].pinned, [{ kind: 'tab', url: 'https://example.com/docs', title: 'Docs' }]);
     assert.deepEqual(await fs.readFile(sidebar), original);
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    await fs.rm(home, { recursive: true, force: true });
+  }
+});
+
+test('Arc on macOS: Space colour, Profile, splits, favorites of every profile and the archive, without changing its files', async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-arc-mac-'));
+  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+  try {
+    process.env.HOME = home;
+    process.env.USERPROFILE = home;
+    const files = await writeArc(path.join(home, 'Library', 'Application Support', 'Arc'));
+    const original = await Promise.all(Object.values(files).map((file) => fs.readFile(file)));
+    assert.equal((await detectBrowsers('darwin')).find(({ id }) => id === 'arc')?.hasBookmarks, true);
+    const { arc, warnings } = await readBrowser('arc', 'darwin');
+    assert.deepEqual(warnings, []);
+    const [personal, work] = arc.spaces;
+    assert.deepEqual([personal.name, personal.emoji, personal.color, personal.profile], ['Personal', '🏠', '#336699', undefined]);
+    // Clamped to 0–1: 1.2 → ff, -0.1 → 00, 0.5 → 80. The profile's name comes from Local State.
+    assert.deepEqual([work.name, work.color, work.profile], ['Work', '#ff0080', { dir: 'Profile 1', name: 'Work profile' }]);
+    // A split's tabs stay where the split was; arc: pages and Easels are left out.
+    assert.deepEqual(personal.pinned.map((n) => (n.kind === 'tab' ? n.url : n.name)), ['https://docs.example.com/', 'Dev', 'https://left.example.com/', 'https://right.example.com/']);
+    assert.deepEqual(personal.today.map((t) => t.url), ['https://news.example.com/', 'https://a.example.com/', 'https://b.example.com/', 'https://c.example.com/']);
+    assert.deepEqual(personal.splits, [['https://left.example.com/', 'https://right.example.com/'], ['https://a.example.com/', 'https://b.example.com/', 'https://c.example.com/']]);
+    // newContainerIDs with object markers, unpinned listed first.
+    assert.deepEqual(work.pinned, [{ kind: 'tab', url: 'https://work.example.com/', title: 'Work home' }]);
+    assert.deepEqual(work.splits, [['https://w1.example.com/', 'https://w2.example.com/'], ['https://w3.example.com/', 'https://w4.example.com/']]);
+    assert.deepEqual(arc.favorites.map((t) => t.url), ['https://mail.example.com/', 'https://calendar.example.com/']);
+    assert.deepEqual(arc.archive, [
+      { url: 'https://old.example.com/', title: 'Old, renamed', closedAt: Date.parse('2025-06-01T10:00:00Z') },
+      { url: 'https://old.example.com/', title: 'Old', closedAt: Date.parse('2025-05-01T10:00:00Z') },
+      { url: 'https://older.example.com/', title: 'Older', closedAt: Date.parse('2025-04-01T10:00:00Z') },
+    ]);
+    assert.deepEqual(arc.skipped, { 'non-web tab': 1, easel: 1 });
+    assert.deepEqual(await Promise.all(Object.values(files).map((file) => fs.readFile(file))), original);
+
+    // An unreadable archive is reported; the sidebar still comes over.
+    await fs.writeFile(files.archive, '{broken');
+    const partial = await readBrowser('arc', 'darwin');
+    assert.equal(partial.arc.spaces.length, 2);
+    assert.deepEqual(partial.arc.archive, []);
+    assert.match(partial.warnings.join(), /Couldn’t read Arc’s archived tabs/);
   } finally {
     for (const [key, value] of Object.entries(saved)) {
       if (value === undefined) delete process.env[key];

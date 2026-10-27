@@ -109,7 +109,8 @@ const api: FlechaApi = {
   // Extensions can't read other apps' icons; the onboarding falls back to the name.
   appIcon: async () => undefined,
   detectBrowsers: () => invoke('detectBrowsers'),
-  importBrowser: (id) => invoke('importBrowser', id),
+  previewImport: (id) => invoke('previewImport', id),
+  importBrowser: (id, options) => invoke('importBrowser', id, options),
   // On the new tab page, what you type opens in this tab.
   newTab: surface === 'newtab' ? cmd('navigate') : cmd('newTab'),
   navigate: cmd('navigate'),
