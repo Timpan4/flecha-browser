@@ -138,6 +138,7 @@ const SETTINGS: Record<string, Check> = {
   sidebarWidth: (v) => isNumber(v) && (v as number) >= SIDEBAR_MIN_WIDTH && (v as number) <= SIDEBAR_MAX_WIDTH,
   peekPinnedLinks: isBoolean,
   openLinksInFlechinha: isBoolean,
+  sidebarInPageFullscreen: isBoolean,
   archiveAfterHours: (v) => isNumber(v) && (v as number) >= 0,
   sitePermissions: recordOf(recordOf(oneOf('allow', 'block'))),
   searchEngine: oneOf('google', 'duckduckgo', 'bing', 'brave', 'kagi', 'ecosia'),
@@ -156,6 +157,7 @@ const TAB_FIELDS: Record<string, Check> = {
   muted: isBoolean,
   device: oneOf('mobile'),
   homeUrl: isString,
+  unseen: isBoolean,
   history: fields({ index: isNumber, entries: (e) => Array.isArray(e) && e.every(fields({ url: isString, title: isString, pageState: isString }, ['pageState'])) }),
 };
 

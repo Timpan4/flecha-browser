@@ -1,0 +1,115 @@
+// The command bar's one ranked list, as Arc's Command Bar orders it, and its inline autocomplete.
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { test } from 'node:test';
+import { loadModule } from './load-module.mjs';
+
+const { displayUrl, historyQuery, inlineCompletion, matchQuality, rank, score } = await loadModule('chromium/shell/lib/commandBar.ts');
+const { SEARCH_ENGINES } = await loadModule('chromium/shell/lib/url.ts');
+
+const result = (label, kind, match, extra = {}) => ({ label, score: score(kind, match), ...extra });
+const labels = (results) => rank(results).map((r) => r.label);
+
+test('what is typed matches the start of a text, the start of its words, or anywhere in it', () => {
+  assert.equal(matchQuality('georg', 'georgia okeeffe'), 'start');
+  assert.equal(matchQuality('okee', 'georgia okeeffe'), 'word');
+  assert.equal(matchQuality('pin geo', 'Pin to Georgia'), 'word');
+  assert.equal(matchQuality('effe', 'georgia okeeffe'), 'contains');
+  assert.equal(matchQuality('xyz', 'georgia okeeffe', 'example.org'), undefined);
+  assert.equal(matchQuality('  ', 'anything'), undefined);
+  assert.equal(matchQuality('EXAM', 'Title', 'example.org/a'), 'start');
+});
+
+test('a tab or action that starts with the query comes before the typed search, and suggestions after it', () => {
+  // "georg" in Arc's demo: the tab, an action, the search, then looser matches.
+  const ranked = labels([
+    result('georg', 'search'),
+    result('georg one', 'suggestion'),
+    result('Museum — Georgia O’Keeffe', 'tab', 'word', { url: 'https://museum.example/' }),
+    result('georgia okeeffe', 'tab', 'start', { url: 'https://g.example/' }),
+    result('Georgia history', 'history', 'start', { url: 'https://h.example/' }),
+    result('Pin to Georgia', 'action', 'start'),
+  ]);
+  assert.deepEqual(ranked, ['Pin to Georgia', 'georgia okeeffe', 'georg', 'Museum — Georgia O’Keeffe', 'Georgia history', 'georg one']);
+});
+
+test('with nothing better, the typed search is the top hit', () => {
+  const ranked = labels([result('weather', 'search'), result('weather radar', 'suggestion'), result('Weather — smhi.se', 'history', 'contains', { url: 'https://smhi.se/' })]);
+  assert.deepEqual(ranked, ['weather', 'weather radar', 'Weather — smhi.se']);
+});
+
+test('the page the address completes to is the top hit, and an open tab beats its own history entry', () => {
+  const ranked = rank([
+    result('1pass', 'search'),
+    result('1Password — history', 'history', 'start', { url: 'https://1password.com/' }),
+    result('1password.com', 'completion', undefined, { url: 'https://1password.com/' }),
+    result('Import — support', 'history', 'word', { url: 'https://support.1password.com/import' }),
+  ]);
+  assert.deepEqual(
+    ranked.map((r) => r.label),
+    ['1password.com', '1pass', 'Import — support'],
+  );
+});
+
+test('equal results go to the most recently used, then keep their order', () => {
+  const ranked = labels([
+    result('old', 'tab', 'start', { recency: 1, url: 'https://a.example/' }),
+    result('new', 'tab', 'start', { recency: 5, url: 'https://b.example/' }),
+    result('first', 'suggestion'),
+    result('second', 'suggestion'),
+  ]);
+  assert.deepEqual(ranked, ['new', 'old', 'first', 'second']);
+});
+
+test('loose matches of some kinds are not offered', () => {
+  assert.equal(score('action', 'contains'), undefined);
+  assert.equal(score('tab', undefined), undefined);
+  assert.equal(score('search'), score('search', 'contains'));
+});
+
+test('rows show the address without scheme, www or a trailing slash', () => {
+  assert.equal(displayUrl('https://www.github.com/foo/'), 'github.com/foo');
+  assert.equal(displayUrl('https://example.org/'), 'example.org');
+  assert.equal(displayUrl('http://localhost:3000/a?b=1'), 'localhost:3000/a?b=1');
+  assert.equal(displayUrl('chrome://settings/'), 'chrome://settings/');
+  assert.equal(displayUrl('not a url'), 'not a url');
+});
+
+test('a site name completes inline to the site, and a longer address to the page', () => {
+  const visited = [
+    { url: 'https://support.1password.com/import-safari/', title: 'Import from Safari', weight: 9 },
+    { url: 'https://1password.com/', title: '1Password', weight: 2 },
+    { url: 'https://1password.com/pricing', title: 'Pricing', weight: 7 },
+  ];
+  assert.deepEqual(inlineCompletion('1pass', visited), { text: '1password.com', url: 'https://1password.com/', title: '1Password' });
+  assert.deepEqual(inlineCompletion('1password.com/p', visited), { text: '1password.com/pricing', url: 'https://1password.com/pricing', title: 'Pricing' });
+  assert.deepEqual(inlineCompletion('supp', visited), { text: 'support.1password.com', url: 'https://support.1password.com/', title: undefined });
+  // A site never visited at its front page still completes to the site, from the most used page.
+  assert.equal(inlineCompletion('WWW.EXAM', [{ url: 'https://www.example.org/a' }]), undefined);
+  assert.deepEqual(inlineCompletion('exam', [{ url: 'https://www.example.org/a' }]), { text: 'example.org', url: 'https://www.example.org/', title: undefined });
+});
+
+test('a partly typed address asks history for its first word, which whole-word search can find', () => {
+  assert.equal(historyQuery('example.o'), 'example');
+  assert.equal(historyQuery('github.com/fo'), 'github');
+  assert.equal(historyQuery('my-site.dev'), 'my-site');
+  assert.equal(historyQuery('weather'), 'weather');
+  assert.equal(historyQuery('weather in stockholm'), 'weather in stockholm');
+  assert.equal(historyQuery('://'), '://');
+});
+
+test('searches, finished addresses and other schemes are not completed', () => {
+  const visited = [{ url: 'https://example.org/' }, { url: 'chrome://settings/' }, { url: 'file:///home/me/a.txt' }];
+  assert.equal(inlineCompletion('exa mple', visited), undefined);
+  assert.equal(inlineCompletion('example.org', visited), undefined);
+  assert.equal(inlineCompletion('https://exa', visited), undefined);
+  assert.equal(inlineCompletion('chrome', visited), undefined);
+  assert.equal(inlineCompletion('', visited), undefined);
+});
+
+test('the command bar page may connect to every engine’s suggest address', async () => {
+  const html = await readFile(new URL('../shell/ui/index.html', import.meta.url), 'utf8');
+  const csp = html.match(/http-equiv="Content-Security-Policy"\s+content="([^"]+)"/)?.[1] ?? '';
+  const connect = csp.split(';').map((d) => d.trim().split(/\s+/)).find(([name]) => name === 'connect-src') ?? [];
+  for (const [id, engine] of Object.entries(SEARCH_ENGINES)) assert.ok(connect.includes(new URL(engine.suggest).origin), id);
+});

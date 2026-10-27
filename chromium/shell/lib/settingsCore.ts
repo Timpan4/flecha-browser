@@ -39,6 +39,7 @@ export function settingsView(store: Store, env: SettingsEnvironment): SettingsVi
     peekPinnedLinks: s.peekPinnedLinks !== false,
     shortcuts: shortcutList(s),
     openLinksInFlechinha: s.openLinksInFlechinha !== false,
+    sidebarInPageFullscreen: !!s.sidebarInPageFullscreen,
     agent: {
       enabled: !!s.agent?.enabled,
       endpoint: env.agentEndpoint,
@@ -90,6 +91,7 @@ export async function applySettings(store: Store, patch: SettingsPatch, effects:
     effects.theme(store.state.theme ?? 'system');
   }
   if (patch.openLinksInFlechinha !== undefined) store.setOpenLinksInFlechinha(patch.openLinksInFlechinha);
+  if (patch.sidebarInPageFullscreen !== undefined) store.setSidebarInPageFullscreen(patch.sidebarInPageFullscreen);
   if (typeof patch.archiveAfterHours === 'number') store.setArchiveAfter(patch.archiveAfterHours);
   if (patch.agentEnabled !== undefined) {
     store.setAgent({ enabled: patch.agentEnabled, token: store.state.agent?.token || newToken() });

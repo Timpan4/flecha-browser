@@ -220,6 +220,7 @@ document.getElementById('addEnvironment')!.addEventListener('click', () => {
 const archiveAfter = document.getElementById('archiveAfter') as HTMLSelectElement;
 const peekPinnedLinks = document.getElementById('peekPinnedLinks') as HTMLInputElement;
 const openLinksInFlechinha = document.getElementById('openLinksInFlechinha') as HTMLInputElement;
+const sidebarInPageFullscreen = document.getElementById('sidebarInPageFullscreen') as HTMLInputElement;
 
 for (const card of document.querySelectorAll<HTMLElement>('.theme-card')) {
   card.addEventListener('click', async () => render(await api.set({ theme: card.dataset.theme as SettingsView['theme'] })));
@@ -227,6 +228,7 @@ for (const card of document.querySelectorAll<HTMLElement>('.theme-card')) {
 archiveAfter.addEventListener('change', async () => render(await api.set({ archiveAfterHours: Number(archiveAfter.value) })));
 peekPinnedLinks.addEventListener('change', async () => render(await api.set({ peekPinnedLinks: peekPinnedLinks.checked })));
 openLinksInFlechinha.addEventListener('change', async () => render(await api.set({ openLinksInFlechinha: openLinksInFlechinha.checked })));
+sidebarInPageFullscreen.addEventListener('change', async () => render(await api.set({ sidebarInPageFullscreen: sidebarInPageFullscreen.checked })));
 
 // ---- keyboard shortcuts: click a key cap, press the new keys --------------------------
 
@@ -376,6 +378,7 @@ function render(view: SettingsView) {
     renderShortcuts();
   }
   openLinksInFlechinha.checked = view.openLinksInFlechinha;
+  sidebarInPageFullscreen.checked = view.sidebarInPageFullscreen;
   agent = view.agent;
   agentEnabled.checked = agent.enabled;
   for (const row of document.querySelectorAll<HTMLElement>('[data-agent-only]')) row.hidden = !agent.enabled;

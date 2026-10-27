@@ -1,0 +1,287 @@
+# Flecha: a page in fullscreen (a video's full screen button) has the screen to itself: no sidebar, no hover edge, the page area edge to edge, unless chrome.flechaPrivate.setSidebarInPageFullscreen(true) keeps the sidebar beside it. The window's own fullscreen (F11) keeps the sidebar's mode, and a page entering or leaving fullscreen inside it is followed through the fullscreen controller.
+--- a/chrome/common/extensions/api/flecha_private.idl
++++ b/chrome/common/extensions/api/flecha_private.idl
+@@ -344,6 +344,16 @@
+     // Prints a tab with the browser's print preview, as Ctrl+P does on the
+     // active tab of its window.
+     static void print(long tabId, optional DoneCallback callback);
++
++    // Whether the sidebar stays beside a page in fullscreen (a video's full
++    // screen button) in the given window, or the caller's. Off, the default,
++    // the page fills the screen alone, whatever the sidebar's mode: no
++    // sidebar, no hover edge. The window's own fullscreen (F11) keeps the
++    // sidebar's mode either way.
++    static void setSidebarInPageFullscreen(
++        boolean show,
++        optional long windowId,
++        optional DoneCallback callback);
+   };
+ 
+   interface Events {
+--- a/chrome/browser/extensions/api/flecha_private/flecha_private_api.h
++++ b/chrome/browser/extensions/api/flecha_private/flecha_private_api.h
+@@ -381,6 +381,17 @@
+   ResponseAction Run() override;
+ };
+ 
++class FlechaPrivateSetSidebarInPageFullscreenFunction
++    : public ExtensionFunction {
++ public:
++  DECLARE_EXTENSION_FUNCTION("flechaPrivate.setSidebarInPageFullscreen",
++                             UNKNOWN)
++
++ protected:
++  ~FlechaPrivateSetSidebarInPageFullscreenFunction() override = default;
++  ResponseAction Run() override;
++};
++
+ }  // namespace extensions
+ 
+ #endif  // CHROME_BROWSER_EXTENSIONS_API_FLECHA_PRIVATE_FLECHA_PRIVATE_API_H_
+--- a/chrome/browser/extensions/api/flecha_private/flecha_private_api.cc
++++ b/chrome/browser/extensions/api/flecha_private/flecha_private_api.cc
+@@ -1061,4 +1061,22 @@
+   return RespondNow(NoArguments());
+ }
+ 
++ExtensionFunction::ResponseAction
++FlechaPrivateSetSidebarInPageFullscreenFunction::Run() {
++  auto params =
++      flecha_private::SetSidebarInPageFullscreen::Params::Create(args());
++  EXTENSION_FUNCTION_VALIDATE(params);
++  FlechaFrameHost* host =
++      params->window_id ? HostForWindow(*params->window_id, browser_context())
++                        : HostForContents(GetSenderWebContents());
++  if (!host) {
++    return RespondNow(
++        Error(kNoWindowError, params->window_id
++                                  ? base::NumberToString(*params->window_id)
++                                  : "(none)"));
++  }
++  host->SetSidebarInPageFullscreen(params->show);
++  return RespondNow(NoArguments());
++}
++
+ }  // namespace extensions
+--- a/chrome/browser/flecha/flecha_frame_host.h
++++ b/chrome/browser/flecha/flecha_frame_host.h
+@@ -93,14 +93,28 @@
+   bool flechinha = false;
+   // The window is in fullscreen: the browser sets this, never setFrame().
+   bool fullscreen = false;
++  // The window is in fullscreen for a page (a video's full screen button),
++  // not only its own (F11): the browser sets this, never setFrame().
++  bool page_fullscreen = false;
++  // The sidebar stays beside a page in fullscreen:
++  // setSidebarInPageFullscreen() sets this, never setFrame().
++  bool sidebar_in_page_fullscreen = false;
+ 
+   bool operator==(const FlechaFrameState&) const = default;
+ 
++  // A page in fullscreen has the screen to itself: no sidebar, no hover edge.
++  bool PageAlone() const {
++    return page_fullscreen && !sidebar_in_page_fullscreen && !flechinha;
++  }
++
+   // The frame view's width, from the window's left edge.
+   int FrameWidth(int window_width) const {
+     if (overlay || flechinha) {
+       return window_width;
+     }
++    if (PageAlone()) {
++      return 0;
++    }
+     switch (sidebar) {
+       case Sidebar::kDocked:
+         return std::min(window_width, sidebar_width);
+@@ -121,9 +135,11 @@
+ 
+   // The page area, as insets from the window's edges.
+   gfx::Insets PageInsets() const {
+-    // In fullscreen with the sidebar hidden or floating, the page fills the
+-    // screen edge to edge, square, as in Arc (the layout drops its corners).
+-    if (fullscreen && !flechinha && sidebar != Sidebar::kDocked) {
++    // In fullscreen with the sidebar hidden or floating, or for a page alone,
++    // the page fills the screen edge to edge, square, as in Arc (the layout
++    // drops its corners).
++    if (fullscreen && !flechinha &&
++        (sidebar != Sidebar::kDocked || PageAlone())) {
+       return gfx::Insets();
+     }
+     if (flechinha) {
+@@ -229,6 +245,8 @@
+   // Whether the window was the last one active (among this profile's).
+   virtual bool IsActiveWindow() const = 0;
+   virtual void SetFrameState(const FlechaFrameState& state) = 0;
++  // FlechaFrameState::sidebar_in_page_fullscreen.
++  virtual void SetSidebarInPageFullscreen(bool show) = 0;
+   virtual void FocusFrame() = 0;
+   virtual void FocusPage() = 0;
+   // Takes the keys in Shortcuts() from now on, and lets go of any others.
+--- a/chrome/browser/ui/views/frame/flecha_frame_view.h
++++ b/chrome/browser/ui/views/frame/flecha_frame_view.h
+@@ -8,6 +8,7 @@
+ #include <memory>
+ #include <optional>
+ 
++#include "base/callback_list.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/memory/weak_ptr.h"
+ #include "base/scoped_observation.h"
+@@ -98,6 +99,7 @@
+   bool IsFlechinha() const override;
+   BrowserWindowInterface* GetBrowserWindowInterface() override;
+   void SetFrameState(const FlechaFrameState& state) override;
++  void SetSidebarInPageFullscreen(bool show) override;
+   void FocusFrame() override;
+   void FocusPage() override;
+   void UpdateShortcuts() override;
+@@ -141,8 +143,9 @@
+   blink::mojom::DisplayMode GetDisplayMode(
+       const content::WebContents* source) override;
+ 
+-  // The window entered or left fullscreen (BrowserView): the page area and the
+-  // frame page's display mode follow.
++  // The window entered or left fullscreen (BrowserView), or a page did (the
++  // fullscreen controller): the page area and the frame page's display mode
++  // follow.
+   void OnWindowFullscreenChanged();
+ 
+   // extensions::ExtensionRegistryObserver:
+@@ -229,6 +232,12 @@
+   std::unique_ptr<views::MenuRunner> action_menu_runner_;
+   std::unique_ptr<content::WebContents> frame_contents_;
+   FlechaFrameState state_;
++  // A page entering or leaving fullscreen while the window is already in
++  // fullscreen (F11) leaves the window as it is: only the fullscreen
++  // controller says so (WatchPageFullscreen()).
++  void WatchPageFullscreen();
++  base::CallbackListSubscription page_fullscreen_subscription_;
++  void TellPageItLeftFullscreen();
+   // The frame page's -webkit-app-region: drag areas, in this view's
+   // coordinates.
+   SkRegion draggable_region_;
+--- a/chrome/browser/ui/views/frame/flecha_frame_view.cc
++++ b/chrome/browser/ui/views/frame/flecha_frame_view.cc
+@@ -18,6 +18,8 @@
+ #include "chrome/browser/lifetime/browser_shutdown.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
++#include "chrome/browser/ui/exclusive_access/fullscreen_controller.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/browser/ui/views/frame/flecha_top_chrome.h"
+ #include "chrome/browser/flecha/flecha_spaces.h"
+@@ -846,6 +848,7 @@
+   popup_press_monitor_ = std::make_unique<PopupPressMonitor>(this);
+   ApplyState();
+   UpdateShortcuts();
++  WatchPageFullscreen();
+ }
+ 
+ void FlechaFrameView::RemovedFromWidget() {
+@@ -981,6 +984,8 @@
+   FlechaFrameState state = new_state;
+   state.flechinha = state_.flechinha;
+   state.fullscreen = state_.fullscreen;
++  state.page_fullscreen = state_.page_fullscreen;
++  state.sidebar_in_page_fullscreen = state_.sidebar_in_page_fullscreen;
+   if (state == state_) {
+     return;
+   }
+@@ -988,6 +993,14 @@
+   ApplyState();
+ }
+ 
++void FlechaFrameView::SetSidebarInPageFullscreen(bool show) {
++  if (show == state_.sidebar_in_page_fullscreen) {
++    return;
++  }
++  state_.sidebar_in_page_fullscreen = show;
++  ApplyState();
++}
++
+ void FlechaFrameView::FocusFrame() {
+   if (frame_contents_) {
+     RequestFocus();
+@@ -1059,12 +1072,35 @@
+ }
+ 
+ void FlechaFrameView::OnWindowFullscreenChanged() {
++  WatchPageFullscreen();
+   const bool fullscreen = browser_view_->IsFullscreen();
+-  if (fullscreen == state_.fullscreen) {
++  ExclusiveAccessManager* access =
++      ExclusiveAccessManager::From(browser_view_->browser());
++  const bool page_fullscreen =
++      fullscreen && access &&
++      access->fullscreen_controller()->IsWindowFullscreenForTabOrPending();
++  if (fullscreen == state_.fullscreen &&
++      page_fullscreen == state_.page_fullscreen) {
+     return;
+   }
++  const bool window_changed = fullscreen != state_.fullscreen;
++  const bool page_left = state_.page_fullscreen && !page_fullscreen;
+   state_.fullscreen = fullscreen;
++  state_.page_fullscreen = page_fullscreen;
+   ApplyState();
++  // Chromium tells a page it left full screen by the resize it expects when
++  // the window leaves it too (FullscreenController's will_cause_resize). With
++  // the sidebar kept beside the page, the page's size may not change, so it is
++  // told directly, once the controller has let it go: BrowserView tells the
++  // controller after this frame.
++  if (page_left) {
++    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++        FROM_HERE, base::BindOnce(&FlechaFrameView::TellPageItLeftFullscreen,
++                                  weak_factory_.GetWeakPtr()));
++  }
++  if (!window_changed) {
++    return;
++  }
+   // The frame page reads it as (display-mode: fullscreen), from its visual
+   // properties.
+   if (frame_contents_) {
+@@ -1077,6 +1113,33 @@
+   }
+ }
+ 
++void FlechaFrameView::TellPageItLeftFullscreen() {
++  if (views::WebView* page = browser_view_->GetActiveContentsWebView();
++      page && page->web_contents()) {
++    if (content::RenderWidgetHost* widget = page->web_contents()
++                                                ->GetPrimaryMainFrame()
++                                                ->GetRenderWidgetHost()) {
++      widget->SynchronizeVisualProperties();
++    }
++  }
++}
++
++void FlechaFrameView::WatchPageFullscreen() {
++  if (page_fullscreen_subscription_) {
++    return;
++  }
++  // The browser's features come after its view (and this frame).
++  ExclusiveAccessManager* access =
++      ExclusiveAccessManager::From(browser_view_->browser());
++  if (!access) {
++    return;
++  }
++  page_fullscreen_subscription_ =
++      access->fullscreen_controller()->RegisterOnFullscreenStateChanged(
++          base::BindRepeating(&FlechaFrameView::OnWindowFullscreenChanged,
++                              base::Unretained(this)));
++}
++
+ int FlechaFrameView::NonClientHitTest(const gfx::Point& point) const {
+   if (!IsActive()) {
+     return HTNOWHERE;
+--- a/chrome/browser/ui/views/frame/BUILD.gn
++++ b/chrome/browser/ui/views/frame/BUILD.gn
+@@ -770,6 +770,7 @@
+     "//chrome/browser/extensions",
+     "//chrome/browser/profiles:profile",
+     "//chrome/browser/ui/browser_window",
++    "//chrome/browser/ui/exclusive_access",
+     "//chrome/browser/ui/extensions",
+     "//chrome/browser/ui/toolbar",
+     "//extensions/common",

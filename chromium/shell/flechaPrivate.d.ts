@@ -38,6 +38,14 @@ declare namespace chrome.flechaPrivate {
   /** Lays out a window's frame. Applies to every normal window when windowId is omitted. */
   function setFrame(state: FrameState, windowId?: number): Promise<void>;
 
+  /**
+   * Whether the sidebar stays beside a page in full screen (a video's button) in a window
+   * (patch 0072). Off, the browser's default, the page fills the screen alone, whatever the
+   * sidebar's mode: frame view 0 wide, page area edge to edge. The window's own full screen
+   * (F11) keeps the sidebar's mode either way. Absent from older browsers.
+   */
+  function setSidebarInPageFullscreen(show: boolean, windowId?: number): Promise<void>;
+
   /** Moves keyboard focus to the frame page (command bar) or back to the active page. */
   function focus(target: 'frame' | 'page', windowId?: number): Promise<void>;
 

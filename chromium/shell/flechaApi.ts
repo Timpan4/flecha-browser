@@ -43,7 +43,7 @@ on('site-icons', (icons: Record<string, string>) => {
 });
 
 // The frame page lays its window out: the background says how, this page adds the colour.
-let frameState: { sidebar: chrome.flechaPrivate.SidebarMode; overlay: boolean } | undefined;
+let frameState: { sidebar: chrome.flechaPrivate.SidebarMode; overlay: boolean; sidebarInPageFullscreen: boolean } | undefined;
 /** The width the sidebar is being dragged to, until the saved state has it. */
 let resizing: number | undefined;
 const windowId = surface === 'window' && framed ? chrome.flechaPrivate.getWindowId() : undefined;
@@ -52,7 +52,12 @@ function applyFrame() {
   const background = spaceTint(lastState.tint, systemDark.matches);
   const sidebarWidth = resizing ?? lastState.sidebarWidth ?? SIDEBAR_DEFAULT_WIDTH;
   document.documentElement.style.setProperty('--sidebar', `${sidebarWidth}px`);
-  void windowId.then((id) => chrome.flechaPrivate.setFrame({ ...frameState!, background, sidebarWidth }, id));
+  const { sidebarInPageFullscreen, ...frame } = frameState;
+  void windowId.then((id) => {
+    void chrome.flechaPrivate.setFrame({ ...frame, background, sidebarWidth }, id);
+    // Patch 0072; a browser without it lays out a page's full screen as the sidebar's mode says.
+    if (typeof chrome.flechaPrivate.setSidebarInPageFullscreen === 'function') void chrome.flechaPrivate.setSidebarInPageFullscreen(sidebarInPageFullscreen, id);
+  });
 }
 on('frame', (state) => {
   frameState = state;
@@ -76,6 +81,9 @@ const api: FlechaApi = {
     if (surface !== 'panel' && surface !== 'window') return;
     paletteListeners.push(cb);
     on('palette', cb);
+  },
+  onClosePalette: (cb) => {
+    if (surface === 'panel' || surface === 'window') on('close-palette', cb);
   },
   onEditSpace: (cb) => on('edit-space', cb),
   onRenameTab: (cb) => {

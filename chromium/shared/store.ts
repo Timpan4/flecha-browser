@@ -34,6 +34,12 @@ export interface StatePersistence {
 
 const randomUUID = () => crypto.randomUUID();
 
+/** You used the tab just now: it is the most recent, and no longer unseen. */
+function used(tab: TabInfo) {
+  tab.lastActive = Date.now();
+  delete tab.unseen;
+}
+
 /**
  * What a change touched: 'tab' is only what one tab shows (its title, icon, address, loading or
  * sound), which never changes which tabs are open or on screen; 'structure' is everything else.
@@ -208,6 +214,7 @@ export class Store {
 
   addTab(url: string, opts: { activate?: boolean; afterTabId?: string; windowId?: string } = {}): TabInfo {
     const tab: TabInfo = { id: randomUUID(), url, title: url, lastActive: Date.now() };
+    if (opts.activate === false) tab.unseen = true;
     this.state.tabs[tab.id] = tab;
     const win = this.window(opts.windowId);
     const ws = this.windowSpace(win.activeSpaceId, win.id);
@@ -231,7 +238,7 @@ export class Store {
     if (loc.space) win.activeSpaceId = loc.space.id;
     if (loc.zone !== 'today') this.claim(tabId, win);
     this.windowSpace(win.activeSpaceId, win.id).activeTabId = tabId;
-    if (opts.recent !== false) tab.lastActive = Date.now();
+    if (opts.recent !== false) used(tab);
     this.changed();
     return win.id;
   }
@@ -240,8 +247,17 @@ export class Store {
   touch(tabId: string) {
     const tab = this.state.tabs[tabId];
     if (!tab) return;
-    tab.lastActive = Date.now();
+    used(tab);
     this.changed();
+  }
+
+  /**
+   * `ids` from the most recently used, as Control-Tab goes through them. Tabs you haven't seen
+   * yet (opened in the background) come after every tab you have used, newest first.
+   */
+  byRecency(ids: string[]): string[] {
+    const tab = (id: string) => this.state.tabs[id];
+    return [...ids].sort((a, b) => Number(!!tab(a)?.unseen) - Number(!!tab(b)?.unseen) || (tab(b)?.lastActive ?? 0) - (tab(a)?.lastActive ?? 0));
   }
 
   updateTab(tabId: string, patch: Partial<TabInfo>) {
@@ -330,7 +346,7 @@ export class Store {
   /** A new pinned tab, favorite or Today tab (of `windowId`) that isn't opened yet. */
   createTab(url: string, title: string, to: TabPlacement, windowId?: string): TabInfo | undefined {
     if (!this.placementExists(to)) return undefined;
-    const tab: TabInfo = { id: randomUUID(), url, title: title || url, lastActive: Date.now() };
+    const tab: TabInfo = { id: randomUUID(), url, title: title || url, lastActive: Date.now(), unseen: true };
     if (to.zone !== 'today') tab.homeUrl = url;
     this.state.tabs[tab.id] = tab;
     this.insert(tab.id, to, windowId);
@@ -369,7 +385,7 @@ export class Store {
     ws.split = side === 'left' ? [tabId, current] : [current, tabId];
     delete ws.splitMode;
     ws.activeTabId = tabId;
-    this.state.tabs[tabId].lastActive = Date.now();
+    used(this.state.tabs[tabId]);
     this.changed();
   }
 
@@ -678,6 +694,11 @@ export class Store {
     this.changed();
   }
 
+  setSidebarInPageFullscreen(show: boolean) {
+    if (typeof show === 'boolean') this.state.sidebarInPageFullscreen = show;
+    this.changed();
+  }
+
   setArchiveAfter(hours: number) {
     this.state.archiveAfterHours = Math.max(0, hours);
     this.changed();
@@ -907,7 +928,7 @@ export class Store {
   }
 
   private importTab(t: { url: string; title: string }, pinned: boolean) {
-    const tab: TabInfo = { id: randomUUID(), url: t.url, title: t.title || t.url, lastActive: Date.now() };
+    const tab: TabInfo = { id: randomUUID(), url: t.url, title: t.title || t.url, lastActive: Date.now(), unseen: true };
     if (pinned) tab.homeUrl = t.url;
     this.state.tabs[tab.id] = tab;
     return tab.id;

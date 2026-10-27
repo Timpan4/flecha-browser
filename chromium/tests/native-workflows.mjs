@@ -57,13 +57,15 @@ await fs.writeFile(path.join(quietExtension, 'bg.js'), '');
 const resumable = Buffer.alloc(200000, 7);
 let resumeAllowed = false;
 // A stand-in for the search engine's suggest endpoint, answering `["query", ["query one", "query two"]]`.
-// It never answers "flecha slow": the test checks that the browser gives that request up.
-let slowSuggest;
-const slowSuggestAsked = new Promise((resolve) => (slowSuggest = resolve));
+// It never answers a query the test holds: the test checks that the browser gives that request up.
+const held = {};
+const heldSuggest = (query) => new Promise((resolve) => (held[query] = resolve));
+const slowSuggestAsked = heldSuggest('flecha slow');
 const server = createServer((request, response) => {
   if (request.url.startsWith('/suggest?')) {
     const query = new URL(request.url, base).searchParams.get('q');
-    if (query === 'flecha slow') return slowSuggest(once(response, 'close'));
+    // Wrapped, so that awaiting the request doesn't also wait for its connection to close.
+    if (held[query]) return held[query]({ closed: once(response, 'close') });
     response.setHeader('Content-Type', 'application/json');
     return response.end(JSON.stringify([query, [`${query} one`, `${query} two`]]));
   }
@@ -107,6 +109,8 @@ const listeners = new Set();
 // default is about three times the longest full run measured (3.5 minutes, 2026-10-26).
 const deadline = Number(process.env.FLECHA_HARNESS_TIMEOUT_MS) || 10 * 60 * 1000;
 let finished = false;
+/** What the current step waits for, when it says; the deadline's failure names it. */
+let waitingFor;
 async function cleanUp() {
   if (browser && browser.exitCode === null) { browser.kill('SIGTERM'); await once(browser, 'exit'); }
   if (display.exitCode === null) { display.kill('SIGTERM'); await once(display, 'exit'); }
@@ -118,7 +122,7 @@ const watchdog = setTimeout(async () => {
   const capture = path.join(os.tmpdir(), 'flecha-harness-timeout.png');
   try { execFileSync('import', ['-display', env.DISPLAY, '-window', 'root', capture]); } catch {}
   if (debugSession) console.error('DIAGNOSTIC', await evaluate(debugSession, "Promise.all([chrome.downloads.search({}), typeof chrome.flechaPrivate.getDownloadWarnings === 'function' ? chrome.flechaPrivate.getDownloadWarnings() : []]).then(([d, w]) => JSON.stringify({ downloads: d.map(x => [x.id, x.filename.split('/').pop(), x.state, x.error, x.canResume, x.bytesReceived]), warnings: w, rows: [...document.querySelectorAll('#downloads-list .download')].map(li => li.textContent), active: testState?.spaces.find(sp => sp.id === testState.activeSpaceId)?.activeTabId && testState.tabs[testState.spaces.find(sp => sp.id === testState.activeSpaceId).activeTabId]?.url }))").catch((error) => error.message));
-  console.error(`FAIL the run took longer than ${deadline} ms (FLECHA_HARNESS_TIMEOUT_MS); last step is the last PASS above; the harness display is in ${capture}`);
+  console.error(`FAIL the run took longer than ${deadline} ms (FLECHA_HARNESS_TIMEOUT_MS); last step is the last PASS above${waitingFor ? `, waiting for ${waitingFor}` : ''}; the harness display is in ${capture}`);
   await cleanUp();
   process.exit(1);
 }, deadline);
@@ -274,6 +278,19 @@ try {
   const key = async (name, modifiers) => {
     execFileSync(inputTool, [env.DISPLAY, String(browser.pid), ...modifiers, name], { env });
   };
+  // The command bar closed by `how` is gone, and a real click on the sidebar reaches it: a bar left
+  // open covers the sidebar, and a click's press then lands on the bar.
+  const barClosed = async (how) => {
+    waitingFor = `the command bar to hide after ${how}`;
+    await domWhere("() => document.querySelector('#palette').hidden");
+    const today = await evaluate(session, "document.querySelector('.today-header > span').getBoundingClientRect().toJSON()");
+    // Where the press and the release land. `void`, so this evaluate doesn't wait for the click.
+    await evaluate(session, "void (globalThis.sidebarPress = new Promise((resolve) => { let down; const name = (t) => (t?.closest?.('.today-header') ? 'Today' : t ? `${t.tagName}#${t.id}` : 'nothing'); addEventListener('mousedown', (e) => (down = e.target), { once: true, capture: true }); addEventListener('mouseup', (e) => resolve([name(down), name(e.target)]), { once: true, capture: true }); }))");
+    waitingFor = `a real click on the sidebar's Today label after ${how} to reach the frame page`;
+    execFileSync(inputTool, [env.DISPLAY, String(browser.pid), 'click', String(Math.round(today.x + today.width / 2)), String(Math.round(today.y + today.height / 2))], { env });
+    assert.deepEqual(await evaluate(session, 'sidebarPress'), ['Today', 'Today'], `after ${how}, a click on the sidebar's Today label landed elsewhere (press, release)`);
+    waitingFor = undefined;
+  };
   await key('1', ['Control_L']);
   await stateWhere(`s => s.spaces.find(sp => sp.id === s.activeSpaceId).activeTabId === ${JSON.stringify(a)}`);
   await key('2', ['Control_L']);
@@ -306,6 +323,28 @@ try {
   await key('Tab', ['Control_L']);
   await active(a);
   console.log('PASS Control-Tab switches by recency while Control is held and commits on release');
+  // A link opened in the background (Control-click) isn't a tab you used yet: Control-Tab still
+  // goes back to the tab before, and reaches the new one last.
+  await evaluate(session, `chrome.tabs.query({ active: true, windowType: 'normal' }).then(([tab]) => chrome.tabs.create({ url: ${JSON.stringify(base + '/background')}, active: false, openerTabId: tab.id }))`);
+  state = await stateWhere(`s => Object.values(s.tabs).some(t => t.url === ${JSON.stringify(base + '/background')})`);
+  const background = Object.values(state.tabs).find(t => t.url === base + '/background').id;
+  await key('Tab', ['Control_L']);
+  await active(c);
+  await key('Tab', ['Control_L']);
+  await active(a);
+  hold('down', 'Control_L');
+  hold('down', 'Shift_L', 'Tab'); hold('up', 'Tab', 'Shift_L');
+  await active(background);
+  hold('down', 'Shift_L', 'Tab'); hold('up', 'Tab', 'Shift_L');
+  await active(b);
+  hold('down', 'Tab'); hold('up', 'Tab');
+  await active(background);
+  hold('down', 'Tab'); hold('up', 'Tab');
+  await active(a);
+  hold('up', 'Control_L');
+  await rpc('close', background);
+  await stateWhere(`s => !s.tabs[${JSON.stringify(background)}]`);
+  console.log('PASS a tab opened in the background comes after the tabs you used, for Control-Tab and Control-Shift-Tab');
   // A hold that began with another shortcut (Control-L, then Tab) ends on release too.
   hold('down', 'Control_L');
   hold('down', 'l'); hold('up', 'l');
@@ -313,8 +352,8 @@ try {
   hold('down', 'Tab'); hold('up', 'Tab');
   await active(c);
   hold('up', 'Control_L');
-  // The tab switch took keyboard focus to the page, so the command bar is closed from the shell.
-  await evaluate(session, "document.querySelector('#palette').hidden || testPort.postMessage({ type: 'cmd', name: 'closePalette', args: [] })");
+  // The tab switch took keyboard focus to the page, which closes the command bar.
+  await barClosed('a tab switch');
   await key('Tab', ['Control_L']);
   await active(a);
   console.log('PASS a Control-Tab run that began with another shortcut ends when Control is released');
@@ -333,59 +372,180 @@ try {
   await key('l', ['Control_L']);
   await domWhere("() => !document.querySelector('#palette').hidden && document.activeElement.tagName === 'INPUT'");
   await key('Escape', []);
-  await domWhere("() => document.querySelector('#palette').hidden");
+  await barClosed('Escape');
   console.log('PASS native Control-L opens and focuses the command bar');
+  // A tab switch closes the bar, with no Escape.
+  await key('l', ['Control_L']);
+  await domWhere("() => !document.querySelector('#palette').hidden && document.activeElement.id === 'palette-input'");
+  await key('Tab', ['Control_L']);
+  await stateWhere(`s => s.spaces.find(sp => sp.id === s.activeSpaceId).activeTabId !== ${JSON.stringify(a)}`);
+  await barClosed('a Control-Tab switch');
+  await rpc('activate', a);
+  await active(a);
+  console.log('PASS Control-Tab from the open command bar closes it and leaves the sidebar clickable');
   // Search suggestions: the frame page's requests to Google's suggest endpoint go to this test's server.
   const suggestRequests = [];
+  // A query in `failing` fails at the network instead; its promise settles once it has.
+  const failing = {};
   const toFakeSuggest = (message) => {
     if (message.sessionId !== session || message.method !== 'Fetch.requestPaused') return;
     const asked = new URL(message.params.request.url);
-    suggestRequests.push(asked.searchParams.get('q'));
+    const query = asked.searchParams.get('q');
+    suggestRequests.push(query);
+    if (failing[query]) return void send('Fetch.failRequest', { requestId: message.params.requestId, errorReason: 'ConnectionFailed' }, session).then(failing[query]);
     void send('Fetch.continueRequest', { requestId: message.params.requestId, url: `${base}/suggest${asked.search}` }, session);
   };
   listeners.add(toFakeSuggest);
   await send('Fetch.enable', { patterns: [{ urlPattern: 'https://www.google.com/complete/search?*' }] }, session);
-  // Every label the Suggestions group ever shows, to check none was for an older query.
-  const suggestionLabels = "[...document.querySelectorAll('#palette-results li')].reduce((seen, li) => (li.classList.contains('group-label') ? (seen.group = li.textContent) : seen.group === 'Suggestions' && seen.labels.push(li.querySelector('.label').textContent), seen), { group: '', labels: [] }).labels";
+  // The command bar is one ranked list, as Arc's: each row says its kind, and the selected one
+  // is the combobox's active option. Every suggestion it ever shows is kept, to check none was for an older query.
+  const paletteRows = "[...document.querySelectorAll('#palette-results [role=option]')].map((li) => li.dataset.kind + ': ' + li.querySelector('.title').textContent + (li.getAttribute('aria-selected') === 'true' && document.querySelector('#palette-input').getAttribute('aria-activedescendant') === li.id ? ' (selected)' : ''))";
+  const suggestionLabels = "[...document.querySelectorAll('#palette-results [data-kind=suggestion] .title')].map((title) => title.textContent)";
   await evaluate(session, `globalThis.shownSuggestions = new Set(); new MutationObserver(() => (${suggestionLabels}).forEach((label) => shownSuggestions.add(label))).observe(document.querySelector('#palette-results'), { childList: true })`);
   await key('t', ['Control_L']);
   await domWhere("() => !document.querySelector('#palette').hidden && document.activeElement.id === 'palette-input'");
   await send('Input.insertText', { text: 'flecha slow' }, session);
-  const slowClosed = await slowSuggestAsked;
+  const { closed: slowClosed } = await slowSuggestAsked;
   await send('Input.insertText', { text: ' more' }, session);
   await domWhere(`() => (${suggestionLabels}).join('|') === 'flecha slow more one|flecha slow more two'`);
   // The older query's request was given up, unanswered.
   await slowClosed;
-  const rows = "[...document.querySelectorAll('#palette-results li')].slice(0, 4).map((li) => (li.classList.contains('group-label') ? '# ' + li.textContent : li.querySelector('.label').textContent + (li.classList.contains('selected') ? ' (selected)' : '')))";
-  assert.deepEqual(await evaluate(session, rows), ['flecha slow more (selected)', '# Suggestions', 'flecha slow more one', 'flecha slow more two']);
+  assert.deepEqual(await evaluate(session, paletteRows), ['search: flecha slow more (selected)', 'suggestion: flecha slow more one', 'suggestion: flecha slow more two']);
   await key('Down', []);
-  assert.deepEqual(await evaluate(session, rows), ['flecha slow more', '# Suggestions', 'flecha slow more one (selected)', 'flecha slow more two']);
+  assert.deepEqual(await evaluate(session, paletteRows), ['search: flecha slow more', 'suggestion: flecha slow more one (selected)', 'suggestion: flecha slow more two']);
   await key('Return', []);
   await stateWhere("s => Object.values(s.tabs).some((t) => t.url === 'https://www.google.com/search?q=flecha%20slow%20more%20one')");
+  await barClosed('picking a suggestion');
   assert.deepEqual([...(await evaluate(session, '[...shownSuggestions]'))].sort(), ['flecha slow more one', 'flecha slow more two']);
   console.log('PASS typing in the command bar shows the engine\'s suggestions under the typed search, never an older query\'s, and picking one searches for it');
   // Nothing is asked for an address, an internal page or a file path, or while Chromium's
   // "Autocomplete searches and URLs" is off; requests that went out would reach the list above.
   const suggestNow = (query) => evaluate(session, `window.flecha.searchSuggestions(${JSON.stringify(query)}, new AbortController().signal)`);
-  for (const query of ['example.com/private', 'chrome://settings', '/home/user/notes.txt']) assert.deepEqual(await suggestNow(query), []);
+  for (const query of ['example.com/private', 'chrome://settings', '/home/user/notes.txt', '%65xample%2ecom', 'notes 127.0.0.1:8080', 'notes 127.0.0.1', 'notes 127.0.0.1.', 'notes chrome:']) assert.deepEqual(await suggestNow(query), []);
   await evaluate(session, 'chrome.privacy.services.searchSuggestEnabled.set({ value: false })');
   assert.deepEqual(await suggestNow('flecha off'), []);
   await evaluate(session, 'chrome.privacy.services.searchSuggestEnabled.clear({})');
   assert.deepEqual(await suggestNow('flecha on'), ['flecha on one', 'flecha on two']);
   assert.deepEqual(suggestRequests.filter((query) => !query.startsWith('flecha slow')), ['flecha on']);
   console.log('PASS no suggestions are asked for addresses, internal pages or file paths, or with Chromium\'s search suggestions off');
-  // An incognito window's command bar asks for none, as Chromium's omnibox in incognito.
-  const regularFrames = new Set((await send('Target.getTargets')).targetInfos.filter((t) => t.url.startsWith(extension + 'window.html')).map((t) => t.targetId));
-  await rpc('newIncognitoWindow');
-  const incognitoFrame = await findTarget((t) => t.url.startsWith(extension + 'window.html') && !regularFrames.has(t.targetId));
-  const incognitoSession = await attach(incognitoFrame.targetId);
-  await loaded(incognitoSession, extension);
-  // Its requests aren't sent to the fake server, and Google doesn't resolve: one sent would fail.
-  assert.deepEqual(await evaluate(incognitoSession, "chrome.extension.inIncognitoContext && window.flecha.searchSuggestions('flecha incognito', new AbortController().signal)"), []);
-  const incognitoClosed = new Promise((resolve) => listeners.add(function closed(message) { if (message.method === 'Target.targetDestroyed' && message.params.targetId === incognitoFrame.targetId) { listeners.delete(closed); resolve(); } }));
-  await evaluate(incognitoSession, 'chrome.windows.getCurrent().then((w) => void setTimeout(() => chrome.windows.remove(w.id)))');
-  await incognitoClosed;
-  console.log('PASS an incognito window asks for no search suggestions');
+  // An empty bar, as Arc's: the three most recent other tabs to switch to, then two actions.
+  await key('t', ['Control_L']);
+  await domWhere("() => !document.querySelector('#palette').hidden && document.activeElement.id === 'palette-input'");
+  state = await stateWhere('s => true');
+  const current = state.spaces.find((sp) => sp.id === state.activeSpaceId).activeTabId;
+  const recentOthers = Object.values(state.tabs).filter((t) => t.id !== current).length;
+  const emptyKinds = [...Array(Math.min(3, recentOthers)).fill('tab'), 'action', 'action'];
+  const kinds = "[...document.querySelectorAll('#palette-results [role=option]')].map((li) => li.dataset.kind)";
+  assert.deepEqual(await evaluate(session, kinds), emptyKinds);
+  assert.deepEqual((await evaluate(session, paletteRows)).slice(-2), ['action: New Space', 'action: New Flechinha Window']);
+  assert.ok((await evaluate(session, "[...document.querySelectorAll('#palette-results [data-kind=tab] .go')].map((go) => go.textContent)")).every((go) => go === 'Switch to Tab'));
+  assert.match((await evaluate(session, paletteRows))[0], /^tab: .* \(selected\)$/);
+  // Tab there searches actions only; Backspace in the empty field goes back.
+  await key('Tab', []);
+  await domWhere("() => document.querySelector('#palette-mode').textContent === 'Actions' && document.activeElement.id === 'palette-input'");
+  assert.ok((await evaluate(session, kinds)).every((kind) => kind === 'action'));
+  await send('Input.insertText', { text: 's' }, session);
+  await domWhere(`() => (${paletteRows})[0] === 'action: Settings (selected)'`);
+  await key('BackSpace', []);
+  await key('BackSpace', []);
+  await domWhere(`() => document.querySelector('#palette-mode').textContent === '' && (${kinds}).join() === ${JSON.stringify(emptyKinds.join())}`);
+  // The same shortcut again closes the bar.
+  await key('t', ['Control_L']);
+  await barClosed('Control-T again');
+  console.log('PASS an empty command bar shows recent tabs to switch to and two actions, Tab searches actions, and Control-T again closes it');
+  // An open tab whose title starts with what's typed is the top hit, before the typed search; Enter switches to it.
+  await key('t', ['Control_L']);
+  await domWhere("() => !document.querySelector('#palette').hidden && document.activeElement.id === 'palette-input'");
+  await send('Input.insertText', { text: 'Workflow /b' }, session);
+  await domWhere(`() => (${paletteRows}).slice(0, 2).join('|') === 'tab: Workflow /b (selected)|search: Workflow /b'`);
+  await key('Return', []);
+  await active(b);
+  await barClosed('switching to a tab');
+  console.log('PASS a tab whose title starts with the query is the top hit and Enter switches to it');
+  // A tab renamed in the background reorders the list; the result you moved to stays selected.
+  await key('t', ['Control_L']);
+  await domWhere("() => !document.querySelector('#palette').hidden && document.activeElement.id === 'palette-input'");
+  await send('Input.insertText', { text: 'Workflow /' }, session);
+  await domWhere(`() => (${paletteRows}).includes('tab: Workflow /a (selected)') && (${paletteRows}).includes('search: Workflow /')`);
+  const searchRow = (await evaluate(session, paletteRows)).indexOf('search: Workflow /');
+  for (let i = 0; i < searchRow; i++) await key('Down', []);
+  await domWhere(`() => (${paletteRows})[${searchRow}] === 'search: Workflow / (selected)'`);
+  await rpc('renameTab', a, 'Renamed elsewhere');
+  await domWhere(`() => !(${paletteRows}).some((row) => row.startsWith('tab: Workflow /a'))`);
+  assert.ok((await evaluate(session, paletteRows)).includes('search: Workflow / (selected)'));
+  await rpc('renameTab', a, '');
+  await key('Escape', []);
+  await domWhere("() => document.querySelector('#palette').hidden");
+  console.log('PASS a background change to the tabs keeps the selected result selected');
+  // An address you've visited completes inline, the added part selected; moving off it puts back what was typed.
+  await key('t', ['Control_L']);
+  await domWhere("() => !document.querySelector('#palette').hidden && document.activeElement.id === 'palette-input'");
+  // The imported Helium history page; the Chrome bookmark import left an example.com tab open, which "exam" would complete to.
+  await send('Input.insertText', { text: 'example.o' }, session);
+  const field = "(() => { const input = document.querySelector('#palette-input'); return [input.value, input.selectionStart, input.selectionEnd].join() })()";
+  await domWhere(`() => ${field} === 'example.org,9,11' && (${paletteRows})[0] === 'completion: example.org (selected)'`);
+  // Down from the completion goes to the typed search, the next row, which Enter would search for.
+  // The completion's row stays where it was; Up selects it and shows it in the field again.
+  await key('Down', []);
+  await domWhere(`() => ${field} === 'example.o,9,9' && (${paletteRows}).slice(0, 2).join('|') === 'completion: example.org|search: example.o (selected)'`);
+  await key('Up', []);
+  await domWhere(`() => ${field} === 'example.org,9,11' && (${paletteRows})[0] === 'completion: example.org (selected)'`);
+  // Typing on completes again; pointing at the typed address ("example.or" reads as one) puts back
+  // what was typed, as the arrows do, and leaves that row under the pointer for a click.
+  await send('Input.insertText', { text: 'r' }, session);
+  await domWhere(`() => ${field} === 'example.org,10,11' && (${paletteRows})[0] === 'completion: example.org (selected)'`);
+  const centre = (selector) => evaluate(session, `(() => { const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
+  // The bar opens in the sidebar-wide frame and moves to the window's centre when the frame grows
+  // (x 130, then 525; 2026-10-26). It stays transparent until then, so point at it once it shows:
+  // the row can't move after that, and the assertion below uses the same point.
+  waitingFor = 'the command bar to show once its frame has grown';
+  await domWhere("() => !document.querySelector('#palette').classList.contains('opening')");
+  // From the field to the row, again until it takes: a move to where the pointer already is fires
+  // no mousemove. Both are measured each time.
+  let typedAt;
+  waitingFor = 'pointing at the typed address in the command bar to select its row';
+  do {
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...(await centre('#palette-input')) }, session);
+    typedAt = await centre('#palette-results [data-kind=address]');
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...typedAt }, session);
+  } while (!(await evaluate(session, `(${paletteRows}).includes('address: example.or (selected)')`)));
+  waitingFor = undefined;
+  await domWhere(`() => ${field} === 'example.or,10,10' && (${paletteRows}).includes('address: example.or (selected)')`);
+  assert.equal(await evaluate(session, `document.elementFromPoint(${typedAt.x}, ${typedAt.y}).closest('[role=option]').dataset.kind`), 'address');
+  await key('Escape', []);
+  await domWhere("() => document.querySelector('#palette').hidden");
+  console.log('PASS a visited address completes inline as the top hit, and moving off it restores the typed text');
+  // Closing gives up the suggestions still on their way, and a change to the tabs after it
+  // doesn't show the bar again.
+  const lateAsked = heldSuggest('flecha late');
+  await key('t', ['Control_L']);
+  await domWhere("() => !document.querySelector('#palette').hidden && document.activeElement.id === 'palette-input'");
+  await send('Input.insertText', { text: 'flecha late' }, session);
+  const { closed: lateClosed } = await lateAsked;
+  await key('Escape', []);
+  await lateClosed;
+  await rpc('renameTab', b, 'Renamed after the bar closed');
+  await textWhere("(text) => text.includes('Renamed after the bar closed')");
+  await barClosed('Escape, with suggestions still on their way');
+  await rpc('renameTab', b, '');
+  console.log('PASS each way of closing the command bar leaves the sidebar clickable, and nothing arriving later shows the bar again');
+  // Suggestions from one opening don't show in the next while the request for them fails (Sol check SUGGEST4).
+  await key('t', ['Control_L']);
+  await domWhere("() => !document.querySelector('#palette').hidden && document.activeElement.id === 'palette-input'");
+  await send('Input.insertText', { text: 'flecha fail' }, session);
+  await domWhere(`() => (${suggestionLabels}).join('|') === 'flecha fail one|flecha fail two'`);
+  await key('Escape', []);
+  await domWhere("() => document.querySelector('#palette').hidden");
+  const failed = new Promise((resolve) => (failing['flecha fail'] = resolve));
+  await key('t', ['Control_L']);
+  await domWhere("() => !document.querySelector('#palette').hidden && document.activeElement.id === 'palette-input'");
+  await send('Input.insertText', { text: 'flecha fail' }, session);
+  await failed;
+  await domWhere(`() => (${paletteRows})[0] === 'search: flecha fail (selected)'`);
+  assert.deepEqual(await evaluate(session, suggestionLabels), []);
+  await key('Escape', []);
+  await barClosed('Escape after a failed suggestion request');
+  console.log('PASS a failed suggestion request shows no suggestions, not those of an earlier opening');
   await send('Fetch.disable', {}, session);
   listeners.delete(toFakeSuggest);
   await rpc('close', Object.values((await stateWhere('s => true')).tabs).find((t) => t.url.startsWith('https://www.google.com/search')).id);
@@ -504,8 +664,11 @@ try {
   assert.equal(fromShortcut.x + fromShortcut.width, frameWindow.x + frameWindow.width - 8 - 8);
   assert.equal(fromShortcut.y, frameWindow.y + 8);
   // The extension's worker, woken from its popup, for chrome.action calls below.
-  await evaluate(await attach((await findTarget(t => t.url.endsWith('/popup.html'))).targetId), "chrome.runtime.sendMessage('wake').catch(() => undefined)");
-  const probeWorker = await attach((await findTarget(t => t.type === 'service_worker' && t.url.endsWith('/bg.js'))).targetId);
+  // The Quiet fixture's worker is a bg.js too, so it is found by the popup's extension.
+  const probePopup = await findTarget(t => t.url.endsWith('/popup.html'));
+  await evaluate(await attach(probePopup.targetId), "chrome.runtime.sendMessage('wake').catch(() => undefined)");
+  const probeWorkerUrl = new URL('/bg.js', probePopup.url).href;
+  const probeWorker = await attach((await findTarget(t => t.type === 'service_worker' && t.url === probeWorkerUrl)).targetId);
   await key('Escape', []);
   await popupGone();
   console.log('PASS an extension popup opened by its shortcut drops into the page area');
@@ -813,6 +976,85 @@ try {
   for (const id of favorites) await rpc('close', id);
   await rpc('activate', pageTab);
 
+  // A page in full screen (a video's button) has the screen to itself, unless Settings keep the
+  // sidebar beside it (patch 0072). Leaving, by Escape or by the page, puts the sidebar back as it
+  // was, hidden or not. The window's own full screen (F11) keeps the sidebar.
+  // Its own tab: two /a pages are open by now, one of them unloaded.
+  await rpc('newTab', base + '/fullscreen');
+  const fsState = await stateWhere(`s => Object.values(s.tabs).some(t => t.url === ${JSON.stringify(base + '/fullscreen')})`);
+  const fsTab = Object.values(fsState.tabs).find(t => t.url === base + '/fullscreen').id;
+  await rpc('activate', fsTab);
+  await stateWhere(`s => s.spaces.find(sp => sp.id === s.activeSpaceId).activeTabId === ${JSON.stringify(fsTab)}`);
+  const fsPage = await attach((await findTarget(t => t.type === 'page' && t.url === base + '/fullscreen')).targetId);
+  await loaded(fsPage, base + '/fullscreen');
+  const polled = (target, expression) => evaluate(target, `new Promise(resolve => { const check = () => (${expression}) ? resolve(true) : setTimeout(check, 16); check(); })`);
+  // Waits for the layout; a step that never gets it ends at the run's deadline, after its label.
+  // `page` is the page's width, a number or an expression of the window's (outerWidth): without
+  // a window manager, as on Xvfb, a window in full screen keeps its size instead of the screen's.
+  // `frame` is the frame view's width, or 'hidden': a frame view 0 wide hides its page, which
+  // keeps its last size.
+  const layoutIs = async (want, label) => {
+    console.log(`waiting for ${label}: ${JSON.stringify(want)}`);
+    await polled(fsPage, `innerWidth === ${want.page} && !!document.fullscreenElement === ${want.full}`);
+    const frame = want.frame === 'hidden' ? "document.visibilityState === 'hidden'" : `document.visibilityState === 'visible' && innerWidth === ${want.frame}`;
+    await polled(session, `${frame} && matchMedia('(display-mode: fullscreen)').matches === ${want.windowFull}`);
+  };
+  const pageFullscreen = () => send('Runtime.evaluate', { expression: 'document.documentElement.requestFullscreen().then(() => true)', userGesture: true, awaitPromise: true }, fsPage);
+  // Docked, the frame view is as wide as the sidebar (a new profile keeps no width of its own).
+  const sidebarWidth = await evaluate(session, 'innerWidth');
+  const docked = { page: await evaluate(fsPage, 'innerWidth'), frame: sidebarWidth, full: false, windowFull: false };
+  const alone = { page: 'outerWidth', frame: 'hidden', full: true, windowFull: true };
+  const besideSidebar = `outerWidth - ${sidebarWidth + 8}`;
+  assert.equal(await evaluate(fsPage, `innerWidth === ${besideSidebar}`), true);
+  // Pressed where the keyboard already is, the page: key() first focuses the window again, and
+  // around a full screen change that sometimes lost the key here.
+  const tap = (name) => { hold('down', name); hold('up', name); };
+  // Off by default: the page fills the screen, and Escape brings the docked sidebar back.
+  await pageFullscreen();
+  await layoutIs(alone, 'page full screen, sidebar docked');
+  assert.equal(await evaluate(fsPage, 'innerHeight === outerHeight'), true);
+  tap('Escape');
+  await layoutIs(docked, 'Escape from page full screen');
+  // A hidden sidebar stays hidden after the page leaves full screen itself.
+  // Hidden, the page area starts 8px in (the hover edge) instead of at the sidebar's edge.
+  const hidden = { page: docked.page + sidebarWidth - 8, frame: 8, full: false, windowFull: false };
+  await rpc('toggleSidebar');
+  await layoutIs(hidden, 'sidebar hidden');
+  await pageFullscreen();
+  await layoutIs(alone, 'page full screen, sidebar hidden');
+  await evaluate(fsPage, 'document.exitFullscreen()');
+  await layoutIs(hidden, 'the page leaving full screen, sidebar hidden');
+  assert.equal((await stateWhere('s => true')).sidebarVisible, false);
+  await rpc('toggleSidebar');
+  await layoutIs(docked, 'sidebar shown again');
+  console.log('PASS a page in full screen fills the screen, and leaving puts the sidebar back as it was');
+  // On: the docked sidebar stays beside the page, as before patch 0072. Where the window keeps its
+  // size, the page's doesn't change either, and Escape must still tell it that it left.
+  await rpc('settings:set', { sidebarInPageFullscreen: true });
+  await pageFullscreen();
+  await layoutIs({ page: besideSidebar, frame: sidebarWidth, full: true, windowFull: true }, 'page full screen with the sidebar kept');
+  tap('Escape');
+  await layoutIs(docked, 'Escape with the sidebar kept');
+  await rpc('settings:set', { sidebarInPageFullscreen: false });
+  console.log('PASS Show sidebar in full screen keeps the sidebar beside a page in full screen');
+  // F11 keeps the sidebar; a page going full screen inside it has the screen alone, and leaves
+  // back to F11's layout.
+  const windowFull = { page: besideSidebar, frame: sidebarWidth, full: false, windowFull: true };
+  tap('F11');
+  await layoutIs(windowFull, 'F11');
+  await pageFullscreen();
+  await layoutIs(alone, 'page full screen inside F11');
+  tap('Escape');
+  await layoutIs(windowFull, 'Escape from page full screen inside F11');
+  tap('F11');
+  await layoutIs(docked, 'F11 again');
+  console.log('PASS F11 keeps the sidebar, and a page in full screen inside it fills the screen until Escape');
+  // Back first: closing the active tab would show a neighbour, possibly after this activation.
+  await rpc('activate', pageTab);
+  await stateWhere(`s => s.spaces.find(sp => sp.id === s.activeSpaceId).activeTabId === ${JSON.stringify(pageTab)}`);
+  await rpc('close', fsTab);
+  await stateWhere(`s => !s.tabs[${JSON.stringify(fsTab)}] && s.spaces.find(sp => sp.id === s.activeSpaceId).activeTabId === ${JSON.stringify(pageTab)}`);
+
   // The inline header on Linux: Flecha's own close, minimize and maximize circles where macOS
   // draws the traffic lights, then the sidebar toggle, the menu button, and back/forward/reload.
   const header = await evaluate(session, `(() => {
@@ -965,15 +1207,38 @@ try {
   // Its timer (every 100 ms; once a second while merely hidden) ran nothing while frozen.
   assert.ok(afterFreeze.silent >= 2000, JSON.stringify(afterFreeze));
   console.log('PASS a tab in a Space no window shows is frozen, and comes back as it was');
-  for (const url of [...Array.from({ length: 11 }, (_, n) => sleepUrl(n)), tickingUrl]) {
+  for (const url of Array.from({ length: 11 }, (_, n) => sleepUrl(n))) {
     const state = await stateWhere('s => true');
     const id = Object.values(state.tabs).find(t => t.url === url)?.id;
     if (id) await rpc('close', id);
   }
-  await rpc('activate', pageTab);
+  // Closing the active tab and picking another at once shows the one picked. Chromium activates a
+  // neighbour of a closing active tab (here /download-page-4), and the shell took that as you
+  // picking it, after your pick. Settled: the closed tab is gone and the window shows the
+  // Store's active tab.
+  const tickingTab = Object.values((await stateWhere('s => true')).tabs).find(t => t.url === tickingUrl).id;
+  await stateWhere(`s => s.spaces.find(sp => sp.id === s.activeSpaceId).activeTabId === ${JSON.stringify(tickingTab)}`);
+  waitingFor = 'the window to settle after closing the active tab and activating another at once';
+  const settledOn = await evaluate(session, `chrome.flechaPrivate.getWindowId().then(windowId => new Promise(resolve => {
+    const check = async () => {
+      const space = testState.spaces.find(sp => sp.id === testState.activeSpaceId);
+      const [shown] = await chrome.tabs.query({ active: true, windowId });
+      const closed = !(await chrome.tabs.query({})).some(t => t.id === ${tickingChromeId});
+      if (!closed || !space.activeTabId || shown?.url !== testState.tabs[space.activeTabId]?.url) return;
+      testWaiters.delete(check); chrome.tabs.onActivated.removeListener(check); chrome.tabs.onRemoved.removeListener(check);
+      resolve(testState.tabs[space.activeTabId].url);
+    };
+    testWaiters.add(check); chrome.tabs.onActivated.addListener(check); chrome.tabs.onRemoved.addListener(check);
+    void testInvoke('close', ${JSON.stringify(tickingTab)}); void testInvoke('activate', ${JSON.stringify(pageTab)});
+  }))`);
+  waitingFor = undefined;
+  assert.equal(settledOn, base + '/a', 'closing the active tab and activating another at once showed the closed tab\'s neighbour');
+  console.log('PASS closing the active tab and picking another at once shows the one picked');
 
   // Several windows: each has its own active Space and Today tabs; pinned tabs are shared.
+  waitingFor = 'the first window to show the /a tab again';
   const firstState = await stateWhere(`s => s.spaces.find(sp => sp.id === s.activeSpaceId).activeTabId === ${JSON.stringify(pageTab)}`);
+  waitingFor = undefined;
   const frameWindows = async () => (await send('Target.getTargets')).targetInfos.filter(t => t.url.startsWith(extension + 'window.html'));
   const openWindowFrame = async (known) => {
     const target = await findTarget(t => t.url.startsWith(extension + 'window.html') && !known.includes(t.targetId));
@@ -984,8 +1249,10 @@ try {
   };
   const known = (await frameWindows()).map(t => t.targetId);
   await key('n', ['Control_L']);
+  waitingFor = 'the frame page of the window Ctrl+N opens';
   const otherWindow = await openWindowFrame(known);
   let secondState = await otherWindow.state('s => true');
+  waitingFor = undefined;
   assert.notEqual(secondState.windowId, firstState.windowId);
   // Saved once the window is up, not after the Store's debounce: a quit right after keeps it.
   assert.equal(await evaluate(session, `chrome.storage.local.get('state').then(({ state }) => JSON.parse(state).windows.some(w => w.id === ${JSON.stringify(secondState.windowId)}))`), true);
@@ -1094,23 +1361,34 @@ try {
   await domWhere("() => document.querySelector('#urlbar-wrap').classList.contains('flashing') && document.querySelector('#urlbar-wrap').dataset.flash === 'Enter a web address, like example.com.'");
   await domWhere(`() => document.querySelector(${JSON.stringify(pinnedTitle)}).textContent === 'Workflow /pinned-later'`);
   assert.equal((await stateWhere('s => true')).tabs[homeTab].homeUrl, base + '/pinned-new');
+  // So is a blank one.
+  await evaluate(session, "document.querySelector('#urlbar-wrap').classList.remove('flashing'); document.querySelector('#urlbar-wrap').dataset.flash = ''");
+  await pickInTabMenu(homeTab, 'Edit Pinned URL…');
+  await typeUrl(pinnedTitle, base + '/pinned-new', '   ');
+  await domWhere("() => document.querySelector('#urlbar-wrap').classList.contains('flashing') && document.querySelector('#urlbar-wrap').dataset.flash === 'Enter a web address, like example.com.'");
+  assert.equal((await stateWhere('s => true')).tabs[homeTab].homeUrl, base + '/pinned-new');
   await pickInTabMenu(homeTab, 'Go Back to Pinned URL');
   await tabWhere(homeTab, `t => t.url === ${JSON.stringify(base + '/pinned-new')}`);
-  console.log('PASS Edit Pinned URL takes a typed address, refuses a script, and Go Back uses the new URL');
+  console.log('PASS Edit Pinned URL takes a typed address, refuses a script or a blank, and Go Back uses the new URL');
   // A favorite is an icon: its URL is edited in a field under the favorites. Shown at its pinned
-  // page, the tab follows the new URL.
+  // page, the tab follows the new URL. Typed without the trailing slash the page reports, it is
+  // still the page the tab shows: no Go Back or Set Pinned URL.
   await rpc('toggleFavorite', homeTab);
   await stateWhere(`s => s.favorites.includes(${JSON.stringify(homeTab)})`);
   await pickInTabMenu(homeTab, 'Edit Pinned URL…');
-  await typeUrl('.url-edit', base + '/pinned-new', base + '/favorite-home');
-  await tabWhere(homeTab, `t => t.homeUrl === ${JSON.stringify(base + '/favorite-home')} && t.url === t.homeUrl`);
+  await typeUrl('.url-edit', base + '/pinned-new', base);
+  await tabWhere(homeTab, `t => t.homeUrl === ${JSON.stringify(base + '/')} && t.url === t.homeUrl && t.title === 'Workflow /'`);
   assert.equal(await evaluate(session, "document.querySelector('.url-edit')"), null);
+  assert.equal((await tabMenuLabels(homeTab)).filter(l => l.includes('Pinned URL')).join(), 'Edit Pinned URL…');
   console.log('PASS Edit Pinned URL works on a favorite, and a tab at its pinned page follows the new URL');
   await rpc('activate', pageTab);
   await stateWhere(`s => s.spaces.find(sp => sp.id === s.activeSpaceId).activeTabId === ${JSON.stringify(pageTab)}`);
+  // The tab menu's edits focused this window, raising it; the reopened window goes back on top,
+  // as it was (the window title check below reads the one underneath).
+  await evaluate(reopened.session, 'chrome.flechaPrivate.getWindowId().then(id => chrome.windows.update(id, { focused: true }))');
   // The second window stays open through the restart below.
 
-  const storage = await evaluate(session, `new Promise(resolve => { const check = async () => { const { state } = await chrome.storage.local.get('state'); if (state && JSON.parse(state).onboarded && Object.values(JSON.parse(state).tabs).some(t => t.url === ${JSON.stringify(base + '/a')})) { chrome.storage.onChanged.removeListener(check); resolve(JSON.parse(state)); } }; chrome.storage.onChanged.addListener(check); void check(); })`);
+  const storage = await evaluate(session, `new Promise(resolve => { const check = async () => { const { state } = await chrome.storage.local.get('state'); if (state && JSON.parse(state).onboarded && Object.values(JSON.parse(state).tabs).some(t => t.url === ${JSON.stringify(base + '/a')}) && JSON.parse(state).tabs[${JSON.stringify(homeTab)}]?.homeUrl === ${JSON.stringify(base + '/')}) { chrome.storage.onChanged.removeListener(check); resolve(JSON.parse(state)); } }; chrome.storage.onChanged.addListener(check); void check(); })`);
   assert.ok(storage.spaces.length > 1);
   console.log('PASS state persisted to native extension storage before shutdown');
   const title = execFileSync(inputTool, [env.DISPLAY, String(browser.pid), 'title'], { env, encoding: 'utf8' });
@@ -1147,6 +1425,9 @@ try {
   assert.ok(Object.values(restored.tabs).some(t => t.url === base + '/a'));
   assert.ok(Object.values(restored.tabs).some(t => t.url === base + '/b'));
   console.log('PASS Spaces and tab URLs survive graceful native restart');
+  assert.equal(restored.tabs[homeTab]?.homeUrl, base + '/');
+  assert.ok(restored.favorites.includes(homeTab));
+  console.log('PASS an edited pinned URL survives the restart');
   assert.equal(restored.sidebarWidth, 300);
   await evaluate(restoredFrame, "new Promise(resolve => { const check = () => innerWidth === 300 && document.querySelector('#sidebar').offsetWidth === 300 ? resolve() : requestAnimationFrame(check); check(); })");
   console.log('PASS the dragged sidebar width comes back after a restart');
@@ -1198,6 +1479,17 @@ try {
   await evaluate(repairedFrame, `new Promise(resolve => { const check = async () => { if ((await chrome.tabs.query({})).some(t => t.url === ${JSON.stringify(coldLink)} && t.status === 'complete')) { chrome.tabs.onUpdated.removeListener(check); resolve(); } }; chrome.tabs.onUpdated.addListener(check); void check(); })`);
   await evaluate(repairedFrame, `testWait(s => Object.values(s.tabs).some(t => t.url === ${JSON.stringify(coldLink)}))`);
   console.log('PASS a cold launch with an address loads it');
+  // An incognito window's command bar asks for no search suggestions, as Chromium's omnibox in
+  // incognito. Last, because this display has no window manager to give the keyboard back to
+  // the main window once the incognito one closes.
+  const regularFrames = new Set((await send('Target.getTargets')).targetInfos.filter((t) => t.url.startsWith(extension + 'window.html')).map((t) => t.targetId));
+  await evaluate(repairedFrame, "testInvoke('newIncognitoWindow')");
+  const incognitoFrame = await findTarget((t) => t.url.startsWith(extension + 'window.html') && !regularFrames.has(t.targetId));
+  const incognitoSession = await attach(incognitoFrame.targetId);
+  await loaded(incognitoSession, extension);
+  // Google doesn't resolve on this run: a request sent would fail, rejecting instead of giving [].
+  assert.deepEqual(await evaluate(incognitoSession, "chrome.extension.inIncognitoContext && window.flecha.searchSuggestions('flecha incognito', new AbortController().signal)"), []);
+  console.log('PASS an incognito window asks for no search suggestions');
   await closeBrowser();
 } finally {
   finished = true;

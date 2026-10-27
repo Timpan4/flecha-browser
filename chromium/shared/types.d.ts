@@ -13,7 +13,10 @@ export interface TabInfo {
   /** Pinned and favorite tabs remember where they started, like Arc. */
   homeUrl?: string;
   loading?: boolean;
+  /** When it was last shown, or opened if it hasn't been yet. */
   lastActive: number;
+  /** Opened without being shown (in the background, unopened or imported) and not shown since. */
+  unseen?: boolean;
   /** Back/forward entries (with scroll position) so a tab comes back as it was after a restart. */
   history?: { entries: Array<{ url: string; title: string; pageState?: string }>; index: number };
 }
@@ -170,6 +173,8 @@ export interface BrowserState {
   peekPinnedLinks?: boolean;
   /** Links arriving from other apps open in a Flechinha instead of a tab. Default on. */
   openLinksInFlechinha?: boolean;
+  /** A page in full screen (a video's button) keeps the sidebar beside it. Default off: the page fills the screen. */
+  sidebarInPageFullscreen?: boolean;
   /** Today tabs untouched this long are archived; 0 keeps them forever. Default 12. */
   archiveAfterHours?: number;
   /** Remembered answers to site permission prompts, by origin then permission. */
@@ -315,6 +320,7 @@ export interface SettingsView {
   /** Set after recording a shortcut another command had, which lost it. */
   notice?: string;
   openLinksInFlechinha: boolean;
+  sidebarInPageFullscreen: boolean;
 }
 
 /** The downloads folder is only changed through the folder picker, never set directly. */
@@ -410,6 +416,8 @@ export interface SettingsApi {
 export interface FlechaApi {
   onState(cb: (state: UiState) => void): void;
   onPalette(cb: (mode: PaletteMode) => void): void;
+  /** Main closed the command bar (a tab switch, say): the sidebar hides it. */
+  onClosePalette(cb: () => void): void;
   /** Main asks the sidebar to open the Space editor (new Space, menu, shortcut). */
   onEditSpace(cb: (spaceId: string) => void): void;
   /** Main asks the sidebar to start renaming a tab in place. */

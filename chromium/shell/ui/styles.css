@@ -1162,6 +1162,14 @@ footer {
   animation: fade var(--fast) var(--ease);
 }
 
+/* Until the frame has grown to the window (showWhenFrameGrown); opacity, so the field keeps focus.
+   Its animations start when it shows. */
+#palette.opening,
+#palette.opening .palette-box {
+  opacity: 0;
+  animation: none;
+}
+
 #palette[hidden] {
   display: none;
 }
@@ -1192,7 +1200,17 @@ footer {
   color: var(--text-3);
 }
 
-.palette-field svg {
+/* The selected result's icon, or a site's favicon when that is a page. */
+#palette-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 18px;
+  height: 18px;
+}
+
+.palette-field svg,
+#palette-icon .favicon {
   width: 18px;
   height: 18px;
 }
@@ -1228,17 +1246,12 @@ footer {
   list-style: none;
   margin: 0;
   padding: 6px;
-  /* Fixed height so the box never shrinks and leaves stale pixels over the transparent backdrop. */
-  height: min(380px, 46vh);
+  /*
+   * Five rows, as Arc's Command Bar shows; more scroll. Fixed height so the box never shrinks
+   * and leaves stale pixels over the transparent backdrop.
+   */
+  height: calc(5 * 40px + 12px);
   overflow-y: auto;
-}
-
-#palette-results .group-label {
-  height: 26px;
-  padding: 8px 10px 2px;
-  font-size: var(--text-xs);
-  font-weight: 600;
-  color: var(--text-3);
 }
 
 #palette-results .item {
@@ -1284,12 +1297,8 @@ footer {
   text-overflow: ellipsis;
 }
 
+/* "Title — 1password.com": the address follows the title, muted. */
 .item .sub {
-  max-width: 45%;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-size: var(--text-sm);
   color: var(--text-3);
 }
 
@@ -1297,15 +1306,36 @@ footer {
   color: rgba(255, 255, 255, 0.75);
 }
 
-.item .enter {
-  display: none;
+/* "Switch to Tab →" on an open tab. */
+.item .go {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: none;
+  font-size: var(--text-sm);
+  color: var(--text-3);
 }
 
-.item.selected .enter {
-  display: inline-block;
+.item .go-arrow {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.item .go-arrow svg {
+  width: 12px;
+  height: 12px;
+}
+
+.item.selected .go {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.item.selected .go-arrow {
   background: rgba(255, 255, 255, 0.18);
-  color: #fff;
-  box-shadow: none;
 }
 
 #palette-detail {
@@ -1325,19 +1355,6 @@ footer {
 
 #palette-detail[hidden] {
   display: none;
-}
-
-.palette-footer {
-  display: flex;
-  gap: var(--space-4);
-  padding: 8px 16px;
-  border-top: 0.5px solid var(--surface-line);
-  font-size: var(--text-xs);
-  color: var(--text-3);
-}
-
-.palette-footer kbd {
-  margin-right: 2px;
 }
 
 /* ---- Space editor ------------------------------------------------------- */

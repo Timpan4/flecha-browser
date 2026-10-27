@@ -12,7 +12,7 @@
  */
 import { Store, type StatePersistence } from '../shared/store';
 import { decodeState, loadSavedState, STATE_KEY } from '../shared/savedState';
-import { pinnableAddress, resolveInput, searchEngine } from './lib/url';
+import { pinnableAddress, resolveInput, sameAddress, searchEngine } from './lib/url';
 import { shortcutHints, type ShortcutId } from './lib/shortcuts';
 import { describe as describeEnvironment } from './lib/environments';
 import type { BrowserState, DropTarget, SearchEngineId, UiState } from '../shared/types';
@@ -251,7 +251,7 @@ async function start() {
     const sidebar: chrome.flechaPrivate.SidebarMode = docked ? 'docked' : frame.sidebarPeek ? 'floating' : 'hidden';
     // The frame covers the whole window while it draws over the page.
     const overlay = frame.paletteOpen || frame.tabDragging || frame.overlays.size > 0 || !store.state.onboarded;
-    broadcastTo(chromeWindowId, 'frame', { sidebar, overlay });
+    broadcastTo(chromeWindowId, 'frame', { sidebar, overlay, sidebarInPageFullscreen: !!store.state.sidebarInPageFullscreen });
   }
   const hasFrame = () => typeof chrome.flechaPrivate?.setFrame === 'function';
   /** The Chromium window a command acts in: the calling page's, else the focused Flecha window's. */
@@ -271,6 +271,15 @@ async function start() {
     sendFrame(chromeWindowId);
     broadcastTo(chromeWindowId, 'palette', mode);
     if (hasFrame()) void chrome.flechaPrivate.focus('frame', chromeWindowId);
+  }
+
+  /** Closes a window's command bar, in its frame page too: a bar left there covers the sidebar. */
+  function closePaletteIn(chromeWindowId: number | undefined) {
+    const frame = frames.get(chromeWindowId);
+    if (!frame?.paletteOpen) return;
+    frame.paletteOpen = false;
+    sendFrame(chromeWindowId);
+    broadcastTo(chromeWindowId, 'close-palette');
   }
 
   /** Windows being made, by Flecha window: a second ask while one is made waits for it. */
@@ -429,13 +438,30 @@ async function start() {
     const windows = new Set((await Promise.all(closing.map((c) => chrome.tabs.get(c).catch(() => undefined)))).map((t) => t?.windowId));
     for (const chromeWindowId of windows) {
       if (chromeWindowId === undefined) continue;
-      const left = (await chrome.tabs.query({ windowId: chromeWindowId })).filter((t) => !closing.includes(t.id!));
+      const tabs = await chrome.tabs.query({ windowId: chromeWindowId });
+      const left = tabs.filter((t) => !closing.includes(t.id!));
       if (!left.length && !placeholders.has(chromeWindowId)) await makePlaceholder(chromeWindowId);
+      else if (tabs.some((t) => t.active && closing.includes(t.id!))) await showBeforeClosing(chromeWindowId, left);
     }
     for (const chromeId of closing) {
       ours.add(chromeId);
       void chrome.tabs.remove(chromeId).catch(() => ours.delete(chromeId));
     }
+  }
+
+  /**
+   * Before a window's active Chromium tab closes, shows the window's own active tab if it is open
+   * there, or else its placeholder until sync opens that tab. Closing the active tab would have
+   * Chromium activate a neighbour, which Flecha would take as you picking it, even after you
+   * picked another tab.
+   */
+  async function showBeforeClosing(chromeWindowId: number, left: chrome.tabs.Tab[]) {
+    const windowId = windowOf(chromeWindowId);
+    if (!windowId) return;
+    const wanted = live.get(store.activeTabIn(windowId)?.id ?? '');
+    if (wanted === undefined || !left.some((t) => t.id === wanted)) return showPlaceholder(chromeWindowId);
+    ourActivations.add(wanted);
+    await chrome.tabs.update(wanted, { active: true }).catch(() => ourActivations.delete(wanted));
   }
 
   async function showPlaceholder(chromeWindowId: number) {
@@ -665,6 +691,8 @@ async function start() {
   }
 
   function onActivated({ tabId, windowId: chromeWindowId }: { tabId: number; windowId: number }) {
+    // Any tab switch (Control-Tab, a click, Flecha's own) closes the window's command bar, as in Arc.
+    closePaletteIn(chromeWindowId);
     if (ourActivations.delete(tabId)) return;
     const id = flechaIdFor(tabId);
     const windowId = windowOf(chromeWindowId);
@@ -796,7 +824,7 @@ async function start() {
           ]),
       { label: 'Reload', enabled: live.has(tabId), run: does('reloadTab', tabId) },
       { label: tab.muted ? 'Unmute Tab' : 'Mute Tab', run: does('toggleMute', tabId) },
-      ...(pinned && tab.homeUrl !== tab.url
+      ...(pinned && !sameAddress(tab.homeUrl!, tab.url)
         ? [
             { label: 'Go Back to Pinned URL', run: does('goHome', tabId) },
             ...(pinnableAddress(tab.url) ? [{ label: 'Set Pinned URL to Current Page', run: does('setHomeUrl', tabId, tab.url) }] : []),
@@ -945,8 +973,13 @@ async function start() {
       const home = store.state.tabs[id]?.homeUrl;
       const chromeId = live.get(id);
       if (!home) return;
-      if (chromeId !== undefined) void chrome.tabs.update(chromeId, { url: home });
-      else store.updateTab(id, { url: home });
+      // A home from older or imported state can be a page Chromium won't open for the shell (file:).
+      const asking = hereChrome();
+      const refused = () => broadcastTo(asking, 'flash', 'Flecha can’t open the pinned URL; edit it to a web address.');
+      if (chromeId !== undefined) chrome.tabs.update(chromeId, { url: home }).catch(refused);
+      // An unloaded tab opens its URL later, where a refusal would go unseen: only web and Chromium pages.
+      else if (pinnableAddress(home) || /^(about|chrome):/i.test(home)) store.updateTab(id, { url: home });
+      else refused();
     },
     // A tab showing its pinned page follows the new URL; one browsed away stays, and goes back to it.
     setHomeUrl: spacesOnly((id: string, input: string) => {
@@ -954,7 +987,8 @@ async function start() {
       if (!tab?.homeUrl || store.locate(id)?.zone === 'today') return;
       const url = pinnableAddress(input);
       if (!url) return broadcastTo(hereChrome(), 'flash', 'Enter a web address, like example.com.');
-      const atHome = tab.url === tab.homeUrl;
+      if (sameAddress(url, tab.homeUrl)) return;
+      const atHome = sameAddress(tab.url, tab.homeUrl);
       store.updateTab(id, { homeUrl: url, ...(atHome ? { url, history: undefined } : {}) });
       const chromeId = live.get(id);
       if (atHome && chromeId !== undefined) void chrome.tabs.update(chromeId, { url });
@@ -989,8 +1023,7 @@ async function start() {
     openPalette: (mode: string) => openPalette(mode),
     closePalette: () => {
       const chromeWindowId = hereChrome();
-      frameOf(chromeWindowId).paletteOpen = false;
-      sendFrame(chromeWindowId);
+      closePaletteIn(chromeWindowId);
       if (hasFrame()) void chrome.flechaPrivate.focus('page', chromeWindowId);
     },
     toggleSidebar: () => {
@@ -1099,7 +1132,8 @@ async function start() {
 
   /**
    * Control-Tab goes through the Space's tabs by when you last used them, like Arc's and an app
-   * switcher. The order is the one at the first press: while Control is held each press moves
+   * switcher; tabs opened in the background and not seen yet come last. The order is the one at
+   * the first press: while Control is held each press moves
    * one further along it, and releasing Control (onShortcutReleased) makes the tab it stopped on
    * the most recent. A browser that doesn't report the release ends the run at every press, so
    * Control-Tab then switches between the two most recent tabs.
@@ -1110,10 +1144,7 @@ async function start() {
     const windowId = here();
     if (recentRun?.windowId !== windowId) {
       const space = store.activeSpaceIn(windowId);
-      const ids = store
-        .allTabIds(space, windowId)
-        .filter((id) => id !== space.activeTabId)
-        .sort((a, b) => store.state.tabs[b].lastActive - store.state.tabs[a].lastActive);
+      const ids = store.byRecency(store.allTabIds(space, windowId).filter((id) => id !== space.activeTabId));
       recentRun = { windowId, ids: space.activeTabId ? [space.activeTabId, ...ids] : ids, index: space.activeTabId ? 0 : -1 };
     }
     const { ids } = recentRun;

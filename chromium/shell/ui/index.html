@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; font-src 'self'; img-src * data: crx: favicon:; style-src 'self' 'unsafe-inline'; script-src 'self'"
+      content="default-src 'self'; connect-src 'self' https://www.google.com https://duckduckgo.com https://www.bing.com https://search.brave.com https://kagisuggest.com https://ac.ecosia.org; font-src 'self'; img-src * data: crx: favicon:; style-src 'self' 'unsafe-inline'; script-src 'self'"
     />
     <title>Flecha</title>
     <link rel="stylesheet" href="tokens.css" />
@@ -190,17 +190,22 @@
     <div id="palette" hidden>
       <div class="palette-box">
         <div class="palette-field">
-          <i data-icon="search"></i>
-          <input id="palette-input" spellcheck="false" autocomplete="off" placeholder="Search tabs, history, or type a URL" />
+          <span id="palette-icon" aria-hidden="true"><i data-icon="search"></i></span>
+          <input
+            id="palette-input"
+            role="combobox"
+            aria-label="Search or enter URL"
+            aria-autocomplete="both"
+            aria-controls="palette-results"
+            aria-expanded="true"
+            spellcheck="false"
+            autocomplete="off"
+            placeholder="Search or Enter URL…"
+          />
           <span id="palette-mode"></span>
         </div>
-        <ul id="palette-results"></ul>
+        <ul id="palette-results" role="listbox" aria-label="Results"></ul>
         <pre id="palette-detail" hidden></pre>
-        <footer class="palette-footer">
-          <span><kbd>↑</kbd><kbd>↓</kbd> Navigate</span>
-          <span><kbd>↵</kbd> Open</span>
-          <span><kbd>esc</kbd> Close</span>
-        </footer>
       </div>
     </div>
 

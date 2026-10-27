@@ -286,6 +286,108 @@ Benchmark plan, to run once the build has finished and nothing else heavy runs:
   - Checks: typecheck and tsrs clean, 51/51 unit tests, `git diff --check` clean. The harness passed 60/60 on `out/Release` (`flecha-perf/results/harness-round15fix.log`). The new checks are submenu ARIA and focus, and Import listing the Chrome and Helium fixtures.
   - Reinstalled as `~/.local/opt/flecha-20261026-1730`; `flecha-current` now points there and the 1650 copy is kept. The installed smoke test passed. The owner's Flecha (PID 3393548, the 1650 copy) was left running; their next launch uses the new copy.
 
+## Edit pinned URL and the sidebar extensions menu (owner bugs, 2026-10-26)
+
+- Bug 2 cause: an extension with no `action` key gets Chromium's synthesized action, disabled, with the puzzle icon. Clicking it ran `ExecuteUserAction`, whose context-menu fallback anchored at the hidden toolbar (page area's top-left). Flecha had no extensions-menu button.
+- Fix: patch 0071 (`flechaPrivate.showExtensionsMenu`, menu and popup anchored at the sidebar puzzle, second click closes, a disabled action's menu at its button) plus `shell/extensionActions.ts` and `#btn-extensions`. Bug 1: "Edit Pinned URL…" (inline, also for Favorites), "Set Pinned URL to Current Page", `lib/url.ts` `pinnableAddress`, `background.ts` `setHomeUrl`.
+- Builds: `out/Release` (`build-release-0071.log`) and `out/Dev` (`build-dev-0071.log`) both include 0071. Frozen runtime: `checker-runtime/release-0071-bugs`; frozen source: `flecha-check/round16-bugs`.
+- Sol round 16 (`evidence/round16-bugs`): every extension point passed. Two shell findings, fixed: saved home URLs are now canonical (`pinnableAddress` returns `URL.href`; `sameAddress` compares, also for older saved values), and a blank URL shows the message (`editInline` `commitBlank`).
+- Checks: typecheck and tsrs clean; 77/77 unit tests; patches 0055-0071 verify; `git diff --check` clean. The full harness can't pass while other tasks own unfinished steps (Control-L command bar, search suggestions, page full screen with patch 0072, which is now also in the shared `out/Release`). The harness without those steps (`flecha-check/round17-bugs/chromium/tests/native-workflows-0071-trimmed.mjs`) passed 67/67 on the frozen 0071 runtime.
+- Sol round 17 (`evidence/round17-bugs`): both fixes passed; two more findings, fixed: `pinnableAddress` keeps only http(s) and about:blank (file: can't be opened by the shell; other about: pages are chrome:// pages). 78/78 unit tests; the trimmed harness (`flecha-check/round18-bugs/chromium/tests/native-workflows-0071-trimmed.mjs`) passed 67/67 again on the frozen 0071 runtime.
+- Sol round 18 (`evidence/round18-bugs`): S1-S3 and S5 passed; two findings, fixed: Go Back to an older or imported file: home now flashes "Flecha can’t open the pinned URL; edit it to a web address."; `sameAddress` compares about:X as chrome://x/. Extension buttons are now updated in place (`extensionActions.ts`).
+- Intermittent harness stall at the first Probe popup click (3 in 10 on the frozen 0071 runtime): caused by the harness, not by 0071 or the shell. The Control-Tab step that begins with Control-L closed the command bar with the background's `closePalette`, which only clears the background's flag, so `#palette` stayed open over the sidebar; the press hit `DIV#palette` and only dismissed it. The old harness closed the bar by accident in its later Control-L step, which the trimmed copy cuts. Fixed in `tests/native-workflows.mjs` (the bar's own Escape, then wait for it to hide), plus the Probe worker lookup now matches the popup's extension (the Quiet fixture also has a `bg.js`). Counts: trimmed fixed harness on 0071 10/10 (68 PASS); unfixed 3/10 stalls; round15 harness and shell on 0070 0/10 and on 0071 0/10 popup stalls (one unrelated stall each at "close circle", and one at Ctrl+N on 0070). Evidence in the session scratchpad (`b13-*`, `mx-*`, `dbg10-*` logs).
+- Possible product gap for the Control-Tab owner: after Control-L, a Control-Tab switch leaves the command bar open in the frame unless its input's blur closes it.
+- Checks: typecheck and tsrs clean, 78/78 unit tests, `git diff --check` clean. Frozen source for round 19: `flecha-check/round19-bugs` (its trimmed harness is the fixed one).
+- Sol round 19 (`evidence/round19-bugs`): extension buttons, exact about: homes and the fixed harness (10/10, 68 PASS) passed; Sol agreed with the stall diagnosis (reverting the fix stalled 3 runs, press on `DIV#palette`). Two legacy-state findings, fixed: Go Back on an unloaded tab with a file: home now flashes and stores nothing (only web, about: and chrome: homes are stored); `sameAddress` maps about:X with a query or fragment too.
+- The Control-Tab owner has since made tab switches close the frame's bar (`closePaletteIn`) and replaced the harness step with `barClosed`, which still stalls in the trimmed harness (3/3 at that step). For my checks, the round 19 trimmed harness (`flecha-check/round20-bugs/chromium/tests/native-workflows-0071-trimmed-r19.mjs`) passed 3/3 against the round 20 shell.
+- A rare stall after "a tab in a Space no window shows is frozen" (next step: Ctrl+N second window) also happens on the frozen 0070 runtime with the round15 harness and shell; not chased.
+- Sol round 20 (`evidence/round20-bugs`): U1-U5 passed, no findings (file: refusal and repair in both zones, loaded and unloaded; about: fragments and queries; unloaded about:/chrome: homes; harness 3/3, 68 PASS). Feature work done; reported to the parent. Not reinstalled; the owner approves any reinstall.
+
+## Command bar: search suggestions and Arc-style results (owner scope, 2026-10-26)
+
+- Suggestions: `lib/suggest.ts`, `SEARCH_ENGINES[*].suggest` in `lib/url.ts`, `flechaApi.searchSuggestions`. They follow Chromium's `search.suggest_enabled` via `chrome.privacy` (no Flecha toggle) and send nothing in incognito. The frame page CSP needed `connect-src` for the six suggest origins; without it every fetch was blocked, which is why the harness "stalled in the search-suggestions block".
+- Arc-style list: `lib/commandBar.ts` ranks one flat list. Empty bar: 3 recent other tabs, then 2 actions. Tab in an empty bar enters action mode. Ctrl+T or Ctrl+L again closes the bar. Tabs show "Switch to Tab". Inline autocomplete. Combobox/listbox ARIA. No group headings or footer.
+- Checks: typecheck clean, 78/78 unit tests, `git diff --check` clean. The full harness still stops at the page full-screen block (patch 0072, another task). `flecha-check/suggest-r1/chromium/tests/native-workflows-suggest-trimmed.mjs` skips that block and fixes the extension-worker lookup (`probeWorker` can match the quiet extension's `bg.js`, whose URL origin is "null"). It passed 74/74 on `out/Dev`, including 6 command-bar checks and the incognito check, which now runs last because Xvfb has no window manager to refocus the main window.
+- Sol SUGGEST (`evidence/suggest-r1`) found four defects, all fixed:
+  - `suggestable()` let `host?query`, IPv4 hosts and a bare `chrome:` through.
+  - Down from an inline completion skipped the typed search.
+  - Background tab changes moved the selection.
+  - Late history completed after the caret moved.
+- After the fixes: 78/78 unit tests. The trimmed harness (`flecha-check/suggest-r2/chromium/tests/native-workflows-suggest-trimmed.mjs`, which also skips the other task's in-progress refocus step) passed 75/75 on `out/Dev`.
+- SUGGEST2 (`evidence/suggest-r2`) confirmed those four fixes and found three more, now fixed:
+  - Address spellings such as `127.1`, a trailing dot and a full-width dot bypassed the filter. `suggestable()` now parses with the URL parser.
+  - Hover left the completion in the field. Hover and arrows now share `moveSelection()`.
+  - Late history completed after an arrow move.
+- After those fixes the trimmed harness (`flecha-check/suggest-r3/chromium/tests/native-workflows-suggest-trimmed.mjs`) passed 75/75 on `out/Dev`.
+- SUGGEST3 (`evidence/suggest-r3`) found that address parts the URL parser drops (dot segments, default ports) and address parts in later words leaked, and that a hovered row could shift before a click. Fixed: `suggestable()` checks the raw words, and the completion row stays in place.
+- Command bar left open over the sidebar (reported by the extensions task): the background's `closePalette` cleared only its own flag, and the input's blur handler ignored focus moving to the page. So after Control-L then Control-Tab, `#palette` stayed over the sidebar. Fixed:
+  - `background.ts` `closePaletteIn()` also broadcasts `close-palette`. It runs on every `chrome.tabs.onActivated` and in the `closePalette` command.
+  - The frame hides the bar on that event (`api.onClosePalette`, `hidePalette`).
+  - The blur handler also closes on `!document.hasFocus()`.
+  - `runItem` closes the bar before running the item.
+- Harness `barClosed(how)`: waits for `#palette` to hide, then sends a real X11 click to "Today" and asserts that the press and release landed there. It runs after Escape, picking a suggestion, Control-T again, Switch to Tab, the Control-L/Control-Tab hold, a plain Control-L then Control-Tab, and an Escape with a held suggestion request. The watchdog failure now names what the step waited for (`waitingFor`).
+  - Its first version hung on every run: `evaluate` awaited the click promise before the click was sent. Fixed with `void`.
+- Checks: typecheck clean, 78/78 unit tests, `git diff --check` clean. Harness: trimmed (no full-screen block) 77/77 and full 80/80 on `out/Dev`; trimmed 77/77 in 3 of 3 runs on the frozen 0071 runtime, so the step needs no patch 0072. On the pre-fix shell (`suggest-r3`), the step fails with "waiting for the command bar to hide after a tab switch" (scratchpad `evidence-18`, `evidence-21old`).
+- SUGGEST4 (`evidence/suggest-r4`): requirements 1, 2, 5, 6 and 7 passed, including every close path. Three findings, all reproduced:
+  - Percent-encoded hosts (`%65xample%2ecom`) were sent. Fixed: `suggestable()` also checks each word decoded.
+  - Ports and paths after a numeric host in later words (`notes 127.0.0.1:8080`) were sent. Fixed: the fraction/date/time exception is now only for words of digits with `/` or `:` between them.
+  - A failed request kept an earlier opening's suggestions. Fixed: a failure shows an empty list, and `hidePalette` drops the suggestions.
+  - Left as designed: a lone number such as `2130706433` or `0x7f000001` is still sent. Chromium treats one number as "likely a query" (`autocomplete_input.cc`), and blocking it would block "1984", ISBNs and error codes. (SUGGEST5 noted that Enter on `2130706433` runs the copy-timestamp action, not a search.)
+- After those fixes: typecheck clean, 78/78 unit tests, `git diff --check` clean. Harness: trimmed 78/78 and full 81/81 on `out/Dev`; trimmed 78/78 on the frozen 0071 runtime. The new native step fails a held suggestion request after a reopen.
+- SUGGEST5 (`evidence/suggest-r5`): requirements 1-3 and 5-7 passed, and the SUGGEST4 fixes held. Four more leaks in longer queries, all fixed in `suggest.ts`:
+  - Four-part IPv4 addresses (`notes 127.0.0.1`): `isDottedQuad`, in any word.
+  - Integer IPv4 with a port or path (`2130706433:80`): the fraction/date/time exception (`isNumberPair`) now needs a first number below 2^24.
+  - A trailing `/`, or `?`/`#` after a host (`notes intranet/`, `notes example.com?`).
+  - Bare schemes the browser opens (`notes chrome:`): `SCHEMES`, from Chromium's url_constants.h files.
+  - Left as designed, following Chromium: two- or three-part numbers in a phrase (`notes 127.1`). Side effect: "what is example.com?" gets no suggestions.
+- After those fixes: typecheck clean, 78/78 unit tests, `git diff --check` clean; harness trimmed 78/78 and full 81/81 on `out/Dev`.
+- SUGGEST6 (`evidence/suggest-r6`): the SUGGEST5 fixes held; requirements 1-3 and 5-7 passed. Three near-misses, fixed:
+  - Each word is also checked without the sentence punctuation around it (`spellings`), so `notes 127.0.0.1.` is caught.
+  - `?` or `#` after a number the browser opens as an IP address (`opensAsIp`: first octet not zero).
+  - `SCHEMES` now includes every scheme in Chromium's `ProfileIOData::IsHandledProtocol`, such as `chrome-search` and `isolated-app`.
+  - 78/78 unit tests. No Sol re-check of these yet.
+- Harness stall after "a background change to the tabs keeps the selected result selected" (6 of 25 `out/Dev` runs; 1 of 3 of the parent's `out/Release` runs). It was the hover step, not the product:
+  - The step measured the typed-address row once, while the bar was still in the sidebar-wide frame (x 130). The frame then grew to the window and the row moved (x 525), so every later move landed on the backdrop.
+  - Diagnosed with a step-level log (scratchpad `harness-g4.log`): 200 moves arrived at x 130 on `DIV#palette`; animation frames were running.
+  - Fixed: the loop measures the field and the row again on every pass, and `waitingFor` names the step.
+- Bar painting in the sidebar-wide frame (asked by the parent). Measured with a probe (scratchpad `harness-paint-probe.mjs`): five Control-T openings per run, a per-frame log in the page plus a CDP screencast.
+  - Before: `out/Release` 0 of 5 openings laid out the bar narrow. `out/Dev`, four runs at once: 4 of 20 openings had one frame with the bar laid out at 260px and its fade-in started (opacity 0 on that frame). The stalled run g4 kept the bar narrow through a whole typed query, long enough to be fully visible there.
+  - Fix: `showWhenFrameGrown()` in `ui/app.ts` and `#palette.opening` in `ui/styles.css` keep the bar transparent, with its animations unstarted, until the page is wider than the sidebar or as wide as the window. A `resize` ends the wait; closing clears it. Outside a frame page `--sidebar` is unset and nothing waits.
+  - After: `out/Dev` four runs at once, 0 of 20 openings shown narrow (one held transparent for one frame, then shown at the centre); `out/Release` 0 of 5. Evidence: scratchpad `evidence-paint-before`, `evidence-paint-dev1`-`4`, `evidence-paint-after-*`.
+- An Xvfb (PID 3519764) left by one of my harness runs was stopped by PID. A run that ends with `process.exit` skips the harness's clean-up.
+- Full harness on `out/Release`: before the paint fix 5 of 6 passed 81/81 (run 6 stalled after the tab-sleep step, outside the command bar); after it 2 of 2 passed 81/81.
+- Sol SUGGEST7 found three issues, all fixed:
+  - `notes 127。0。0。1。` was sent. Now `isDottedQuad` drops one trailing dot in any spelling, and `spellings` strips trailing Unicode full stops. `version 1.2.3.` is now sent.
+  - With the floating sidebar, the frame (298px) passed the growth guard. Now the bar is grown only when wider than sidebar + 38 (float margin and shadow, patch 0010) or as wide as the window, and only frame pages wait.
+  - The hover assertion used a point from before growth. The step now waits for the bar to stop waiting (`opening` gone) before pointing.
+  - Checked with Sol's held-growth probe (all three sidebar modes held transparent) and the hover step with growth held 3 s (passed at x 525). Full harness on `out/Release`: 1 of 2 runs passed 81/81; the other stalled at the tab-sleep step again.
+- Sol SUGGEST8: placement and hover passed. One leak: CJK brackets and commas around a four-part address (`notes 「127。0。0。1。」`). Fixed: `spellings` also checks each part of a word split on `NOT_IN_ADDRESS` (not a letter, digit, mark or ASCII, other than Unicode full stops), and `alone` counts those parts, so `サーバー「example.com」は遅い` is sent. Full harness on `out/Release` with it: 81/81.
+- Sol SUGGEST9: three regressions from that change, fixed. Stripped whole words are checked again; `NOT_IN_ADDRESS` leaves Default_Ignorable characters (which the URL parser drops) inside words; `alone` counts only parts with a letter or digit (`❤️ example.com` and `-- example.com` are now blocked). Full harness on `out/Release`: 81/81.
+- Sol SUGGEST10: no ordinary-address leak. Its three findings all need invisible characters, so under the parent's stopping rule (2026-10-26) they are documented below, not fixed. It also showed that the SUGGEST9 `alone` rule blocked ordinary text (`-- done.`, `! e.g.`, `... U.S.A.`). That rule was reverted to counting non-empty parts. Checked locally: Sol's 58 affected queries are sent again; SUGGEST8's 517-row matrix has nothing newly sent and only its six leaks newly blocked; all 51 ordinary multilingual rows from SUGGEST9 are sent.
+- Privacy filter, known limitations (unusual spellings; documented, not fixed). The filter is stricter than Chrome, which sends most typed text to suggest:
+  - Invisible characters (zero-width joiners and non-joiners, bidi controls, soft hyphen) next to or inside an address can hide it: `notes \u{200c}127.0.0.1`, `notes \u{200b}chrome:`, `notes 127.0.0.1.\u{200b}`.
+  - Invisible Hangul fillers (U+115F, U+3164, U+FFA0), or an emoji with a variation selector, count as a word, so the host beside them is not "alone": `\u{3164} example.com`, `❤\u{fe0f} example.com`. A host with no path, port or login among other words is sent by design.
+  - Other spellings of an address in two or three parts among words (`notes 127.1`), and a lone number that is also an IP (`2130706433`), are sent, following Chromium's omnibox.
+  - Malformed percent escapes (`%31%32%37.0.0.1%FF`), a tab inside an address (`127.0.\t0.1`), bare `::`, and a single label with an empty `?` or `#` (`notes intranet?`) are sent.
+  - Over-blocking: a lone word ending in a full stop (`done.`, `今日は晴れ。`) and a single host with only symbols or emoji beside it (`🙂 example.com`) get no suggestions.
+- Next: the final report. The other task's full-screen block still presses Escape on a "leftover" bar first; that is no longer needed.
+
+## Control-Tab recency and page full screen (owner bugs, 2026-10-26)
+
+- Control-Tab cause: the native path (0016, 0057) worked on X11 and on Wayland (Weston nested in Xvfb), with focus in a page, the sidebar or the command bar. The order was wrong: tabs opened in the background, created or imported got `lastActive = now` and outranked the tab you were last on. Fix: `unseen` on `TabInfo` (saved), set when a tab opens without being shown and cleared when it is shown; `store.byRecency` ranks unseen tabs after used ones; `cycleRecent` uses it. Test: `tests/recent-tabs.test.mjs`.
+- Page full screen: patch 0072 (`flechaPrivate.setSidebarInPageFullscreen`; `FlechaFrameState` `page_fullscreen`/`sidebar_in_page_fullscreen`/`PageAlone()`; `FlechaFrameView` watches `FullscreenController`). Setting "Show sidebar in full screen" in Settings > Appearance, default off. Off: the page has the screen alone and leaving restores the sidebar as it was, hidden or not. F11 ignores the setting and keeps the sidebar. When page full screen ends, the frame posts `SynchronizeVisualProperties` to the page: Chromium's Escape path assumes a resize, which doesn't come when the window keeps its size (before 0072 too).
+- `mkpatches.sh` (flecha-perf/tools) generates 0072; patches 0055-0072 verify. `out/Release` (`build-release-0072d.log`) and `out/Dev` (`build-dev-0072b.log`) include it. Frozen: `flecha-check/ctrltab-fs-r1`, `checker-runtime/ctrltab-fs-r1`.
+- Checks: typecheck clean, 78/78 unit tests, `git diff --check` clean. Full harness on `out/Release` 81/81 in 2 of the last 3 runs; the third stalled in the command-bar steps after "a background change to the tabs keeps the selected result selected", before the full-screen block. My block's cleanup now activates the old tab before closing its own (closing first let a neighbour win once). Full-screen probe 13/13 on X11 and on Wayland (scratchpad `fs-probe.mjs`). Sol ctrltab-fs-r1 (`evidence/ctrltab-fs-r1`): points A-J passed, no findings. Not tested: the owner's COSMIC session, a real video player.
+- Not reinstalled; the owner approves any reinstall.
+
+## Harness stall after tab sleep (2026-10-26)
+
+- Product bug, not the harness or Ctrl+N. The stall came before Ctrl+N: `stateWhere(activeTabId === pageTab)` never resolved. When the shell closed the active Chromium tab (`unload` in background.ts), Chromium activated a neighbour (/download-page-4). If that `tabs.onActivated` reached the shell after the user's next pick, the shell took it as the user's choice. The reproduction (diagnostic run d3-4 in a scratch copy of the harness) logged that event at the same millisecond as the removal, 2 ms after the harness's activate, and the Store then switched to it. No frozen tab, focus or wrong-target involvement.
+- Fix: `showBeforeClosing` in background.ts. Before closing a window's active Chromium tab, `unload` shows the window's own active tab, or its placeholder if that tab isn't open there, as an activation of its own.
+- Harness: a new check, "closing the active tab and picking another at once shows the one picked". It fails 4/4 on the unfixed shell with an assertion, not a hang. The waits around it and Ctrl+N set `waitingFor`, so the deadline names them.
+- Checks: full harness on `out/Release` 10/10, 82 PASS each. Also typecheck, tsrs, 78/78 unit tests and `git diff --check`.
+- Separate flake seen once in 13 unfixed diagnostic runs, not fixed: the 0072 block stalled at "page full screen, sidebar hidden" with the window in fullscreen.
+
 ## Remaining gates and next action
 
 0. Sol checks: round 12 (re-check of the round-11 fixes) running; then the performance work, then the official release build.

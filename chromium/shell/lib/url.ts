@@ -41,13 +41,29 @@ export function webAddress(raw: string): string | undefined {
   return undefined;
 }
 
-/** A URL to keep, for a pinned tab or favorite: typed like the address bar (`github.com` works), never a search. */
+/**
+ * A URL to keep, for a pinned tab or favorite: typed like the address bar (`github.com` works), never
+ * a search. Written the way the tab reports its page (`https://github.com/`), so the two compare.
+ * Only web pages and about:blank: the shell can't open a file: page (Chromium refuses file URLs to
+ * an extension without file access), and other about: pages are Chromium's chrome:// pages.
+ */
 export function pinnableAddress(raw: unknown): string | undefined {
   const url = webAddress(String(raw ?? ''));
   if (!url) return undefined;
   try {
-    return /^(https?|file|about):$/.test(new URL(url).protocol) ? url : undefined;
+    const parsed = new URL(url);
+    return /^https?:$/.test(parsed.protocol) || parsed.href === 'about:blank' ? parsed.href : undefined;
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Whether two addresses are the same page, however each is written (`https://a.com`, `https://a.com/`).
+ * Chromium opens `about:version#x` as `chrome://version/#x`, so a home saved either way matches the other.
+ */
+export function sameAddress(a: string, b: string): boolean {
+  const comparable = (url: string) =>
+    pinnableAddress(url) ?? url.replace(/^about:(?!(?:blank|srcdoc)(?:[?#]|$))([a-z0-9-]+)([?#].*)?$/i, (_, page: string, rest?: string) => `chrome://${page.toLowerCase()}/${rest ?? ''}`);
+  return comparable(a) === comparable(b);
 }
