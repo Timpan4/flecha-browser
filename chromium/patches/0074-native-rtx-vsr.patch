@@ -1,0 +1,873 @@
+diff --git a/components/viz/service/BUILD.gn b/components/viz/service/BUILD.gn
+index f26d694..edbd68a 100755
+--- a/components/viz/service/BUILD.gn
++++ b/components/viz/service/BUILD.gn
+@@ -530,6 +530,16 @@ viz_component("service") {
+   if (enable_vulkan) {
+     deps += [ "//gpu/vulkan" ]
+ 
++    # Flecha: optional native Linux video processing, no NVIDIA build
++    # dependency.
++    if (is_linux) {
++      sources += [
++        "display_embedder/flecha_video_processor.cc",
++        "display_embedder/flecha_video_processor.h",
++        "display_embedder/flecha_vsr_api.h",
++      ]
++    }
++
+     sources += [
+       "display_embedder/skia_output_device_vulkan.cc",
+       "display_embedder/skia_output_device_vulkan.h",
+diff --git a/components/viz/service/display/external_use_client.h b/components/viz/service/display/external_use_client.h
+index 1657489..51c0154 100755
+--- a/components/viz/service/display/external_use_client.h
++++ b/components/viz/service/display/external_use_client.h
+@@ -44,6 +44,11 @@ class VIZ_SERVICE_EXPORT ExternalUseClient {
+ 
+     explicit ImageContext(const TransferableResource& resource);
+ 
++    // Flecha: retain the original mailbox and sync tokens for GPU video input,
++    // while promising the compositor a processed BGRA output image.
++    ImageContext(const TransferableResource& resource,
++                 std::optional<gfx::Size> video_output_size);
++
+     ImageContext(const ImageContext&) = delete;
+     ImageContext& operator=(const ImageContext&) = delete;
+ 
+diff --git a/components/viz/service/display/external_use_client.cc b/components/viz/service/display/external_use_client.cc
+index 87335e0..c57e474 100755
+--- a/components/viz/service/display/external_use_client.cc
++++ b/components/viz/service/display/external_use_client.cc
+@@ -25,14 +25,23 @@ ExternalUseClient::ImageContext::ImageContext(
+ 
+ ExternalUseClient::ImageContext::ImageContext(
+     const TransferableResource& resource)
++    : ImageContext(resource, std::nullopt) {}
++
++// Flecha: the processed image has its own dimensions and RGB color space.
++ExternalUseClient::ImageContext::ImageContext(
++    const TransferableResource& resource,
++    std::optional<gfx::Size> video_output_size)
+     : mailbox_(resource.mailbox()),
+       sync_tokens_(resource.shared_image()->GetSyncTokensForDisplayCompositor(
+           resource.sync_token())),
+       texture_target_(resource.texture_target()),
+-      size_(resource.GetSize()),
+-      format_(resource.GetFormat()),
+-      color_space_(resource.GetColorSpace()),
+-      origin_(resource.GetOrigin()),
++      size_(video_output_size.value_or(resource.GetSize())),
++      format_(video_output_size ? SinglePlaneFormat::kBGRA_8888
++                                : resource.GetFormat()),
++      color_space_(video_output_size ? gfx::ColorSpace::CreateSRGB()
++                                     : resource.GetColorSpace()),
++      origin_(video_output_size ? kTopLeft_GrSurfaceOrigin
++                                : resource.GetOrigin()),
+       resource_source_(resource.resource_source) {
+ #if BUILDFLAG(IS_ANDROID)
+   ycbcr_info_ = resource.ycbcr_info;
+diff --git a/components/viz/service/display/display_resource_provider.cc b/components/viz/service/display/display_resource_provider.cc
+index a6ecedb..5d7ad73 100755
+--- a/components/viz/service/display/display_resource_provider.cc
++++ b/components/viz/service/display/display_resource_provider.cc
+@@ -21,6 +21,12 @@
+ #include "ui/gfx/geometry/size.h"
+ #include "ui/gl/trace_util.h"
+ 
++// Flecha: video processed by the compositor must not bypass it as an overlay.
++#include "gpu/vulkan/buildflags.h"
++#if BUILDFLAG(IS_LINUX) && BUILDFLAG(ENABLE_VULKAN)
++#include "components/viz/service/display_embedder/flecha_video_processor.h"
++#endif
++
+ namespace viz {
+ 
+ namespace {
+@@ -149,6 +155,12 @@ bool DisplayResourceProvider::IsOverlayCandidate(ResourceId id) const {
+   if (resource->transferable.hdr_metadata.HasAgtm()) {
+     return false;
+   }
++  // Flecha: protected and HDR resources are excluded by this same predicate.
++#if BUILDFLAG(IS_LINUX) && BUILDFLAG(ENABLE_VULKAN)
++  if (GetFlechaVideoOutputSize(resource->transferable)) {
++    return false;
++  }
++#endif
+   return resource->transferable.GetIsOverlayCandidate();
+ }
+ 
+diff --git a/components/viz/service/display/skia_renderer.cc b/components/viz/service/display/skia_renderer.cc
+index 9e11ec5..da43fa2 100755
+--- a/components/viz/service/display/skia_renderer.cc
++++ b/components/viz/service/display/skia_renderer.cc
+@@ -2748,6 +2748,16 @@ void SkiaRenderer::DrawTextureQuad(const TextureDrawQuad* quad,
+ 
+   gfx::RectF uv_rect = quad->GetUnnormalizedTexCoords(
+       gfx::Size(image->width(), image->height()));
++  // Flecha: VSR changes the sampled image size. Preserve visible-rect cropping
++  // for video quads whose input coordinates are expressed in source pixels.
++  if (quad->is_video_frame) {
++    const auto source_size =
++        resource_provider()->GetResourceBackedSize(quad->resource_id);
++    if (source_size != gfx::Size(image->width(), image->height())) {
++      uv_rect = quad->GetNormalizedTexCoords(source_size);
++      uv_rect.Scale(image->width(), image->height());
++    }
++  }
+   params->vis_tex_coords = cc::MathUtil::ScaleRectProportional(
+       uv_rect, gfx::RectF(quad->rect), params->visible_rect);
+ 
+diff --git a/components/viz/service/display_embedder/image_context_impl.h b/components/viz/service/display_embedder/image_context_impl.h
+index f27f0bd..aca24fb 100755
+--- a/components/viz/service/display_embedder/image_context_impl.h
++++ b/components/viz/service/display_embedder/image_context_impl.h
+@@ -18,6 +18,7 @@
+ #include "gpu/command_buffer/common/mailbox.h"
+ #include "gpu/command_buffer/common/sync_token.h"
+ #include "gpu/command_buffer/service/shared_image/shared_image_representation.h"
++#include "gpu/vulkan/buildflags.h"
+ #include "gpu/vulkan/vulkan_ycbcr_info.h"
+ #include "third_party/skia/include/core/SkImageInfo.h"
+ #include "third_party/skia/include/core/SkRefCnt.h"
+@@ -34,6 +35,9 @@ class SharedImageRepresentationFactory;
+ 
+ namespace viz {
+ 
++// Flecha: implementation owns the exported Vulkan images and CUDA imports.
++class FlechaVideoProcessor;
++
+ // ImageContext can be accessed by compositor and GPU thread. It is a complete
+ // enough implementation for use in tests by FakeSkiaOutputSurface.
+ //
+@@ -43,7 +47,8 @@ class ImageContextImpl final : public ExternalUseClient::ImageContext {
+  public:
+   ImageContextImpl(const TransferableResource& resource,
+                    bool maybe_concurrent_reads,
+-                   uint32_t client_id);
++                   uint32_t client_id,
++                   std::optional<gfx::Size> video_output_size = std::nullopt);
+ 
+   // Used only for creating promise image from RenderPass.
+   ImageContextImpl(const gpu::Mailbox& mailbox,
+@@ -116,6 +121,14 @@ class ImageContextImpl final : public ExternalUseClient::ImageContext {
+   // from the renderer.
+   const bool is_for_render_pass_ = false;
+ 
++  // Flecha: promise metadata describes the output, these describe the input.
++  const gfx::Size source_size_;
++  const SharedImageFormat source_format_;
++  const bool process_video_ = false;
++#if BUILDFLAG(IS_LINUX) && BUILDFLAG(ENABLE_VULKAN)
++  std::unique_ptr<FlechaVideoProcessor> video_processor_;
++#endif
++
+   // Fallback in case we cannot produce or access `representation_`.
+   raw_ptr<gpu::SharedContextState> fallback_context_state_ = nullptr;
+   std::vector<GrBackendTexture> fallback_textures_;
+diff --git a/components/viz/service/display_embedder/image_context_impl.cc b/components/viz/service/display_embedder/image_context_impl.cc
+index 076cb5b..3c979c3 100755
+--- a/components/viz/service/display_embedder/image_context_impl.cc
++++ b/components/viz/service/display_embedder/image_context_impl.cc
+@@ -30,6 +30,11 @@
+ #include "third_party/skia/include/gpu/graphite/dawn/DawnTypes.h"
+ #include "third_party/skia/include/private/chromium/GrPromiseImageTexture.h"
+ 
++// Flecha: native video processing runs on the GPU sequence.
++#if BUILDFLAG(IS_LINUX) && BUILDFLAG(ENABLE_VULKAN)
++#include "components/viz/service/display_embedder/flecha_video_processor.h"
++#endif
++
+ namespace {
+ 
+ // These values are persisted to logs. Entries should not be renumbered and
+@@ -123,15 +128,22 @@ namespace viz {
+ 
+ ImageContextImpl::ImageContextImpl(const TransferableResource& resource,
+                                    bool maybe_concurrent_reads,
+-                                   uint32_t client_id)
+-    : ImageContext(resource), maybe_concurrent_reads_(maybe_concurrent_reads) {}
++                                   uint32_t client_id,
++                                   std::optional<gfx::Size> video_output_size)
++    : ImageContext(resource, video_output_size),
++      maybe_concurrent_reads_(maybe_concurrent_reads),
++      source_size_(resource.GetSize()),
++      source_format_(resource.GetFormat()),
++      process_video_(video_output_size.has_value()) {}
+ 
+ ImageContextImpl::ImageContextImpl(const gpu::Mailbox& mailbox,
+                                    const gfx::Size& size,
+                                    SharedImageFormat format,
+                                    const gfx::ColorSpace& color_space)
+     : ImageContext(mailbox, size, format, color_space),
+-      is_for_render_pass_(true) {}
++      is_for_render_pass_(true),
++      source_size_(size),
++      source_format_(format) {}
+ 
+ ImageContextImpl::~ImageContextImpl() {
+   // Destroy the SkImage before `representation_` as it's a view of the
+@@ -141,6 +153,12 @@ ImageContextImpl::~ImageContextImpl() {
+ }
+ 
+ void ImageContextImpl::OnContextLost() {
++  // Flecha: do not wait on CUDA work whose Vulkan input fence was lost.
++#if BUILDFLAG(IS_LINUX) && BUILDFLAG(ENABLE_VULKAN)
++  if (video_processor_) {
++    video_processor_->OnContextLost();
++  }
++#endif
+   if (representation_) {
+     representation_->OnContextLost();
+     representation_scoped_read_access_.reset();
+@@ -368,21 +386,21 @@ bool ImageContextImpl::BeginAccessIfNecessaryInternal(
+       return false;
+     }
+ 
+-    if (representation->size() != size()) {
++    if (representation->size() != source_size_) {
+       DLOG(ERROR) << "Failed to fulfill the promise texture - SharedImage "
+                      "size does not match TransferableResource size: "
+                   << representation->size().ToString() << " vs "
+-                  << size().ToString();
++                  << source_size_.ToString();
+       return false;
+     }
+ 
+-    if (representation->format() != format() ||
++    if (representation->format() != source_format_ ||
+         representation->format().PrefersExternalSampler() !=
+-            format().PrefersExternalSampler()) {
++            source_format_.PrefersExternalSampler()) {
+       DLOG(ERROR) << "Failed to fulfill the promise texture - SharedImage "
+                      "format does not match TransferableResource format: "
+                   << representation->format().ToString() << " vs "
+-                  << format().ToString();
++                  << source_format_.ToString();
+       return false;
+     }
+ 
+@@ -405,6 +423,27 @@ bool ImageContextImpl::BeginAccessIfNecessaryInternal(
+     return false;
+   }
+ 
++  // Flecha: convert YUV on the GPU, process the exported image in CUDA, then
++  // fulfill the ordinary compositor promise with the processed GPU texture.
++#if BUILDFLAG(IS_LINUX) && BUILDFLAG(ENABLE_VULKAN)
++  if (process_video_) {
++    if (!video_processor_) {
++      video_processor_ =
++          FlechaVideoProcessor::Create(context_state, source_size_, size());
++    }
++    auto source =
++        representation_scoped_read_access_->CreateSkImage(context_state);
++    if (!video_processor_ || !source ||
++        !video_processor_->Process(std::move(source), begin_semaphores)) {
++      representation_scoped_read_access_->ApplyBackendSurfaceEndState();
++      representation_scoped_read_access_.reset();
++      return false;
++    }
++    promise_image_textures_.push_back(video_processor_->texture());
++    return true;
++  }
++#endif
++
+   // Only one promise texture for external sampler case.
+   int num_planes =
+       format().PrefersExternalSampler() ? 1 : format().NumberOfPlanes();
+diff --git a/components/viz/service/display_embedder/skia_output_surface_impl.cc b/components/viz/service/display_embedder/skia_output_surface_impl.cc
+index 33821d5..299ef03 100755
+--- a/components/viz/service/display_embedder/skia_output_surface_impl.cc
++++ b/components/viz/service/display_embedder/skia_output_surface_impl.cc
+@@ -44,6 +44,11 @@
+ #include "components/viz/service/display/overlay_candidate.h"
+ #include "components/viz/service/display/render_pass_alpha_type.h"
+ #include "components/viz/service/display_embedder/image_context_impl.h"
++
++// Flecha: keep native VSR opt-in and limited to the Vulkan Ganesh backend.
++#if BUILDFLAG(IS_LINUX) && BUILDFLAG(ENABLE_VULKAN)
++#include "components/viz/service/display_embedder/flecha_video_processor.h"
++#endif
+ #include "components/viz/service/display_embedder/skia_output_surface_dependency.h"
+ #include "components/viz/service/display_embedder/skia_output_surface_impl_on_gpu.h"
+ #include "components/viz/service/display_embedder/skia_output_surface_shared_image_interface.h"
+@@ -694,8 +699,18 @@ std::unique_ptr<ExternalUseClient::ImageContext>
+ SkiaOutputSurfaceImpl::CreateImageContext(const TransferableResource& resource,
+                                           bool maybe_concurrent_reads,
+                                           uint32_t client_id) {
++  // Flecha: choose immutable promise-image metadata on the Viz thread.
++  std::optional<gfx::Size> video_output_size;
++#if BUILDFLAG(IS_LINUX) && BUILDFLAG(ENABLE_VULKAN)
++  if (gr_context_thread_safe_ &&
++      gr_context_thread_safe_
++              ->defaultBackendFormat(kBGRA_8888_SkColorType, GrRenderable::kNo)
++              .backend() == GrBackendApi::kVulkan) {
++    video_output_size = GetFlechaVideoOutputSize(resource);
++  }
++#endif
+   return std::make_unique<ImageContextImpl>(resource, maybe_concurrent_reads,
+-                                            client_id);
++                                            client_id, video_output_size);
+ }
+ 
+ DBG_FLAG_FBOOL("skia_gpu.swap_buffers.force_disable_makecurrent",
+diff --git a/gpu/config/gpu_finch_features.h b/gpu/config/gpu_finch_features.h
+index 302d9a5..6256b8d 100755
+--- a/gpu/config/gpu_finch_features.h
++++ b/gpu/config/gpu_finch_features.h
+@@ -26,6 +26,9 @@ struct GpuFeatureInfo;
+ 
+ namespace features {
+ 
++// Flecha: opt-in native Vulkan/CUDA video enhancement on Linux.
++GPU_CONFIG_EXPORT BASE_DECLARE_FEATURE(kFlechaVsr);
++
+ // All features in alphabetical order. The features should be documented
+ // alongside the definition of their values in the .cc file.
+ GPU_CONFIG_EXPORT BASE_DECLARE_FEATURE(kAggressiveShaderCacheLimits);
+diff --git a/gpu/config/gpu_finch_features.cc b/gpu/config/gpu_finch_features.cc
+index f64f082..acbb935 100755
+--- a/gpu/config/gpu_finch_features.cc
++++ b/gpu/config/gpu_finch_features.cc
+@@ -138,6 +138,9 @@ bool IsDeviceBlocked(std::string_view field, std::string_view block_list) {
+ 
+ }  // namespace
+ 
++// Flecha: the native VSR bridge is loaded only by the opt-in launcher.
++BASE_FEATURE(kFlechaVsr, base::FEATURE_DISABLED_BY_DEFAULT);
++
+ // More aggressive behavior for the shader cache: increase size, and do not
+ // purge as much in case of memory pressure.
+ BASE_FEATURE(kAggressiveShaderCacheLimits, base::FEATURE_DISABLED_BY_DEFAULT);
+diff --git a/content/common/gpu_pre_sandbox_hook_linux.cc b/content/common/gpu_pre_sandbox_hook_linux.cc
+index 2e53794..e13b535 100755
+--- a/content/common/gpu_pre_sandbox_hook_linux.cc
++++ b/content/common/gpu_pre_sandbox_hook_linux.cc
+@@ -16,6 +16,7 @@
+ #include <vector>
+ 
+ #include "base/base_paths.h"
++#include "base/feature_list.h"
+ #include "base/files/file_enumerator.h"
+ #include "base/files/file_path.h"
+ #include "base/files/scoped_file.h"
+@@ -26,6 +27,7 @@
+ #include "build/build_config.h"
+ #include "build/buildflag.h"
+ #include "content/public/common/content_switches.h"
++#include "gpu/config/gpu_finch_features.h"
+ #include "media/gpu/buildflags.h"
+ #include "sandbox/linux/bpf_dsl/policy.h"
+ #include "sandbox/linux/syscall_broker/broker_command.h"
+@@ -699,8 +701,19 @@ bool GpuPreSandboxHook(sandbox::policy::SandboxLinux::Options options) {
+   sandbox::policy::SandboxLinux::GetInstance()->StartBrokerProcess(
+       CommandSetForGPU(options), FilePermissionsForGpu(options), options);
+ 
+-  if (!LoadLibrariesForGpu(options))
++  if (!LoadLibrariesForGpu(options)) {
+     return false;
++  }
++
++  // Flecha: connect the preloaded client to its GPU worker before sandboxing.
++  // NVIDIA model loading stays in the worker, outside the browser GPU process.
++  if (base::FeatureList::IsEnabled(features::kFlechaVsr)) {
++    auto prepare =
++        reinterpret_cast<int (*)()>(dlsym(RTLD_DEFAULT, "flecha_vsr_prepare"));
++    if (!prepare || !prepare()) {
++      LOG(ERROR) << "Flecha VSR: native bridge initialization failed";
++    }
++  }
+ 
+   // TODO(tsepez): enable namspace sandbox here once crashes are understood.
+ 
+diff --git a/components/viz/service/display_embedder/flecha_video_processor.h b/components/viz/service/display_embedder/flecha_video_processor.h
+new file mode 100644
+index 0000000..be82380
+--- /dev/null
++++ b/components/viz/service/display_embedder/flecha_video_processor.h
+@@ -0,0 +1,42 @@
++// Flecha: GPU-only video enhancement between shared-image access and sampling.
++#ifndef COMPONENTS_VIZ_SERVICE_DISPLAY_EMBEDDER_FLECHA_VIDEO_PROCESSOR_H_
++#define COMPONENTS_VIZ_SERVICE_DISPLAY_EMBEDDER_FLECHA_VIDEO_PROCESSOR_H_
++
++#include <memory>
++#include <optional>
++#include <vector>
++
++#include "components/viz/common/resources/transferable_resource.h"
++#include "third_party/skia/include/core/SkImage.h"
++#include "third_party/skia/include/gpu/ganesh/GrBackendSemaphore.h"
++#include "third_party/skia/include/private/chromium/GrPromiseImageTexture.h"
++
++namespace gpu {
++class SharedContextState;
++}
++
++namespace viz {
++
++std::optional<gfx::Size> GetFlechaVideoOutputSize(
++    const TransferableResource& resource);
++
++class FlechaVideoProcessor {
++ public:
++  static std::unique_ptr<FlechaVideoProcessor> Create(
++      gpu::SharedContextState* context,
++      const gfx::Size& input_size,
++      const gfx::Size& output_size);
++  ~FlechaVideoProcessor();
++
++  bool Process(sk_sp<SkImage> source,
++               std::vector<GrBackendSemaphore>* source_waits);
++  GrPromiseImageTexture* texture() const;
++  void OnContextLost();
++
++ private:
++  struct Resources;
++  explicit FlechaVideoProcessor(std::unique_ptr<Resources> resources);
++  std::unique_ptr<Resources> resources_;
++};
++}  // namespace viz
++#endif
+diff --git a/components/viz/service/display_embedder/flecha_video_processor.cc b/components/viz/service/display_embedder/flecha_video_processor.cc
+new file mode 100644
+index 0000000..87ebeb0
+--- /dev/null
++++ b/components/viz/service/display_embedder/flecha_video_processor.cc
+@@ -0,0 +1,340 @@
++// Flecha: Vulkan/CUDA VSR. All pixel conversion and copies stay on the GPU.
++#include "components/viz/service/display_embedder/flecha_video_processor.h"
++
++#include <dlfcn.h>
++
++#include <atomic>
++
++#include "base/bits.h"
++#include "base/functional/bind.h"
++#include "base/logging.h"
++#include "base/memory/raw_ptr.h"
++#include "base/trace_event/trace_event.h"
++#include "components/viz/service/display_embedder/flecha_vsr_api.h"
++#include "gpu/command_buffer/service/shared_context_state.h"
++#include "gpu/command_buffer/service/vulkan_context_provider.h"
++#include "gpu/config/gpu_finch_features.h"
++#include "gpu/vulkan/vulkan_fence_helper.h"
++#include "gpu/vulkan/vulkan_function_pointers.h"
++#include "gpu/vulkan/vulkan_image.h"
++#include "gpu/vulkan/vulkan_util.h"
++#include "third_party/skia/include/core/SkCanvas.h"
++#include "third_party/skia/include/core/SkColorSpace.h"
++#include "third_party/skia/include/core/SkSamplingOptions.h"
++#include "third_party/skia/include/core/SkSurface.h"
++#include "third_party/skia/include/gpu/ganesh/GrDirectContext.h"
++#include "third_party/skia/include/gpu/ganesh/SkSurfaceGanesh.h"
++#include "third_party/skia/include/gpu/ganesh/vk/GrVkBackendSemaphore.h"
++#include "third_party/skia/include/gpu/ganesh/vk/GrVkBackendSurface.h"
++#include "third_party/skia/include/gpu/ganesh/vk/GrVkTypes.h"
++#include "third_party/skia/include/gpu/vk/VulkanMutableTextureState.h"
++#include "ui/gfx/geometry/size_conversions.h"
++
++namespace viz {
++namespace {
++// The preloaded bridge remains loaded for the lifetime of the GPU process.
++struct Api {
++  std::atomic<bool> disabled{false};
++  decltype(&flecha_vsr_create) create = nullptr;
++  decltype(&flecha_vsr_destroy) destroy = nullptr;
++  decltype(&flecha_vsr_bind) bind = nullptr;
++  decltype(&flecha_vsr_release) release = nullptr;
++  decltype(&flecha_vsr_process) process = nullptr;
++  decltype(&flecha_vsr_last_error) error = nullptr;
++  Api() {
++    create = reinterpret_cast<decltype(create)>(
++        dlsym(RTLD_DEFAULT, "flecha_vsr_create"));
++    destroy = reinterpret_cast<decltype(destroy)>(
++        dlsym(RTLD_DEFAULT, "flecha_vsr_destroy"));
++    bind = reinterpret_cast<decltype(bind)>(
++        dlsym(RTLD_DEFAULT, "flecha_vsr_bind"));
++    release = reinterpret_cast<decltype(release)>(
++        dlsym(RTLD_DEFAULT, "flecha_vsr_release"));
++    process = reinterpret_cast<decltype(process)>(
++        dlsym(RTLD_DEFAULT, "flecha_vsr_process"));
++    error = reinterpret_cast<decltype(error)>(
++        dlsym(RTLD_DEFAULT, "flecha_vsr_last_error"));
++  }
++  bool available() const {
++    return !disabled.load(std::memory_order_relaxed) && create && destroy &&
++           bind && release && process && error;
++  }
++};
++Api& Bridge() {
++  static Api api;
++  return api;
++}
++
++GrBackendTexture WrapImage(gpu::VulkanImage* image) {
++  GrVkImageInfo info;
++  info.fImage = image->image();
++  info.fAlloc.fMemory = image->device_memory();
++  info.fAlloc.fSize = image->device_size();
++  info.fFormat = image->format();
++  info.fImageUsageFlags = image->usage();
++  info.fLevelCount = 1;
++  info.fCurrentQueueFamily = image->device_queue()->GetVulkanQueueIndex();
++  return GrBackendTextures::MakeVk(image->size().width(),
++                                   image->size().height(), info);
++}
++sk_sp<SkSurface> WrapSurface(GrDirectContext* context,
++                             const GrBackendTexture& texture) {
++  return SkSurfaces::WrapBackendTexture(
++      context, texture, kTopLeft_GrSurfaceOrigin, 1, kBGRA_8888_SkColorType,
++      SkColorSpace::MakeSRGB(), nullptr);
++}
++void DrawSource(SkSurface* surface, SkImage* source) {
++  surface->getCanvas()->drawImageRect(
++      source, SkRect::MakeWH(surface->width(), surface->height()),
++      SkSamplingOptions(SkFilterMode::kLinear), nullptr);
++}
++}  // namespace
++
++std::optional<gfx::Size> GetFlechaVideoOutputSize(
++    const TransferableResource& resource) {
++  if (!base::FeatureList::IsEnabled(features::kFlechaVsr) ||
++      !Bridge().available() ||
++      resource.resource_source !=
++          TransferableResource::ResourceSource::kVideo ||
++      resource.GetColorSpace().IsHDR() || resource.hdr_metadata.HasAgtm() ||
++      (resource.GetFormat().HasAlpha() &&
++       resource.shared_image()->alpha_type() != kOpaque_SkAlphaType) ||
++      resource.shared_image()->usage().Has(
++          gpu::SHARED_IMAGE_USAGE_PROTECTED_VIDEO)) {
++    return std::nullopt;
++  }
++  const auto size = resource.GetSize();
++  // Preserve the existing project's 1.5x default, 1440p output policy, and
++  // 16-pixel alignment. These are not new SDK or hardware restrictions.
++  if (size.IsEmpty() || size.height() >= 1440) {
++    return std::nullopt;
++  }
++  const float scale = std::min(1.5f, 1440.f / size.height());
++  const auto scaled = gfx::ScaleToCeiledSize(size, scale);
++  return gfx::Size(
++      base::bits::AlignUp(static_cast<uint32_t>(scaled.width()), 16u),
++      base::bits::AlignUp(static_cast<uint32_t>(scaled.height()), 16u));
++}
++
++struct FlechaVideoProcessor::Resources {
++  raw_ptr<gpu::SharedContextState> context;
++  raw_ptr<gpu::VulkanDeviceQueue> queue;
++  std::unique_ptr<gpu::VulkanImage> input;
++  std::unique_ptr<gpu::VulkanImage> output;
++  GrBackendTexture input_texture;
++  GrBackendTexture output_texture;
++  sk_sp<SkSurface> input_surface;
++  sk_sp<SkSurface> output_surface;
++  sk_sp<GrPromiseImageTexture> promise;
++  raw_ptr<FlechaVsrProcessor> processor = nullptr;
++  raw_ptr<FlechaVsrFrame> frame = nullptr;
++  VkSemaphore input_ready = VK_NULL_HANDLE;
++  VkSemaphore output_ready = VK_NULL_HANDLE;
++  bool context_lost = false;
++
++  ~Resources() {
++    // A lost GPU may never signal an outstanding external semaphore. Abandon
++    // CUDA handles in that case; process teardown reclaims them without
++    // waiting.
++    if (!context_lost) {
++      if (frame) {
++        Bridge().release(frame);
++      }
++      if (processor) {
++        Bridge().destroy(processor);
++      }
++    }
++    promise.reset();
++    input_surface.reset();
++    output_surface.reset();
++    const auto device = queue->GetVulkanDevice();
++    if (input_ready) {
++      vkDestroySemaphore(device, input_ready, nullptr);
++    }
++    if (output_ready) {
++      vkDestroySemaphore(device, output_ready, nullptr);
++    }
++    if (input) {
++      input->Destroy();
++    }
++    if (output) {
++      output->Destroy();
++    }
++  }
++};
++
++std::unique_ptr<FlechaVideoProcessor> FlechaVideoProcessor::Create(
++    gpu::SharedContextState* context,
++    const gfx::Size& input_size,
++    const gfx::Size& output_size) {
++  if (!Bridge().available() || !context->GrContextIsVulkan()) {
++    return nullptr;
++  }
++  auto resources = std::make_unique<Resources>();
++  resources->context = context;
++  resources->queue = context->vk_context_provider()->GetDeviceQueue();
++  constexpr VkImageUsageFlags usage =
++      VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
++      VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
++  resources->input = gpu::VulkanImage::CreateWithExternalMemory(
++      resources->queue, input_size, VK_FORMAT_B8G8R8A8_UNORM, usage);
++  resources->output = gpu::VulkanImage::CreateWithExternalMemory(
++      resources->queue, output_size, VK_FORMAT_B8G8R8A8_UNORM, usage);
++  if (!resources->input || !resources->output) {
++    return nullptr;
++  }
++  resources->input_texture = WrapImage(resources->input.get());
++  resources->output_texture = WrapImage(resources->output.get());
++  resources->input_surface =
++      WrapSurface(context->gr_context(), resources->input_texture);
++  resources->output_surface =
++      WrapSurface(context->gr_context(), resources->output_texture);
++  resources->promise = GrPromiseImageTexture::Make(resources->output_texture);
++  if (!resources->input_surface || !resources->output_surface ||
++      !resources->promise) {
++    return nullptr;
++  }
++
++  auto* queue = resources->queue.get();
++  VkPhysicalDeviceIDProperties id{
++      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
++  VkPhysicalDeviceProperties2 properties{
++      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
++  properties.pNext = &id;
++  vkGetPhysicalDeviceProperties2(queue->GetVulkanPhysicalDevice(), &properties);
++  resources->processor =
++      Bridge().create(id.deviceUUID, input_size.width(), input_size.height(),
++                      output_size.width(), output_size.height(), 2);
++  if (resources->processor &&
++      gpu::IsVkOpaqueExternalSemaphoreSupported(queue)) {
++    resources->input_ready =
++        gpu::CreateVkOpaqueExternalSemaphore(queue->GetVulkanDevice());
++    resources->output_ready =
++        gpu::CreateVkOpaqueExternalSemaphore(queue->GetVulkanDevice());
++    if (resources->input_ready && resources->output_ready) {
++      auto in_fd = resources->input->GetMemoryFd();
++      auto out_fd = resources->output->GetMemoryFd();
++      auto ready_fd = gpu::ExportVkOpaqueExternalSemaphore(
++                          queue->GetVulkanDevice(), resources->input_ready)
++                          .TakeHandle();
++      auto done_fd = gpu::ExportVkOpaqueExternalSemaphore(
++                         queue->GetVulkanDevice(), resources->output_ready)
++                         .TakeHandle();
++      resources->frame =
++          Bridge().bind(resources->processor,
++                        {in_fd.get(), resources->input->device_size(),
++                         static_cast<uint32_t>(input_size.width()),
++                         static_cast<uint32_t>(input_size.height())},
++                        {out_fd.get(), resources->output->device_size(),
++                         static_cast<uint32_t>(output_size.width()),
++                         static_cast<uint32_t>(output_size.height())},
++                        ready_fd.get(), done_fd.get());
++    }
++  }
++  if (!resources->frame) {
++    LOG(ERROR) << "Flecha VSR unavailable, using GPU scaling: "
++               << Bridge().error();
++  }
++  return base::WrapUnique(new FlechaVideoProcessor(std::move(resources)));
++}
++
++FlechaVideoProcessor::FlechaVideoProcessor(std::unique_ptr<Resources> resources)
++    : resources_(std::move(resources)) {}
++
++FlechaVideoProcessor::~FlechaVideoProcessor() {
++  // Keep the imported storage alive until all compositor sampling has finished.
++  resources_->context_lost |= resources_->context->context_lost();
++  if (resources_->context_lost) {
++    Bridge().disabled.store(true, std::memory_order_relaxed);
++  } else {
++    // Also submit any pending CUDA completion wait if a paint was cancelled.
++    resources_->context->gr_context()->flushAndSubmit(GrSyncCpu::kNo);
++  }
++  auto* queue = resources_->queue.get();
++  queue->GetFenceHelper()->EnqueueCleanupTaskForSubmittedWork(base::BindOnce(
++      [](std::unique_ptr<Resources> resources, gpu::VulkanDeviceQueue*,
++         bool lost) {
++        resources->context_lost |= lost;
++        if (resources->context_lost) {
++          Bridge().disabled.store(true, std::memory_order_relaxed);
++        }
++      },
++      std::move(resources_)));
++}
++
++bool FlechaVideoProcessor::Process(
++    sk_sp<SkImage> source,
++    std::vector<GrBackendSemaphore>* source_waits) {
++  auto& r = *resources_;
++  auto* context = r.context->gr_context();
++  if (!source_waits->empty()) {
++    auto* target = r.frame ? r.input_surface.get() : r.output_surface.get();
++    if (!target->wait(source_waits->size(), source_waits->data(), false)) {
++      return false;
++    }
++    source_waits->clear();
++  }
++  if (!r.frame) {
++    DrawSource(r.output_surface.get(), source.get());
++    return true;
++  }
++  TRACE_EVENT("viz", "FlechaVsr::Process");
++  DrawSource(r.input_surface.get(), source.get());
++  // Release both images to CUDA. The input semaphore includes these ownership
++  // and layout barriers as well as the GPU YUV-to-RGB conversion above.
++  const auto external = skgpu::MutableTextureStates::MakeVulkan(
++      VK_IMAGE_LAYOUT_GENERAL, VK_QUEUE_FAMILY_EXTERNAL);
++  if (!context->setBackendTextureState(r.output_texture, external)) {
++    return false;
++  }
++  GrBackendSemaphore ready = GrBackendSemaphores::MakeVk(r.input_ready);
++  GrFlushInfo flush{.fNumSemaphores = 1, .fSignalSemaphores = &ready};
++  auto result = context->flush(r.input_surface.get(), flush, &external);
++  if (!result.fSuccess || result.fSubmitted != GrSemaphoresSubmitted::kYes ||
++      !context->submit(GrSyncCpu::kNo)) {
++    return false;
++  }
++  const int processed = Bridge().process(r.frame);
++  if (processed < 0) {
++    LOG(ERROR) << "Flecha VSR CUDA context failed: " << Bridge().error();
++    r.context_lost = true;
++    Bridge().disabled.store(true, std::memory_order_relaxed);
++    r.context->MarkContextLost();
++    return false;
++  }
++  GrBackendSemaphore done = GrBackendSemaphores::MakeVk(r.output_ready);
++  // The normal compositor flush acquires ownership and samples this texture
++  // after the CUDA signal. There is no per-frame CPU synchronization.
++  if (!context->wait(1, &done, false)) {
++    // CUDA may still be writing. Abandon the imports instead of retiring them
++    // behind a Vulkan fence that does not cover the failed completion wait.
++    r.context_lost = true;
++    Bridge().disabled.store(true, std::memory_order_relaxed);
++    r.context->MarkContextLost();
++    return false;
++  }
++  if (!processed) {
++    LOG(ERROR) << "Flecha VSR inference failed, using GPU scaling: "
++               << Bridge().error();
++    DrawSource(r.output_surface.get(), source.get());
++  } else {
++    // Record activation, rather than merely reporting that the SDK loaded.
++    static bool activated = false;
++    if (!activated) {
++      activated = true;
++      LOG(INFO) << "Flecha VSR: native GPU video processing active, "
++                << r.input->size().ToString() << " -> "
++                << r.output->size().ToString();
++    }
++  }
++  return true;
++}
++
++GrPromiseImageTexture* FlechaVideoProcessor::texture() const {
++  return resources_->promise.get();
++}
++void FlechaVideoProcessor::OnContextLost() {
++  resources_->context_lost = true;
++  Bridge().disabled.store(true, std::memory_order_relaxed);
++}
++}  // namespace viz
+diff --git a/components/viz/service/display_embedder/flecha_vsr_api.h b/components/viz/service/display_embedder/flecha_vsr_api.h
+new file mode 100644
+index 0000000..bf8fd5e
+--- /dev/null
++++ b/components/viz/service/display_embedder/flecha_vsr_api.h
+@@ -0,0 +1,59 @@
++// Flecha: native VSR boundary. Pixel storage stays in Vulkan device memory.
++#ifndef COMPONENTS_VIZ_SERVICE_DISPLAY_EMBEDDER_FLECHA_VSR_API_H_
++#define COMPONENTS_VIZ_SERVICE_DISPLAY_EMBEDDER_FLECHA_VSR_API_H_
++
++#include <stdint.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++typedef struct FlechaVsrProcessor FlechaVsrProcessor;
++typedef struct FlechaVsrFrame FlechaVsrFrame;
++
++// Prepare before the GPU sandbox starts. The browser client connects to its
++// local worker, which owns the NVIDIA driver and model.
++int flecha_vsr_prepare(void);
++
++// A dedicated VK_FORMAT_B8G8R8A8_UNORM image allocated with OPAQUE_FD export.
++// Descriptors are borrowed. The bridge duplicates them before CUDA import.
++typedef struct FlechaVsrImage {
++  int memory_fd;
++  uint64_t allocation_bytes;
++  uint32_t width;
++  uint32_t height;
++} FlechaVsrImage;
++
++// Call on a single GPU sequence. The UUID must match the Vulkan physical
++// device.
++FlechaVsrProcessor* flecha_vsr_create(const unsigned char device_uuid[16],
++                                      uint32_t input_width,
++                                      uint32_t input_height,
++                                      uint32_t output_width,
++                                      uint32_t output_height,
++                                      uint32_t quality);
++void flecha_vsr_destroy(FlechaVsrProcessor* processor);
++
++// Semaphores must be exportable binary Vulkan semaphores (OPAQUE_FD).
++FlechaVsrFrame* flecha_vsr_bind(FlechaVsrProcessor* processor,
++                                FlechaVsrImage input,
++                                FlechaVsrImage output,
++                                int input_ready_fd,
++                                int output_ready_fd);
++// Release before processing, or after a Vulkan/compositor completion fence.
++// Standalone clients can instead call flecha_vsr_synchronize first.
++void flecha_vsr_release(FlechaVsrFrame* frame);
++
++// Enqueue CUDA wait -> device copy -> VSR -> device copy -> CUDA signal.
++// Returns without a CPU wait. Vulkan must wait on output_ready before sampling.
++// 1: success, 0: failed with completion signal queued, -1: CUDA context
++// failure.
++int flecha_vsr_process(FlechaVsrFrame* frame);
++// Initialization/teardown and standalone verification only, never per-frame.
++int flecha_vsr_synchronize(FlechaVsrProcessor* processor);
++const char* flecha_vsr_last_error(void);
++
++#ifdef __cplusplus
++}
++#endif
++#endif
+diff --git a/content/gpu/gpu_main.cc b/content/gpu/gpu_main.cc
+index 543e347..fef23f2 100755
+--- a/content/gpu/gpu_main.cc
++++ b/content/gpu/gpu_main.cc
+@@ -523,9 +523,13 @@ bool StartSandboxLinux(gpu::GpuWatchdogThread* watchdog_thread,
+     sandbox::policy::SandboxLinux::GetInstance()->StopThread(trace_thread);
+   }
+ 
+-  // SandboxLinux::InitializeSandbox() must always be called
+-  // with only one thread.
++  // Default sandbox startup requires a single thread.
+   sandbox::policy::SandboxLinux::Options sandbox_options;
++  // Flecha: Vulkan can start driver workers before sandbox initialization.
++  // Use the existing TSYNC path to apply the GPU policy to every thread.
++  const bool native_vsr =
++      BUILDFLAG(IS_LINUX) && base::FeatureList::IsEnabled(features::kFlechaVsr);
++  sandbox_options.allow_threads_during_sandbox_init = native_vsr;
+   if (gpu_info) {
+     // We have to enable sandbox settings for all GPUs in the system
+     // for Chrome to be able to access/use them.
+@@ -570,6 +574,11 @@ bool StartSandboxLinux(gpu::GpuWatchdogThread* watchdog_thread,
+           *base::CommandLine::ForCurrentProcess()),
+       base::BindOnce(GpuPreSandboxHook), sandbox_options);
+ 
++  // Flecha: never silently run native VSR after sandbox setup was skipped.
++  CHECK(!native_vsr ||
++        (res &&
++         sandbox::policy::SandboxLinux::GetInstance()->seccomp_bpf_started()));
++
+   if (watchdog_thread) {
+     watchdog_thread->Start();
+   }

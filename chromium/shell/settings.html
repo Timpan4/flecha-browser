@@ -23,6 +23,7 @@
       <button class="nav-item" data-pane="tabs-spaces"><span class="nav-icon indigo"><i data-icon="stack"></i></span>Tabs &amp; Spaces</button>
       <button class="nav-item" data-pane="privacy"><span class="nav-icon blue"><i data-icon="lock"></i></span>Privacy</button>
       <button class="nav-item" data-pane="downloads"><span class="nav-icon green"><i data-icon="download"></i></span>Downloads</button>
+      <button class="nav-item" data-pane="video"><span class="nav-icon purple"><i data-icon="sparkle"></i></span>Video</button>
       <div class="nav-label">Developer</div>
       <button class="nav-item" data-pane="environments"><span class="nav-icon amber"><i data-icon="code"></i></span>Environments</button>
       <button class="nav-item" data-pane="boosts"><span class="nav-icon orange"><i data-icon="zap"></i></span>Boosts</button>
@@ -60,6 +61,34 @@
             <button id="showTour" class="button">Show Tour</button>
           </div>
         </div>
+      </section>
+
+      <section class="pane" data-pane="video">
+        <p class="lead">Enhance lower-resolution video with NVIDIA RTX Video Super Resolution.</p>
+        <form id="vsr-form">
+          <fieldset id="vsr-controls" class="card" disabled>
+            <label class="row">
+              <div class="row-text"><strong>RTX Video Super Resolution</strong><small>Use NVIDIA's video enhancement on compatible SDR video.</small></div>
+              <input id="vsr-enabled" type="checkbox" class="switch" />
+            </label>
+            <label class="row">
+              <div class="row-text"><strong>Quality</strong><small>Higher quality uses more GPU resources.</small></div>
+              <select id="vsr-quality" class="select">
+                <option value="1">Low</option><option value="2">Medium</option>
+                <option value="3">High</option><option value="4">Ultra</option>
+              </select>
+            </label>
+            <label class="row">
+              <div class="row-text"><strong>Maximum output height</strong><small>In pixels. Video is enlarged by up to 1.5 times its original size.</small></div>
+              <input id="vsr-height" class="select" type="number" min="1" max="2147483647" step="1" aria-label="Maximum output height in pixels" />
+            </label>
+          </fieldset>
+        </form>
+        <div class="card"><div class="row"><div class="row-text">
+          <strong>Native VSR status</strong><small id="vsr-status" role="status">Checking availability...</small>
+          <small id="vsr-frames"></small><small id="vsr-output"></small>
+        </div></div></div>
+        <p class="footnote">Changes apply to new video frames without restarting Flecha. These settings apply across all browser profiles.</p>
       </section>
 
       <section class="pane" data-pane="appearance">

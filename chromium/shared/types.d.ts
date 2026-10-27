@@ -435,7 +435,25 @@ export interface TabsEditResult {
 /** What a right-click on tabs or a folder asks the page to do; the rest happens in main. */
 export type TabsMenuAction = 'rename' | 'edit';
 
+/** Native GPU video preferences are shared across browser profiles. */
+export interface VsrSettings {
+  enabled: boolean;
+  quality: 1 | 2 | 3 | 4;
+  maxOutputHeight: number;
+}
+export interface VsrState extends VsrSettings {
+  available: boolean;
+  processedFrames: string;
+  inputWidth: number;
+  inputHeight: number;
+  outputWidth: number;
+  outputHeight: number;
+  error: string;
+}
+
 export interface SettingsApi {
+  getVsrState?(): Promise<VsrState>;
+  setVsrSettings?(settings: VsrSettings): Promise<VsrState>;
   get(): Promise<SettingsView>;
   set(patch: SettingsPatch): Promise<SettingsView>;
   chooseDownloadsFolder(): Promise<SettingsView>;

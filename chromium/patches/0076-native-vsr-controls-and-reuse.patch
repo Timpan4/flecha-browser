@@ -1,0 +1,1315 @@
+diff --git a/components/viz/service/display_embedder/flecha_video_processor.h b/components/viz/service/display_embedder/flecha_video_processor.h
+index be82380..e8d3ef9 100755
+--- a/components/viz/service/display_embedder/flecha_video_processor.h
++++ b/components/viz/service/display_embedder/flecha_video_processor.h
+@@ -6,6 +6,8 @@
+ #include <optional>
+ #include <vector>
+ 
++#include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
+ #include "components/viz/common/resources/transferable_resource.h"
+ #include "third_party/skia/include/core/SkImage.h"
+ #include "third_party/skia/include/gpu/ganesh/GrBackendSemaphore.h"
+@@ -17,6 +19,15 @@ class SharedContextState;
+ 
+ namespace viz {
+ 
++class FlechaVideoProcessorPool;
++
++// The feature is on, the bridge is loaded and usable, and the compositor runs
++// on a backend the processor supports.
++bool IsFlechaVideoAvailable();
++
++// Turns native VSR off for the rest of this GPU process.
++void DisableFlechaVideo();
++
+ std::optional<gfx::Size> GetFlechaVideoOutputSize(
+     const TransferableResource& resource);
+ 
+@@ -25,7 +36,9 @@ class FlechaVideoProcessor {
+   static std::unique_ptr<FlechaVideoProcessor> Create(
+       gpu::SharedContextState* context,
+       const gfx::Size& input_size,
+-      const gfx::Size& output_size);
++      const gfx::Size& output_size,
++      uint32_t quality,
++      base::WeakPtr<FlechaVideoProcessorPool> pool);
+   ~FlechaVideoProcessor();
+ 
+   bool Process(sk_sp<SkImage> source,
+@@ -34,9 +47,33 @@ class FlechaVideoProcessor {
+   void OnContextLost();
+ 
+  private:
++  friend class FlechaVideoProcessorPool;
+   struct Resources;
+-  explicit FlechaVideoProcessor(std::unique_ptr<Resources> resources);
++  FlechaVideoProcessor(std::unique_ptr<Resources> resources,
++                       base::WeakPtr<FlechaVideoProcessorPool> pool);
+   std::unique_ptr<Resources> resources_;
++  base::WeakPtr<FlechaVideoProcessorPool> pool_;
++};
++
++// Flecha: image contexts lease storage; the output surface retains idle
++// imports. Completed compositor fences, rather than frame submission, allow
++// slot reuse.
++class FlechaVideoProcessorPool {
++ public:
++  explicit FlechaVideoProcessorPool(gpu::SharedContextState* context);
++  ~FlechaVideoProcessorPool();
++  std::unique_ptr<FlechaVideoProcessor> Acquire(const gfx::Size& input_size,
++                                                const gfx::Size& output_size,
++                                                uint32_t quality);
++
++ private:
++  friend class FlechaVideoProcessor;
++  void Recycle(std::unique_ptr<FlechaVideoProcessor::Resources> resources);
++  void TrimIdleResources();
++  const raw_ptr<gpu::SharedContextState> context_;
++  std::vector<std::unique_ptr<FlechaVideoProcessor::Resources>> idle_;
++  size_t idle_bytes_ = 0;
++  base::WeakPtrFactory<FlechaVideoProcessorPool> weak_factory_{this};
+ };
+ }  // namespace viz
+ #endif
+diff --git a/components/viz/service/display_embedder/flecha_video_processor.cc b/components/viz/service/display_embedder/flecha_video_processor.cc
+index 87ebeb0..2e457dd 100644
+--- a/components/viz/service/display_embedder/flecha_video_processor.cc
++++ b/components/viz/service/display_embedder/flecha_video_processor.cc
+@@ -6,10 +6,12 @@
+ #include <atomic>
+ 
+ #include "base/bits.h"
++#include "base/compiler_specific.h"
+ #include "base/functional/bind.h"
+ #include "base/logging.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/trace_event/trace_event.h"
++#include "components/viz/service/display_embedder/flecha_video_settings.h"
+ #include "components/viz/service/display_embedder/flecha_vsr_api.h"
+ #include "gpu/command_buffer/service/shared_context_state.h"
+ #include "gpu/command_buffer/service/vulkan_context_provider.h"
+@@ -59,12 +61,42 @@ struct Api {
+     return !disabled.load(std::memory_order_relaxed) && create && destroy &&
+            bind && release && process && error;
+   }
++  // Flecha: only these calls cross into the preloaded, non-CFI C ABI module.
++  DISABLE_CFI_DLSYM FlechaVsrProcessor* Create(const unsigned char uuid[16],
++                                               uint32_t width,
++                                               uint32_t height,
++                                               uint32_t output_width,
++                                               uint32_t output_height,
++                                               uint32_t quality) const {
++    return create(uuid, width, height, output_width, output_height, quality);
++  }
++  DISABLE_CFI_DLSYM FlechaVsrFrame* Bind(FlechaVsrProcessor* processor,
++                                         FlechaVsrImage input,
++                                         FlechaVsrImage output,
++                                         int ready_fd,
++                                         int done_fd) const {
++    return bind(processor, input, output, ready_fd, done_fd);
++  }
++  DISABLE_CFI_DLSYM void Release(FlechaVsrFrame* frame) const {
++    release(frame);
++  }
++  DISABLE_CFI_DLSYM void Destroy(FlechaVsrProcessor* processor) const {
++    destroy(processor);
++  }
++  DISABLE_CFI_DLSYM int Process(FlechaVsrFrame* frame) const {
++    return process(frame);
++  }
++  DISABLE_CFI_DLSYM const char* Error() const { return error(); }
+ };
+ Api& Bridge() {
+   static Api api;
+   return api;
+ }
+ 
++// Set once this GPU process composites with Ganesh on Vulkan, the only backend
++// that runs the processor.
++std::atomic<bool> g_vulkan_compositing{false};
++
+ GrBackendTexture WrapImage(gpu::VulkanImage* image) {
+   GrVkImageInfo info;
+   info.fImage = image->image();
+@@ -90,10 +122,19 @@ void DrawSource(SkSurface* surface, SkImage* source) {
+ }
+ }  // namespace
+ 
++bool IsFlechaVideoAvailable() {
++  return base::FeatureList::IsEnabled(features::kFlechaVsr) &&
++         Bridge().available() &&
++         g_vulkan_compositing.load(std::memory_order_relaxed);
++}
++
++void DisableFlechaVideo() {
++  Bridge().disabled.store(true, std::memory_order_relaxed);
++}
++
+ std::optional<gfx::Size> GetFlechaVideoOutputSize(
+     const TransferableResource& resource) {
+-  if (!base::FeatureList::IsEnabled(features::kFlechaVsr) ||
+-      !Bridge().available() ||
++  if (!IsFlechaVideoAvailable() ||
+       resource.resource_source !=
+           TransferableResource::ResourceSource::kVideo ||
+       resource.GetColorSpace().IsHDR() || resource.hdr_metadata.HasAgtm() ||
+@@ -104,12 +145,15 @@ std::optional<gfx::Size> GetFlechaVideoOutputSize(
+     return std::nullopt;
+   }
+   const auto size = resource.GetSize();
++  const auto settings = GetFlechaVideoStatus().settings;
+   // Preserve the existing project's 1.5x default, 1440p output policy, and
+   // 16-pixel alignment. These are not new SDK or hardware restrictions.
+-  if (size.IsEmpty() || size.height() >= 1440) {
++  if (!settings.enabled || size.IsEmpty() ||
++      static_cast<uint32_t>(size.height()) >= settings.max_output_height) {
+     return std::nullopt;
+   }
+-  const float scale = std::min(1.5f, 1440.f / size.height());
++  const float scale = std::min(
++      1.5f, static_cast<float>(settings.max_output_height) / size.height());
+   const auto scaled = gfx::ScaleToCeiledSize(size, scale);
+   return gfx::Size(
+       base::bits::AlignUp(static_cast<uint32_t>(scaled.width()), 16u),
+@@ -131,6 +175,14 @@ struct FlechaVideoProcessor::Resources {
+   VkSemaphore input_ready = VK_NULL_HANDLE;
+   VkSemaphore output_ready = VK_NULL_HANDLE;
+   bool context_lost = false;
++  // A binary semaphore signaled for CUDA and never waited on cannot be
++  // signaled again, so only a completed round trip returns these to the pool.
++  bool recyclable = true;
++  uint32_t quality = 2;
++
++  size_t allocation_bytes() const {
++    return input->device_size() + output->device_size();
++  }
+ 
+   ~Resources() {
+     // A lost GPU may never signal an outstanding external semaphore. Abandon
+@@ -138,10 +190,10 @@ struct FlechaVideoProcessor::Resources {
+     // waiting.
+     if (!context_lost) {
+       if (frame) {
+-        Bridge().release(frame);
++        Bridge().Release(frame);
+       }
+       if (processor) {
+-        Bridge().destroy(processor);
++        Bridge().Destroy(processor);
+       }
+     }
+     promise.reset();
+@@ -166,12 +218,15 @@ struct FlechaVideoProcessor::Resources {
+ std::unique_ptr<FlechaVideoProcessor> FlechaVideoProcessor::Create(
+     gpu::SharedContextState* context,
+     const gfx::Size& input_size,
+-    const gfx::Size& output_size) {
++    const gfx::Size& output_size,
++    uint32_t quality,
++    base::WeakPtr<FlechaVideoProcessorPool> pool) {
+   if (!Bridge().available() || !context->GrContextIsVulkan()) {
+     return nullptr;
+   }
+   auto resources = std::make_unique<Resources>();
+   resources->context = context;
++  resources->quality = quality;
+   resources->queue = context->vk_context_provider()->GetDeviceQueue();
+   constexpr VkImageUsageFlags usage =
+       VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+@@ -203,8 +258,8 @@ std::unique_ptr<FlechaVideoProcessor> FlechaVideoProcessor::Create(
+   properties.pNext = &id;
+   vkGetPhysicalDeviceProperties2(queue->GetVulkanPhysicalDevice(), &properties);
+   resources->processor =
+-      Bridge().create(id.deviceUUID, input_size.width(), input_size.height(),
+-                      output_size.width(), output_size.height(), 2);
++      Bridge().Create(id.deviceUUID, input_size.width(), input_size.height(),
++                      output_size.width(), output_size.height(), quality);
+   if (resources->processor &&
+       gpu::IsVkOpaqueExternalSemaphoreSupported(queue)) {
+     resources->input_ready =
+@@ -221,7 +276,7 @@ std::unique_ptr<FlechaVideoProcessor> FlechaVideoProcessor::Create(
+                          queue->GetVulkanDevice(), resources->output_ready)
+                          .TakeHandle();
+       resources->frame =
+-          Bridge().bind(resources->processor,
++          Bridge().Bind(resources->processor,
+                         {in_fd.get(), resources->input->device_size(),
+                          static_cast<uint32_t>(input_size.width()),
+                          static_cast<uint32_t>(input_size.height())},
+@@ -232,14 +287,18 @@ std::unique_ptr<FlechaVideoProcessor> FlechaVideoProcessor::Create(
+     }
+   }
+   if (!resources->frame) {
++    RecordFlechaVideoError(Bridge().Error());
+     LOG(ERROR) << "Flecha VSR unavailable, using GPU scaling: "
+-               << Bridge().error();
++               << Bridge().Error();
+   }
+-  return base::WrapUnique(new FlechaVideoProcessor(std::move(resources)));
++  return base::WrapUnique(
++      new FlechaVideoProcessor(std::move(resources), std::move(pool)));
+ }
+ 
+-FlechaVideoProcessor::FlechaVideoProcessor(std::unique_ptr<Resources> resources)
+-    : resources_(std::move(resources)) {}
++FlechaVideoProcessor::FlechaVideoProcessor(
++    std::unique_ptr<Resources> resources,
++    base::WeakPtr<FlechaVideoProcessorPool> pool)
++    : resources_(std::move(resources)), pool_(std::move(pool)) {}
+ 
+ FlechaVideoProcessor::~FlechaVideoProcessor() {
+   // Keep the imported storage alive until all compositor sampling has finished.
+@@ -252,14 +311,78 @@ FlechaVideoProcessor::~FlechaVideoProcessor() {
+   }
+   auto* queue = resources_->queue.get();
+   queue->GetFenceHelper()->EnqueueCleanupTaskForSubmittedWork(base::BindOnce(
+-      [](std::unique_ptr<Resources> resources, gpu::VulkanDeviceQueue*,
++      [](base::WeakPtr<FlechaVideoProcessorPool> pool,
++         std::unique_ptr<Resources> resources, gpu::VulkanDeviceQueue*,
+          bool lost) {
+         resources->context_lost |= lost;
+         if (resources->context_lost) {
+           Bridge().disabled.store(true, std::memory_order_relaxed);
++        } else if (pool && resources->recyclable) {
++          pool->Recycle(std::move(resources));
+         }
+       },
+-      std::move(resources_)));
++      pool_, std::move(resources_)));
++}
++
++FlechaVideoProcessorPool::FlechaVideoProcessorPool(
++    gpu::SharedContextState* context)
++    : context_(context) {
++  // The output surface creates this pool only for a Ganesh Vulkan context.
++  g_vulkan_compositing.store(true, std::memory_order_relaxed);
++}
++
++FlechaVideoProcessorPool::~FlechaVideoProcessorPool() {
++  weak_factory_.InvalidateWeakPtrs();
++  for (auto& resources : idle_) {
++    resources->context_lost |= context_->context_lost();
++  }
++}
++
++std::unique_ptr<FlechaVideoProcessor> FlechaVideoProcessorPool::Acquire(
++    const gfx::Size& input_size,
++    const gfx::Size& output_size,
++    uint32_t quality) {
++  TrimIdleResources();
++  for (auto it = idle_.begin(); it != idle_.end(); ++it) {
++    if ((*it)->input->size() == input_size &&
++        (*it)->output->size() == output_size && (*it)->quality == quality) {
++      auto resources = std::move(*it);
++      idle_.erase(it);
++      idle_bytes_ -= resources->allocation_bytes();
++      return base::WrapUnique(new FlechaVideoProcessor(
++          std::move(resources), weak_factory_.GetWeakPtr()));
++    }
++  }
++  return FlechaVideoProcessor::Create(context_, input_size, output_size,
++                                      quality, weak_factory_.GetWeakPtr());
++}
++
++void FlechaVideoProcessorPool::Recycle(
++    std::unique_ptr<FlechaVideoProcessor::Resources> resources) {
++  // A slot without a CUDA binding only does GPU scaling. It stays pooled so a
++  // persistent bridge failure costs one setup per size, not one per frame; a
++  // quality change keys a new slot and retries the bridge.
++  idle_bytes_ += resources->allocation_bytes();
++  idle_.push_back(std::move(resources));
++  TrimIdleResources();
++}
++
++void FlechaVideoProcessorPool::TrimIdleResources() {
++  if (context_->context_lost()) {
++    for (auto& resources : idle_) {
++      resources->context_lost = true;
++    }
++    idle_.clear();
++    idle_bytes_ = 0;
++    return;
++  }
++  // Reuse Chromium's configured Skia cache budget, including its pressure
++  // adjustments. Never evict leased slots or invent another VRAM threshold.
++  const size_t budget = context_->gr_context()->getResourceCacheLimit();
++  while (idle_bytes_ > budget && !idle_.empty()) {
++    idle_bytes_ -= idle_.front()->allocation_bytes();
++    idle_.erase(idle_.begin());
++  }
+ }
+ 
+ bool FlechaVideoProcessor::Process(
+@@ -287,6 +410,7 @@ bool FlechaVideoProcessor::Process(
+   if (!context->setBackendTextureState(r.output_texture, external)) {
+     return false;
+   }
++  r.recyclable = false;
+   GrBackendSemaphore ready = GrBackendSemaphores::MakeVk(r.input_ready);
+   GrFlushInfo flush{.fNumSemaphores = 1, .fSignalSemaphores = &ready};
+   auto result = context->flush(r.input_surface.get(), flush, &external);
+@@ -294,9 +418,10 @@ bool FlechaVideoProcessor::Process(
+       !context->submit(GrSyncCpu::kNo)) {
+     return false;
+   }
+-  const int processed = Bridge().process(r.frame);
++  const int processed = Bridge().Process(r.frame);
+   if (processed < 0) {
+-    LOG(ERROR) << "Flecha VSR CUDA context failed: " << Bridge().error();
++    RecordFlechaVideoError(Bridge().Error());
++    LOG(ERROR) << "Flecha VSR CUDA context failed: " << Bridge().Error();
+     r.context_lost = true;
+     Bridge().disabled.store(true, std::memory_order_relaxed);
+     r.context->MarkContextLost();
+@@ -314,10 +439,15 @@ bool FlechaVideoProcessor::Process(
+     return false;
+   }
+   if (!processed) {
++    RecordFlechaVideoError(Bridge().Error());
+     LOG(ERROR) << "Flecha VSR inference failed, using GPU scaling: "
+-               << Bridge().error();
++               << Bridge().Error();
+     DrawSource(r.output_surface.get(), source.get());
+   } else {
++    // The worker waited on input_ready, so both semaphores can be reused.
++    r.recyclable = true;
++    RecordFlechaVideoFrame(r.input->size().width(), r.input->size().height(),
++                           r.output->size().width(), r.output->size().height());
+     // Record activation, rather than merely reporting that the SDK loaded.
+     static bool activated = false;
+     if (!activated) {
+diff --git a/components/viz/service/display_embedder/image_context_impl.h b/components/viz/service/display_embedder/image_context_impl.h
+index aca24fb..583a019 100755
+--- a/components/viz/service/display_embedder/image_context_impl.h
++++ b/components/viz/service/display_embedder/image_context_impl.h
+@@ -37,6 +37,7 @@ namespace viz {
+ 
+ // Flecha: implementation owns the exported Vulkan images and CUDA imports.
+ class FlechaVideoProcessor;
++class FlechaVideoProcessorPool;
+ 
+ // ImageContext can be accessed by compositor and GPU thread. It is a complete
+ // enough implementation for use in tests by FakeSkiaOutputSurface.
+@@ -93,7 +94,8 @@ class ImageContextImpl final : public ExternalUseClient::ImageContext {
+       gpu::SharedContextState* context_state,
+       gpu::SharedImageRepresentationFactory* representation_factory,
+       std::vector<GrBackendSemaphore>* begin_semaphores,
+-      std::vector<GrBackendSemaphore>* end_semaphores);
++      std::vector<GrBackendSemaphore>* end_semaphores,
++      FlechaVideoProcessorPool* video_pool = nullptr);
+   void EndAccessIfNecessary();
+ 
+  private:
+@@ -109,7 +111,8 @@ class ImageContextImpl final : public ExternalUseClient::ImageContext {
+       gpu::SharedContextState* context_state,
+       gpu::SharedImageRepresentationFactory* representation_factory,
+       std::vector<GrBackendSemaphore>* begin_semaphores,
+-      std::vector<GrBackendSemaphore>* end_semaphores);
++      std::vector<GrBackendSemaphore>* end_semaphores,
++      FlechaVideoProcessorPool* video_pool);
+ 
+   // Validates that the promise image YCbCr info is compatible with the shared
+   // image YCbCr info. This is only implemented for some compositing
+@@ -127,6 +130,7 @@ class ImageContextImpl final : public ExternalUseClient::ImageContext {
+   const bool process_video_ = false;
+ #if BUILDFLAG(IS_LINUX) && BUILDFLAG(ENABLE_VULKAN)
+   std::unique_ptr<FlechaVideoProcessor> video_processor_;
++  bool video_processed_ = false;
+ #endif
+ 
+   // Fallback in case we cannot produce or access `representation_`.
+diff --git a/components/viz/service/display_embedder/image_context_impl.cc b/components/viz/service/display_embedder/image_context_impl.cc
+index 3c979c3..5bb66d8 100755
+--- a/components/viz/service/display_embedder/image_context_impl.cc
++++ b/components/viz/service/display_embedder/image_context_impl.cc
+@@ -33,6 +33,7 @@
+ // Flecha: native video processing runs on the GPU sequence.
+ #if BUILDFLAG(IS_LINUX) && BUILDFLAG(ENABLE_VULKAN)
+ #include "components/viz/service/display_embedder/flecha_video_processor.h"
++#include "components/viz/service/display_embedder/flecha_video_settings.h"
+ #endif
+ 
+ namespace {
+@@ -342,9 +343,11 @@ void ImageContextImpl::BeginAccessIfNecessary(
+     gpu::SharedContextState* context_state,
+     gpu::SharedImageRepresentationFactory* representation_factory,
+     std::vector<GrBackendSemaphore>* begin_semaphores,
+-    std::vector<GrBackendSemaphore>* end_semaphores) {
++    std::vector<GrBackendSemaphore>* end_semaphores,
++    FlechaVideoProcessorPool* video_pool) {
+   if (!BeginAccessIfNecessaryInternal(context_state, representation_factory,
+-                                      begin_semaphores, end_semaphores)) {
++                                      begin_semaphores, end_semaphores,
++                                      video_pool)) {
+     CreateFallbackImage(context_state);
+   }
+ }
+@@ -353,7 +356,8 @@ bool ImageContextImpl::BeginAccessIfNecessaryInternal(
+     gpu::SharedContextState* context_state,
+     gpu::SharedImageRepresentationFactory* representation_factory,
+     std::vector<GrBackendSemaphore>* begin_semaphores,
+-    std::vector<GrBackendSemaphore>* end_semaphores) {
++    std::vector<GrBackendSemaphore>* end_semaphores,
++    FlechaVideoProcessorPool* video_pool) {
+   // Skip the context if it has been processed.
+   if (representation_scoped_read_access_) {
+     CHECK(owned_promise_image_textures_.empty());
+@@ -427,18 +431,23 @@ bool ImageContextImpl::BeginAccessIfNecessaryInternal(
+   // fulfill the ordinary compositor promise with the processed GPU texture.
+ #if BUILDFLAG(IS_LINUX) && BUILDFLAG(ENABLE_VULKAN)
+   if (process_video_) {
+-    if (!video_processor_) {
+-      video_processor_ =
+-          FlechaVideoProcessor::Create(context_state, source_size_, size());
++    if (!video_processor_ && video_pool) {
++      video_processor_ = video_pool->Acquire(
++          source_size_, size(), GetFlechaVideoStatus().settings.quality);
+     }
+     auto source =
+-        representation_scoped_read_access_->CreateSkImage(context_state);
+-    if (!video_processor_ || !source ||
+-        !video_processor_->Process(std::move(source), begin_semaphores)) {
++        video_processed_
++            ? nullptr
++            : representation_scoped_read_access_->CreateSkImage(context_state);
++    if (!video_processor_ ||
++        (!video_processed_ &&
++         (!source ||
++          !video_processor_->Process(std::move(source), begin_semaphores)))) {
+       representation_scoped_read_access_->ApplyBackendSurfaceEndState();
+       representation_scoped_read_access_.reset();
+       return false;
+     }
++    video_processed_ = true;
+     promise_image_textures_.push_back(video_processor_->texture());
+     return true;
+   }
+diff --git a/components/viz/service/display_embedder/skia_output_surface_impl_on_gpu.h b/components/viz/service/display_embedder/skia_output_surface_impl_on_gpu.h
+index fe15099..eb67b08 100755
+--- a/components/viz/service/display_embedder/skia_output_surface_impl_on_gpu.h
++++ b/components/viz/service/display_embedder/skia_output_surface_impl_on_gpu.h
+@@ -88,6 +88,7 @@ namespace viz {
+ class AsyncReadResultHelper;
+ class AsyncReadResultLock;
+ class ImageContextImpl;
++class FlechaVideoProcessorPool;
+ class ReadbackContextTexture;
+ class SkiaOutputSurfaceDependency;
+ 
+@@ -547,6 +548,10 @@ class SkiaOutputSurfaceImplOnGpu
+   scoped_refptr<gl::GLSurface> gl_surface_;
+   raw_ptr<gl::Presenter> presenter_ = nullptr;
+   scoped_refptr<gpu::SharedContextState> context_state_;
++#if BUILDFLAG(IS_LINUX) && BUILDFLAG(ENABLE_VULKAN)
++  // Flecha: retain video image imports across individual resource lifetimes.
++  std::unique_ptr<FlechaVideoProcessorPool> video_processor_pool_;
++#endif
+   size_t max_resource_cache_bytes_ = 0u;
+ 
+   bool context_is_lost_ = false;
+diff --git a/components/viz/service/display_embedder/skia_output_surface_impl_on_gpu.cc b/components/viz/service/display_embedder/skia_output_surface_impl_on_gpu.cc
+index f87ec81..6e70fed 100755
+--- a/components/viz/service/display_embedder/skia_output_surface_impl_on_gpu.cc
++++ b/components/viz/service/display_embedder/skia_output_surface_impl_on_gpu.cc
+@@ -41,6 +41,10 @@
+ #include "components/viz/service/debugger/viz_debugger.h"
+ #include "components/viz/service/display/output_surface_frame.h"
+ #include "components/viz/service/display_embedder/image_context_impl.h"
++#if BUILDFLAG(IS_LINUX) && BUILDFLAG(ENABLE_VULKAN)
++// Flecha: the output surface owns persistent video resources on the GPU thread.
++#include "components/viz/service/display_embedder/flecha_video_processor.h"
++#endif
+ #include "components/viz/service/display_embedder/output_presenter_gl.h"
+ #include "components/viz/service/display_embedder/skia_output_device.h"
+ #include "components/viz/service/display_embedder/skia_output_device_buffer_queue.h"
+@@ -1836,6 +1840,17 @@ void SkiaOutputSurfaceImplOnGpu::BeginAccessImages(
+   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+ 
+   bool is_gl = gpu_preferences_.gr_context_type == gpu::GrContextType::kGL;
++  FlechaVideoProcessorPool* video_pool = nullptr;
++#if BUILDFLAG(IS_LINUX) && BUILDFLAG(ENABLE_VULKAN)
++  if (context_state_->GrContextIsVulkan() &&
++      base::FeatureList::IsEnabled(features::kFlechaVsr)) {
++    if (!video_processor_pool_) {
++      video_processor_pool_ =
++          std::make_unique<FlechaVideoProcessorPool>(context_state_.get());
++    }
++    video_pool = video_processor_pool_.get();
++  }
++#endif
+   for (ImageContextImpl* context : image_contexts) {
+     if (buffer_capture()) {
+       AttemptDebuggerBufferCapture(context, context_state_.get(),
+@@ -1843,9 +1858,9 @@ void SkiaOutputSurfaceImplOnGpu::BeginAccessImages(
+     }
+ 
+     // Prepare for accessing render pass.
+-    context->BeginAccessIfNecessary(context_state_.get(),
+-                                    shared_image_representation_factory_.get(),
+-                                    begin_semaphores, end_semaphores);
++    context->BeginAccessIfNecessary(
++        context_state_.get(), shared_image_representation_factory_.get(),
++        begin_semaphores, end_semaphores, video_pool);
+     if (context->HasAccessEndState()) {
+       image_contexts_to_apply_end_state_.emplace(context);
+     }
+diff --git a/services/viz/privileged/mojom/gl/gpu_service.mojom b/services/viz/privileged/mojom/gl/gpu_service.mojom
+index 3fcfa9a..6f34306 100755
+--- a/services/viz/privileged/mojom/gl/gpu_service.mojom
++++ b/services/viz/privileged/mojom/gl/gpu_service.mojom
+@@ -63,7 +63,26 @@ enum MemoryInvalidAccessType {
+   kMemberDereferenceAfterFree,
+ };
+ 
++// Flecha: browser-wide controls and evidence from actual video processing.
++struct FlechaVsrSettings {
++  bool enabled = true;
++  uint32 quality = 2;
++  uint32 max_output_height = 1440;
++};
++struct FlechaVsrState {
++  FlechaVsrSettings settings;
++  bool available = false;
++  uint64 processed_frames = 0;
++  uint32 input_width = 0;
++  uint32 input_height = 0;
++  uint32 output_width = 0;
++  uint32 output_height = 0;
++  string error;
++};
++
+ interface GpuService {
++  // Flecha: a null settings argument reads status without changing the GPU.
++  UpdateFlechaVsr(FlechaVsrSettings? settings) => (FlechaVsrState state);
+   // Tells the GPU service to connect `channel_handle` for communication with a
+   // client. The GPU service responds with `success` to indicate whether the
+   // connecting of `channel_handle` succeeds or not.  `gpu_info` and
+diff --git a/components/viz/service/gl/gpu_service_impl.h b/components/viz/service/gl/gpu_service_impl.h
+index 4746b6e..b921fce 100755
+--- a/components/viz/service/gl/gpu_service_impl.h
++++ b/components/viz/service/gl/gpu_service_impl.h
+@@ -275,6 +275,9 @@ class VIZ_SERVICE_EXPORT GpuServiceImpl
+   void DidLoseContext(gpu::error::ContextLostReason reason,
+                       const GURL& active_url) override;
+   void GetDawnInfo(bool collect_metrics, GetDawnInfoCallback callback) override;
++  // Flecha: live video configuration, without restarting the GPU process.
++  void UpdateFlechaVsr(mojom::FlechaVsrSettingsPtr settings,
++                       UpdateFlechaVsrCallback callback) override;
+ 
+   void GetIsolationKey(int client_id,
+                        const blink::WebGPUExecutionContextToken& token,
+diff --git a/components/viz/service/gl/gpu_service_impl.cc b/components/viz/service/gl/gpu_service_impl.cc
+index 8a30676..2484b27 100755
+--- a/components/viz/service/gl/gpu_service_impl.cc
++++ b/components/viz/service/gl/gpu_service_impl.cc
+@@ -4,6 +4,12 @@
+ 
+ #include "components/viz/service/gl/gpu_service_impl.h"
+ 
++// Flecha: shared video configuration is independent of the GPU main sequence.
++#if BUILDFLAG(IS_LINUX) && BUILDFLAG(ENABLE_VULKAN)
++#include "components/viz/service/display_embedder/flecha_video_processor.h"
++#include "components/viz/service/display_embedder/flecha_video_settings.h"
++#endif
++
+ #include <memory>
+ #include <string>
+ #include <utility>
+@@ -1423,6 +1429,34 @@ base::WaitableEvent* GpuServiceImpl::CreateShutdownEvent() {
+   return owned_shutdown_event_.get();
+ }
+ 
++// Flecha: status reads stay on IO; no synchronous wait on the GPU main thread.
++void GpuServiceImpl::UpdateFlechaVsr(mojom::FlechaVsrSettingsPtr settings,
++                                     UpdateFlechaVsrCallback callback) {
++  auto result = mojom::FlechaVsrState::New();
++  result->settings = mojom::FlechaVsrSettings::New();
++#if BUILDFLAG(IS_LINUX) && BUILDFLAG(ENABLE_VULKAN)
++  if (settings && !SetFlechaVideoSettings({settings->enabled, settings->quality,
++                                           settings->max_output_height})) {
++    result->error = "Invalid native VSR settings";
++    std::move(callback).Run(std::move(result));
++    return;
++  }
++  const auto status = GetFlechaVideoStatus();
++  result->settings->enabled = status.settings.enabled;
++  result->settings->quality = status.settings.quality;
++  result->settings->max_output_height = status.settings.max_output_height;
++  // Flecha: a disabled or missing bridge, or another backend, is unavailable.
++  result->available = IsFlechaVideoAvailable();
++  result->processed_frames = status.processed_frames;
++  result->input_width = status.input_width;
++  result->input_height = status.input_height;
++  result->output_width = status.output_width;
++  result->output_height = status.output_height;
++  result->error = status.error;
++#endif
++  std::move(callback).Run(std::move(result));
++}
++
+ void GpuServiceImpl::GetDawnInfo(bool collect_metrics,
+                                  GetDawnInfoCallback callback) {
+   DCHECK(io_runner_->BelongsToCurrentThread());
+diff --git a/components/viz/service/BUILD.gn b/components/viz/service/BUILD.gn
+index edbd68a..29b4256 100755
+--- a/components/viz/service/BUILD.gn
++++ b/components/viz/service/BUILD.gn
+@@ -15,6 +15,17 @@ import("//third_party/jni_zero/jni_zero.gni")
+ config("viz_service_implementation") {
+ }
+ 
++# Flecha: focused, display-independent coverage without the full Viz test data.
++executable("flecha_video_settings_test") {
++  testonly = true
++  sources = [
++    "display_embedder/flecha_video_settings.cc",
++    "display_embedder/flecha_video_settings.h",
++    "display_embedder/flecha_video_settings_test.cc",
++  ]
++  deps = [ "//base" ]
++}
++
+ source_set("viz_service_export") {
+   sources = [ "viz_service_export.h" ]
+ 
+@@ -536,6 +547,8 @@ viz_component("service") {
+       sources += [
+         "display_embedder/flecha_video_processor.cc",
+         "display_embedder/flecha_video_processor.h",
++        "display_embedder/flecha_video_settings.cc",
++        "display_embedder/flecha_video_settings.h",
+         "display_embedder/flecha_vsr_api.h",
+       ]
+     }
+diff --git a/content/public/browser/gpu_utils.h b/content/public/browser/gpu_utils.h
+index fe59ed8..3724c24 100755
+--- a/content/public/browser/gpu_utils.h
++++ b/content/public/browser/gpu_utils.h
+@@ -5,6 +5,10 @@
+ #ifndef CONTENT_PUBLIC_BROWSER_GPU_UTILS_H_
+ #define CONTENT_PUBLIC_BROWSER_GPU_UTILS_H_
+ 
++#include <cstdint>
++#include <optional>
++#include <string>
++
+ #include "base/clang_profiling_buildflags.h"
+ #include "base/functional/callback_forward.h"
+ #include "content/common/content_export.h"
+@@ -16,6 +20,26 @@ class GpuChannelEstablishFactory;
+ 
+ namespace content {
+ 
++// Flecha: the GPU process is shared, so video settings apply browser-wide.
++struct FlechaVsrSettings {
++  bool enabled = true;
++  uint32_t quality = 2;
++  uint32_t max_output_height = 1440;
++};
++struct FlechaVsrStatus {
++  bool available = false;
++  uint64_t processed_frames = 0;
++  uint32_t input_width = 0;
++  uint32_t input_height = 0;
++  uint32_t output_width = 0;
++  uint32_t output_height = 0;
++  std::string error;
++};
++// A read uses nullopt. Disconnection returns unavailable instead of waiting.
++CONTENT_EXPORT void UpdateFlechaVsr(
++    std::optional<FlechaVsrSettings> settings,
++    base::OnceCallback<void(FlechaVsrStatus)> callback);
++
+ CONTENT_EXPORT const gpu::GpuPreferences GetGpuPreferencesFromCommandLine();
+ 
+ // Kills the GPU process with a normal termination status.
+diff --git a/content/public/browser/gpu_utils.cc b/content/public/browser/gpu_utils.cc
+index f1e4188..76bf4d6 100755
+--- a/content/public/browser/gpu_utils.cc
++++ b/content/public/browser/gpu_utils.cc
+@@ -11,6 +11,7 @@
+ #include "base/functional/bind.h"
+ #include "base/logging.h"
+ #include "base/strings/string_number_conversions.h"
++#include "base/task/bind_post_task.h"
+ #include "build/build_config.h"
+ #include "cc/base/switches.h"
+ #include "components/viz/common/features.h"
+@@ -26,6 +27,7 @@
+ #include "media/base/media_switches.h"
+ #include "media/gpu/buildflags.h"
+ #include "media/media_buildflags.h"
++#include "mojo/public/cpp/bindings/callback_helpers.h"
+ #include "third_party/blink/public/common/features.h"
+ #include "ui/gfx/switches.h"
+ #include "ui/gl/gl_features.h"
+@@ -49,6 +51,50 @@ bool GetUintFromSwitch(const base::CommandLine* command_line,
+ 
+ namespace content {
+ 
++// Flecha: keep private GPU-service IPC behind content's public browser API.
++void UpdateFlechaVsr(std::optional<FlechaVsrSettings> settings,
++                     base::OnceCallback<void(FlechaVsrStatus)> callback) {
++  GpuProcessHost::CallOnUI(
++      FROM_HERE, GPU_PROCESS_KIND_SANDBOXED, false,
++      base::BindOnce(
++          [](std::optional<FlechaVsrSettings> settings,
++             base::OnceCallback<void(FlechaVsrStatus)> callback,
++             GpuProcessHost* host) {
++            if (!host) {
++              std::move(callback).Run({});
++              return;
++            }
++            viz::mojom::FlechaVsrSettingsPtr request;
++            if (settings) {
++              request = viz::mojom::FlechaVsrSettings::New();
++              request->enabled = settings->enabled;
++              request->quality = settings->quality;
++              request->max_output_height = settings->max_output_height;
++            }
++            host->gpu_service()->UpdateFlechaVsr(
++                std::move(request),
++                mojo::WrapCallbackWithDefaultInvokeIfNotRun(
++                    base::BindOnce(
++                        [](base::OnceCallback<void(FlechaVsrStatus)> callback,
++                           viz::mojom::FlechaVsrStatePtr state) {
++                          FlechaVsrStatus status;
++                          if (state) {
++                            status.available = state->available;
++                            status.processed_frames = state->processed_frames;
++                            status.input_width = state->input_width;
++                            status.input_height = state->input_height;
++                            status.output_width = state->output_width;
++                            status.output_height = state->output_height;
++                            status.error = state->error;
++                          }
++                          std::move(callback).Run(std::move(status));
++                        },
++                        std::move(callback)),
++                    viz::mojom::FlechaVsrStatePtr()));
++          },
++          settings, base::BindPostTaskToCurrentDefault(std::move(callback))));
++}
++
+ const gpu::GpuPreferences GetGpuPreferencesFromCommandLine() {
+   DCHECK(base::CommandLine::InitializedForCurrentProcess());
+   const base::CommandLine* command_line =
+diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
+index 4ac1a6e..9bcca90 100755
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -3,6 +3,7 @@
+ // found in the LICENSE file.
+ 
+ #include "chrome/browser/chrome_content_browser_client.h"
++#include "chrome/browser/flecha/flecha_video_preferences.h"
+ 
+ #include <algorithm>
+ #include <iterator>
+@@ -3305,6 +3306,8 @@ void ChromeContentBrowserClient::AppendExtraCommandLineSwitches(
+     command_line->CopySwitchesFrom(browser_command_line, kMoreCrOSSwitchNames);
+ #endif
+   } else if (process_type == switches::kGpuProcess) {
++    // Flecha: reapply live video preferences after a GPU process restart.
++    flecha::AppendVideoPreferences(command_line);
+     // If --ignore-gpu-blocklist is passed in, don't send in crash reports
+     // because GPU is expected to be unreliable.
+     if (browser_command_line.HasSwitch(switches::kIgnoreGpuBlocklist) &&
+diff --git a/chrome/browser/prefs/browser_prefs.cc b/chrome/browser/prefs/browser_prefs.cc
+index 0a98aae..30667e6 100755
+--- a/chrome/browser/prefs/browser_prefs.cc
++++ b/chrome/browser/prefs/browser_prefs.cc
+@@ -3,6 +3,7 @@
+ // found in the LICENSE file.
+ 
+ #include "chrome/browser/prefs/browser_prefs.h"
++#include "chrome/browser/flecha/flecha_video_preferences.h"
+ 
+ #include <array>
+ #include <optional>
+@@ -1683,6 +1684,8 @@ std::string GetCountry() {
+ }
+ 
+ void RegisterLocalState(PrefRegistrySimple* registry) {
++  // Flecha: video settings belong to the browser-wide GPU process.
++  flecha::RegisterVideoPreferences(registry);
+   // Call outs to individual subsystems that register Local State (browser-wide)
+   // prefs en masse. See RegisterProfilePrefs for per-profile prefs. Please
+   // keep this list alphabetized.
+diff --git a/chrome/browser/extensions/api/flecha_private/flecha_private_api.cc b/chrome/browser/extensions/api/flecha_private/flecha_private_api.cc
+index f5623af..b7e1b29 100755
+--- a/chrome/browser/extensions/api/flecha_private/flecha_private_api.cc
++++ b/chrome/browser/extensions/api/flecha_private/flecha_private_api.cc
+@@ -3,6 +3,7 @@
+ // found in the LICENSE file.
+ 
+ #include "chrome/browser/extensions/api/flecha_private/flecha_private_api.h"
++#include "chrome/browser/flecha/flecha_video_preferences.h"
+ 
+ #include <algorithm>
+ #include <optional>
+@@ -77,6 +78,23 @@ constexpr char kBadColorError[] = "background must be #rrggbb.";
+ constexpr char kNoTabError[] = "No tab with id *.";
+ constexpr char kNotSplitError[] = "The tab is not in a split view.";
+ 
++// Flecha: prefs are browser-wide; status comes from real processing in Viz.
++flecha_private::VsrState VideoState(const content::FlechaVsrStatus& runtime) {
++  const auto settings = flecha::ReadVideoPreferences();
++  flecha_private::VsrState state;
++  state.enabled = settings.enabled;
++  state.quality = settings.quality;
++  state.max_output_height = settings.max_output_height;
++  state.available = runtime.available;
++  state.processed_frames = base::NumberToString(runtime.processed_frames);
++  state.input_width = runtime.input_width;
++  state.input_height = runtime.input_height;
++  state.output_width = runtime.output_width;
++  state.output_height = runtime.output_height;
++  state.error = runtime.error;
++  return state;
++}
++
+ std::optional<SkColor> ParseColor(const std::string& text) {
+   uint32_t rgb = 0;
+   if (text.size() != 7 || text[0] != '#' ||
+@@ -1079,4 +1097,46 @@ FlechaPrivateSetSidebarInPageFullscreenFunction::Run() {
+   return RespondNow(NoArguments());
+ }
+ 
++// Flecha: the shell reads and changes the browser-wide native video path.
++ExtensionFunction::ResponseAction FlechaPrivateGetVsrStateFunction::Run() {
++  content::UpdateFlechaVsr(
++      std::nullopt,
++      base::BindOnce(
++          [](scoped_refptr<FlechaPrivateGetVsrStateFunction> function,
++             content::FlechaVsrStatus runtime) {
++            function->Respond(function->ArgumentList(
++                flecha_private::GetVsrState::Results::Create(
++                    VideoState(runtime))));
++          },
++          base::WrapRefCounted(this)));
++  return RespondLater();
++}
++
++ExtensionFunction::ResponseAction FlechaPrivateSetVsrSettingsFunction::Run() {
++  auto params = flecha_private::SetVsrSettings::Params::Create(args());
++  EXTENSION_FUNCTION_VALIDATE(params);
++  // These are the SDK's upscaling quality modes and gfx::Size's positive
++  // height.
++  if (params->quality < 1 || params->quality > 4 ||
++      params->max_output_height <= 0) {
++    return RespondNow(
++        Error("Choose a valid quality and positive output height."));
++  }
++  auto* prefs = g_browser_process->local_state();
++  prefs->SetBoolean(flecha::kVsrEnabled, params->enabled);
++  prefs->SetInteger(flecha::kVsrQuality, params->quality);
++  prefs->SetInteger(flecha::kVsrMaxHeight, params->max_output_height);
++  content::UpdateFlechaVsr(
++      flecha::ReadVideoPreferences(),
++      base::BindOnce(
++          [](scoped_refptr<FlechaPrivateSetVsrSettingsFunction> function,
++             content::FlechaVsrStatus runtime) {
++            function->Respond(function->ArgumentList(
++                flecha_private::SetVsrSettings::Results::Create(
++                    VideoState(runtime))));
++          },
++          base::WrapRefCounted(this)));
++  return RespondLater();
++}
++
+ }  // namespace extensions
+diff --git a/chrome/browser/extensions/api/flecha_private/flecha_private_api.h b/chrome/browser/extensions/api/flecha_private/flecha_private_api.h
+index b73e354..fefc660 100755
+--- a/chrome/browser/extensions/api/flecha_private/flecha_private_api.h
++++ b/chrome/browser/extensions/api/flecha_private/flecha_private_api.h
+@@ -12,6 +12,22 @@ class Profile;
+ 
+ namespace extensions {
+ 
++// Flecha: native video configuration is separate from the legacy extension.
++class FlechaPrivateGetVsrStateFunction : public ExtensionFunction {
++ public:
++  DECLARE_EXTENSION_FUNCTION("flechaPrivate.getVsrState", UNKNOWN)
++ protected:
++  ~FlechaPrivateGetVsrStateFunction() override = default;
++  ResponseAction Run() override;
++};
++class FlechaPrivateSetVsrSettingsFunction : public ExtensionFunction {
++ public:
++  DECLARE_EXTENSION_FUNCTION("flechaPrivate.setVsrSettings", UNKNOWN)
++ protected:
++  ~FlechaPrivateSetVsrSettingsFunction() override = default;
++  ResponseAction Run() override;
++};
++
+ // chrome.flechaPrivate: what Flecha's browser gives its shell, and only the
+ // shell (see flecha_frame_host.h). Its functions use the UNKNOWN histogram
+ // value so that Flecha's patches stay off Chromium's histogram enums.
+diff --git a/chrome/common/extensions/api/flecha_private.idl b/chrome/common/extensions/api/flecha_private.idl
+index a8df169..914fbda 100755
+--- a/chrome/common/extensions/api/flecha_private.idl
++++ b/chrome/common/extensions/api/flecha_private.idl
+@@ -8,6 +8,20 @@
+ // macOS traffic lights) around it. Only Flecha's shell may use it; the
+ // contract is chromium/shell/flechaPrivate.d.ts in the Flecha repo.
+ namespace flechaPrivate {
++  // Flecha: status is based on processed frames, not model availability.
++  dictionary VsrState {
++    boolean enabled;
++    long quality;
++    long maxOutputHeight;
++    boolean available;
++    DOMString processedFrames;
++    long inputWidth;
++    long inputHeight;
++    long outputWidth;
++    long outputHeight;
++    DOMString error;
++  };
++  callback VsrStateCallback = void(VsrState state);
+   // Where the sidebar is.
+   enum SidebarMode {
+     // A strip at the window's left edge; the page area is beside it.
+@@ -140,6 +154,10 @@ namespace flechaPrivate {
+   };
+ 
+   interface Functions {
++    // Flecha: global GPU video settings; changes apply to new video frames.
++    static void getVsrState(VsrStateCallback callback);
++    static void setVsrSettings(boolean enabled, long quality,
++                              long maxOutputHeight, VsrStateCallback callback);
+     // Lays out a window's frame. Applies to every normal window (and to the
+     // windows opened later) when <code>windowId</code> is omitted.
+     static void setFrame(
+diff --git a/components/viz/test/stub_gpu_service.h b/components/viz/test/stub_gpu_service.h
+index 04df449..7db00c2 100755
+--- a/components/viz/test/stub_gpu_service.h
++++ b/components/viz/test/stub_gpu_service.h
+@@ -24,6 +24,9 @@ class StubGpuService : public mojom::GpuService {
+   ~StubGpuService() override;
+ 
+   // mojom::GpuService:
++  // Flecha: keep test services compatible with the native video settings API.
++  void UpdateFlechaVsr(mojom::FlechaVsrSettingsPtr settings,
++                       UpdateFlechaVsrCallback callback) override;
+   void EstablishGpuChannel(int32_t client_id,
+                            uint64_t client_tracing_id,
+                            mojom::GpuClientType client_type,
+diff --git a/components/viz/test/stub_gpu_service.cc b/components/viz/test/stub_gpu_service.cc
+index 97034fd..06b693e 100755
+--- a/components/viz/test/stub_gpu_service.cc
++++ b/components/viz/test/stub_gpu_service.cc
+@@ -10,6 +10,15 @@
+ 
+ namespace viz {
+ 
++// Flecha: a stub has no video processing device.
++void StubGpuService::UpdateFlechaVsr(mojom::FlechaVsrSettingsPtr settings,
++                                     UpdateFlechaVsrCallback callback) {
++  auto state = mojom::FlechaVsrState::New();
++  state->settings =
++      settings ? std::move(settings) : mojom::FlechaVsrSettings::New();
++  std::move(callback).Run(std::move(state));
++}
++
+ StubGpuService::StubGpuService() = default;
+ StubGpuService::~StubGpuService() = default;
+ 
+diff --git a/content/common/gpu_pre_sandbox_hook_linux.cc b/content/common/gpu_pre_sandbox_hook_linux.cc
+index e13b535..6832327 100755
+--- a/content/common/gpu_pre_sandbox_hook_linux.cc
++++ b/content/common/gpu_pre_sandbox_hook_linux.cc
+@@ -17,6 +17,7 @@
+ 
+ #include "base/base_paths.h"
+ #include "base/feature_list.h"
++#include "base/compiler_specific.h"
+ #include "base/files/file_enumerator.h"
+ #include "base/files/file_path.h"
+ #include "base/files/scoped_file.h"
+@@ -697,6 +698,15 @@ bool LoadLibrariesForGpu(
+   return true;
+ }
+ 
++namespace {
++// Flecha: the preloaded worker client is a C ABI module outside Chromium's CFI.
++DISABLE_CFI_DLSYM bool PrepareFlechaVsrBridge() {
++  auto prepare =
++      reinterpret_cast<int (*)()>(dlsym(RTLD_DEFAULT, "flecha_vsr_prepare"));
++  return prepare && prepare();
++}
++}  // namespace
++
+ bool GpuPreSandboxHook(sandbox::policy::SandboxLinux::Options options) {
+   sandbox::policy::SandboxLinux::GetInstance()->StartBrokerProcess(
+       CommandSetForGPU(options), FilePermissionsForGpu(options), options);
+@@ -708,9 +718,7 @@ bool GpuPreSandboxHook(sandbox::policy::SandboxLinux::Options options) {
+   // Flecha: connect the preloaded client to its GPU worker before sandboxing.
+   // NVIDIA model loading stays in the worker, outside the browser GPU process.
+   if (base::FeatureList::IsEnabled(features::kFlechaVsr)) {
+-    auto prepare =
+-        reinterpret_cast<int (*)()>(dlsym(RTLD_DEFAULT, "flecha_vsr_prepare"));
+-    if (!prepare || !prepare()) {
++    if (!PrepareFlechaVsrBridge()) {
+       LOG(ERROR) << "Flecha VSR: native bridge initialization failed";
+     }
+   }
+diff --git a/components/viz/service/display_embedder/flecha_video_settings.h b/components/viz/service/display_embedder/flecha_video_settings.h
+new file mode 100644
+index 0000000..81bf223
+--- /dev/null
++++ b/components/viz/service/display_embedder/flecha_video_settings.h
+@@ -0,0 +1,31 @@
++// Flecha: one process-wide configuration shared by Viz and GPU sequences.
++#ifndef COMPONENTS_VIZ_SERVICE_DISPLAY_EMBEDDER_FLECHA_VIDEO_SETTINGS_H_
++#define COMPONENTS_VIZ_SERVICE_DISPLAY_EMBEDDER_FLECHA_VIDEO_SETTINGS_H_
++
++#include <cstdint>
++#include <string>
++
++namespace viz {
++struct FlechaVideoSettings {
++  bool enabled = true;
++  uint32_t quality = 2;
++  uint32_t max_output_height = 1440;
++};
++struct FlechaVideoStatus {
++  FlechaVideoSettings settings;
++  uint64_t processed_frames = 0;
++  uint32_t input_width = 0;
++  uint32_t input_height = 0;
++  uint32_t output_width = 0;
++  uint32_t output_height = 0;
++  std::string error;
++};
++FlechaVideoStatus GetFlechaVideoStatus();
++bool SetFlechaVideoSettings(FlechaVideoSettings settings);
++void RecordFlechaVideoFrame(uint32_t input_width,
++                            uint32_t input_height,
++                            uint32_t output_width,
++                            uint32_t output_height);
++void RecordFlechaVideoError(std::string error);
++}  // namespace viz
++#endif
+diff --git a/components/viz/service/display_embedder/flecha_video_settings.cc b/components/viz/service/display_embedder/flecha_video_settings.cc
+new file mode 100644
+index 0000000..8e34fcd
+--- /dev/null
++++ b/components/viz/service/display_embedder/flecha_video_settings.cc
+@@ -0,0 +1,83 @@
++// Flecha: settings survive GPU restarts through browser-supplied switches.
++#include "components/viz/service/display_embedder/flecha_video_settings.h"
++
++#include <limits>
++#include <utility>
++
++#include "base/command_line.h"
++#include "base/no_destructor.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/synchronization/lock.h"
++
++namespace viz {
++namespace {
++bool ValidSettings(const FlechaVideoSettings& settings) {
++  // NVIDIA VFX's LOW, MEDIUM, HIGH and ULTRA upscaling modes are 1 through 4.
++  // gfx::Size dimensions must fit a positive signed int.
++  return settings.quality >= 1 && settings.quality <= 4 &&
++         settings.max_output_height > 0 &&
++         settings.max_output_height <= std::numeric_limits<int>::max();
++}
++struct Runtime {
++  Runtime() {
++    const auto* command = base::CommandLine::ForCurrentProcess();
++    auto settings = status.settings;
++    settings.enabled = !command->HasSwitch("flecha-vsr-disabled");
++    uint32_t value;
++    if (base::StringToUint(command->GetSwitchValueASCII("flecha-vsr-quality"),
++                           &value)) {
++      settings.quality = value;
++    }
++    if (base::StringToUint(
++            command->GetSwitchValueASCII("flecha-vsr-max-height"), &value)) {
++      settings.max_output_height = value;
++    }
++    if (ValidSettings(settings)) {
++      status.settings = settings;
++    }
++  }
++  base::Lock lock;
++  FlechaVideoStatus status;
++};
++Runtime& State() {
++  static base::NoDestructor<Runtime> runtime;
++  return *runtime;
++}
++}  // namespace
++
++FlechaVideoStatus GetFlechaVideoStatus() {
++  auto& state = State();
++  base::AutoLock lock(state.lock);
++  return state.status;
++}
++
++bool SetFlechaVideoSettings(FlechaVideoSettings settings) {
++  if (!ValidSettings(settings)) {
++    return false;
++  }
++  auto& state = State();
++  base::AutoLock lock(state.lock);
++  state.status.settings = settings;
++  return true;
++}
++
++void RecordFlechaVideoFrame(uint32_t input_width,
++                            uint32_t input_height,
++                            uint32_t output_width,
++                            uint32_t output_height) {
++  auto& state = State();
++  base::AutoLock lock(state.lock);
++  ++state.status.processed_frames;
++  state.status.input_width = input_width;
++  state.status.input_height = input_height;
++  state.status.output_width = output_width;
++  state.status.output_height = output_height;
++  state.status.error.clear();
++}
++
++void RecordFlechaVideoError(std::string error) {
++  auto& state = State();
++  base::AutoLock lock(state.lock);
++  state.status.error = std::move(error);
++}
++}  // namespace viz
+diff --git a/components/viz/service/display_embedder/flecha_video_settings_test.cc b/components/viz/service/display_embedder/flecha_video_settings_test.cc
+new file mode 100644
+index 0000000..a65e9a1
+--- /dev/null
++++ b/components/viz/service/display_embedder/flecha_video_settings_test.cc
+@@ -0,0 +1,40 @@
++// Flecha: native settings validation and status reporting without a desktop.
++#include "components/viz/service/display_embedder/flecha_video_settings.h"
++
++#include <cstdio>
++#include <limits>
++
++#include "base/check.h"
++#include "base/check_op.h"
++#include "base/command_line.h"
++
++int main(int argc, char** argv) {
++  base::CommandLine::Init(argc, argv);
++  using namespace viz;
++  CHECK_EQ(GetFlechaVideoStatus().processed_frames, 0u);
++  CHECK(SetFlechaVideoSettings({false, 4, 2160}));
++  CHECK(!GetFlechaVideoStatus().settings.enabled);
++  CHECK_EQ(GetFlechaVideoStatus().settings.quality, 4u);
++  CHECK_EQ(GetFlechaVideoStatus().settings.max_output_height, 2160u);
++  // Invalid boundary input must leave the previous settings intact.
++  CHECK(!SetFlechaVideoSettings({true, 0, 1440}));
++  CHECK(!SetFlechaVideoSettings({true, 5, 1440}));
++  CHECK(!SetFlechaVideoSettings({true, 2, 0}));
++  CHECK(!SetFlechaVideoSettings(
++      {true, 2, static_cast<uint32_t>(std::numeric_limits<int>::max()) + 1u}));
++  CHECK(!GetFlechaVideoStatus().settings.enabled);
++  CHECK_EQ(GetFlechaVideoStatus().settings.quality, 4u);
++  CHECK(SetFlechaVideoSettings({true, 2, 1440}));
++  RecordFlechaVideoError("inference unavailable");
++  CHECK_EQ(GetFlechaVideoStatus().processed_frames, 0u);
++  CHECK_EQ(GetFlechaVideoStatus().error, "inference unavailable");
++  RecordFlechaVideoFrame(1280, 720, 1920, 1088);
++  const auto status = GetFlechaVideoStatus();
++  CHECK_EQ(status.processed_frames, 1u);
++  CHECK_EQ(status.input_width, 1280u);
++  CHECK_EQ(status.output_height, 1088u);
++  CHECK(status.error.empty());
++  std::puts(
++      "PASS: live VSR settings, boundary validation and processed-frame "
++      "status");
++}
+diff --git a/chrome/browser/flecha/flecha_video_preferences.h b/chrome/browser/flecha/flecha_video_preferences.h
+new file mode 100644
+index 0000000..41be0cd
+--- /dev/null
++++ b/chrome/browser/flecha/flecha_video_preferences.h
+@@ -0,0 +1,41 @@
++// Flecha: browser-wide video prefs, also supplied to every new GPU process.
++#ifndef CHROME_BROWSER_FLECHA_FLECHA_VIDEO_PREFERENCES_H_
++#define CHROME_BROWSER_FLECHA_FLECHA_VIDEO_PREFERENCES_H_
++
++#include "base/command_line.h"
++#include "base/strings/string_number_conversions.h"
++#include "chrome/browser/browser_process.h"
++#include "components/prefs/pref_registry_simple.h"
++#include "components/prefs/pref_service.h"
++#include "content/public/browser/gpu_utils.h"
++
++namespace flecha {
++inline constexpr char kVsrEnabled[] = "flecha.vsr.enabled";
++inline constexpr char kVsrQuality[] = "flecha.vsr.quality";
++inline constexpr char kVsrMaxHeight[] = "flecha.vsr.max_output_height";
++
++inline void RegisterVideoPreferences(PrefRegistrySimple* registry) {
++  registry->RegisterBooleanPref(kVsrEnabled, true);
++  registry->RegisterIntegerPref(kVsrQuality, 2);
++  registry->RegisterIntegerPref(kVsrMaxHeight, 1440);
++}
++inline content::FlechaVsrSettings ReadVideoPreferences() {
++  auto* prefs = g_browser_process->local_state();
++  const int quality = prefs->GetInteger(kVsrQuality);
++  const int height = prefs->GetInteger(kVsrMaxHeight);
++  return {prefs->GetBoolean(kVsrEnabled),
++          static_cast<uint32_t>(quality >= 1 && quality <= 4 ? quality : 2),
++          static_cast<uint32_t>(height > 0 ? height : 1440)};
++}
++inline void AppendVideoPreferences(base::CommandLine* command) {
++  const auto settings = ReadVideoPreferences();
++  if (!settings.enabled) {
++    command->AppendSwitch("flecha-vsr-disabled");
++  }
++  command->AppendSwitchASCII("flecha-vsr-quality",
++                             base::NumberToString(settings.quality));
++  command->AppendSwitchASCII("flecha-vsr-max-height",
++                             base::NumberToString(settings.max_output_height));
++}
++}  // namespace flecha
++#endif
+diff --git a/content/gpu/gpu_main.cc b/content/gpu/gpu_main.cc
+index fef23f2..513fd5c 100755
+--- a/content/gpu/gpu_main.cc
++++ b/content/gpu/gpu_main.cc
+@@ -43,6 +43,11 @@
+ #include "components/viz/common/features.h"
+ #include "components/viz/service/gl/gpu_log_message_manager.h"
+ #include "components/viz/service/main/viz_main_impl.h"
++#include "gpu/vulkan/buildflags.h"
++// Flecha: native VSR is turned off when the GPU sandbox did not start.
++#if BUILDFLAG(IS_LINUX) && BUILDFLAG(ENABLE_VULKAN)
++#include "components/viz/service/display_embedder/flecha_video_processor.h"
++#endif
+ #include "content/child/child_process.h"
+ #include "content/common/content_constants_internal.h"
+ #include "content/common/content_switches_internal.h"
+@@ -574,10 +579,16 @@ bool StartSandboxLinux(gpu::GpuWatchdogThread* watchdog_thread,
+           *base::CommandLine::ForCurrentProcess()),
+       base::BindOnce(GpuPreSandboxHook), sandbox_options);
+ 
+-  // Flecha: never silently run native VSR after sandbox setup was skipped.
+-  CHECK(!native_vsr ||
+-        (res &&
+-         sandbox::policy::SandboxLinux::GetInstance()->seccomp_bpf_started()));
++  // Flecha: never run native VSR after sandbox setup was skipped, but keep the
++  // GPU process usable without it.
++  if (native_vsr &&
++      !(res &&
++        sandbox::policy::SandboxLinux::GetInstance()->seccomp_bpf_started())) {
++    LOG(ERROR) << "Flecha VSR: GPU sandbox inactive, native VSR disabled";
++#if BUILDFLAG(IS_LINUX) && BUILDFLAG(ENABLE_VULKAN)
++    viz::DisableFlechaVideo();
++#endif
++  }
+ 
+   if (watchdog_thread) {
+     watchdog_thread->Start();

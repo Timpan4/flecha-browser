@@ -64,6 +64,8 @@ on('settings:ask', async (id: number, options: AskOptions) => {
 });
 
 const api: SettingsApi = {
+  getVsrState: () => invoke('settings:vsr-state'),
+  setVsrSettings: (settings) => invoke('settings:vsr-set', settings),
   get: () => invoke<SettingsView>('settings:get'),
   set: (patch) => invoke<SettingsView>('settings:set', patch),
   chooseDownloadsFolder: () => invoke<SettingsView>('settings:choose-downloads-folder').then(tellNotYet),
