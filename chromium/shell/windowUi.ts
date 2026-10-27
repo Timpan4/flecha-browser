@@ -8,7 +8,8 @@
  * a question is up it covers the whole window (an "overlay", like the command bar): clicks
  * on the page dismiss the menu, and the dialog has room.
  */
-import type { DetectedBrowser, ImportResult, UiState } from '../shared/types';
+import type { DetectedBrowser, ImportOptions, ImportPreview, ImportResult, UiState } from '../shared/types';
+import { hasImport, previewLines, resultLine } from '../shared/importText';
 import { cmd, invoke, on } from './client';
 import type { MenuRun } from './protocol';
 import { askDialog, popupMenu, type MenuEntry, type MenuOptions } from './settingsUi';
@@ -109,9 +110,33 @@ export async function importFromBrowser() {
     })];
     if (!picked) return;
     try {
-      const r = await invoke<ImportResult>('importBrowser', picked.id);
-      const parts = [r.bookmarks && `${r.bookmarks.toLocaleString()} bookmark${r.bookmarks === 1 ? '' : 's'}`, r.history && `${r.history.toLocaleString()} page${r.history === 1 ? '' : 's'}`].filter(Boolean);
-      return note(`Imported from ${picked.name}`, [...parts, ...r.warnings].join(' · ') || 'Nothing to import');
+      const preview = await invoke<ImportPreview>('previewImport', picked.id);
+      if (!hasImport(preview)) return note(`Nothing to import from ${picked.name}`, preview.warnings.join('\n') || 'No bookmarks or history were found.');
+      const detail = [
+        ...previewLines(preview),
+        ...(preview.skipped.length ? ['', 'Won’t come over:', ...preview.skipped] : []),
+        ...preview.warnings,
+      ].join('\n');
+      // Merge joins Spaces of the same name and leaves out tabs you or the favorites have; Add as New keeps everything.
+      const buttons = preview.spaces.length ? ['Merge', 'Add as New', 'Cancel'] : ['Import', 'Cancel'];
+      const answer = await askDialog({ message: `Import from ${picked.name}?`, detail, buttons, defaultId: 0, cancelId: buttons.length - 1 });
+      if (answer === buttons.length - 1) return;
+      const mode = buttons[answer] === 'Add as New' ? 'append' : 'merge';
+      // New Spaces from other Arc Profiles can have Separate Cookies and Logins; one that joins yours keeps its own.
+      let isolate = preview.canIsolate ? preview.spaces.flatMap((s, i) => (s.profile && !(s.matches && mode === 'merge') ? [i] : [])) : [];
+      if (isolate.length) {
+        const separate = await askDialog({
+          message: 'Separate Cookies and Logins for Spaces from other Arc Profiles?',
+          detail: `${isolate.map((i) => `“${preview.spaces[i].name}”`).join(', ')} used another Arc Profile. With Separate Cookies and Logins, each is signed in on its own, as in Arc.`,
+          buttons: ['Separate', 'Share with Other Spaces', 'Cancel'],
+          defaultId: 0,
+          cancelId: 2,
+        });
+        if (separate === 2) return;
+        if (separate !== 0) isolate = [];
+      }
+      const r = await invoke<ImportResult>('importBrowser', picked.id, { mode, isolate, spacesKey: preview.spacesKey } satisfies ImportOptions);
+      return note(`Imported from ${picked.name}`, [resultLine(r), ...r.warnings, ...r.details].filter(Boolean).join('\n') || 'Nothing to import');
     } catch {
       return note(`Couldn’t import ${picked.name}`, 'Try again.');
     }

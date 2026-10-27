@@ -1,9 +1,11 @@
 import type {
+  ArchivedTab,
   BrowserState,
   ClosedWindow,
   DropTarget,
   Environment,
   FlechaWindow,
+  ImportMode,
   PinnedNode,
   SavedSpace,
   SearchEngineId,
@@ -13,13 +15,33 @@ import type {
   WindowBounds,
   WindowSpace,
 } from './types';
-import type { ArcImport, ImportNode } from './importApply';
+import type { ImportNode, ImportOutcome, ImportSpace, ImportTab } from './importApply';
 import { STATE_VERSION } from './savedState';
 import { clampSidebarWidth } from './sidebarWidth';
 
 const SPACE_COLORS = ['#cdd9f7', '#f6d6cc', '#d3ecd5', '#e8d6f3', '#f5e7c4', '#cfe8ec'];
 const SPACE_EMOJIS = ['🏠', '💼', '🎨', '📚', '🧪', '🎮'];
-const ARCHIVE_LIMIT = 500;
+/** The Space a fresh install starts with. */
+const INITIAL_SPACE = { name: 'Personal', emoji: SPACE_EMOJIS[0], color: SPACE_COLORS[0] };
+
+/**
+ * A fresh install's Space while still untouched (its first name, emoji and colour, nothing in it
+ * and no favorites), which imported Spaces replace instead of joining.
+ */
+export function pristineSpace(s: Pick<BrowserState, 'spaces' | 'favorites' | 'windows' | 'closedWindows'>): SavedSpace | undefined {
+  const only = s.spaces.length === 1 ? s.spaces[0] : undefined;
+  const untouched =
+    !!only &&
+    only.name === INITIAL_SPACE.name &&
+    only.emoji === INITIAL_SPACE.emoji &&
+    only.color === INITIAL_SPACE.color &&
+    !only.isolated &&
+    !only.pinned.length &&
+    !s.favorites.length &&
+    [...s.windows, ...s.closedWindows].every((w) => !w.spaces[only.id]?.today.length);
+  return untouched ? only : undefined;
+}
+export const ARCHIVE_LIMIT = 500;
 /** Closed windows kept for reopening: as many entries as Chromium's tab restore keeps (TabRestoreServiceHelper::kMaxEntries). */
 const CLOSED_WINDOW_LIMIT = 25;
 
@@ -754,45 +776,99 @@ export class Store {
 
   // ---- imports --------------------------------------------------------------------
 
-  /** Arc's Spaces become Flecha's; their Today tabs open in `windowId`. */
-  importArc(data: ArcImport, windowId?: string) {
+  /**
+   * Another browser's Spaces (Arc's, or one Space of bookmarks) come over; their Today tabs open
+   * in `windowId`. With `merge`, a Space joins the Space of the same name Flecha already had, and tabs
+   * whose address that Space (or the favorites) had are left out; with `append`, each is new.
+   * Favorites already there are never added twice. A split of two tabs becomes the Space's split
+   * when it has none yet; other splits stay as their tabs, side by side.
+   */
+  importSpaces(spaces: ImportSpace[], opts: { mode: ImportMode; favorites?: ImportTab[]; archive?: ArchivedTab[]; windowId?: string }): ImportOutcome {
     const s = this.state;
-    const pristine = this.dropPristineSpace();
-    const win = this.window(windowId);
+    const pristine = spaces.length > 0 && this.dropPristineSpace();
+    const win = this.window(opts.windowId);
+    const out: ImportOutcome = { spaces: 0, merged: 0, tabs: 0, splits: 0, pairs: 0, archived: 0, archiveDropped: 0 };
+    // Where a favorite is and where it started, as for pinned tabs.
+    const favoriteUrls = new Set(s.favorites.flatMap((id) => (s.tabs[id] ? [s.tabs[id].url, s.tabs[id].homeUrl] : [])));
+    let first: string | undefined;
 
-    for (const imported of data.spaces) {
-      const n = s.spaces.length;
-      const space: SavedSpace = {
-        id: randomUUID(),
-        name: imported.name,
-        emoji: imported.emoji,
-        color: SPACE_COLORS[n % SPACE_COLORS.length],
-        pinned: this.importNodes(imported.pinned),
-      };
-      s.spaces.push(space);
-      win.spaces[space.id] = { today: imported.today.map((t) => this.importTab(t, false)) };
+    // Favorites first, so a merged Space leaves out the tabs they already hold.
+    for (const fav of opts.favorites ?? []) {
+      if (favoriteUrls.has(fav.url)) continue;
+      favoriteUrls.add(fav.url);
+      s.favorites.push(this.importTab(fav, true));
+      out.tabs++;
     }
-    for (const fav of data.favorites) s.favorites.push(this.importTab(fav, true));
-    this.afterImport(pristine, s.spaces[0].id);
-    this.changed();
-  }
 
-  /** Another browser's bookmarks become the pinned tabs and folders of a new Space named `name`. */
-  importBookmarks(name: string, nodes: ImportNode[]): SavedSpace {
-    const s = this.state;
-    const pristine = this.dropPristineSpace();
-    const n = s.spaces.length;
-    const space: SavedSpace = {
-      id: randomUUID(),
-      name,
-      emoji: SPACE_EMOJIS[n % SPACE_EMOJIS.length],
-      color: SPACE_COLORS[n % SPACE_COLORS.length],
-      pinned: this.importNodes(nodes),
-    };
-    s.spaces.push(space);
-    this.afterImport(pristine, space.id);
+    // Merge joins Spaces Flecha had before the import, and leaves out the addresses they had then.
+    // Imported Spaces never join each other, so two of the same name stay two, as in the other browser.
+    const before = new Map<string, { space: SavedSpace; urls: string[] }>();
+    if (opts.mode === 'merge') {
+      for (const sp of s.spaces) {
+        const key = sp.name.trim().toLowerCase();
+        if (!before.has(key)) before.set(key, { space: sp, urls: this.spaceTabUrls(sp) });
+      }
+    }
+
+    for (const imported of spaces) {
+      const match = before.get(imported.name.trim().toLowerCase());
+      let space = match?.space;
+      if (space) out.merged++;
+      else {
+        const n = s.spaces.length;
+        space = {
+          id: randomUUID(),
+          name: imported.name,
+          emoji: imported.emoji ?? SPACE_EMOJIS[n % SPACE_EMOJIS.length],
+          color: imported.color ?? SPACE_COLORS[n % SPACE_COLORS.length],
+          pinned: [],
+          // Only a new Space: an existing one keeps its cookies and logins as they are.
+          ...(imported.isolated ? { isolated: true } : {}),
+        };
+        s.spaces.push(space);
+        out.spaces++;
+      }
+      first ??= space.id;
+      // Repeats within the import stay, as Append keeps them.
+      const known = opts.mode === 'merge' ? new Set([...favoriteUrls, ...(match?.urls ?? [])]) : undefined;
+      const add = (t: ImportTab) => {
+        if (known?.has(t.url)) return false;
+        out.tabs++;
+        return true;
+      };
+      const had = new Set(this.allTabIds(space, win.id));
+      // Folders join only inside a Space Flecha had; a new Space keeps the other browser's folders as they were.
+      this.mergeNodes(space.pinned, imported.pinned, add, !!match);
+      const ws = this.windowSpace(space.id, win.id);
+      for (const t of imported.today) if (add(t)) ws.today.push(this.importTab(t, false));
+
+      // Each half is a different tab with that address, one this import added when there is one.
+      // A pinned tab or favorite on screen in another window stays there; the split stays as tabs.
+      const shownElsewhere = (id: string) =>
+        s.windows.some((w) => w !== win && Object.values(w.spaces).some((o) => o.activeTabId === id || o.split?.includes(id)));
+      const tabByUrl = (url: string, taken?: string) => {
+        const ids = this.allTabIds(space, win.id).filter((id) => id !== taken && s.tabs[id]?.url === url && !shownElsewhere(id));
+        return ids.find((id) => !had.has(id)) ?? ids[0];
+      };
+      for (const urls of imported.splits ?? []) {
+        const left = tabByUrl(urls[0]);
+        const right = urls.length === 2 ? tabByUrl(urls[1], left) : undefined;
+        if (urls.length === 2 && !ws.split && left && right) {
+          ws.split = [left, right];
+          out.splits++;
+        } else out.pairs++;
+      }
+    }
+
+    if (opts.archive?.length) {
+      const merged = mergeArchive(s.archive, opts.archive);
+      s.archive = merged.archive;
+      out.archived = merged.added;
+      out.archiveDropped = merged.dropped;
+    }
+    if (first) this.afterImport(pristine, first);
     this.changed();
-    return space;
+    return out;
   }
 
   /** Takes over another Flecha's whole state (its Spaces, tabs and settings), as if it had been loaded. */
@@ -915,20 +991,15 @@ export class Store {
     }
   }
 
-  /** A fresh install's single empty Space gives way to imported ones. Returns whether it did. */
+  /** A fresh install's single Space, untouched, gives way to imported ones. Returns whether it did. */
   private dropPristineSpace() {
     const s = this.state;
-    const only = s.spaces.length === 1 ? s.spaces[0] : undefined;
-    const pristine =
-      !!only &&
-      !s.favorites.length &&
-      !pinnedTabIds(only.pinned).length &&
-      [...s.windows, ...s.closedWindows].every((w) => !w.spaces[only.id]?.today.length);
-    if (pristine) {
+    const only = pristineSpace(s);
+    if (only) {
       s.spaces = [];
-      for (const win of s.windows) delete win.spaces[only!.id];
+      for (const win of s.windows) delete win.spaces[only.id];
     }
-    return pristine;
+    return !!only;
   }
 
   /** Windows whose Space went away (the pristine one), or every window after a fresh start, show `spaceId`. */
@@ -943,12 +1014,32 @@ export class Store {
     return tab.id;
   }
 
-  private importNodes(nodes: ImportNode[]): PinnedNode[] {
-    return nodes.map((n) =>
-      n.kind === 'tab'
-        ? { kind: 'tab', tabId: this.importTab(n, true) }
-        : { kind: 'folder', id: randomUUID(), name: n.name, open: false, children: this.importNodes(n.children) },
-    );
+  /**
+   * Adds imported pinned tabs and folders to `list`; with `merge`, a folder joins one of the same
+   * name already there. `add` says whether a tab comes over. A folder all of whose tabs were already
+   * there isn't added.
+   */
+  private mergeNodes(list: PinnedNode[], nodes: ImportNode[], add: (t: ImportTab) => boolean, merge: boolean) {
+    for (const n of nodes) {
+      if (n.kind === 'tab') {
+        if (add(n)) list.push({ kind: 'tab', tabId: this.importTab(n, true) });
+        continue;
+      }
+      const name = n.name.trim().toLowerCase();
+      const same = merge ? list.find((f): f is Extract<PinnedNode, { kind: 'folder' }> => f.kind === 'folder' && f.name.trim().toLowerCase() === name) : undefined;
+      const folder: Extract<PinnedNode, { kind: 'folder' }> = same ?? { kind: 'folder', id: randomUUID(), name: n.name, open: false, children: [] };
+      this.mergeNodes(folder.children, n.children, add, merge);
+      if (!same && (folder.children.length || !n.children.length)) list.push(folder);
+    }
+  }
+
+  /** Addresses of a Space's pinned tabs (where they are and where they started) and its Today tabs in every window. */
+  private spaceTabUrls(space: SavedSpace): string[] {
+    const ids = [...pinnedTabIds(space.pinned), ...[...this.state.windows, ...this.state.closedWindows].flatMap((w) => w.spaces[space.id]?.today ?? [])];
+    return ids.flatMap((id) => {
+      const tab = this.state.tabs[id];
+      return tab ? [tab.url, ...(tab.homeUrl ? [tab.homeUrl] : [])] : [];
+    });
   }
 
   private archive(tab: TabInfo | undefined) {
@@ -963,9 +1054,29 @@ export class Store {
   }
 
   private initialState(): BrowserState {
-    const space: SavedSpace = { id: randomUUID(), name: 'Personal', emoji: '🏠', color: SPACE_COLORS[0], pinned: [] };
+    const space: SavedSpace = { id: randomUUID(), ...INITIAL_SPACE, pinned: [] };
     return { spaces: [space], windows: [{ id: randomUUID(), activeSpaceId: space.id, spaces: {} }], closedWindows: [], favorites: [], tabs: {}, archive: [], sidebarVisible: true };
   }
+}
+
+/**
+ * The archive with `incoming` added: newest first, each archiving (address and time) once, and no
+ * more than ARCHIVE_LIMIT. `added` counts incoming entries that were kept; `dropped`, entries of
+ * either that didn't fit.
+ */
+export function mergeArchive(existing: ArchivedTab[], incoming: ArchivedTab[]): { archive: ArchivedTab[]; added: number; dropped: number } {
+  const key = (a: ArchivedTab) => `${a.closedAt} ${a.url}`;
+  const seen = new Set(existing.map(key));
+  const fresh: ArchivedTab[] = [];
+  for (const a of incoming) {
+    if (seen.has(key(a))) continue;
+    seen.add(key(a));
+    fresh.push(a);
+  }
+  const all = [...existing, ...fresh].sort((a, b) => b.closedAt - a.closedAt);
+  const archive = all.slice(0, ARCHIVE_LIMIT);
+  const kept = new Set(archive);
+  return { archive, added: fresh.filter((a) => kept.has(a)).length, dropped: all.length - archive.length };
 }
 
 export function pinnedTabIds(nodes: PinnedNode[]): string[] {

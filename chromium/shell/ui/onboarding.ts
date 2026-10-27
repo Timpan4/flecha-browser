@@ -1,5 +1,6 @@
 import type { IconName } from './icons.js';
-import type { FlechaApi, UiState } from '../../shared/types';
+import type { FlechaApi, ImportMode, ImportOptions, ImportPreview, UiState } from '../../shared/types';
+import { hasImport, plural, resultLine, spaceCounts } from '../../shared/importText';
 
 /**
  * The first-run tour, full window: steps on the left, a live miniature Flecha on the right
@@ -45,7 +46,10 @@ export function setupOnboarding(api: FlechaApi, h: H, icon: (name: IconName) => 
   let step: Step = 'welcome';
   let state: UiState | undefined;
   type BrowserDiscovery = { status: 'idle' } | { status: 'loading' } | { status: 'ready'; browsers: DetectedBrowser[] } | { status: 'error'; message: string };
-  type BrowserImport = { status: 'importing' } | { status: 'done' | 'failed'; message: string };
+  type BrowserImport =
+    | { status: 'reading' | 'importing' }
+    | { status: 'preview'; preview: ImportPreview; mode: ImportMode; isolate: Set<number> }
+    | { status: 'done' | 'failed'; message: string; details: string[] };
   let discovery: BrowserDiscovery = { status: 'idle' };
   const appIcons = new Map<string, string | undefined>();
   const imports = new Map<string, BrowserImport>();
@@ -221,18 +225,97 @@ export function setupOnboarding(api: FlechaApi, h: H, icon: (name: IconName) => 
     return url ? h('img', { class: 'tour-app-icon', src: url, alt: '' }) : h('span', { class: 'tour-app-icon letter' }, b.name[0]);
   }
 
-  async function runImport(b: DetectedBrowser) {
+  /** Reads the browser and shows what would come over; nothing is added until the preview is confirmed. */
+  async function previewImport(b: DetectedBrowser) {
+    imports.set(b.id, { status: 'reading' });
+    draw();
+    try {
+      const preview = await api.previewImport(b.id);
+      if (!hasImport(preview)) imports.set(b.id, { status: 'failed', message: preview.warnings.join(' · ') || 'Nothing to import', details: [] });
+      else {
+        // Spaces from other Arc Profiles start with Separate Cookies and Logins on, as they were kept apart in Arc.
+        const isolate = new Set(preview.canIsolate ? preview.spaces.flatMap((s, i) => (s.profile ? [i] : [])) : []);
+        imports.set(b.id, { status: 'preview', preview, mode: 'merge', isolate });
+      }
+    } catch {
+      imports.set(b.id, { status: 'failed', message: 'Couldn’t read this browser. Try again.', details: [] });
+    }
+    draw();
+  }
+
+  async function runImport(b: DetectedBrowser, options: ImportOptions) {
     imports.set(b.id, { status: 'importing' });
     draw();
     try {
-      const r = await api.importBrowser(b.id);
-      const parts = [r.bookmarks && `${r.bookmarks.toLocaleString()} bookmark${r.bookmarks === 1 ? '' : 's'}`, r.history && `${r.history.toLocaleString()} page${r.history === 1 ? '' : 's'}`].filter(Boolean);
-      const message = [...parts, ...r.warnings].join(' · ') || 'Nothing to import';
-      imports.set(b.id, { status: parts.length || r.spaces ? 'done' : 'failed', message });
+      const r = await api.importBrowser(b.id, options);
+      const line = resultLine(r);
+      imports.set(b.id, { status: line ? 'done' : 'failed', message: [line, ...r.warnings].filter(Boolean).join(' · ') || 'Nothing to import', details: r.details });
     } catch {
-      imports.set(b.id, { status: 'failed', message: 'Couldn’t import this browser. Try again.' });
+      imports.set(b.id, { status: 'failed', message: 'Couldn’t import this browser. Try again.', details: [] });
     }
     draw();
+  }
+
+  /** The preview under a browser: its Spaces, Merge or Add as new, and what stays behind. */
+  function importPreview(b: DetectedBrowser, current: Extract<BrowserImport, { status: 'preview' }>) {
+    const { preview, isolate } = current;
+    const set = (patch: Partial<typeof current>) => {
+      imports.set(b.id, { ...current, ...patch });
+      draw();
+    };
+    const extras = [preview.favorites && plural(preview.favorites, 'favorite'), preview.archived && plural(preview.archived, 'archived tab'), preview.history && `${plural(preview.history, 'page')} of history`].filter(Boolean).join(' · ');
+    return h(
+      'div',
+      { class: 'tour-preview' },
+      preview.spaces.length
+        ? h(
+            'div',
+            { class: 'tour-segmented' },
+            ...(['merge', 'append'] as const).map((mode) =>
+              h('button', { class: current.mode === mode ? 'on' : '', onclick: () => set({ mode }) }, mode === 'merge' ? 'Merge' : 'Add as new'),
+            ),
+          )
+        : null,
+      preview.spaces.length
+        ? h('p', { class: 'tour-preview-hint' }, current.mode === 'merge' ? 'Spaces join yours of the same name, without tabs you already have.' : 'Every Space is added, even when you have one of that name.')
+        : null,
+      h(
+        'ul',
+        { class: 'tour-preview-spaces' },
+        ...preview.spaces.map((s, i) => {
+          const toggle = h('input', { type: 'checkbox', checked: isolate.has(i), onchange: () => {
+            const next = new Set(isolate);
+            if (next.has(i)) next.delete(i);
+            else next.add(i);
+            set({ isolate: next });
+          } });
+          // A Space that joins one of yours keeps that Space's cookies and logins.
+          const joins = s.matches && current.mode === 'merge';
+          return h(
+            'li',
+            {},
+            h('span', { class: 'tour-preview-swatch', style: s.color ? `--swatch:${s.color}` : '' }, s.emoji ?? ''),
+            h(
+              'span',
+              { class: 'tour-browser-text' },
+              h('strong', {}, s.name),
+              h('small', {}, spaceCounts(s), joins ? ' · joins your Space of this name' : '', s.profile ? ` · Arc Profile “${s.profile}”` : ''),
+              s.profile && preview.canIsolate && !joins ? h('label', { class: 'tour-preview-isolate' }, toggle, 'Separate Cookies and Logins') : null,
+            ),
+          );
+        }),
+      ),
+      extras ? h('p', { class: 'tour-preview-extras' }, extras) : null,
+      preview.skipped.length || preview.warnings.length
+        ? h('details', { class: 'tour-preview-skipped' }, h('summary', {}, 'What won’t come over'), h('ul', {}, ...[...preview.skipped, ...preview.warnings].map((line) => h('li', {}, line))))
+        : null,
+      h(
+        'div',
+        { class: 'tour-preview-buttons' },
+        h('button', { class: 'tour-ghost', onclick: () => { imports.delete(b.id); draw(); } }, 'Cancel'),
+        h('button', { class: 'tour-ghost tour-confirm', onclick: () => runImport(b, { mode: current.mode, isolate: [...isolate], spacesKey: preview.spacesKey }) }, 'Import'),
+      ),
+    );
   }
 
   function importStep() {
@@ -255,20 +338,27 @@ export function setupOnboarding(api: FlechaApi, h: H, icon: (name: IconName) => 
         : h(
             'div',
             { class: 'tour-browsers' },
-            ...discovery.browsers.map((b) => {
+            ...discovery.browsers.flatMap((b) => {
               const result = imports.get(b.id);
               const done = result?.status === 'done';
-              const busy = result?.status === 'importing';
+              const busy = result?.status === 'importing' || result?.status === 'reading';
               const what = [b.hasBookmarks && 'Bookmarks', b.hasHistory && 'history'].filter(Boolean).join(' & ') || 'Data';
-              return h(
+              const message = result && 'message' in result ? result.message : `${what}${b.profiles > 1 ? ` · ${b.profiles} profiles` : ''}`;
+              const row = h(
                 'div',
                 { class: `tour-browser${done ? ' done' : ''}${busy ? ' busy' : ''}` },
                 browserIcon(b),
-                h('span', { class: 'tour-browser-text' }, h('strong', {}, b.name), h('small', {}, result && result.status !== 'importing' ? result.message : `${what}${b.profiles > 1 ? ` · ${b.profiles} profiles` : ''}`)),
+                h('span', { class: 'tour-browser-text' }, h('strong', {}, b.name), h('small', {}, message)),
                 done
                   ? h('span', { class: 'tour-done' }, icon('check'))
-                  : h('button', { class: 'tour-ghost', disabled: busy, onclick: () => runImport(b) }, busy ? 'Importing…' : result?.status === 'failed' ? 'Try again' : 'Import'),
+                  : result?.status === 'preview'
+                    ? null
+                    : h('button', { class: 'tour-ghost', disabled: busy, onclick: () => previewImport(b) }, result?.status === 'importing' ? 'Importing…' : result?.status === 'reading' ? 'Reading…' : result?.status === 'failed' ? 'Try again' : 'Import'),
               );
+              if (result?.status === 'preview') return [row, importPreview(b, result)];
+              // The summary: what came over differently or stayed behind.
+              if (result && 'details' in result && result.details.length) return [row, h('ul', { class: 'tour-preview tour-summary' }, ...result.details.map((line) => h('li', {}, line)))];
+              return [row];
             }),
           );
     return h(
@@ -395,7 +485,8 @@ export function setupOnboarding(api: FlechaApi, h: H, icon: (name: IconName) => 
 
   api.onTourKey(tourKey);
   document.addEventListener('keydown', (e) => {
-    if (root.hidden || e.key !== 'Enter' || (e.target as HTMLElement).tagName === 'INPUT') return;
+    // Enter on a focused field, button or disclosure does what it does there, not the next step.
+    if (root.hidden || e.key !== 'Enter' || ['INPUT', 'BUTTON', 'SUMMARY'].includes((e.target as HTMLElement).tagName)) return;
     e.preventDefault();
     root.querySelector<HTMLButtonElement>('.tour-primary')?.click();
   });

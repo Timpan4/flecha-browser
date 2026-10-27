@@ -9,15 +9,17 @@
  *
  * Install the host with chromium/scripts/install-native-host.sh.
  */
-import type { DetectedBrowser, HistoryEntry, ImportResult, UiState } from '../shared/types';
+import type { DetectedBrowser, HistoryEntry, ImportOptions, ImportPreview, ImportResult, UiState } from '../shared/types';
 import { pinnedTabIds, type Store } from '../shared/store';
 import type { AgentResult, AgentTab, AgentToolName } from '../shared/agentTools';
-import { applyBrowserImport } from '../shared/importApply';
+import { applyBrowserImport, importOptions, previewBrowserImport } from '../shared/importApply';
 import { HOST_NAME, type HostMethods, type ToHost, type ToShell } from '../native-host/protocol';
 import { handle } from './hub';
 
 export interface NativeHostContext {
   store: Store;
+  /** This build can give a Space its own cookies and logins (Separate Cookies and Logins). */
+  canIsolate: boolean;
   /** Sends every page the new state (the sidebar shows what an agent is doing). */
   broadcastState(): void;
   tabs: {
@@ -33,6 +35,12 @@ export interface NativeHostContext {
 const NOT_INSTALLED =
   'Flecha’s import helper is unavailable. Repair or reinstall Flecha, then try again.';
 const IDLE_CLOSE = 60_000;
+
+/** Why the helper couldn't be used, in words for the person importing. */
+function helperProblem(err: unknown) {
+  const message = String(err instanceof Error ? err.message : err);
+  return /native messaging host|not found|forbidden/i.test(message) ? NOT_INSTALLED : message;
+}
 
 export function registerNativeHost(ctx: NativeHostContext) {
   const { store } = ctx;
@@ -151,13 +159,20 @@ export function registerNativeHost(ctx: NativeHostContext) {
         throw new Error('Browser import is unavailable because Flecha could not connect to its import helper.');
       }
     },
-    importBrowser: async (id: string): Promise<ImportResult> => {
+    previewImport: async (id: string): Promise<ImportPreview> => {
       try {
-        return await applyBrowserImport(await call('readBrowser', String(id)), store, history);
+        return previewBrowserImport(await call('readBrowser', String(id)), store.state, ctx.canIsolate);
       } catch (err) {
-        const message = String(err instanceof Error ? err.message : err);
-        const missing = /native messaging host|not found|forbidden/i.test(message);
-        return { spaces: 0, bookmarks: 0, history: 0, warnings: [missing ? NOT_INSTALLED : message] };
+        return { name: String(id), spaces: [], favorites: 0, archived: 0, history: 0, skipped: [], canIsolate: ctx.canIsolate, warnings: [helperProblem(err)], spacesKey: '' };
+      }
+    },
+    // The browser is read again rather than kept from the preview: the background may have slept since.
+    // The preview's spacesKey makes sure the Spaces it showed are still the ones being imported.
+    importBrowser: async (id: string, options: ImportOptions): Promise<ImportResult> => {
+      try {
+        return await applyBrowserImport(await call('readBrowser', String(id)), importOptions(options, ctx.canIsolate), store, history);
+      } catch (err) {
+        return { spaces: 0, merged: 0, bookmarks: 0, history: 0, archived: 0, warnings: [helperProblem(err)], details: [] };
       }
     },
     /** The Electron spike's saved state as text, or undefined when there's none or no helper. */

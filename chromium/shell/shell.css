@@ -158,6 +158,10 @@
 .shell-dialog p {
   margin: 8px 0 18px;
   color: var(--text-2);
+  /* Import previews list one item per line. */
+  white-space: pre-line;
+  max-height: 50vh;
+  overflow-y: auto;
 }
 
 .shell-dialog-buttons {
