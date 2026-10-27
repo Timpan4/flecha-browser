@@ -1,7 +1,9 @@
 /**
  * Console errors per tab since its last page load, for the sidebar's error badge, as in
  * Electron. The content scripts (consoleHook.ts, consoleBridge.ts) count them, so no tab needs
- * the DevTools protocol attached just to have a badge.
+ * the DevTools protocol attached just to have a badge. They run only on development hosts
+ * (manifest.json), the pages ui/app.ts isDevUrl() shows the badge on: elsewhere every console
+ * error woke the background and redrew every sidebar for a count nobody sees.
  */
 import { sessionKey } from '../incognito';
 

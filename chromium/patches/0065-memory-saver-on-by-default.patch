@@ -1,0 +1,16 @@
+# Flecha: Memory Saver is on by default, as tab sleep: Chromium discards a tab that has been in the background for the Memory Saver time, with its own protections (audio, capture, forms and edits, PDFs, notifications, DevTools).
+--- a/components/performance_manager/user_tuning/prefs.cc
++++ b/components/performance_manager/user_tuning/prefs.cc
+@@ -31,8 +31,11 @@
+   registry->RegisterIntegerPref(
+       kMemorySaverModeTimeBeforeDiscardInMinutes,
+       kDefaultMemorySaverModeTimeBeforeDiscardInMinutes);
++  // Flecha: Memory Saver is on unless turned off, so a background tab is
++  // discarded after the Memory Saver time. Proactive discards keep their
++  // protections (audio, capture, forms and edits).
+   registry->RegisterIntegerPref(
+-      kMemorySaverModeState, static_cast<int>(MemorySaverModeState::kDisabled));
++      kMemorySaverModeState, static_cast<int>(MemorySaverModeState::kEnabled));
+   registry->RegisterIntegerPref(
+       kMemorySaverModeAggressiveness,
+       static_cast<int>(MemorySaverModeAggressiveness::kMedium));

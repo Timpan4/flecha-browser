@@ -6,8 +6,8 @@
  * patch (stock Chromium, or a build older than the shell).
  */
 import type { Store } from '../shared/store';
-import { SHORTCUTS, keysFor } from './lib/shortcuts';
-import { broadcast, handle } from './hub';
+import { SHORTCUTS, fixedShortcuts, keysFor } from './lib/shortcuts';
+import { broadcast, broadcastTo, callerWindow, handle } from './hub';
 import { incognito } from './incognito';
 
 export interface NativeContext {
@@ -18,6 +18,8 @@ export interface NativeContext {
    * `selectSpace:1`…`selectSpace:9` (⌃1…⌃9). `windowId` is the window the key was pressed in.
    */
   run(command: string, windowId?: number): void;
+  /** The modifier keys held for `command` were released (patch 0057's onShortcutReleased). */
+  released?(command: string, windowId: number): void;
   /** The Chromium tab of an open Flecha tab (background.ts's `live` map). */
   chromeTabId?(flechaId: string): number | undefined;
   /** The Flecha tab of a Chromium tab. */
@@ -47,6 +49,9 @@ const when =
     void ready.then((ctx) => fn(ctx, ...args));
 
 if (has('setShortcuts')) chrome.flechaPrivate.onShortcut.addListener(when((ctx, command: string, windowId: number) => ctx.run(command, windowId)));
+if (typeof chrome.flechaPrivate?.onShortcutReleased?.addListener === 'function') {
+  chrome.flechaPrivate.onShortcutReleased.addListener(when((ctx, command: string, windowId: number) => ctx.released?.(command, windowId)));
+}
 
 export function registerNative(ctx: NativeContext) {
   registerShortcuts(ctx);
@@ -97,8 +102,29 @@ function registerDevToolsAndDefaultBrowser() {
 // sendPeek(); while a Peek is open the browser keeps the frame over the whole window.
 if (has('openPeek')) {
   chrome.flechaPrivate.onPeekChanged.addListener(
-    when((_ctx, windowId: number, peek?: chrome.flechaPrivate.PeekState) => broadcast('peek', peek ?? null, windowId)),
+    // Each window has its own Peek, and its own toolbar for it.
+    when((_ctx, windowId: number, peek?: chrome.flechaPrivate.PeekState) => broadcastTo(windowId, 'peek', peek ?? null, windowId)),
   );
+  chrome.contextMenus.onClicked.addListener(
+    when((_ctx, info: chrome.contextMenus.OnClickData, tab?: chrome.tabs.Tab) => {
+      if (info.menuItemId === PEEK_MENU_ID && info.linkUrl) void openLinkInPeek(info.linkUrl, tab);
+    }),
+  );
+}
+
+/** "Open in Peek" on every web link's context menu. */
+const PEEK_MENU_ID = 'flecha-open-in-peek';
+
+/**
+ * A link's Peek: in the window the link is in (a Flechinha has no Peek, so Flecha's main
+ * window), and in the storage partition of the tab it is on, so a Space with separate cookies
+ * keeps its logins. A link inside a Peek has no tab; it replaces that Peek.
+ */
+async function openLinkInPeek(url: string, tab?: chrome.tabs.Tab) {
+  const windowId = tab?.windowId !== undefined && tab.windowId >= 0 && !(await isFlechinhaWindow(tab.windowId)) ? tab.windowId : undefined;
+  const source = tab?.id !== undefined && tab.id >= 0 ? tab.id : undefined;
+  // A browser without patch 0055 takes no source tab; the Peek then has the profile's storage.
+  await chrome.flechaPrivate.openPeek(url, windowId, source).catch(() => chrome.flechaPrivate.openPeek(url, windowId));
 }
 
 /**
@@ -108,10 +134,17 @@ if (has('openPeek')) {
  */
 function registerPeek(ctx: NativeContext) {
   if (!has('openPeek')) return;
+  // Made again on every start: menu items outlive the background, and creating one twice fails.
+  chrome.contextMenus.removeAll(() =>
+    chrome.contextMenus.create({ id: PEEK_MENU_ID, title: 'Open in Peek', contexts: ['link'], targetUrlPatterns: ['http://*/*', 'https://*/*'] }),
+  );
   handle({
-    openPeek: (url: string) => void chrome.flechaPrivate.openPeek(String(url)),
-    closePeek: () => void chrome.flechaPrivate.closePeek(),
-    promotePeek: () => void chrome.flechaPrivate.promotePeek(),
+    // In the window of the page that asks (a keyboard shortcut's window); the last active one otherwise.
+    openPeek: (url: string) => void chrome.flechaPrivate.openPeek(String(url), callerWindow()),
+    // The context menu item's action, for tests: `tabId` is the tab whose link it is.
+    openLinkInPeek: async (url: string, tabId?: number) => openLinkInPeek(String(url), tabId === undefined ? undefined : await chrome.tabs.get(tabId)),
+    closePeek: () => void chrome.flechaPrivate.closePeek(callerWindow()),
+    promotePeek: () => void chrome.flechaPrivate.promotePeek(callerWindow()),
   });
 
   // The browser keeps one list for every window; an incognito window has no pinned tabs.
@@ -209,28 +242,31 @@ if (has('setSplitRatio')) {
   // Dragging the gap between the panes: the Store keeps the ratio (store.setSplitRatio clamps it).
   chrome.flechaPrivate.onSplitRatioChanged.addListener(
     when((ctx, tabId: number, ratio: number) => {
-      const split = ctx.store.activeSpace.split;
-      if (split && ctx.flechaTabId?.(tabId) === split[0]) ctx.store.setSplitRatio(ratio);
+      const id = ctx.flechaTabId?.(tabId);
+      const windowId = id && ctx.store.windowShowing(id);
+      if (windowId && ctx.store.activeSpaceIn(windowId).split?.[0] === id) ctx.store.setSplitRatio(ratio, windowId);
     }),
   );
 }
 
-/** The active Space's splitRatio on Chromium's split (patch 0019 also draws it flat, 8px apart). */
+/** Each window's active Space's splitRatio on Chromium's split (patch 0019 also draws it flat, 8px apart). */
 function registerSplitRatio(ctx: NativeContext) {
   if (!has('setSplitRatio') || !ctx.chromeTabId) return;
-  let sent = '';
+  /** The ratio last applied, by the split's left tab. */
+  const sent = new Map<number, number>();
   const apply = () => {
-    const space = ctx.store.activeSpace;
-    const left = space.split && ctx.chromeTabId!(space.split[0]);
-    if (left === undefined || !space.split) return;
-    const ratio = space.splitRatio ?? 0.5;
-    const key = `${left}:${ratio}`;
-    if (key === sent) return;
-    // Fails until Chromium has made the split; tabs.onUpdated (splitViewId) tries again.
-    void chrome.flechaPrivate.setSplitRatio(left, ratio).then(
-      () => (sent = key),
-      () => undefined,
-    );
+    for (const win of ctx.store.state.windows) {
+      const space = ctx.store.activeSpaceIn(win.id);
+      const left = space.split && ctx.chromeTabId!(space.split[0]);
+      if (left === undefined || !space.split) continue;
+      const ratio = space.splitRatio ?? 0.5;
+      if (sent.get(left) === ratio) continue;
+      // Fails until Chromium has made the split; tabs.onUpdated (splitViewId) tries again.
+      void chrome.flechaPrivate.setSplitRatio(left, ratio).then(
+        () => sent.set(left, ratio),
+        () => undefined,
+      );
+    }
   };
   apply();
   ctx.store.onChange(apply);
@@ -260,13 +296,7 @@ function registerTheme(ctx: NativeContext) {
 
 /** Accelerator → command id, as setShortcuts() wants it: the fixed families, then yours. */
 export function shortcutMap(state: Store['state']): Record<string, string> {
-  const map: Record<string, string> = {};
-  for (let i = 1; i <= 9; i++) {
-    map[`CmdOrCtrl+${i}`] = `selectTab:${i}`;
-    map[`Ctrl+${i}`] = `selectSpace:${i}`;
-  }
-  // ⌘O in a Flechinha: Open in Flecha, as in the Electron spike (the toolbar's button says so).
-  map['CmdOrCtrl+O'] = 'openInFlecha';
+  const map = fixedShortcuts();
   for (const { id } of SHORTCUTS) {
     const keys = keysFor(state, id);
     if (keys) map[keys] = id;

@@ -1,0 +1,267 @@
+# Flecha: Dia's low-RAM policy (decompiled; flecha-perf/findings.md): on moderate memory pressure, with free memory under 200 MB, discard background tabs to free the shortfall plus 100 MB, then wait 60 s, or 600 s when nothing could be discarded. Chromium's protections apply, including an extension's autoDiscardable=false; the ten most recently used tabs, which Flecha's tab sleep keeps from its own discards, are not spared, as in Dia.
+--- a/base/memory/memory_pressure_listener.h
++++ b/base/memory/memory_pressure_listener.h
+@@ -102,6 +102,8 @@
+   kGrShaderCache = 68,
+   kMemoryPressureListenerPolicy = 69,
+   kLongScreenshotsTabService = 70,
++  // Flecha: performance_manager::policies::FlechaLowRamPolicy.
++  kFlechaLowRamPolicy = 71,
+ };
+ 
+ // base::MemoryPressureListener is deprecated. Use base::MemoryConsumer instead.
+--- a/chrome/browser/performance_manager/BUILD.gn
++++ b/chrome/browser/performance_manager/BUILD.gn
+@@ -73,6 +73,7 @@
+   if (!is_android) {
+     public += [
+       "metrics/metrics_provider_desktop.h",
++      "policies/flecha_low_ram_policy.h",
+       "policies/freezing_opt_out_checker.h",
+       "policies/memory_saver_memory_coordinator_policy.h",
+       "policies/memory_saver_mode_policy.h",
+@@ -212,6 +213,7 @@
+   if (!is_android) {
+     sources += [
+       "metrics/metrics_provider_desktop.cc",
++      "policies/flecha_low_ram_policy.cc",
+       "policies/freezing_opt_out_checker.cc",
+       "policies/memory_saver_memory_coordinator_policy.cc",
+       "policies/memory_saver_mode_policy.cc",
+--- a/chrome/browser/performance_manager/chrome_browser_main_extra_parts_performance_manager.cc
++++ b/chrome/browser/performance_manager/chrome_browser_main_extra_parts_performance_manager.cc
+@@ -85,6 +85,7 @@
+ #include "chrome/browser/performance_manager/policies/process_rank_policy_android.h"
+ #include "chrome/browser/performance_manager/policies/swap_pressure_discarding_policy_android.h"
+ #else
++#include "chrome/browser/performance_manager/policies/flecha_low_ram_policy.h"
+ #include "chrome/browser/performance_manager/policies/memory_saver_mode_policy.h"
+ #include "chrome/browser/performance_manager/policies/urgent_page_discarding_policy.h"
+ #include "chrome/browser/performance_manager/public/user_tuning/battery_saver_mode_manager.h"
+@@ -237,6 +238,11 @@
+ 
+   graph->PassToGraph(
+       std::make_unique<performance_manager::policies::MemorySaverModePolicy>());
++  if (base::FeatureList::IsEnabled(
++          performance_manager::policies::kFlechaLowRamPolicy)) {
++    graph->PassToGraph(
++        std::make_unique<performance_manager::policies::FlechaLowRamPolicy>());
++  }
+ #endif  // !BUILDFLAG(IS_ANDROID)
+ 
+ #if !BUILDFLAG(IS_ANDROID)
+--- /dev/null
++++ b/chrome/browser/performance_manager/policies/flecha_low_ram_policy.h
+@@ -0,0 +1,69 @@
++// Copyright 2026 The Flecha Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_PERFORMANCE_MANAGER_POLICIES_FLECHA_LOW_RAM_POLICY_H_
++#define CHROME_BROWSER_PERFORMANCE_MANAGER_POLICIES_FLECHA_LOW_RAM_POLICY_H_
++
++#include <optional>
++
++#include "base/byte_size.h"
++#include "base/feature_list.h"
++#include "base/memory/memory_pressure_listener.h"
++#include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
++#include "base/metrics/field_trial_params.h"
++#include "base/time/time.h"
++#include "components/performance_manager/public/graph/graph.h"
++
++namespace performance_manager::policies {
++
++// Dia's low-RAM policy, as decompiled from Dia 1.54.2's ArcCore
++// (arc/browser/performance/low_ram_policy.cc; the Flecha research notes
++// flecha-perf/findings.md, "Low-RAM policy"): on moderate memory pressure,
++// when free system memory is under a threshold, discard background tabs to
++// free the shortfall plus some more, then wait a short cooldown, or a long one
++// when nothing could be discarded. Its values are Dia's defaults for its
++// low-ram-policy-* flags.
++BASE_DECLARE_FEATURE(kFlechaLowRamPolicy);
++extern const base::FeatureParam<int> kFlechaLowRamThresholdMb;
++extern const base::FeatureParam<int> kFlechaLowRamExtraMb;
++extern const base::FeatureParam<base::TimeDelta> kFlechaLowRamShortCooldown;
++extern const base::FeatureParam<base::TimeDelta> kFlechaLowRamLongCooldown;
++
++class FlechaLowRamPolicy : public GraphOwnedDefaultImpl,
++                           public base::MemoryPressureListener {
++ public:
++  FlechaLowRamPolicy();
++  FlechaLowRamPolicy(const FlechaLowRamPolicy&) = delete;
++  FlechaLowRamPolicy& operator=(const FlechaLowRamPolicy&) = delete;
++  ~FlechaLowRamPolicy() override;
++
++  // GraphOwned:
++  void OnPassedToGraph(Graph* graph) override;
++  void OnTakenFromGraph(Graph* graph) override;
++
++ private:
++  // base::MemoryPressureListener:
++  void OnMemoryPressure(base::MemoryPressureLevel level) override;
++
++  // With the free memory read off the main thread: discards if it is short.
++  void OnAvailableMemory(base::ByteSize available);
++
++  // Discards background pages, oldest shown first, until their estimated
++  // memory reaches `target`. Returns whether any page was discarded.
++  bool DiscardToFree(base::ByteSize target);
++
++  raw_ptr<Graph> graph_ = nullptr;
++  std::optional<base::MemoryPressureListenerRegistration> registration_;
++  // No pressure response before this time (the cooldowns).
++  base::TimeTicks next_allowed_;
++  // A free memory reading is on its way.
++  bool reading_ = false;
++
++  base::WeakPtrFactory<FlechaLowRamPolicy> weak_factory_{this};
++};
++
++}  // namespace performance_manager::policies
++
++#endif  // CHROME_BROWSER_PERFORMANCE_MANAGER_POLICIES_FLECHA_LOW_RAM_POLICY_H_
+--- /dev/null
++++ b/chrome/browser/performance_manager/policies/flecha_low_ram_policy.cc
+@@ -0,0 +1,140 @@
++// Copyright 2026 The Flecha Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/performance_manager/policies/flecha_low_ram_policy.h"
++
++#include <algorithm>
++#include <utility>
++#include <vector>
++
++#include "base/functional/bind.h"
++#include "base/system/sys_info.h"
++#include "base/task/thread_pool.h"
++#include "chrome/browser/performance_manager/policies/discard_eligibility_policy.h"
++#include "chrome/browser/performance_manager/policies/page_discarding_helper.h"
++#include "components/performance_manager/public/graph/page_node.h"
++#include "content/public/browser/browser_context.h"
++#include "content/public/browser/web_contents.h"
++
++namespace performance_manager::policies {
++
++BASE_FEATURE(kFlechaLowRamPolicy, base::FEATURE_ENABLED_BY_DEFAULT);
++
++// Dia's defaults: low-ram-policy-threshold-mb, -extra-ram-to-free-over-
++// threshold-mb, -short-cooldown-seconds and -long-cooldown-seconds.
++const base::FeatureParam<int> kFlechaLowRamThresholdMb = {&kFlechaLowRamPolicy,
++                                                          "threshold_mb", 200};
++const base::FeatureParam<int> kFlechaLowRamExtraMb = {&kFlechaLowRamPolicy,
++                                                      "extra_mb", 100};
++const base::FeatureParam<base::TimeDelta> kFlechaLowRamShortCooldown = {
++    &kFlechaLowRamPolicy, "short_cooldown", base::Seconds(60)};
++const base::FeatureParam<base::TimeDelta> kFlechaLowRamLongCooldown = {
++    &kFlechaLowRamPolicy, "long_cooldown", base::Seconds(600)};
++
++namespace {
++
++// What PageDiscardingHelper assumes for a page whose footprint hasn't been
++// measured yet (page_discarding_helper.cc, DiscardMultiplePagesImpl).
++constexpr base::ByteSize kUnmeasuredPageFootprint = base::MiB(80);
++
++// A feature param's megabytes; a negative one counts as none.
++base::ByteSize Megabytes(int megabytes) {
++  return base::MiB(static_cast<uint64_t>(std::max(megabytes, 0)));
++}
++
++}  // namespace
++
++FlechaLowRamPolicy::FlechaLowRamPolicy() = default;
++FlechaLowRamPolicy::~FlechaLowRamPolicy() = default;
++
++void FlechaLowRamPolicy::OnPassedToGraph(Graph* graph) {
++  graph_ = graph;
++  registration_.emplace(base::MemoryPressureListenerTag::kFlechaLowRamPolicy,
++                        this);
++}
++
++void FlechaLowRamPolicy::OnTakenFromGraph(Graph* graph) {
++  registration_.reset();
++  weak_factory_.InvalidateWeakPtrs();
++  graph_ = nullptr;
++}
++
++void FlechaLowRamPolicy::OnMemoryPressure(base::MemoryPressureLevel level) {
++  // Dia acts on moderate pressure only, outside its cooldown.
++  if (level != base::MEMORY_PRESSURE_LEVEL_MODERATE || reading_ ||
++      base::TimeTicks::Now() < next_allowed_) {
++    return;
++  }
++  reading_ = true;
++  // Reading free memory can block (on Linux it reads /proc/meminfo).
++  base::ThreadPool::PostTaskAndReplyWithResult(
++      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
++      base::BindOnce(
++          [] { return base::SysInfo::AmountOfAvailablePhysicalMemory(); }),
++      base::BindOnce(&FlechaLowRamPolicy::OnAvailableMemory,
++                     weak_factory_.GetWeakPtr()));
++}
++
++void FlechaLowRamPolicy::OnAvailableMemory(base::ByteSize available) {
++  reading_ = false;
++  const base::ByteSize threshold = Megabytes(kFlechaLowRamThresholdMb.Get());
++  if (available >= threshold) {
++    return;
++  }
++  const bool discarded = DiscardToFree(threshold - available +
++                                       Megabytes(kFlechaLowRamExtraMb.Get()));
++  next_allowed_ =
++      base::TimeTicks::Now() + (discarded ? kFlechaLowRamShortCooldown.Get()
++                                          : kFlechaLowRamLongCooldown.Get());
++}
++
++bool FlechaLowRamPolicy::DiscardToFree(base::ByteSize target) {
++  if (!graph_) {
++    return false;
++  }
++  auto* eligibility = DiscardEligibilityPolicy::GetFromGraph(graph_);
++  auto* helper = graph_->GetRegisteredObjectAs<PageDiscardingHelper>();
++  if (!eligibility || !helper) {
++    return false;
++  }
++  // Dia discards what Chromium's own proactive discards may (its call is
++  // DiscardMultiplePages(target, /*discard_protected_tabs=*/false,
++  // PROACTIVE)). The ten most recently used tabs that Dia's tab policy keeps
++  // from its time rule are kept by Flecha's shell alone, so they aren't
++  // spared here either, as in Dia; a tab an extension made not
++  // auto-discardable is.
++  std::vector<const PageNode*> candidates;
++  for (const PageNode* page : graph_->GetAllPageNodes()) {
++    // Incognito is left alone, as by the shell's tab sleep.
++    const base::WeakPtr<content::WebContents> contents = page->GetWebContents();
++    if (!contents || contents->GetBrowserContext()->IsOffTheRecord()) {
++      continue;
++    }
++    if (eligibility->CanDiscard(
++            page, DiscardEligibilityPolicy::DiscardReason::PROACTIVE,
++            /*ignore_recent_visibility=*/false) ==
++        CanDiscardResult::kEligible) {
++      candidates.push_back(page);
++    }
++  }
++  // The longest in the background first.
++  std::ranges::sort(candidates, {}, &PageNode::GetLastVisibilityChangeTime);
++  std::vector<const PageNode*> chosen;
++  base::ByteSize freed;
++  for (const PageNode* page : candidates) {
++    if (freed >= target) {
++      break;
++    }
++    const base::ByteSize footprint = page->EstimatePrivateFootprintSize();
++    freed += footprint.is_zero() ? kUnmeasuredPageFootprint : footprint;
++    chosen.push_back(page);
++  }
++  return !chosen.empty() &&
++         helper->ImmediatelyDiscardMultiplePages(
++             chosen, DiscardEligibilityPolicy::DiscardReason::PROACTIVE,
++             /*ignore_recent_visibility=*/false,
++             /*eligibility_policy=*/nullptr);
++}
++
++}  // namespace performance_manager::policies

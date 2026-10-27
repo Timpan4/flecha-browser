@@ -55,10 +55,6 @@
   width: 100%;
 }
 
-[data-surface='panel'] .palette-footer {
-  display: none;
-}
-
 /* With the browser's frame, the tour runs over the whole window there, not on new tab pages. */
 [data-frame][data-surface='newtab'] #onboarding {
   display: none !important;
@@ -103,10 +99,18 @@
   outline: none;
 }
 
+/* The arrow is drawn only; aria-haspopup tells a screen reader there's a submenu. */
 .shell-menu-item.has-submenu::after {
-  content: '›';
+  content: '›' / '';
   float: right;
   margin-left: 16px;
+  opacity: 0.6;
+}
+
+/* An item's shortcut, on its right, as native menus show it. */
+.shell-menu-accel {
+  float: right;
+  margin-left: 24px;
   opacity: 0.6;
 }
 

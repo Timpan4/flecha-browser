@@ -1,0 +1,120 @@
+# Flecha: chrome.flechaPrivate.discardTab discards a tab with Memory Saver's own call (PROACTIVE), so the browser's protections apply, which an extension's chrome.tabs.discard (EXTERNAL) skips; getLiveTicks is a clock that stops while the device is suspended, for tab sleep's active-use time.
+--- a/chrome/common/extensions/api/flecha_private.idl
++++ b/chrome/common/extensions/api/flecha_private.idl
+@@ -128,6 +128,8 @@
+   };
+   callback DownloadSettingsCallback = void(DownloadSettings settings);
+   callback QuittingCallback = void(boolean quitting);
++  callback DiscardedCallback = void(boolean discarded);
++  callback LiveTicksCallback = void(double milliseconds);
+ 
+   // What a new Flechinha shows.
+   dictionary FlechinhaOptions {
+@@ -306,6 +308,16 @@
+         long tabId,
+         boolean canFreeze,
+         optional DoneCallback callback);
++
++    // Discards a background tab the way Memory Saver does: only if none of
++    // the browser's protections apply (visible, audible, capturing, form
++    // input, PDF, notifications, DevTools, not auto-discardable, ...).
++    // Calls back with whether it was discarded.
++    static void discardTab(long tabId, DiscardedCallback callback);
++
++    // Time since an arbitrary start that doesn't advance while the device is
++    // suspended (base::LiveTicks), in milliseconds.
++    static void getLiveTicks(LiveTicksCallback callback);
+   };
+ 
+   interface Events {
+--- a/chrome/browser/extensions/api/flecha_private/flecha_private_api.h
++++ b/chrome/browser/extensions/api/flecha_private/flecha_private_api.h
+@@ -327,6 +327,24 @@
+   ResponseAction Run() override;
+ };
+ 
++class FlechaPrivateDiscardTabFunction : public ExtensionFunction {
++ public:
++  DECLARE_EXTENSION_FUNCTION("flechaPrivate.discardTab", UNKNOWN)
++
++ protected:
++  ~FlechaPrivateDiscardTabFunction() override = default;
++  ResponseAction Run() override;
++};
++
++class FlechaPrivateGetLiveTicksFunction : public ExtensionFunction {
++ public:
++  DECLARE_EXTENSION_FUNCTION("flechaPrivate.getLiveTicks", UNKNOWN)
++
++ protected:
++  ~FlechaPrivateGetLiveTicksFunction() override = default;
++  ResponseAction Run() override;
++};
++
+ }  // namespace extensions
+ 
+ #endif  // CHROME_BROWSER_EXTENSIONS_API_FLECHA_PRIVATE_FLECHA_PRIVATE_API_H_
+--- a/chrome/browser/extensions/api/flecha_private/flecha_private_api.cc
++++ b/chrome/browser/extensions/api/flecha_private/flecha_private_api.cc
+@@ -16,7 +16,13 @@
+ #include "chrome/browser/lifetime/browser_shutdown.h"
+ #include "chrome/common/pref_names.h"
+ #include "components/download/public/common/download_item.h"
++#include "base/time/time.h"
++#include "chrome/browser/performance_manager/policies/discard_eligibility_policy.h"
++#include "chrome/browser/performance_manager/policies/page_discarding_helper.h"
+ #include "components/performance_manager/public/freezing/freezing.h"
++#include "components/performance_manager/public/graph/graph.h"
++#include "components/performance_manager/public/graph/page_node.h"
++#include "components/performance_manager/public/performance_manager.h"
+ #include "components/prefs/pref_service.h"
+ #include "content/public/browser/download_manager.h"
+ #include "ui/shell_dialogs/select_file_dialog.h"
+@@ -958,4 +964,37 @@
+   return RespondNow(NoArguments());
+ }
+ 
++ExtensionFunction::ResponseAction FlechaPrivateDiscardTabFunction::Run() {
++  auto params = flecha_private::DiscardTab::Params::Create(args());
++  EXTENSION_FUNCTION_VALIDATE(params);
++  content::WebContents* contents = nullptr;
++  if (!ExtensionTabUtil::GetTabById(params->tab_id, browser_context(),
++                                    /*include_incognito=*/false, &contents)) {
++    return RespondNow(Error(kNoTabError, base::NumberToString(params->tab_id)));
++  }
++  base::WeakPtr<performance_manager::PageNode> page =
++      performance_manager::PerformanceManager::GetPrimaryPageNodeForWebContents(
++          contents);
++  auto* helper =
++      page && performance_manager::PerformanceManager::IsAvailable()
++          ? performance_manager::PerformanceManager::GetGraph()
++                ->GetRegisteredObjectAs<
++                    performance_manager::policies::PageDiscardingHelper>()
++          : nullptr;
++  // MemorySaverModePolicy's own call when its timer fires: a PROACTIVE
++  // discard, which the DiscardEligibilityPolicy protections apply to. (An
++  // extension's chrome.tabs.discard is EXTERNAL, which skips them all.)
++  const bool discarded =
++      helper &&
++      helper->ImmediatelyDiscardMultiplePages(
++          {page.get()}, performance_manager::policies::
++                            DiscardEligibilityPolicy::DiscardReason::PROACTIVE);
++  return RespondNow(WithArguments(discarded));
++}
++
++ExtensionFunction::ResponseAction FlechaPrivateGetLiveTicksFunction::Run() {
++  return RespondNow(WithArguments(
++      (base::LiveTicks::Now() - base::LiveTicks()).InMillisecondsF()));
++}
++
+ }  // namespace extensions
+--- a/chrome/browser/extensions/api/flecha_private/BUILD.gn
++++ b/chrome/browser/extensions/api/flecha_private/BUILD.gn
+@@ -14,6 +14,7 @@
+     "//base",
+     "//chrome/browser/download",
+     "//chrome/browser/flecha:flecha_frame_host",
++    "//chrome/browser/performance_manager",
+     "//chrome/browser/profiles:profile",
+     "//chrome/browser/themes",
+     "//chrome/common/extensions/api",

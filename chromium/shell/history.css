@@ -1,0 +1,144 @@
+/* The History page. Values come from tokens.css. */
+
+html {
+  background: var(--surface-2);
+}
+
+body {
+  margin: 0;
+  font: var(--text-md) / 1.45 var(--font);
+  color: var(--text);
+}
+
+header {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 24px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--surface-line);
+}
+
+h1 {
+  margin: 0;
+  font-size: 18px;
+}
+
+#search {
+  flex: 1;
+  min-width: 160px;
+}
+
+#clear {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-2);
+}
+
+input,
+select,
+.button {
+  font: inherit;
+  color: inherit;
+  padding: 4px 8px;
+  border: 1px solid var(--surface-line);
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+.button {
+  cursor: pointer;
+}
+
+.button.danger {
+  color: var(--red);
+}
+
+main {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 8px 24px 32px;
+}
+
+h2 {
+  margin: 20px 0 6px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+li {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+}
+
+li:hover {
+  background: var(--fill-hover);
+}
+
+time,
+.host,
+.hint {
+  color: var(--text-2);
+  font-size: var(--text-sm);
+}
+
+a {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: inherit;
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+a img {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+
+.remove {
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-3);
+  font-size: 16px;
+  opacity: 0;
+  cursor: pointer;
+}
+
+li:hover .remove,
+.remove:focus-visible {
+  opacity: 1;
+}
+
+.remove:hover {
+  background: var(--fill-hover);
+  color: var(--text);
+}
+
+#more:not([hidden]) {
+  display: block;
+  margin: 16px auto 0;
+}

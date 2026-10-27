@@ -1,0 +1,112 @@
+# Flecha: chrome.flechaPrivate.setTabFreezing(tabId, canFreeze) holds or drops a performance_manager FreezingVote for a tab, so the shell can freeze background tabs (another Space's, say) without discarding them. Chromium still refuses to freeze a page that plays audio, captures, uses WebRTC and so on.
+--- a/chrome/common/extensions/api/flecha_private.idl
++++ b/chrome/common/extensions/api/flecha_private.idl
+@@ -295,6 +295,17 @@
+     // `windowId`, of a window that has closed: whether quitting closed it,
+     // false if you closed it before the quit began.
+     static void isQuitting(optional long windowId, QuittingCallback callback);
++
++    // Votes for the browser to freeze a tab (<code>canFreeze</code>), or
++    // takes the vote back. A frozen page keeps its memory and state but runs
++    // no tasks until it is shown or the vote is taken back. The browser
++    // freezes it only while nothing keeps it running (audio, capture, WebRTC
++    // and the other performance_manager CannotFreezeReasons). The vote ends
++    // with the tab.
++    static void setTabFreezing(
++        long tabId,
++        boolean canFreeze,
++        optional DoneCallback callback);
+   };
+ 
+   interface Events {
+--- a/chrome/browser/extensions/api/flecha_private/flecha_private_api.h
++++ b/chrome/browser/extensions/api/flecha_private/flecha_private_api.h
+@@ -318,6 +318,15 @@
+   ResponseAction Run() override;
+ };
+ 
++class FlechaPrivateSetTabFreezingFunction : public ExtensionFunction {
++ public:
++  DECLARE_EXTENSION_FUNCTION("flechaPrivate.setTabFreezing", UNKNOWN)
++
++ protected:
++  ~FlechaPrivateSetTabFreezingFunction() override = default;
++  ResponseAction Run() override;
++};
++
+ }  // namespace extensions
+ 
+ #endif  // CHROME_BROWSER_EXTENSIONS_API_FLECHA_PRIVATE_FLECHA_PRIVATE_API_H_
+--- a/chrome/browser/extensions/api/flecha_private/flecha_private_api.cc
++++ b/chrome/browser/extensions/api/flecha_private/flecha_private_api.cc
+@@ -16,6 +16,7 @@
+ #include "chrome/browser/lifetime/browser_shutdown.h"
+ #include "chrome/common/pref_names.h"
+ #include "components/download/public/common/download_item.h"
++#include "components/performance_manager/public/freezing/freezing.h"
+ #include "components/prefs/pref_service.h"
+ #include "content/public/browser/download_manager.h"
+ #include "ui/shell_dialogs/select_file_dialog.h"
+@@ -51,6 +52,7 @@
+ #include "components/tabs/public/tab_interface.h"
+ #include "chrome/common/extensions/api/flecha_private.h"
+ #include "content/public/browser/web_contents.h"
++#include "content/public/browser/web_contents_user_data.h"
+ #include "extensions/browser/extensions_browser_client.h"
+ 
+ namespace extensions {
+@@ -916,4 +918,44 @@
+   return RespondNow(WithArguments(browser_shutdown::IsTryingToQuit()));
+ }
+ 
++namespace {
++
++// Flecha: the shell's vote to freeze a tab (setTabFreezing()). It lives as
++// long as the tab or until the shell takes it back.
++class FlechaFreezingVote
++    : public content::WebContentsUserData<FlechaFreezingVote> {
++ public:
++  ~FlechaFreezingVote() override = default;
++
++ private:
++  friend class content::WebContentsUserData<FlechaFreezingVote>;
++  explicit FlechaFreezingVote(content::WebContents* contents)
++      : content::WebContentsUserData<FlechaFreezingVote>(*contents),
++        vote_(contents) {}
++
++  performance_manager::freezing::FreezingVote vote_;
++
++  WEB_CONTENTS_USER_DATA_KEY_DECL();
++};
++
++WEB_CONTENTS_USER_DATA_KEY_IMPL(FlechaFreezingVote);
++
++}  // namespace
++
++ExtensionFunction::ResponseAction FlechaPrivateSetTabFreezingFunction::Run() {
++  auto params = flecha_private::SetTabFreezing::Params::Create(args());
++  EXTENSION_FUNCTION_VALIDATE(params);
++  content::WebContents* contents = nullptr;
++  if (!ExtensionTabUtil::GetTabById(params->tab_id, browser_context(),
++                                    /*include_incognito=*/false, &contents)) {
++    return RespondNow(Error(kNoTabError, base::NumberToString(params->tab_id)));
++  }
++  if (params->can_freeze) {
++    FlechaFreezingVote::CreateForWebContents(contents);
++  } else {
++    contents->RemoveUserData(FlechaFreezingVote::UserDataKey());
++  }
++  return RespondNow(NoArguments());
++}
++
+ }  // namespace extensions
+--- a/chrome/browser/extensions/api/flecha_private/BUILD.gn
++++ b/chrome/browser/extensions/api/flecha_private/BUILD.gn
+@@ -19,6 +19,7 @@
+     "//chrome/common/extensions/api",
+     "//content/public/browser",
+     "//components/download/public/common:public",
++    "//components/performance_manager",
+     "//extensions/browser",
+     "//ui/shell_dialogs",
+   ]

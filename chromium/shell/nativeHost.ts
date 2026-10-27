@@ -10,7 +10,7 @@
  * Install the host with chromium/scripts/install-native-host.sh.
  */
 import type { DetectedBrowser, HistoryEntry, ImportResult, UiState } from '../shared/types';
-import type { Store } from '../shared/store';
+import { pinnedTabIds, type Store } from '../shared/store';
 import type { AgentResult, AgentTab, AgentToolName } from '../shared/agentTools';
 import { applyBrowserImport } from '../shared/importApply';
 import { HOST_NAME, type HostMethods, type ToHost, type ToShell } from '../native-host/protocol';
@@ -31,7 +31,7 @@ export interface NativeHostContext {
 }
 
 const NOT_INSTALLED =
-  'Flecha’s helper isn’t installed, so other browsers can’t be read. Run chromium/scripts/install-native-host.sh, then try again.';
+  'Flecha’s import helper is unavailable. Repair or reinstall Flecha, then try again.';
 const IDLE_CLOSE = 60_000;
 
 export function registerNativeHost(ctx: NativeHostContext) {
@@ -147,8 +147,8 @@ export function registerNativeHost(ctx: NativeHostContext) {
       try {
         return await call('detectBrowsers');
       } catch (err) {
-        console.warn('Flecha shell: no browsers to import from:', err);
-        return [];
+        console.warn('Flecha shell: browser discovery failed:', err);
+        throw new Error('Browser import is unavailable because Flecha could not connect to its import helper.');
       }
     },
     importBrowser: async (id: string): Promise<ImportResult> => {
@@ -199,7 +199,7 @@ export function registerNativeHost(ctx: NativeHostContext) {
   }
 
   function listTabs(): AgentTab[] {
-    const visible = new Set(store.visibleTabIds());
+    const visible = new Set(store.state.windows.flatMap((w) => store.visibleTabIds(w.id)));
     const tabs: AgentTab[] = [];
     const add = (id: string, space: string, zone: AgentTab['zone']) => {
       const tab = store.state.tabs[id];
@@ -207,9 +207,9 @@ export function registerNativeHost(ctx: NativeHostContext) {
     };
     for (const id of store.state.favorites) add(id, '', 'favorites');
     for (const space of store.state.spaces) {
-      for (const id of store.allTabIds(space)) {
-        if (!store.state.favorites.includes(id)) add(id, space.name, space.today.includes(id) ? 'today' : 'pinned');
-      }
+      for (const id of pinnedTabIds(space.pinned)) add(id, space.name, 'pinned');
+      // Today tabs of every window.
+      for (const win of store.state.windows) for (const id of win.spaces[space.id]?.today ?? []) add(id, space.name, 'today');
     }
     return tabs;
   }

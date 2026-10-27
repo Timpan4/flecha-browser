@@ -2,3 +2,4 @@
 import './noPageMenu';
 import './flechaApi';
 import './ui/app';
+import './extensionActions';

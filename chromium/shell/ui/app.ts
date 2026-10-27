@@ -2,6 +2,14 @@ import { devSuggestions } from './devCommands.js';
 import { ICONS, type IconName } from './icons.js';
 import { setupOnboarding } from './onboarding.js';
 import { SPACE_COLORS, SPACE_EMOJIS } from './spaceChoices.js';
+import { displayKeys } from '../lib/shortcuts';
+import { isMac } from '../lib/platform';
+import { EMPTY_ACTIONS, EMPTY_TABS, type Match, type ResultKind, displayUrl, historyQuery, inlineCompletion, matchQuality, rank, score } from '../lib/commandBar';
+import { suggestable, suggestionRequests } from '../lib/suggest';
+import { searchUrl } from '../lib/url';
+import type { MenuEntry } from '../settingsUi';
+import { importFromBrowser, showPageMenu } from '../windowUi';
+import { SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH } from '../../shared/sidebarWidth';
 import type { DownloadInfo, DropTarget, FlechaApi, HistoryEntry, PaletteMode, PeekState, PinnedNode, Space, TabInfo, UiState } from '../../shared/types';
 
 declare global {
@@ -99,6 +107,7 @@ function render(s: UiState) {
 
   document.body.dataset.sidebar = s.sidebarMode;
   if (s.sidebarMode !== 'floating') $('sidebar').classList.remove('peek-leaving');
+  $('sidebar-resize').setAttribute('aria-valuenow', String(s.sidebarWidth ?? SIDEBAR_DEFAULT_WIDTH));
   // Shortcuts can be changed in Settings; key caps and tooltips show the current ones.
   for (const el of document.querySelectorAll<HTMLElement>('[data-shortcut]')) {
     const keys = s.shortcuts[el.dataset.shortcut!] ?? '';
@@ -161,7 +170,8 @@ function render(s: UiState) {
     ),
   );
 
-  if (!palette.hidden) updatePalette();
+  // Tabs opening, closing or renaming in the background keep the selected result selected.
+  if (!palette.hidden) refreshPalette();
   if (!spaceEditor.hidden) renderSpaceEditor();
   if (!sitePanel.hidden) renderSitePanel();
 }
@@ -231,7 +241,7 @@ function renderUrlbar(s: UiState, active: TabInfo | undefined) {
   $('urlbar-text').textContent = url ? host(url) : 'Search or enter URL';
   $('urlbar').classList.toggle('empty', !url);
   $('urlbar-env').replaceChildren(
-    ...(s.environment ? [h('span', { class: `env-badge ${s.environment.tone}`, title: `${s.environment.name} · ⌥⌘E to switch` }, s.environment.label)] : []),
+    ...(s.environment ? [h('span', { class: `env-badge ${s.environment.tone}`, title: `${s.environment.name} · ${state?.shortcuts.nextEnvironment ?? displayKeys('Alt+CmdOrCtrl+E')} to switch` }, s.environment.label)] : []),
   );
 }
 
@@ -409,7 +419,8 @@ function isBoosted(url: string) {
 function isDevUrl(url: string) {
   try {
     const { hostname } = new URL(url);
-    return /^(localhost|127\.0\.0\.1|\[::1\])$|\.(localhost|local|test)$/.test(hostname);
+    // The hosts manifest.json's console scripts run on: *.local and *.test include bare local and test.
+    return /^(localhost|local|test|127\.0\.0\.1|\[::1\])$|\.(localhost|local|test)$/.test(hostname);
   } catch {
     return false;
   }
@@ -425,6 +436,22 @@ function renameTab(tabId: string) {
   const tab = state?.tabs[tabId];
   if (!row || !tab) return;
   editInline(row, tabTitle(tab), (title) => api.renameTab(tabId, title));
+}
+
+/** Inline edit of the URL a pinned tab or favorite goes back to, started from the tab's context menu. */
+function editHomeUrl(tabId: string) {
+  const tab = state?.tabs[tabId];
+  if (!tab?.homeUrl) return;
+  const commit = (input: string) => api.setHomeUrl(tabId, input);
+  const title = document.querySelector<HTMLElement>(`#pinned .row[data-tab-id="${CSS.escape(tabId)}"] .title`);
+  // The title comes back whether or not the URL was taken (a bad or blank one only shows a message).
+  if (title) return editInline(title, tab.homeUrl, commit, { commitBlank: true, done: () => state && render(state) });
+  // A favorite is just an icon, so its URL gets a field of its own under the favorites.
+  if (!state?.favorites.includes(tabId)) return;
+  document.querySelector('.url-edit')?.remove();
+  const field = h('div', { class: 'url-edit', role: 'textbox', 'aria-label': `URL of ${tabTitle(tab)}` });
+  $('favorites').after(field);
+  editInline(field, tab.homeUrl, commit, { commitBlank: true, done: () => field.remove() });
 }
 
 function wireTab(el: HTMLElement, tab: TabInfo, target: DropTarget) {
@@ -467,7 +494,11 @@ function acceptDrops(el: HTMLElement, target: DropTarget, hoverClass = 'drag-ove
   });
 }
 
-function editInline(el: HTMLElement, current: string, commit: (value: string) => void) {
+/**
+ * Without `done`, the next state draws what was saved, and a cancel redraws now. A blank value is
+ * dropped unless `commitBlank`, for an edit whose commit says what's wrong with it.
+ */
+function editInline(el: HTMLElement, current: string, commit: (value: string) => void, { done, commitBlank = false }: { done?: () => void; commitBlank?: boolean } = {}) {
   el.contentEditable = 'true';
   el.textContent = current;
   el.focus();
@@ -477,8 +508,10 @@ function editInline(el: HTMLElement, current: string, commit: (value: string) =>
     el.removeEventListener('blur', onBlur);
     el.contentEditable = 'false';
     const value = el.textContent?.trim() ?? '';
-    if (save && value && value !== current) commit(value);
-    else if (state) render(state);
+    const changed = save && (!!value || commitBlank) && value !== current;
+    if (changed) commit(value);
+    if (done) done();
+    else if (!changed && state) render(state);
   };
   const onKey = (e: KeyboardEvent) => {
     if (e.key === 'Enter') e.preventDefault(), finish(true);
@@ -691,17 +724,27 @@ document.addEventListener('keydown', (e) => e.key === 'Escape' && !spaceEditor.h
 
 // ---- command bar ----------------------------------------------------------------
 
+// One ranked list, the way Arc's Command Bar shows its results (lib/commandBar.ts says how it ranks).
+
 interface PaletteItem {
-  group: PaletteGroup;
+  kind: ResultKind;
   /** An icon name, a tab (its favicon) or a URL (that site's icon). */
   icon: IconName | TabInfo | string;
   label: string;
-  sub: string;
+  /** After the label, muted: the page's address ("1password.com"), or what a developer command does. */
+  sub?: string;
   /** A keyboard shortcut for the same command, shown on the right. */
   hint?: string;
+  /** On the right with an arrow: "Switch to Tab" on an open tab. */
+  go?: string;
+  /** What a screen reader says for the row. */
+  speak: string;
   run: () => void;
   /** Shown under the results while this item is selected, e.g. a decoded JWT. */
   detail?: string;
+  score: number;
+  recency?: number;
+  url?: string;
 }
 
 const palette = $('palette');
@@ -710,55 +753,118 @@ const paletteList = $('palette-results');
 let paletteMode: PaletteMode = 'new-tab';
 let paletteItems: PaletteItem[] = [];
 let selected = 0;
+/** Arrow keys or the mouse moved the selection since the last keystroke. */
+let selectionMoved = false;
+/** Tab in an empty bar: the list is Flecha's actions only, as in Arc. */
+let actionMode = false;
+/** What was typed; the field may show more, the inline completion after it. */
+let typed = '';
+let completion: ReturnType<typeof inlineCompletion>;
+/** The last keystroke added text at the end, so the address may be completed. */
+let mayComplete = false;
 
 function looksLikeUrl(q: string) {
   return /^[a-z][a-z0-9+.-]*:\/\//i.test(q) || (!/\s/.test(q) && /\.[a-z]{2,}(:\d+)?(\/|$)/i.test(q)) || /^localhost(:\d+)?/.test(q);
 }
 
 function openPalette(mode: PaletteMode) {
+  // As in Arc, the same shortcut again closes the bar.
+  if (!palette.hidden && paletteMode === mode) return closePalette();
   paletteMode = mode;
   palette.hidden = false;
+  showWhenFrameGrown();
+  actionMode = false;
   const space = state?.spaces.find((s) => s.id === state!.activeSpaceId);
   const active = space?.activeTabId ? state?.tabs[space.activeTabId] : undefined;
-  paletteInput.value = mode === 'navigate' && active ? active.url : '';
+  paletteInput.value = typed = mode === 'navigate' && active ? active.url : '';
+  completion = undefined;
   paletteInput.focus();
   paletteInput.select();
   selected = 0;
+  selectionMoved = false;
   historyResults = [];
   updatePalette();
   refreshHistory();
+  refreshSuggestions();
 }
 
 function closePalette() {
   if (palette.hidden) return;
-  palette.hidden = true;
+  hidePalette();
   api.closePalette();
 }
 
-type PaletteGroup = '' | 'Developer' | 'Actions' | 'Tabs' | 'History' | 'Archive';
+/**
+ * In a window's frame page the bar opens as the frame grows from the sidebar to the whole window,
+ * and the growth can land after the bar is laid out: one frame on a busy machine, a whole typed
+ * query in a loaded test run (2026-10-26). Until then the bar stays transparent, so it appears
+ * once, at the window's centre, with its opening animation. Grown: wider than the widest frame
+ * before it grows, the floating sidebar's, or as wide as the window. Only frame pages wait.
+ */
+let revealWhenGrown: (() => void) | undefined;
+/** The floating sidebar's frame is wider than the sidebar by kFlechaFloatMargin + kFlechaFloatShadow (patch 0010). */
+const FLOATING_FRAME_EXTRA = 10 + 28;
+function showWhenFrameGrown() {
+  stopWaitingForFrame();
+  const sidebar = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sidebar'));
+  const grown = () =>
+    !('frame' in document.documentElement.dataset) || innerWidth > sidebar + FLOATING_FRAME_EXTRA || innerWidth >= outerWidth;
+  if (grown()) return;
+  palette.classList.add('opening');
+  revealWhenGrown = () => grown() && stopWaitingForFrame();
+  addEventListener('resize', revealWhenGrown);
+}
+function stopWaitingForFrame() {
+  if (revealWhenGrown) removeEventListener('resize', revealWhenGrown);
+  revealWhenGrown = undefined;
+  palette.classList.remove('opening');
+}
 
-/** Commands the bar can run, found by typing any word of their label or keywords. */
-const ACTIONS: Array<{ label: string; keywords: string; icon: IconName; shortcut?: string; run: () => void }> = [
-  { label: 'New Space', keywords: 'space create add', icon: 'space', shortcut: 'newSpace', run: () => api.newSpace() },
+/** Hides the bar here; main already knows when it closed the bar itself (a tab switch, say). */
+function hidePalette() {
+  stopWaitingForFrame();
+  palette.hidden = true;
+  actionMode = false;
+  requestSuggestions(undefined);
+  // The next opening asks again: an answer kept from this one could be shown in its place.
+  suggestions = undefined;
+}
+
+/**
+ * Commands the bar can run, found by typing any word of their label or keywords. `emptyBar`
+ * ones fill an empty bar after the recent tabs, as Arc's shows two actions there.
+ */
+const ACTIONS: Array<{ label: string; keywords: string; icon: IconName; shortcut?: string; emptyBar?: true; run: () => void }> = [
+  { label: 'New Space', keywords: 'space create add', icon: 'space', shortcut: 'newSpace', emptyBar: true, run: () => api.newSpace() },
   { label: 'Edit Space', keywords: 'space rename emoji colour color icon', icon: 'space', run: () => state && openSpaceEditor(state.activeSpaceId) },
-  { label: 'New Flechinha Window', keywords: 'flechinha little mini small window quick lookup', icon: 'miniWindow', shortcut: 'newFlechinha', run: () => api.newFlechinha() },
+  {
+    label: 'New Flechinha Window',
+    keywords: 'flechinha little mini small window quick lookup',
+    icon: 'miniWindow',
+    shortcut: 'newFlechinha',
+    emptyBar: true,
+    run: () => api.newFlechinha(),
+  },
   { label: 'Settings', keywords: 'preferences settings config options', icon: 'settings', shortcut: 'settings', run: () => api.openSettings() },
   { label: 'Responsive View', keywords: 'mobile phone responsive device split', icon: 'phone', shortcut: 'responsive', run: () => api.toggleResponsive() },
   { label: 'Toggle Sidebar', keywords: 'sidebar hide show', icon: 'sidebar', shortcut: 'toggleSidebar', run: () => api.toggleSidebar() },
   { label: 'Clear Today Tabs', keywords: 'clear archive today close', icon: 'archive', shortcut: 'clearToday', run: () => api.clearToday() },
   { label: 'Show Downloads', keywords: 'downloads files', icon: 'download', run: () => (downloadsPanel.hidden = false) },
+  { label: 'Show History', keywords: 'history visited pages clear', icon: 'history', shortcut: 'history', run: () => api.openHistory() },
   {
     label: 'Import from another browser',
     keywords: 'import migrate bookmarks history arc chrome safari firefox brave edge vivaldi opera',
     icon: 'import',
-    run: () => api.importMenu(),
+    run: () => void importFromBrowser(),
   },
+  { label: 'Import from Flecha (Electron)', keywords: 'import migrate electron flecha state', icon: 'import', run: () => api.importMenu() },
   { label: 'Open Boosts Folder', keywords: 'boosts folder scripts css', icon: 'zap', run: () => api.openBoostsFolder() },
 ];
 
-function matchingActions(q: string) {
+/** Among all results, one letter matches too much to offer actions; on their own (after Tab), it doesn't. */
+function matchingActions(q: string, minLength = 2) {
   const words = q.toLowerCase().split(/\s+/).filter(Boolean);
-  if (!words.length || q.length < 2) return [];
+  if (!words.length || q.length < minLength) return [];
   return ACTIONS.filter((a) => {
     const haystack = `${a.label} ${a.keywords}`.toLowerCase().split(/\s+/);
     return words.every((w) => haystack.some((h) => h.startsWith(w)));
@@ -772,164 +878,296 @@ function itemIcon(source: IconName | TabInfo | string) {
   return favicon({ id: '', url: source, title: '', lastActive: 0 });
 }
 
-function updatePalette() {
-  if (!state) return;
-  const q = paletteInput.value.trim();
-  const lower = q.toLowerCase();
-  const matches = (title: string, url: string) => !lower || title.toLowerCase().includes(lower) || url.toLowerCase().includes(lower);
+/** An open tab; picking it goes to it ("Switch to Tab") rather than opening the page again. */
+function tabItem(tab: TabInfo, place: number): PaletteItem {
+  const split = paletteMode === 'split';
+  return {
+    kind: 'tab',
+    icon: tab,
+    label: tabTitle(tab),
+    go: split ? 'Split with Tab' : 'Switch to Tab',
+    speak: `${split ? 'Split with tab' : 'Switch to tab'}: ${tabTitle(tab)}`,
+    run: split ? () => api.splitWith(tab.id) : () => api.activate(tab.id),
+    score: place,
+    recency: tab.lastActive,
+    url: tab.url,
+  };
+}
+
+function actionItem(action: (typeof ACTIONS)[number], place: number): PaletteItem {
+  const hint = action.shortcut && state?.shortcuts[action.shortcut];
+  return { kind: 'action', icon: action.icon, label: action.label, hint, speak: `Action: ${action.label}`, run: action.run, score: place };
+}
+
+/** Tabs the bar may switch to: not the one you are on, as Chromium's omnibox doesn't offer it either. */
+function offeredTabs() {
+  const activeId = state?.spaces.find((s) => s.id === state!.activeSpaceId)?.activeTabId;
+  return Object.values(state?.tabs ?? {}).filter((t) => t.id !== activeId);
+}
+
+/** An empty bar, as Arc's: the most recent other tabs, then two actions. */
+function emptyBarItems(): PaletteItem[] {
+  const recent = offeredTabs()
+    .sort((a, b) => b.lastActive - a.lastActive)
+    .slice(0, EMPTY_TABS)
+    .map((tab) => tabItem(tab, 0));
+  return [...recent, ...ACTIONS.filter((a) => a.emptyBar).slice(0, EMPTY_ACTIONS).map((a) => actionItem(a, 0))];
+}
+
+function actionItems(q: string, minLength?: number): PaletteItem[] {
+  if (!q) return ACTIONS.map((a) => actionItem(a, 0));
+  return rank(matchingActions(q, minLength).map((a) => actionItem(a, score('action', matchQuality(q, a.label) === 'start' ? 'start' : 'word')!)));
+}
+
+function queryItems(q: string): PaletteItem[] {
+  const s = state!;
   const items: PaletteItem[] = [];
   const open = { navigate: api.navigate, 'new-tab': api.newTab, split: api.splitNew }[paletteMode];
-  const activeId = state.spaces.find((s) => s.id === state!.activeSpaceId)?.activeTabId;
-  const activeUrl = activeId ? state.tabs[activeId]?.url : undefined;
+  const reopen = paletteMode === 'split' ? api.splitNew : api.newTab;
+  const activeId = s.spaces.find((sp) => sp.id === s.activeSpaceId)?.activeTabId;
+  const activeUrl = activeId ? s.tabs[activeId]?.url : undefined;
+  const isUrl = looksLikeUrl(q);
+  const add = (item: Omit<PaletteItem, 'score'>, kind: ResultKind, match?: Match) => {
+    const value = score(kind, match);
+    if (value !== undefined) items.push({ ...item, score: value });
+  };
 
-  $('palette-mode').textContent = { navigate: 'Current Tab', split: 'Split View', 'new-tab': '' }[paletteMode];
+  if (isUrl) add({ kind: 'address', icon: 'globe', label: q, speak: `Open ${q}`, run: () => open(q) }, 'address');
+  else add({ kind: 'search', icon: 'search', label: q, speak: `Search ${s.searchEngineName}: ${q}`, run: () => open(q) }, 'search');
 
-  if (q) {
-    const isUrl = looksLikeUrl(q);
-    const searchItem: PaletteItem = {
-      group: '',
-      icon: isUrl ? 'globe' : 'search',
-      label: q,
-      sub: isUrl ? 'Open' : `Search ${state.searchEngineName}`,
-      run: () => open(q),
-    };
-
-    // `env` lists the current page on the project's other environments.
-    if (/^env\b/i.test(q) && state.environment) {
-      for (const target of state.environment.switches) {
-        items.push({ group: 'Developer', icon: 'code', label: `Switch to ${target.label}`, sub: host(target.url), run: () => api.navigate(target.url) });
-      }
-    }
-    // `boost` edits this site's boost files.
-    if (/^boost/i.test(q) && activeUrl) {
-      const site = host(activeUrl);
-      items.push({ group: 'Developer', icon: 'zap', label: `Edit boost script for ${site}`, sub: 'TypeScript', run: () => api.editBoost('script') });
-      items.push({ group: 'Developer', icon: 'zap', label: `Edit boost styles for ${site}`, sub: 'CSS, live', run: () => api.editBoost('styles') });
-    }
-    for (const dev of devSuggestions(q, activeUrl)) {
-      items.push({
-        group: 'Developer',
-        icon: dev.url ? dev.url : 'code',
-        label: dev.label,
-        sub: dev.sub,
-        detail: dev.copy,
-        run: () => (dev.url ? open(dev.url) : api.copyText(dev.copy ?? '')),
-      });
-    }
-    for (const action of matchingActions(q).slice(0, 4)) {
-      items.push({ group: 'Actions', icon: action.icon, label: action.label, sub: '', hint: action.shortcut && state.shortcuts[action.shortcut], run: action.run });
-    }
-    // A matching shortcut or action is what was meant (`gh 12`, `settings`); otherwise searching is.
-    if (items.length && !isUrl) items.push(searchItem);
-    else items.unshift(searchItem);
+  // The page the address completes to, which the field shows (inline autocomplete).
+  if (completion) {
+    const done = completion;
+    const tab = offeredTabs().find((t) => t.url === done.url);
+    if (tab) items.push(tabItem(tab, score('completion')!));
+    else add({ kind: 'completion', icon: done.url, label: done.title || done.text, sub: done.title ? done.text : undefined, speak: `Open ${done.text}`, run: () => open(done.url), url: done.url }, 'completion');
   }
 
-  const openTabs = Object.values(state.tabs)
-    .filter((t) => matches(t.title, t.url) && !(paletteMode === 'split' && t.id === activeId))
-    .sort((a, b) => b.lastActive - a.lastActive)
-    .slice(0, q ? 6 : 8);
-  for (const tab of openTabs) {
-    items.push({
-      group: 'Tabs',
-      icon: tab,
-      label: tabTitle(tab),
-      sub: host(tab.url),
-      run: paletteMode === 'split' ? () => api.splitWith(tab.id) : () => api.activate(tab.id),
-    });
+  // `env` lists the current page on the project's other environments.
+  if (/^env\b/i.test(q) && s.environment) {
+    for (const target of s.environment.switches) {
+      add({ kind: 'developer', icon: 'code', label: `Switch to ${target.label}`, sub: host(target.url), speak: `Switch to ${target.label}`, run: () => api.navigate(target.url) }, 'developer');
+    }
+  }
+  // `boost` edits this site's boost files.
+  if (/^boost/i.test(q) && activeUrl) {
+    const site = host(activeUrl);
+    add({ kind: 'developer', icon: 'zap', label: `Edit boost script for ${site}`, sub: 'TypeScript', speak: `Edit boost script for ${site}`, run: () => api.editBoost('script') }, 'developer');
+    add({ kind: 'developer', icon: 'zap', label: `Edit boost styles for ${site}`, sub: 'CSS, live', speak: `Edit boost styles for ${site}`, run: () => api.editBoost('styles') }, 'developer');
+  }
+  for (const dev of devSuggestions(q, activeUrl)) {
+    const run = () => (dev.url ? open(dev.url) : api.copyText(dev.copy ?? ''));
+    add({ kind: 'developer', icon: dev.url ? dev.url : 'code', label: dev.label, sub: dev.sub, speak: dev.label, detail: dev.copy, run }, 'developer');
+  }
+  items.push(...actionItems(q).slice(0, 4));
+
+  // The engine's suggestions for exactly what is typed now, in its order, after the typed search.
+  if (!isUrl && suggestions?.query === q) {
+    const engine = s.searchEngine;
+    for (const text of suggestions.list) {
+      add({ kind: 'suggestion', icon: 'search', label: text, speak: `Search suggestion: ${text}`, run: () => open(searchUrl(text, engine)) }, 'suggestion');
+    }
   }
 
-  if (q) {
-    const seen = new Set(openTabs.map((t) => t.url));
-    for (const entry of historyResults.filter((e) => !seen.has(e.url)).slice(0, 6)) {
-      seen.add(entry.url);
-      items.push({ group: 'History', icon: entry.url, label: entry.title || entry.url, sub: host(entry.url), run: () => open(entry.url) });
-    }
-    const reopen = paletteMode === 'split' ? api.splitNew : api.newTab;
-    for (const item of state.archive.filter((a) => !seen.has(a.url) && matches(a.title, a.url)).slice(0, 5)) {
-      seen.add(item.url);
-      items.push({ group: 'Archive', icon: item.url, label: item.title || item.url, sub: host(item.url), run: () => reopen(item.url) });
-    }
+  const tabs = offeredTabs()
+    .map((tab) => ({ tab, match: matchQuality(q, tabTitle(tab), displayUrl(tab.url)) }))
+    .filter(({ match }) => match)
+    .sort((a, b) => score('tab', b.match)! - score('tab', a.match)! || b.tab.lastActive - a.tab.lastActive)
+    .slice(0, 6);
+  for (const { tab, match } of tabs) items.push(tabItem(tab, score('tab', match)!));
+  // Until the history for this query arrives, the last query's shows only where it still matches.
+  const visited = historyResults.map((entry) => ({ entry, match: matchQuality(q, entry.title, displayUrl(entry.url)) })).filter(({ match }) => match);
+  for (const { entry, match } of visited.slice(0, 6)) {
+    const address = displayUrl(entry.url);
+    const titled = entry.title && entry.title !== entry.url;
+    const page = { kind: 'history' as const, icon: entry.url, label: titled ? entry.title : address, sub: titled ? address : undefined, url: entry.url, recency: entry.lastVisit };
+    add({ ...page, speak: `History: ${page.label}${page.sub ? `, ${page.sub}` : ''}`, run: () => open(entry.url) }, 'history', match);
   }
+  const archived = s.archive.map((a) => ({ a, match: matchQuality(q, a.title, displayUrl(a.url)) })).filter(({ match }) => match);
+  for (const { a, match } of archived.slice(0, 5)) {
+    const address = displayUrl(a.url);
+    const page = { kind: 'archive' as const, icon: a.url, label: a.title || address, sub: a.title ? address : undefined, url: a.url };
+    add({ ...page, speak: `Archived tab: ${page.label}${page.sub ? `, ${page.sub}` : ''}`, run: () => reopen(a.url) }, 'archive', match);
+  }
+  return rank(items);
+}
+
+function updatePalette() {
+  if (!state) return;
+  const q = typed.trim();
+  $('palette-mode').textContent = actionMode ? 'Actions' : { navigate: 'Current Tab', split: 'Split View', 'new-tab': '' }[paletteMode];
+  paletteInput.placeholder = actionMode ? 'Search actions…' : 'Search or Enter URL…';
+  const items = actionMode ? actionItems(q, 1) : q ? queryItems(q) : emptyBarItems();
 
   paletteItems = items;
   selected = Math.min(selected, Math.max(items.length - 1, 0));
-  const rows: HTMLElement[] = [];
-  let group: PaletteGroup | undefined;
-  items.forEach((item, i) => {
-    if (item.group !== group) {
-      group = item.group;
-      if (group) rows.push(h('li', { class: 'group-label' }, group));
-    }
-    rows.push(
-      h(
-        'li',
-        {
-          class: `item${i === selected ? ' selected' : ''}`,
-          dataset: { index: String(i) },
-          onmousemove: () => {
-            if (selected !== i) (selected = i), updatePalette();
-          },
-          onmousedown: (e: Event) => {
-            e.preventDefault();
-            runItem(i);
-          },
+  const rows = items.map((item, i) =>
+    h(
+      'li',
+      {
+        id: `palette-option-${i}`,
+        role: 'option',
+        'aria-selected': String(i === selected),
+        'aria-label': item.speak,
+        class: `item${i === selected ? ' selected' : ''}`,
+        dataset: { index: String(i), kind: item.kind },
+        onmousemove: () => {
+          if (selected !== i) moveSelection(i);
         },
-        h('span', { class: 'item-icon' }, itemIcon(item.icon)),
-        h('span', { class: 'label' }, item.label),
-        item.sub ? h('span', { class: 'sub' }, item.sub) : null,
-        item.hint ? h('kbd', {}, item.hint) : null,
-        h('kbd', { class: 'enter' }, '↵'),
-      ),
-    );
-  });
+        onmousedown: (e: Event) => {
+          e.preventDefault();
+          runItem(i);
+        },
+      },
+      h('span', { class: 'item-icon' }, itemIcon(item.icon)),
+      h('span', { class: 'label' }, h('span', { class: 'title' }, item.label), item.sub ? h('span', { class: 'sub' }, ` — ${item.sub}`) : null),
+      item.hint ? h('kbd', {}, item.hint) : null,
+      item.go ? h('span', { class: 'go' }, item.go, h('span', { class: 'go-arrow' }, icon('arrowRight'))) : null,
+    ),
+  );
   paletteList.replaceChildren(...rows);
   paletteList.querySelector('.item.selected')?.scrollIntoView({ block: 'nearest' });
+  if (items.length) paletteInput.setAttribute('aria-activedescendant', `palette-option-${selected}`);
+  else paletteInput.removeAttribute('aria-activedescendant');
+  // The field's icon is the selected result's, as Arc's shows the top hit's.
+  $('palette-icon').replaceChildren(itemIcon(items[selected]?.icon ?? (actionMode ? 'zap' : 'search')));
   const detail = $('palette-detail');
   detail.hidden = !items[selected]?.detail;
   detail.textContent = items[selected]?.detail ?? '';
 }
 
+/** The same result after a redraw: a page by its address (its title may have changed), anything else by its label. */
+function sameItem(a: PaletteItem, b: PaletteItem) {
+  return a.kind === b.kind && (a.url ? a.url === b.url : a.label === b.label);
+}
+
+/**
+ * Selects row `i`, by arrow key or mouse. The completed page's row stays where it is, so nothing
+ * moves under the pointer; the field shows the completion only while that row is selected, as
+ * Chromium's omnibox does.
+ */
+function moveSelection(i: number) {
+  selected = i;
+  selectionMoved = true;
+  if (completion) showCompletion(paletteItems[i]?.url === completion.url);
+  updatePalette();
+}
+
+/** The field with the inline completion after what was typed, the added part selected; or just what was typed. */
+function showCompletion(shown: boolean) {
+  paletteInput.value = shown && completion ? typed + completion.text.slice(typed.length) : typed;
+  paletteInput.setSelectionRange(shown ? typed.length : paletteInput.value.length, paletteInput.value.length);
+}
+
+/**
+ * Redraws after history, suggestions or tabs change. Until the arrows or mouse move the
+ * selection, the top hit stays selected; after, the same item does.
+ */
+function refreshPalette() {
+  const target = selectionMoved ? paletteItems[selected] : undefined;
+  updatePalette();
+  const at = target ? paletteItems.findIndex((item) => sameItem(item, target)) : -1;
+  if (at >= 0 && at !== selected) (selected = at), updatePalette();
+}
+
 function runItem(i: number) {
   const item = paletteItems[i];
   if (!item) return;
-  item.run();
+  // Closed first, so a run that fails or opens the bar again doesn't leave it over the sidebar.
   closePalette();
+  item.run();
+}
+
+/**
+ * Completes the typed address in the field from open tabs and history, with the added part
+ * selected. Only while the caret is still at the end and no other row was chosen: history may
+ * arrive after either.
+ */
+function completeInline() {
+  if (!mayComplete || selectionMoved || actionMode || paletteInput.value !== typed || !state) return;
+  if (paletteInput.selectionStart !== typed.length || paletteInput.selectionEnd !== typed.length) return;
+  const visited = [
+    ...Object.values(state.tabs).map((t) => ({ url: t.url, title: tabTitle(t), weight: t.lastActive })),
+    ...historyResults.map((e) => ({ url: e.url, title: e.title, weight: e.visits })),
+  ];
+  completion = inlineCompletion(typed, visited);
+  if (completion) showCompletion(true);
 }
 
 // History lives in the main process; results arrive asynchronously and are dropped if stale.
 let historyResults: HistoryEntry[] = [];
 function refreshHistory() {
-  const q = paletteInput.value.trim();
-  if (!q) {
+  const q = typed.trim();
+  if (!q || actionMode) {
     historyResults = [];
     return;
   }
-  api.searchHistory(q).then((results) => {
-    if (paletteInput.value.trim() !== q || palette.hidden) return;
+  api.searchHistory(historyQuery(q)).then((results) => {
+    if (typed.trim() !== q || palette.hidden || actionMode) return;
     historyResults = results;
-    updatePalette();
+    completeInline();
+    refreshPalette();
   });
 }
 
-paletteInput.addEventListener('input', () => {
+// Search suggestions, for the query they were asked for only; requests for older queries are aborted.
+let suggestions: { query: string; list: string[] } | undefined;
+const requestSuggestions = suggestionRequests(
+  (query, signal) => api.searchSuggestions(query, signal),
+  (query, list) => {
+    if (palette.hidden || actionMode || typed.trim() !== query) return;
+    suggestions = { query, list };
+    refreshPalette();
+  },
+);
+function refreshSuggestions() {
+  const q = typed.trim();
+  requestSuggestions(q && !actionMode && !looksLikeUrl(q) && suggestable(q) ? q : undefined);
+}
+
+paletteInput.addEventListener('input', (e) => {
+  typed = paletteInput.value;
+  completion = undefined;
+  // Only typing at the end completes; deleting the completion leaves what was typed.
+  mayComplete = (e as InputEvent).inputType?.startsWith('insert') && paletteInput.selectionEnd === typed.length;
   selected = 0;
+  selectionMoved = false;
+  completeInline();
   updatePalette();
   refreshHistory();
+  refreshSuggestions();
 });
 paletteInput.addEventListener('keydown', (e) => {
+  const plain = !e.ctrlKey && !e.metaKey && !e.altKey;
   if (e.key === 'Escape') closePalette();
+  // Shift+Enter is Enter: Arc's Shift+Enter (Instant Links) is an Arc Max AI feature.
   else if (e.key === 'Enter') runItem(selected);
   else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
     e.preventDefault();
     const n = paletteItems.length;
-    if (n) selected = (selected + (e.key === 'ArrowDown' ? 1 : -1) + n) % n;
+    if (n) moveSelection((selected + (e.key === 'ArrowDown' ? 1 : -1) + n) % n);
+  } else if (e.key === 'Tab' && plain && !e.shiftKey) {
+    // Tab keeps focus in the bar; in an empty bar it searches actions, as Arc's does.
+    e.preventDefault();
+    if (!typed && !actionMode) {
+      actionMode = true;
+      selected = 0;
+      updatePalette();
+    }
+  } else if (e.key === 'Backspace' && actionMode && !paletteInput.value) {
+    actionMode = false;
+    selected = 0;
     updatePalette();
   } else return;
 });
 palette.addEventListener('mousedown', (e) => {
   if (e.target === palette) closePalette();
 });
-paletteInput.addEventListener('blur', () => setTimeout(() => document.activeElement !== paletteInput && closePalette(), 0));
+// Focus going to the page or another window (a tab switch, a click in the page) leaves the field
+// the active element of a document that has lost focus, so that closes the bar too.
+paletteInput.addEventListener('blur', () =>
+  setTimeout(() => (!document.hasFocus() || document.activeElement !== paletteInput) && closePalette(), 0),
+);
 
 // ---- peek -------------------------------------------------------------------------
 
@@ -968,9 +1206,11 @@ function formatBytes(n: number) {
 }
 
 function downloadStatus(d: DownloadInfo) {
+  if (d.warning === 'dangerous') return 'This file may harm your computer';
+  if (d.warning === 'insecure') return 'Sent without encryption (HTTP)';
   if (d.state === 'completed') return formatBytes(d.received);
   if (d.state === 'cancelled') return 'Cancelled';
-  if (d.state === 'interrupted') return 'Failed';
+  if (d.state === 'interrupted') return d.canResume ? 'Stopped' : 'Failed';
   return d.total ? `${formatBytes(d.received)} of ${formatBytes(d.total)}` : formatBytes(d.received);
 }
 
@@ -993,26 +1233,38 @@ function renderDownloads(items: DownloadInfo[], started?: DownloadInfo) {
         },
         h('span', { class: 'name' }, d.filename),
         h('span', { class: 'status' }, downloadStatus(d)),
-        d.state === 'progressing'
+        d.state === 'progressing' && !d.warning
           ? h('span', { class: 'bar' }, h('span', { class: 'fill', style: `width: ${Math.round(progress * 100)}%` }))
           : null,
-        h(
-          'button',
-          {
-            class: 'icon-button',
-            title: d.state === 'progressing' ? 'Cancel' : 'Show in Finder',
-            onclick: (e: Event) => {
-              e.stopPropagation();
-              if (d.state === 'progressing') api.cancelDownload(d.id);
-              else api.revealDownload(d.id);
-            },
-          },
-          d.state === 'progressing' ? icon('close') : icon('folder'),
-        ),
+        downloadActions(d),
       );
     }),
   );
   if (!items.length) $('downloads-list').append(h('li', { class: 'empty' }, 'No downloads yet'));
+}
+
+/** What a download's row offers: a decision for a held one, resume or retry for a stopped one. */
+function downloadActions(d: DownloadInfo) {
+  const button = (label: string, run: () => void, kind = 'text-button') =>
+    h('button', { class: kind, onclick: (e: Event) => (e.stopPropagation(), run()) }, label);
+  if (d.warning) return h('span', { class: 'actions' }, button('Discard', () => api.discardDownload(d.id)), button('Keep', () => api.keepDownload(d.id), 'text-button keep'));
+  if (d.state === 'interrupted') {
+    return h('span', { class: 'actions' }, d.canResume ? button('Resume', () => api.resumeDownload(d.id)) : button('Retry', () => api.retryDownload(d.id)));
+  }
+  const progressing = d.state === 'progressing';
+  return h(
+    'button',
+    {
+      class: 'icon-button',
+      title: progressing ? 'Cancel' : isMac ? 'Show in Finder' : 'Show in Folder',
+      onclick: (e: Event) => {
+        e.stopPropagation();
+        if (progressing) api.cancelDownload(d.id);
+        else api.revealDownload(d.id);
+      },
+    },
+    progressing ? icon('close') : icon('folder'),
+  );
 }
 
 $('btn-downloads').onclick = () => (downloadsPanel.hidden = !downloadsPanel.hidden);
@@ -1068,6 +1320,33 @@ for (const half of splitDrop.querySelectorAll<HTMLElement>('.drop-half')) {
 
 // The edge strip stays under the pointer while the floating sidebar is out (it covers the gap
 // between the window's edge and the card, styles.css), so the card sliding in under a pointer
+// ---- resizing the sidebar --------------------------------------------------------
+// Drag its right edge: the window's layout follows as you go, and the width is kept for every
+// window when you let go.
+const resizeHandle = $('sidebar-resize');
+resizeHandle.setAttribute('aria-valuemin', String(SIDEBAR_MIN_WIDTH));
+resizeHandle.setAttribute('aria-valuemax', String(SIDEBAR_MAX_WIDTH));
+resizeHandle.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  resizeHandle.setPointerCapture(e.pointerId);
+  const start = { x: e.clientX, width: $('sidebar').offsetWidth };
+  let width = start.width;
+  const move = (ev: PointerEvent) => {
+    width = start.width + ev.clientX - start.x;
+    api.resizeSidebar(width, false);
+  };
+  const end = () => {
+    resizeHandle.removeEventListener('pointermove', move);
+    resizeHandle.removeEventListener('pointerup', end);
+    resizeHandle.removeEventListener('pointercancel', end);
+    api.resizeSidebar(width, true);
+  };
+  resizeHandle.addEventListener('pointermove', move);
+  resizeHandle.addEventListener('pointerup', end);
+  resizeHandle.addEventListener('pointercancel', end);
+});
+
 // resting at the edge never reads as leaving it: the sidebar shows once, and goes only after
 // the pointer has left both the edge and the card for a moment, sliding out to the left.
 let peekCloseTimer: number | undefined;
@@ -1141,6 +1420,93 @@ document.addEventListener('pointerdown', hideTip, true);
 document.addEventListener('scroll', hideTip, true);
 window.addEventListener('blur', hideTip);
 
+// ---- window controls and menu (Linux, Windows) ------------------------------------
+// Flecha's own window has no title bar there: its close, minimize and maximize circles sit
+// where macOS draws the traffic lights, and the menu button holds what the macOS menu bar
+// does (styles.css, "window controls and menu").
+
+document.documentElement.dataset.platform = isMac ? 'mac' : 'other';
+const ownWindow = !isMac && document.documentElement.dataset.frame !== undefined && typeof chrome.flechaPrivate?.getWindowId === 'function';
+
+if (ownWindow) {
+  const root = document.documentElement;
+  const windowId = chrome.flechaPrivate.getWindowId();
+  const maximize = $('wc-maximize');
+  const showState = (win: chrome.windows.Window) => {
+    root.dataset.windowState = win.state ?? 'normal';
+    maximize.setAttribute('aria-label', win.state === 'maximized' ? 'Restore' : 'Maximize');
+  };
+  const showFocused = async (focusedId: number) => (root.dataset.windowFocused = String(focusedId === (await windowId)));
+  void windowId.then((id) => chrome.windows.get(id)).then(showState);
+  void chrome.windows.getLastFocused().then((win) => showFocused(win.id ?? chrome.windows.WINDOW_ID_NONE));
+  chrome.windows.onBoundsChanged.addListener(async (win) => win.id === (await windowId) && showState(win));
+  chrome.windows.onFocusChanged.addListener((id) => void showFocused(id));
+  $('wc-close').onclick = async () => chrome.windows.remove(await windowId);
+  $('wc-minimize').onclick = async () => chrome.windows.update(await windowId, { state: 'minimized' });
+  maximize.onclick = async () => {
+    const id = await windowId;
+    const win = await chrome.windows.get(id);
+    showState(await chrome.windows.update(id, { state: win.state === 'maximized' ? 'normal' : 'maximized' }));
+  };
+
+  const menuButton = $('btn-menu');
+  const openMenu = async (keyboard: boolean) => {
+    menuButton.setAttribute('aria-expanded', 'true');
+    try {
+      const picked = await showPageMenu(windowMenu(), { anchor: menuButton, keyboard });
+      if (picked) picked.run();
+      else menuButton.focus();
+    } finally {
+      menuButton.setAttribute('aria-expanded', 'false');
+    }
+  };
+  // A click from the keyboard (Enter, Space) has no pointer position: detail 0.
+  menuButton.onclick = (e) => void openMenu(e.detail === 0);
+  menuButton.onkeydown = (e) => {
+    if (e.key !== 'ArrowDown') return;
+    e.preventDefault();
+    void openMenu(true);
+  };
+}
+
+/**
+ * What the macOS app menu and menu bar give you that Linux and Windows would otherwise have no
+ * way to reach. The rest of the menu bar is elsewhere already: editing in the page's own menu
+ * and keys, tabs and Spaces in the sidebar's menus, the window's own controls beside this.
+ */
+function windowMenu(): MenuEntry<() => void>[] {
+  const keys = (id: string) => state?.shortcuts[id] || undefined;
+  const item = (label: string, run: () => void, accel?: string) => ({ label, run, accel });
+  const regular = !chrome.extension.inIncognitoContext;
+  const canQuit = typeof chrome.flechaPrivate?.quit === 'function';
+  return [
+    // An incognito window can't open a regular one from here; Chromium's own Ctrl+N does.
+    ...(regular ? [item('New window', () => api.newWindow(), 'Ctrl+N')] : []),
+    item('New incognito window', () => api.newIncognitoWindow(), 'Ctrl+Shift+N'),
+    item('New Flechinha window', () => api.newFlechinha(), keys('newFlechinha')),
+    { separator: true },
+    item('History', () => api.openHistory(), keys('history')),
+    item('Downloads', () => ($('downloads-panel').hidden = false)),
+    item('Boosts', () => api.openSettings('boosts')),
+    ...(regular ? [item('Extensions', () => api.openExtensions())] : []),
+    { separator: true },
+    item('Find in page…', () => api.runCommand('find'), keys('find')),
+    {
+      label: 'Zoom',
+      submenu: [item('Zoom in', () => api.zoom(1), keys('zoomIn')), item('Zoom out', () => api.zoom(-1), keys('zoomOut')), item('Actual size', () => api.zoom(0), keys('actualSize'))],
+    },
+    item('Print…', () => api.print(), 'Ctrl+P'),
+    item('Developer tools', () => api.openDevTools(), keys('devTools')),
+    { separator: true },
+    item('Import from another browser…', () => void importFromBrowser()),
+    item('Settings', () => api.openSettings(), keys('settings')),
+    { label: 'Help', submenu: [item('Keyboard shortcuts', () => api.openSettings('shortcuts'), keys('shortcuts')), item('Flecha help', () => api.openHelp())] },
+    item('About Flecha', () => api.openAbout()),
+    // Quitting so that every window comes back takes the browser's own Quit (patch 0070).
+    ...(canQuit ? [{ separator: true } as const, item('Quit Flecha', () => api.quit(), keys('quit'))] : []),
+  ];
+}
+
 // ---- wiring ---------------------------------------------------------------------
 
 $('btn-sidebar').onclick = () => api.toggleSidebar();
@@ -1162,7 +1528,7 @@ $('space-header').oncontextmenu = (e) => {
 // background: they have their own menu, the native edit menu, or none.
 $('sidebar').addEventListener('contextmenu', (e) => {
   if (e.defaultPrevented || !state) return;
-  if ((e.target as Element).closest('button, a, input, textarea, select, label, [contenteditable], .row, .popover, browser-action-list, #urlbar-wrap, #agent-status')) return;
+  if ((e.target as Element).closest('button, a, input, textarea, select, label, [contenteditable], .row, .popover, #extensions, #urlbar-wrap, #agent-status')) return;
   e.preventDefault();
   api.spaceMenu(state.activeSpaceId);
 });
@@ -1178,8 +1544,10 @@ api.onState((s) => {
   renderOnboarding(s);
 });
 api.onPalette(openPalette);
+api.onClosePalette(hidePalette);
 api.onEditSpace(openSpaceEditor);
 api.onRenameTab(renameTab);
+api.onEditHomeUrl(editHomeUrl);
 api.onPeek(renderPeek);
 api.onDownloads(renderDownloads);
 api.ready();

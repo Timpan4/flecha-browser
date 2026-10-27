@@ -1,0 +1,93 @@
+# Flecha: setFrame's sidebarWidth makes the sidebar as wide as you drag it, within Chromium's limits for its vertical tab strip (chrome/browser/ui/tabs/vertical_tab_strip_state.h, 126 to 400); 260 stays the default.
+--- a/chrome/common/extensions/api/flecha_private.idl
++++ b/chrome/common/extensions/api/flecha_private.idl
+@@ -41,6 +41,9 @@
+     boolean overlay;
+     // The window's colour behind the page area, as #rrggbb.
+     DOMString background;
++    // The docked or floating sidebar's width, kept within Chromium's limits
++    // for its vertical tab strip (126 to 400). 260 if left out.
++    long? sidebarWidth;
+   };
+ 
+   callback DoneCallback = void();
+--- a/chrome/browser/flecha/flecha_frame_host.h
++++ b/chrome/browser/flecha/flecha_frame_host.h
+@@ -42,7 +42,8 @@
+ // views so that the extension API can reach the frames, which live in the
+ // browser views (chrome/browser/ui/views/frame/flecha_frame_view.h).
+ 
+-// The spike's layout constants.
++// The spike's layout constants. The sidebar is this wide unless you resize it
++// (FlechaFrameState::sidebar_width).
+ inline constexpr int kFlechaSidebarWidth = 260;
+ // With the sidebar hidden, this strip at the left edge brings it back on hover.
+ inline constexpr int kFlechaEdgeWidth = 8;
+@@ -86,6 +87,9 @@
+   Sidebar sidebar = Sidebar::kDocked;
+   bool overlay = false;
+   SkColor background = SkColorSetRGB(0xe9, 0xec, 0xf2);
++  // The docked or floating sidebar's width; setFrame() keeps it within
++  // Chromium's vertical tab strip limits.
++  int sidebar_width = kFlechaSidebarWidth;
+   // A Flechinha window: the browser sets this, never setFrame().
+   bool flechinha = false;
+   // The window is in fullscreen: the browser sets this, never setFrame().
+@@ -100,12 +104,12 @@
+     }
+     switch (sidebar) {
+       case Sidebar::kDocked:
+-        return std::min(window_width, kFlechaSidebarWidth);
++        return std::min(window_width, sidebar_width);
+       case Sidebar::kHidden:
+         return std::min(window_width, kFlechaEdgeWidth);
+       case Sidebar::kFloating:
+-        return std::min(window_width, kFlechaFloatMargin + kFlechaSidebarWidth +
+-                                          kFlechaFloatShadow);
++        return std::min(window_width,
++                        kFlechaFloatMargin + sidebar_width + kFlechaFloatShadow);
+     }
+   }
+ 
+@@ -129,7 +133,7 @@
+     }
+     return gfx::Insets::TLBR(
+         kFlechaGap,
+-        sidebar == Sidebar::kDocked ? kFlechaSidebarWidth : kFlechaGap,
++        sidebar == Sidebar::kDocked ? sidebar_width : kFlechaGap,
+         kFlechaGap, kFlechaGap);
+   }
+ 
+--- a/chrome/browser/extensions/api/flecha_private/flecha_private_api.cc
++++ b/chrome/browser/extensions/api/flecha_private/flecha_private_api.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "chrome/browser/extensions/api/flecha_private/flecha_private_api.h"
+ 
++#include <algorithm>
+ #include <optional>
+ #include <string>
+ 
+@@ -46,6 +47,7 @@
+ #include "chrome/browser/themes/theme_service_factory.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/browser/ui/tabs/vertical_tab_strip_state.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "chrome/common/extensions/api/flecha_private.h"
+ #include "content/public/browser/web_contents.h"
+@@ -141,6 +143,14 @@
+     return RespondNow(Error(kBadColorError));
+   }
+   state.background = *background;
++  // The sidebar is Flecha's vertical tab strip: Chromium's limits for its own
++  // apply.
++  if (params->state.sidebar_width) {
++    state.sidebar_width =
++        std::clamp(*params->state.sidebar_width,
++                   tabs::kVerticalTabStripUncollapsedMinWidth,
++                   tabs::kVerticalTabStripUncollapsedMaxWidth);
++  }
+ 
+   if (params->window_id) {
+     FlechaFrameHost* host = HostForWindow(*params->window_id, browser_context());

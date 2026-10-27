@@ -11,6 +11,8 @@ import { broadcast, handle } from './hub';
 
 export interface SettingsContext {
   store: Store;
+  /** The window the Settings page is in, whose Today tabs it shows and edits; the focused one otherwise. */
+  windowId?(): string;
   /** Closes the Chromium tabs of these Flecha tabs; they reopen from the Store when next shown. */
   unload(tabIds: string[]): void;
   /** Sends every page the new state, as after any change from the sidebar. */
@@ -54,13 +56,13 @@ export function registerSettings(ctx: SettingsContext) {
       broadcast('settings:ask', id, options);
     });
 
-  const tabs = new TabManager(store, {
+  const tabs = new TabManager(store, () => ctx.windowId?.(), {
     isOpen: (tabId) => ctx.isOpen?.(tabId) ?? false,
     load: (tabId, url) => (ctx.load ? ctx.load(tabId, url) : ctx.unload([tabId])),
     destroyView: (tabId) => ctx.unload([tabId]),
     show: (tabId) => {
       // The background follows the Store's active tab into Chromium.
-      store.activate(tabId);
+      store.activate(tabId, { windowId: ctx.windowId?.() });
       ctx.broadcastState();
     },
     // TODO(chromium): site icons come from chrome://favicon2 / _favicon, not a favicon:// cache; tabs use their own favicon URL for now.
@@ -72,9 +74,14 @@ export function registerSettings(ctx: SettingsContext) {
     push: (view) => broadcast('settings:tabs', view),
   });
 
+  // The download folder and "ask where to save" are Chromium's prefs (patch 0058); the Store
+  // keeps a copy for Settings to show.
+  const downloadPrefs = typeof chrome.flechaPrivate?.getDownloadSettings === 'function';
+  const mirrorDownloads = ({ folder, askWhereToSave }: chrome.flechaPrivate.DownloadSettings) => store.setDownloads({ folder, askWhereToSave });
+  if (downloadPrefs) void chrome.flechaPrivate.getDownloadSettings().then(mirrorDownloads);
+
   const view = (): SettingsView =>
     settingsView(store, {
-      // TODO(chromium): Chromium's download folder (prefs download.default_directory) isn't readable from an extension.
       downloadsFolder: store.state.downloadsFolder ?? '~/Downloads',
       defaultBrowser: ctx.defaultBrowser?.() ?? { isDefault: false, canSet: false },
       agentEndpoint: ctx.agentEndpoint?.(),
@@ -83,6 +90,7 @@ export function registerSettings(ctx: SettingsContext) {
   handle({
     'settings:get': view,
     'settings:set': async (patch: SettingsPatch) => {
+      if (downloadPrefs && typeof patch?.askWhereToSave === 'boolean') mirrorDownloads(await chrome.flechaPrivate.setAskWhereToSave(patch.askWhereToSave));
       const notice = await applySettings(store, patch && typeof patch === 'object' ? patch : {}, {
         // TODO(chromium): Chromium's own light/dark mode isn't settable from an extension; Flecha's pages follow the system.
         theme: () => {},
@@ -98,16 +106,18 @@ export function registerSettings(ctx: SettingsContext) {
       renewAgentToken(store);
       return view();
     },
-    // TODO(chromium): needs a native folder picker.
-    'settings:choose-downloads-folder': () => ({ ...view(), ...notYet('Choosing the downloads folder') }),
+    'settings:choose-downloads-folder': async () => {
+      if (!downloadPrefs) return { ...view(), ...notYet('Choosing the downloads folder') };
+      mirrorDownloads(await chrome.flechaPrivate.chooseDownloadsFolder());
+      return view();
+    },
     'settings:make-default-browser': async () => {
       if (!ctx.makeDefaultBrowser) return { ...view(), ...notYet('Making Flecha the default browser') };
       await ctx.makeDefaultBrowser();
       return view();
     },
     // 'settings:open-boosts' opens the Boosts page; features.ts handles it.
-    // TODO(chromium): the welcome tour (ui/onboarding.ts) isn't in the shell's sidebar yet.
-    'settings:show-tour': () => notYet('The welcome tour'),
+    'settings:show-tour': () => store.setOnboarded(false),
     // TODO(chromium): there's no extension API for the macOS emoji picker; ⌃⌘Space opens it.
     'settings:emoji-panel': () => notYet('The emoji picker button (press ⌃⌘Space)'),
 

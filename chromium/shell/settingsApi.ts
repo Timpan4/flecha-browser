@@ -8,6 +8,7 @@ import type { AskOptions, TabsMenuItem } from './lib/tabManager';
 import { cmd, invoke, on } from './client';
 import type { NotYet } from './settingsHandlers';
 import { askDialog, popupMenu, toast } from './settingsUi';
+import { isMac, primaryModifier } from './lib/platform';
 
 /** A stub in the background says what isn't ported; the page shows it rather than doing nothing. */
 function tellNotYet<T>(result: T): T {
@@ -36,7 +37,7 @@ window.addEventListener(
       return;
     }
     // ⌘F: Electron's Find menu item sends this to Settings; here the page catches it itself.
-    if (e.code === 'KeyF' && e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+    if (e.code === 'KeyF' && primaryModifier(e) && !(isMac ? e.ctrlKey : e.metaKey) && !e.altKey && !e.shiftKey) {
       e.preventDefault();
       for (const fn of findListeners) fn();
     }

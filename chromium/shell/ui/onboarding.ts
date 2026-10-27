@@ -44,10 +44,11 @@ export function setupOnboarding(api: FlechaApi, h: H, icon: (name: IconName) => 
   const root = document.getElementById('onboarding')!;
   let step: Step = 'welcome';
   let state: UiState | undefined;
-  let browsers: DetectedBrowser[] | undefined;
+  type BrowserDiscovery = { status: 'idle' } | { status: 'loading' } | { status: 'ready'; browsers: DetectedBrowser[] } | { status: 'error'; message: string };
+  type BrowserImport = { status: 'importing' } | { status: 'done' | 'failed'; message: string };
+  let discovery: BrowserDiscovery = { status: 'idle' };
   const appIcons = new Map<string, string | undefined>();
-  const imported = new Map<string, string>();
-  const importing = new Set<string>();
+  const imports = new Map<string, BrowserImport>();
   const tried = new Set<string>();
   let drawn = '';
   /** The step the last draw showed; its entrance animation only plays when the step changes. */
@@ -221,45 +222,52 @@ export function setupOnboarding(api: FlechaApi, h: H, icon: (name: IconName) => 
   }
 
   async function runImport(b: DetectedBrowser) {
-    importing.add(b.id);
+    imports.set(b.id, { status: 'importing' });
     draw();
     try {
       const r = await api.importBrowser(b.id);
-      const parts = [r.bookmarks && `${r.bookmarks.toLocaleString()} bookmarks`, r.history && `${r.history.toLocaleString()} pages`].filter(Boolean);
-      imported.set(b.id, parts.length ? parts.join(' · ') : r.warnings[0] ?? 'Nothing to import');
+      const parts = [r.bookmarks && `${r.bookmarks.toLocaleString()} bookmark${r.bookmarks === 1 ? '' : 's'}`, r.history && `${r.history.toLocaleString()} page${r.history === 1 ? '' : 's'}`].filter(Boolean);
+      const message = [...parts, ...r.warnings].join(' · ') || 'Nothing to import';
+      imports.set(b.id, { status: parts.length || r.spaces ? 'done' : 'failed', message });
     } catch {
-      imported.set(b.id, 'Couldn’t import this one');
+      imports.set(b.id, { status: 'failed', message: 'Couldn’t import this browser. Try again.' });
     }
-    importing.delete(b.id);
     draw();
   }
 
   function importStep() {
-    if (!browsers) {
+    if (discovery.status === 'idle') {
+      discovery = { status: 'loading' };
       api.detectBrowsers().then(
-        (found) => ((browsers = found), step === 'import' && draw()),
-        () => ((browsers = []), step === 'import' && draw()),
+        (browsers) => { discovery = { status: 'ready', browsers }; if (step === 'import') draw(); },
+        (error) => {
+          discovery = { status: 'error', message: error instanceof Error ? error.message : 'Browser discovery failed.' };
+          if (step === 'import') draw();
+        },
       );
     }
-    const list = !browsers
+    const list = discovery.status === 'loading'
       ? h('div', { class: 'tour-note' }, h('span', { class: 'tour-spinner' }), 'Looking for your browsers…')
-      : !browsers.length
-        ? h('div', { class: 'tour-note' }, 'No other browsers with data on this Mac. You can import later from File → Import Browser Data.')
+      : discovery.status === 'error'
+        ? h('div', { class: 'tour-note' }, discovery.message, h('button', { class: 'tour-ghost', onclick: () => { discovery = { status: 'idle' }; draw(); } }, 'Try again'))
+        : !discovery.browsers.length
+        ? h('div', { class: 'tour-note' }, 'No supported browser data found in the standard profile folders on this computer. Custom locations and sandboxed installations may not be detected.')
         : h(
             'div',
             { class: 'tour-browsers' },
-            ...browsers.map((b) => {
-              const done = imported.get(b.id);
-              const busy = importing.has(b.id);
+            ...discovery.browsers.map((b) => {
+              const result = imports.get(b.id);
+              const done = result?.status === 'done';
+              const busy = result?.status === 'importing';
               const what = [b.hasBookmarks && 'Bookmarks', b.hasHistory && 'history'].filter(Boolean).join(' & ') || 'Data';
               return h(
                 'div',
                 { class: `tour-browser${done ? ' done' : ''}${busy ? ' busy' : ''}` },
                 browserIcon(b),
-                h('span', { class: 'tour-browser-text' }, h('strong', {}, b.name), h('small', {}, done ?? `${what}${b.profiles > 1 ? ` · ${b.profiles} profiles` : ''}`)),
+                h('span', { class: 'tour-browser-text' }, h('strong', {}, b.name), h('small', {}, result && result.status !== 'importing' ? result.message : `${what}${b.profiles > 1 ? ` · ${b.profiles} profiles` : ''}`)),
                 done
                   ? h('span', { class: 'tour-done' }, icon('check'))
-                  : h('button', { class: 'tour-ghost', disabled: busy, onclick: () => runImport(b) }, busy ? 'Importing…' : 'Import'),
+                  : h('button', { class: 'tour-ghost', disabled: busy, onclick: () => runImport(b) }, busy ? 'Importing…' : result?.status === 'failed' ? 'Try again' : 'Import'),
               );
             }),
           );
@@ -299,7 +307,7 @@ export function setupOnboarding(api: FlechaApi, h: H, icon: (name: IconName) => 
     return h(
       'div',
       { class: 'tour-step' },
-      heading('For developers', 'Built for the web you build', servers.length ? `Flecha already found ${servers.length} dev server${servers.length === 1 ? '' : 's'} running on this Mac. They live at the top of the sidebar.` : 'Start a dev server and it shows up at the top of the sidebar, with its console errors.'),
+      heading('For developers', 'Built for the web you build', servers.length ? `Flecha already found ${servers.length} dev server${servers.length === 1 ? '' : 's'} running on this computer. They live at the top of the sidebar.` : 'Start a dev server and it shows up at the top of the sidebar, with its console errors.'),
       h(
         'div',
         { class: 'tour-features' },
@@ -332,7 +340,7 @@ export function setupOnboarding(api: FlechaApi, h: H, icon: (name: IconName) => 
 
   function primaryLabel() {
     if (step === 'welcome') return 'Let’s go';
-    if (step === 'import') return imported.size ? 'Continue' : 'Skip';
+    if (step === 'import') return [...imports.values()].some((result) => result.status === 'done') ? 'Continue' : 'Skip';
     if (step === 'try') return tried.size === CHALLENGES.length ? 'Nice. Continue' : 'Skip';
     if (step === 'done') return 'Start browsing';
     return 'Continue';
@@ -398,6 +406,9 @@ export function setupOnboarding(api: FlechaApi, h: H, icon: (name: IconName) => 
     if (show && root.hidden) {
       step = 'welcome';
       tried.clear();
+      drawn = '';
+      discovery = { status: 'idle' };
+      imports.clear();
     }
     root.hidden = !show;
     if (!show) return;

@@ -7,10 +7,11 @@ const here = path.dirname(new URL(import.meta.url).pathname);
 
 export const featureEntries = {
   boostsPage: path.join(here, 'boostsPage.ts'),
+  historyPage: path.join(here, 'historyPage.ts'),
   consoleHook: path.join(here, 'features/consoleHook.ts'),
   consoleBridge: path.join(here, 'features/consoleBridge.ts'),
 };
 
 export function copyFeatureStatic(out) {
-  for (const f of ['boosts.html', 'boosts.css']) fs.copyFileSync(path.join(here, f), path.join(out, f));
+  for (const f of ['boosts.html', 'boosts.css', 'history.html', 'history.css']) fs.copyFileSync(path.join(here, f), path.join(out, f));
 }

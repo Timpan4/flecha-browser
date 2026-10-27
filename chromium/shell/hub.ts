@@ -1,15 +1,44 @@
 /**
  * The background side of the shell's messaging. Every Flecha page (sidebar, Settings, …)
  * connects a port named "flecha"; commands are fire-and-forget, invokes get a reply, and
- * events go out to every connected page. Feature modules register their own handlers, so
- * they never need to touch one shared switch.
+ * events go out to every connected page, or to the pages of one window. Feature modules
+ * register their own handlers, so they never need to touch one shared switch.
+ *
+ * A page's window is the Chromium window it is in: its tab's window, or for a window's frame
+ * page the `window` in its address (window.html?window=<id>). While a handler runs, its
+ * synchronous part can ask for the calling page's window with callerWindow().
  */
 import type { Message } from './protocol';
 
 type Handler = (...args: any[]) => unknown;
 
 const commands = new Map<string, Handler>();
-const ports = new Set<chrome.runtime.Port>();
+/** Each connected page, with its Chromium window if it has one. */
+const ports = new Map<chrome.runtime.Port, number | undefined>();
+let caller: number | undefined;
+
+/** The Chromium window of the page whose command is running, read before the handler's first await. */
+export const callerWindow = () => caller;
+
+/** Runs `fn` as if a page in `windowId` had sent it (a keyboard shortcut in that window, say). */
+export function asWindow<T>(windowId: number | undefined, fn: () => T): T {
+  const previous = caller;
+  caller = windowId;
+  try {
+    return fn();
+  } finally {
+    caller = previous;
+  }
+}
+
+/** The windows that have Flecha pages open, and undefined when some page has none. */
+export const pageWindows = () => new Set(ports.values());
+
+function windowOf(port: chrome.runtime.Port): number | undefined {
+  if (port.sender?.tab?.windowId !== undefined) return port.sender.tab.windowId;
+  const id = Number(new URL(port.sender?.url ?? 'about:blank').searchParams.get('window'));
+  return Number.isInteger(id) && id > 0 ? id : undefined;
+}
 
 /** Adds handlers by name; a name registered twice is a bug, so it throws. */
 export function handle(handlers: Record<string, Handler>) {
@@ -45,12 +74,18 @@ export function run(name: string, ...args: unknown[]) {
 /** Sends an event to every open Flecha page. */
 export function broadcast(name: string, ...args: unknown[]) {
   const message: Message = { type: 'event', name, args };
-  for (const port of ports) port.postMessage(message);
+  for (const port of ports.keys()) port.postMessage(message);
 }
 
-/** Calls fn whenever a page connects (to send it the current state, say). */
-const connectListeners: Array<(port: chrome.runtime.Port) => void> = [];
-export function onConnect(fn: (port: chrome.runtime.Port) => void) {
+/** Sends an event to the pages of one window (undefined: the pages that are in none). */
+export function broadcastTo(windowId: number | undefined, name: string, ...args: unknown[]) {
+  const message: Message = { type: 'event', name, args };
+  for (const [port, id] of ports) if (id === windowId) port.postMessage(message);
+}
+
+/** Calls fn whenever a page connects (to send it the current state, say), with its window. */
+const connectListeners: Array<(port: chrome.runtime.Port, windowId: number | undefined) => void> = [];
+export function onConnect(fn: (port: chrome.runtime.Port, windowId: number | undefined) => void) {
   connectListeners.push(fn);
 }
 
@@ -64,7 +99,8 @@ export function listen(ready: Promise<unknown>) {
     port.onMessage.addListener(buffer);
     await ready;
     port.onMessage.removeListener(buffer);
-    ports.add(port);
+    const windowId = windowOf(port);
+    ports.set(port, windowId);
     port.onDisconnect.addListener(() => ports.delete(port));
     const dispatch = async (message: Message) => {
       if (message.type === 'ping') return;
@@ -76,7 +112,7 @@ export function listen(ready: Promise<unknown>) {
         return;
       }
       try {
-        const value = await fn(...message.args);
+        const value = await asWindow(windowId, () => fn(...message.args));
         if (message.type === 'invoke') port.postMessage({ type: 'result', id: message.id, value } satisfies Message);
       } catch (err) {
         console.error(`Flecha shell: "${message.name}" failed`, err);
@@ -84,7 +120,7 @@ export function listen(ready: Promise<unknown>) {
       }
     };
     port.onMessage.addListener(dispatch);
-    for (const fn of connectListeners) fn(port);
+    for (const fn of connectListeners) fn(port, windowId);
     for (const m of early) void dispatch(m);
   });
 }

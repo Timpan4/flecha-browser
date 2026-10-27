@@ -1,0 +1,33 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; font-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'" />
+    <title>History</title>
+    <link rel="stylesheet" href="tokens.css" />
+    <link rel="stylesheet" href="history.css" />
+  </head>
+  <body>
+    <header>
+      <h1>History</h1>
+      <input id="search" type="search" placeholder="Search history" spellcheck="false" autocomplete="off" aria-label="Search history" />
+      <form id="clear">
+        <label for="range">Clear history from</label>
+        <select id="range">
+          <option value="3600000">the last hour</option>
+          <option value="86400000">the last 24 hours</option>
+          <option value="604800000">the last 7 days</option>
+          <option value="2419200000">the last 4 weeks</option>
+          <option value="all">all time</option>
+        </select>
+        <button class="button danger">Clear</button>
+      </form>
+    </header>
+    <main>
+      <div id="days"></div>
+      <p id="empty" class="hint" hidden>No pages here.</p>
+      <button id="more" class="button" hidden>Show older pages</button>
+    </main>
+    <script type="module" src="historyPage.js"></script>
+  </body>
+</html>

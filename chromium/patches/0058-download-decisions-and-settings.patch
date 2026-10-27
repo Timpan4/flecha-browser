@@ -1,0 +1,324 @@
+# Flecha: with Chromium's download bubble off, the sidebar settles held downloads (dangerous, or insecure over plain HTTP, which chrome.downloads doesn't report) and Settings sets Chromium's download folder (with the platform folder chooser) and ask-where-to-save.
+--- a/chrome/common/extensions/api/flecha_private.idl
++++ b/chrome/common/extensions/api/flecha_private.idl
+@@ -107,6 +107,31 @@
+   };
+   callback ExtensionActionsCallback = void(ExtensionAction[] actions);
+ 
++  // A download held until you keep or discard it. Chromium's download bubble,
++  // which would ask, is off; the sidebar asks instead.
++  dictionary DownloadWarning {
++    // Its chrome.downloads id.
++    long id;
++    // "dangerous": its file type or Safe Browsing flagged it. "insecure": it
++    // came over plain HTTP. chrome.downloads doesn't report the second.
++    DOMString kind;
++  };
++  callback DownloadWarningsCallback = void(DownloadWarning[] warnings);
++
++  // Where downloads go, and whether Chromium asks each time.
++  dictionary DownloadSettings {
++    DOMString folder;
++    boolean askWhereToSave;
++  };
++  callback DownloadSettingsCallback = void(DownloadSettings settings);
++
++  // What a new Flechinha shows.
++  dictionary FlechinhaOptions {
++    // A page to open (default: the new tab page).
++    DOMString? url;
++    // A tab to move into the Flechinha instead, from any window.
++    long? tabId;
++  };
+ 
+   interface Functions {
+     // Lays out a window's frame. Applies to every normal window (and to the
+@@ -245,6 +270,21 @@
+         DOMString id,
+         Bounds anchor,
+         optional DoneCallback callback);
++
++    // The downloads held for a decision.
++    static void getDownloadWarnings(DownloadWarningsCallback callback);
++    // Lets a held download finish.
++    static void keepDownload(long id, optional DoneCallback callback);
++    // Cancels a held download and deletes what it saved.
++    static void discardDownload(long id, optional DoneCallback callback);
++    static void getDownloadSettings(DownloadSettingsCallback callback);
++    // Picks the downloads folder with the platform's folder chooser, over the
++    // last active window. Calls back with the settings after (unchanged when
++    // cancelled).
++    static void chooseDownloadsFolder(DownloadSettingsCallback callback);
++    static void setAskWhereToSave(
++        boolean ask,
++        DownloadSettingsCallback callback);
+   };
+ 
+   interface Events {
+--- a/chrome/browser/extensions/api/flecha_private/flecha_private_api.h
++++ b/chrome/browser/extensions/api/flecha_private/flecha_private_api.h
+@@ -252,6 +252,63 @@
+   ResponseAction Run() override;
+ };
+ 
++class FlechaPrivateGetDownloadWarningsFunction : public ExtensionFunction {
++ public:
++  DECLARE_EXTENSION_FUNCTION("flechaPrivate.getDownloadWarnings", UNKNOWN)
++
++ protected:
++  ~FlechaPrivateGetDownloadWarningsFunction() override = default;
++  ResponseAction Run() override;
++};
++
++class FlechaPrivateKeepDownloadFunction : public ExtensionFunction {
++ public:
++  DECLARE_EXTENSION_FUNCTION("flechaPrivate.keepDownload", UNKNOWN)
++
++ protected:
++  ~FlechaPrivateKeepDownloadFunction() override = default;
++  ResponseAction Run() override;
++};
++
++class FlechaPrivateDiscardDownloadFunction : public ExtensionFunction {
++ public:
++  DECLARE_EXTENSION_FUNCTION("flechaPrivate.discardDownload", UNKNOWN)
++
++ protected:
++  ~FlechaPrivateDiscardDownloadFunction() override = default;
++  ResponseAction Run() override;
++};
++
++class FlechaPrivateGetDownloadSettingsFunction : public ExtensionFunction {
++ public:
++  DECLARE_EXTENSION_FUNCTION("flechaPrivate.getDownloadSettings", UNKNOWN)
++
++ protected:
++  ~FlechaPrivateGetDownloadSettingsFunction() override = default;
++  ResponseAction Run() override;
++};
++
++class FlechaPrivateChooseDownloadsFolderFunction : public ExtensionFunction {
++ public:
++  DECLARE_EXTENSION_FUNCTION("flechaPrivate.chooseDownloadsFolder", UNKNOWN)
++
++  // The folder chooser closed: answers with the settings as they are now.
++  void Answer();
++
++ protected:
++  ~FlechaPrivateChooseDownloadsFolderFunction() override = default;
++  ResponseAction Run() override;
++};
++
++class FlechaPrivateSetAskWhereToSaveFunction : public ExtensionFunction {
++ public:
++  DECLARE_EXTENSION_FUNCTION("flechaPrivate.setAskWhereToSave", UNKNOWN)
++
++ protected:
++  ~FlechaPrivateSetAskWhereToSaveFunction() override = default;
++  ResponseAction Run() override;
++};
++
+ }  // namespace extensions
+ 
+ #endif  // CHROME_BROWSER_EXTENSIONS_API_FLECHA_PRIVATE_FLECHA_PRIVATE_API_H_
+--- a/chrome/browser/extensions/api/flecha_private/flecha_private_api.cc
++++ b/chrome/browser/extensions/api/flecha_private/flecha_private_api.cc
+@@ -11,6 +11,14 @@
+ #include "base/auto_reset.h"
+ #include "chrome/browser/devtools/devtools_toggle_action.h"
+ #include "chrome/browser/devtools/devtools_window.h"
++#include "chrome/browser/download/download_prefs.h"
++#include "chrome/common/pref_names.h"
++#include "components/download/public/common/download_item.h"
++#include "components/prefs/pref_service.h"
++#include "content/public/browser/download_manager.h"
++#include "ui/shell_dialogs/select_file_dialog.h"
++#include "ui/shell_dialogs/select_file_policy.h"
++#include "ui/shell_dialogs/selected_file_info.h"
+ #include "chrome/browser/extensions/api/tabs/tabs_util.h"
+ #include "chrome/browser/shell_integration.h"
+ #include "chrome/browser/extensions/extension_tab_util.h"
+@@ -725,4 +733,166 @@
+   return RespondNow(NoArguments());
+ }
+ 
++// ---- downloads ---------------------------------------------------------------
++
++namespace {
++
++constexpr char kNoDownloadError[] = "No download with id *.";
++constexpr char kNotHeldError[] = "Download * isn't waiting for a decision.";
++
++// A download held for a decision: dangerous, or insecure (plain HTTP).
++const char* WarningKind(download::DownloadItem* item) {
++  if (item->GetState() != download::DownloadItem::IN_PROGRESS) {
++    return nullptr;
++  }
++  if (item->IsInsecure()) {
++    return "insecure";
++  }
++  return item->IsDangerous() ? "dangerous" : nullptr;
++}
++
++download::DownloadItem* FindDownload(content::BrowserContext* context, int id) {
++  return id < 0 ? nullptr : context->GetDownloadManager()->GetDownload(id);
++}
++
++flecha_private::DownloadSettings DownloadSettingsOf(
++    content::BrowserContext* context) {
++  DownloadPrefs* prefs = DownloadPrefs::FromBrowserContext(context);
++  flecha_private::DownloadSettings settings;
++  settings.folder = prefs->DownloadPath().AsUTF8Unsafe();
++  settings.ask_where_to_save = prefs->PromptForDownload();
++  return settings;
++}
++
++// The platform's folder chooser for the downloads folder; answers the call
++// that opened it, then deletes itself.
++class DownloadsFolderChooser : public ui::SelectFileDialog::Listener {
++ public:
++  DownloadsFolderChooser(
++      scoped_refptr<FlechaPrivateChooseDownloadsFolderFunction> function,
++                         content::BrowserContext* context)
++      : function_(std::move(function)), context_(context) {}
++  ~DownloadsFolderChooser() override {
++    if (dialog_) {
++      dialog_->ListenerDestroyed();
++    }
++  }
++
++  void Show(gfx::NativeWindow parent) {
++    dialog_ = ui::SelectFileDialog::Create(this, /*policy=*/nullptr);
++    dialog_->SelectFile(
++        ui::SelectFileDialog::SELECT_FOLDER, std::u16string(),
++        DownloadPrefs::FromBrowserContext(context_)->DownloadPath(),
++        /*file_types=*/nullptr, /*file_type_index=*/0,
++        base::FilePath::StringType(), parent);
++  }
++
++  // ui::SelectFileDialog::Listener:
++  void FileSelected(const ui::SelectedFileInfo& file, int index) override {
++    DownloadPrefs::FromBrowserContext(context_)->SetDownloadPath(file.path());
++    Finish();
++  }
++  void FileSelectionCanceled() override { Finish(); }
++
++ private:
++  void Finish() {
++    function_->Answer();
++    delete this;
++  }
++
++  scoped_refptr<FlechaPrivateChooseDownloadsFolderFunction> function_;
++  raw_ptr<content::BrowserContext> context_;
++  scoped_refptr<ui::SelectFileDialog> dialog_;
++};
++
++}  // namespace
++
++ExtensionFunction::ResponseAction
++FlechaPrivateGetDownloadWarningsFunction::Run() {
++  download::SimpleDownloadManager::DownloadVector items;
++  browser_context()->GetDownloadManager()->GetAllDownloads(&items);
++  std::vector<flecha_private::DownloadWarning> warnings;
++  for (download::DownloadItem* item : items) {
++    if (const char* kind = WarningKind(item)) {
++      flecha_private::DownloadWarning& warning = warnings.emplace_back();
++      warning.id = static_cast<int>(item->GetId());
++      warning.kind = kind;
++    }
++  }
++  return RespondNow(ArgumentList(
++      flecha_private::GetDownloadWarnings::Results::Create(warnings)));
++}
++
++ExtensionFunction::ResponseAction FlechaPrivateKeepDownloadFunction::Run() {
++  auto params = flecha_private::KeepDownload::Params::Create(args());
++  EXTENSION_FUNCTION_VALIDATE(params);
++  download::DownloadItem* item = FindDownload(browser_context(), params->id);
++  if (!item) {
++    return RespondNow(Error(kNoDownloadError, base::NumberToString(params->id)));
++  }
++  const char* kind = WarningKind(item);
++  if (!kind) {
++    return RespondNow(Error(kNotHeldError, base::NumberToString(params->id)));
++  }
++  if (item->IsInsecure()) {
++    item->ValidateInsecureDownload();
++  } else {
++    item->ValidateDangerousDownload();
++  }
++  return RespondNow(NoArguments());
++}
++
++ExtensionFunction::ResponseAction FlechaPrivateDiscardDownloadFunction::Run() {
++  auto params = flecha_private::DiscardDownload::Params::Create(args());
++  EXTENSION_FUNCTION_VALIDATE(params);
++  download::DownloadItem* item = FindDownload(browser_context(), params->id);
++  if (!item) {
++    return RespondNow(Error(kNoDownloadError, base::NumberToString(params->id)));
++  }
++  if (!WarningKind(item)) {
++    return RespondNow(Error(kNotHeldError, base::NumberToString(params->id)));
++  }
++  // Deletes the partial file and drops the download from the list.
++  item->Remove();
++  return RespondNow(NoArguments());
++}
++
++ExtensionFunction::ResponseAction
++FlechaPrivateGetDownloadSettingsFunction::Run() {
++  return RespondNow(
++      ArgumentList(flecha_private::GetDownloadSettings::Results::Create(
++          DownloadSettingsOf(browser_context()))));
++}
++
++void FlechaPrivateChooseDownloadsFolderFunction::Answer() {
++  Respond(
++      ArgumentList(flecha_private::ChooseDownloadsFolder::Results::Create(
++          DownloadSettingsOf(browser_context()))));
++}
++
++ExtensionFunction::ResponseAction
++FlechaPrivateChooseDownloadsFolderFunction::Run() {
++  FlechaFrameHost* host = FlechaFrameHost::Main(browser_context());
++  ui::BaseWindow* window =
++      host ? host->GetBrowserWindowInterface()->GetWindow() : nullptr;
++  if (!window) {
++    return RespondNow(Error(kNoWindowError, "(main)"));
++  }
++  // Deletes itself once answered.
++  (new DownloadsFolderChooser(this, browser_context()))
++      ->Show(window->GetNativeWindow());
++  return RespondLater();
++}
++
++ExtensionFunction::ResponseAction FlechaPrivateSetAskWhereToSaveFunction::Run() {
++  auto params = flecha_private::SetAskWhereToSave::Params::Create(args());
++  EXTENSION_FUNCTION_VALIDATE(params);
++  Profile::FromBrowserContext(browser_context())
++      ->GetPrefs()
++      ->SetBoolean(prefs::kPromptForDownload, params->ask);
++  return RespondNow(
++      ArgumentList(flecha_private::SetAskWhereToSave::Results::Create(
++          DownloadSettingsOf(browser_context()))));
++}
++
+ }  // namespace extensions
+--- a/chrome/browser/extensions/api/flecha_private/BUILD.gn
++++ b/chrome/browser/extensions/api/flecha_private/BUILD.gn
+@@ -12,11 +12,14 @@
+ 
+   deps = [
+     "//base",
++    "//chrome/browser/download",
+     "//chrome/browser/flecha:flecha_frame_host",
+     "//chrome/browser/profiles:profile",
+     "//chrome/browser/themes",
+     "//chrome/common/extensions/api",
+     "//content/public/browser",
++    "//components/download/public/common:public",
+     "//extensions/browser",
++    "//ui/shell_dialogs",
+   ]
+ }

@@ -6,10 +6,10 @@ import type { SettingsPatch, SettingsView } from '../../shared/types';
 import type { Store } from '../../shared/store';
 import { SEARCH_ENGINES } from './url';
 import { sanitize as sanitizeEnvironments } from './environments';
-import { SHORTCUTS, displayKeys, isShortcutId, keysFor, sameKeys, shortcutList } from './shortcuts';
+import { SHORTCUTS, defaultKeys, displayKeys, fixedShortcuts, isShortcutId, keysFor, sameKeys, shortcutList } from './shortcuts';
 
 /** A modifier and a key, or a function key alone: "Alt+Cmd+K", "F5". */
-const ACCELERATOR = /^((Ctrl|Alt|Shift|Cmd)\+){1,4}[^+]+$|^F\d{1,2}$/;
+const ACCELERATOR = /^((Ctrl|Alt|Shift|Cmd|CmdOrCtrl)\+){1,4}[^+]+$|^F\d{1,2}$/;
 
 /** What the view needs from the browser it runs in. */
 export interface SettingsEnvironment {
@@ -39,6 +39,7 @@ export function settingsView(store: Store, env: SettingsEnvironment): SettingsVi
     peekPinnedLinks: s.peekPinnedLinks !== false,
     shortcuts: shortcutList(s),
     openLinksInFlechinha: s.openLinksInFlechinha !== false,
+    sidebarInPageFullscreen: !!s.sidebarInPageFullscreen,
     agent: {
       enabled: !!s.agent?.enabled,
       endpoint: env.agentEndpoint,
@@ -56,13 +57,9 @@ export function settingsView(store: Store, env: SettingsEnvironment): SettingsVi
 /** Records one shortcut. A command that had the same keys loses them, and the notice says so. */
 export function setShortcut(store: Store, id: string, keys: string | null): string | undefined {
   if (!isShortcutId(id)) return undefined;
-  if (keys === 'default') {
-    store.setKeybinding(id, undefined);
-    return undefined;
-  }
+  if (keys === 'default') keys = defaultKeys(id);
   if (keys !== null && !ACCELERATOR.test(keys)) return undefined;
-  // ⌘1…⌘9 and ⌃1…⌃9 pick tabs and Spaces.
-  if (keys && /^(Cmd|Ctrl)\+\d$/.test(keys)) return `${displayKeys(keys)} already goes to a tab or Space.`;
+  if (keys && Object.keys(fixedShortcuts()).some((fixed) => sameKeys(fixed, keys))) return `${displayKeys(keys)} is reserved for tab, Space or Flechinha navigation.`;
   let notice: string | undefined;
   if (keys) {
     for (const other of SHORTCUTS) {
@@ -73,7 +70,7 @@ export function setShortcut(store: Store, id: string, keys: string | null): stri
       }
     }
   }
-  const fallback = SHORTCUTS.find((s) => s.id === id)!.keys;
+  const fallback = defaultKeys(id);
   store.setKeybinding(id, keys && sameKeys(keys, fallback) ? undefined : keys);
   return notice;
 }
@@ -94,6 +91,7 @@ export async function applySettings(store: Store, patch: SettingsPatch, effects:
     effects.theme(store.state.theme ?? 'system');
   }
   if (patch.openLinksInFlechinha !== undefined) store.setOpenLinksInFlechinha(patch.openLinksInFlechinha);
+  if (patch.sidebarInPageFullscreen !== undefined) store.setSidebarInPageFullscreen(patch.sidebarInPageFullscreen);
   if (typeof patch.archiveAfterHours === 'number') store.setArchiveAfter(patch.archiveAfterHours);
   if (patch.agentEnabled !== undefined) {
     store.setAgent({ enabled: patch.agentEnabled, token: store.state.agent?.token || newToken() });

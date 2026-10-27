@@ -1,4 +1,5 @@
 import type { BrowserState, ShortcutInfo } from '../../shared/types';
+import { isMac } from './platform';
 
 /**
  * Every command with a keyboard shortcut. Menus, tooltips and Settings all read keys from
@@ -15,11 +16,12 @@ export const SHORTCUTS = [
   { id: 'find', group: 'Getting around', label: 'Find in page', keys: 'CmdOrCtrl+F' },
   { id: 'toggleSidebar', group: 'Getting around', label: 'Show or hide the sidebar', keys: 'CmdOrCtrl+S' },
   { id: 'settings', group: 'Getting around', label: 'Settings', keys: 'CmdOrCtrl+,' },
+  { id: 'history', group: 'Getting around', label: 'History', keys: 'CmdOrCtrl+Y' },
   { id: 'newFlechinha', group: 'Tabs', label: 'New Flechinha window', keys: 'Alt+CmdOrCtrl+N' },
   { id: 'closeTab', group: 'Tabs', label: 'Close tab', keys: 'CmdOrCtrl+W' },
   { id: 'reopenTab', group: 'Tabs', label: 'Reopen closed tab', keys: 'CmdOrCtrl+Shift+T' },
-  { id: 'nextTab', group: 'Tabs', label: 'Next tab', keys: 'Ctrl+Tab' },
-  { id: 'previousTab', group: 'Tabs', label: 'Previous tab', keys: 'Ctrl+Shift+Tab' },
+  { id: 'nextTab', group: 'Tabs', label: 'Switch to recent tab', keys: 'Ctrl+Tab' },
+  { id: 'previousTab', group: 'Tabs', label: 'Switch to recent tab, backwards', keys: 'Ctrl+Shift+Tab' },
   { id: 'pinTab', group: 'Tabs', label: 'Pin or unpin tab', keys: 'CmdOrCtrl+D' },
   { id: 'duplicateTab', group: 'Tabs', label: 'Duplicate tab', keys: 'Alt+CmdOrCtrl+D' },
   { id: 'muteTab', group: 'Tabs', label: 'Mute or unmute tab', keys: 'Ctrl+M' },
@@ -41,22 +43,40 @@ export const SHORTCUTS = [
   { id: 'editBoost', group: 'Developer', label: 'Edit boost for this site', keys: 'Alt+CmdOrCtrl+B' },
   { id: 'viewSource', group: 'Developer', label: 'View source', keys: 'Alt+CmdOrCtrl+U' },
   { id: 'shortcuts', group: 'Getting around', label: 'Keyboard shortcuts', keys: 'CmdOrCtrl+/' },
+  { id: 'quit', group: 'Getting around', label: 'Quit Flecha', keys: 'Ctrl+Shift+Q' },
 ] as const;
 
 export type ShortcutId = (typeof SHORTCUTS)[number]['id'];
 
 /** Shortcuts that are a family of keys (⌘1…⌘9) and can't be recorded as one. */
-const FIXED: ShortcutInfo[] = [
-  { id: 'tabN', group: 'Tabs', label: 'Go to tab · last tab', keys: '⌘1 … ⌘9', fixed: true },
-  { id: 'spaceN', group: 'Spaces', label: 'Go to Space', keys: '⌃1 … ⌃9', fixed: true },
-  { id: 'closePeek', group: 'Split & Peek', label: 'Close Peek', keys: 'Esc', fixed: true },
-];
+export function fixedShortcuts(mac = isMac): Record<string, string> {
+  const map: Record<string, string> = { 'CmdOrCtrl+O': 'openInFlecha' };
+  for (let i = 1; i <= 9; i++) {
+    map[`CmdOrCtrl+${i}`] = `selectTab:${i}`;
+    map[`${mac ? 'Ctrl' : 'Ctrl+Alt'}+${i}`] = `selectSpace:${i}`;
+  }
+  return map;
+}
+
+export function defaultKeys(id: ShortcutId, mac = isMac): string {
+  if (id === 'newSpace' && !mac) return 'Ctrl+Alt+Shift+N';
+  // Chrome's keys for History: ⌘Y on macOS, Ctrl+H elsewhere.
+  if (id === 'history' && !mac) return 'Ctrl+H';
+  // macOS quits from its menu bar (⌘Q); elsewhere Flecha has no menu bar to hold the key.
+  if (id === 'quit' && mac) return '';
+  return SHORTCUTS.find((s) => s.id === id)!.keys;
+}
 
 /** The accelerator for a command: yours if you set one, none if you removed it, else the default. */
-export function keysFor(state: BrowserState, id: ShortcutId): string | undefined {
+export function keysFor(state: BrowserState, id: ShortcutId, mac = isMac): string | undefined {
   const own = state.keybindings?.[id];
   if (own === null) return undefined;
-  return own ?? SHORTCUTS.find((s) => s.id === id)?.keys;
+  if (own) return Object.keys(fixedShortcuts(mac)).some((fixed) => sameKeys(own, fixed, mac)) ? undefined : own;
+  const fallback = defaultKeys(id, mac);
+  // Saved custom bindings can move between platforms. Keep the custom command when
+  // CmdOrCtrl resolves differently, and leave any conflicting default unbound.
+  if (SHORTCUTS.some((other) => other.id !== id && state.keybindings?.[other.id] && sameKeys(state.keybindings[other.id]!, fallback, mac))) return undefined;
+  return fallback;
 }
 
 export function isShortcutId(id: string): id is ShortcutId {
@@ -64,25 +84,23 @@ export function isShortcutId(id: string): id is ShortcutId {
 }
 
 /** Two accelerators that press the same keys ("CmdOrCtrl+T" and "Cmd+T") compare equal. */
-export function sameKeys(a: string, b: string) {
-  const norm = (keys: string) =>
-    keys
-      .replace(/CmdOrCtrl|CommandOrControl|Command/g, 'Cmd')
-      .replace(/Option/g, 'Alt')
-      .replace(/Control/g, 'Ctrl')
-      .split('+')
-      .sort()
-      .join('+')
-      .toLowerCase();
+export function sameKeys(a: string, b: string, mac = isMac) {
+  const norm = (keys: string) => acceleratorParts(keys, mac).sort().join('+').toLowerCase();
   return norm(a) === norm(b);
 }
 
-/** macOS notation: "Alt+CmdOrCtrl+Shift+T" → "⌥⇧⌘T". */
-export function displayKeys(keys: string | undefined) {
+function acceleratorParts(keys: string, mac: boolean): string[] {
+  const aliases: Record<string, string> = { CmdOrCtrl: mac ? 'Cmd' : 'Ctrl', CommandOrControl: mac ? 'Cmd' : 'Ctrl', Command: 'Cmd', Option: 'Alt', Control: 'Ctrl' };
+  return keys.split('+').map((part) => aliases[part] ?? part);
+}
+
+/** Use the platform's familiar modifier labels in menus, hints and Settings. */
+export function displayKeys(keys: string | undefined, mac = isMac) {
   if (!keys) return '';
-  const parts = keys.split('+');
-  const mods = new Set(parts.slice(0, -1).map((m) => m.replace(/CmdOrCtrl|CommandOrControl|Command/, 'Cmd').replace('Option', 'Alt').replace('Control', 'Ctrl')));
+  const parts = acceleratorParts(keys, mac);
+  const mods = new Set(parts.slice(0, -1));
   const key = parts[parts.length - 1];
+  if (!mac) return [...['Ctrl', 'Alt', 'Shift', 'Cmd'].filter((m) => mods.has(m)).map((m) => m === 'Cmd' ? 'Super' : m), key.length === 1 ? key.toUpperCase() : key].join('+');
   const names: Record<string, string> = { Left: '←', Right: '→', Up: '↑', Down: '↓', Return: '↩', Enter: '↩', Tab: '⇥', Space: 'Space', Escape: 'Esc', Backspace: '⌫', Delete: '⌦', '-': '−' };
   return (
     (mods.has('Ctrl') ? '⌃' : '') + (mods.has('Alt') ? '⌥' : '') + (mods.has('Shift') ? '⇧' : '') + (mods.has('Cmd') ? '⌘' : '') + (names[key] ?? key.toUpperCase())
@@ -90,13 +108,18 @@ export function displayKeys(keys: string | undefined) {
 }
 
 /** Everything Settings shows, in order, with your keys applied. */
-export function shortcutList(state: BrowserState): ShortcutInfo[] {
+export function shortcutList(state: BrowserState, mac = isMac): ShortcutInfo[] {
   const editable = SHORTCUTS.map((s): ShortcutInfo => {
-    const keys = keysFor(state, s.id);
-    return { id: s.id, group: s.group, label: s.label, keys: displayKeys(keys), changed: state.keybindings?.[s.id] !== undefined };
+    const keys = keysFor(state, s.id, mac);
+    return { id: s.id, group: s.group, label: s.label, keys: displayKeys(keys, mac), changed: state.keybindings?.[s.id] !== undefined };
   });
+  const fixed: ShortcutInfo[] = [
+    { id: 'tabN', group: 'Tabs', label: 'Go to tab · last tab', keys: `${displayKeys('CmdOrCtrl+1', mac)} … ${displayKeys('CmdOrCtrl+9', mac)}`, fixed: true },
+    { id: 'spaceN', group: 'Spaces', label: 'Go to Space', keys: `${displayKeys(`${mac ? 'Ctrl' : 'Ctrl+Alt'}+1`, mac)} … ${displayKeys(`${mac ? 'Ctrl' : 'Ctrl+Alt'}+9`, mac)}`, fixed: true },
+    { id: 'closePeek', group: 'Split & Peek', label: 'Close Peek', keys: 'Esc', fixed: true },
+  ];
   const groups = [...new Set(SHORTCUTS.map((s) => s.group))];
-  return groups.flatMap((g) => [...editable.filter((s) => s.group === g), ...FIXED.filter((s) => s.group === g)]);
+  return groups.flatMap((g) => [...editable.filter((s) => s.group === g), ...fixed.filter((s) => s.group === g)]);
 }
 
 /** The sidebar's tooltips and hints, by command: { newTab: '⌘T', … }. */

@@ -209,11 +209,12 @@ export async function buildAdblock(out, { refresh = false } = {}) {
   }
 
   // Generic hiding, except selectors any site has an exception for: those need per-site rules.
-  // :is() takes a forgiving selector list, so one selector Chromium doesn't know can't void the rest.
+  // One rule per selector: a selector Chromium doesn't know drops only its own rule, and Blink
+  // files each rule under its id, class or tag. Inside :is() lists every selector was checked
+  // against every element on each style recalc (perf findings, 2026-10-26).
   const selectors = [...hide].filter((s) => !hideExceptions.has(s) && !s.includes('{') && !s.includes('}'));
-  const chunks = [];
-  for (let i = 0; i < selectors.length; i += 500) chunks.push(`:is(${selectors.slice(i, i + 500).join(',\n')}) { display: none !important; }`);
-  fs.writeFileSync(path.join(rulesDir, 'cosmetic.css'), `/* Generated from EasyList by build-adblock.mjs. */\n${chunks.join('\n')}\n`);
+  const rules = selectors.map((s) => `${s} { display: none !important; }`);
+  fs.writeFileSync(path.join(rulesDir, 'cosmetic.css'), `/* Generated from EasyList by build-adblock.mjs. */\n${rules.join('\n')}\n`);
   const excludeMatches = [...exempt].sort().flatMap((d) => [`*://${d}/*`, `*://*.${d}/*`]);
   fs.writeFileSync(path.join(rulesDir, 'cosmetic-exclude.json'), JSON.stringify(excludeMatches));
 

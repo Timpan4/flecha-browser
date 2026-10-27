@@ -1,0 +1,59 @@
+# Flecha: chrome.flechaPrivate.isQuitting tells a window closed by quitting from one closed by you, so windows come back after a restart.
+--- a/chrome/common/extensions/api/flecha_private.idl
++++ b/chrome/common/extensions/api/flecha_private.idl
+@@ -124,6 +124,7 @@
+     boolean askWhereToSave;
+   };
+   callback DownloadSettingsCallback = void(DownloadSettings settings);
++  callback QuittingCallback = void(boolean quitting);
+ 
+   // What a new Flechinha shows.
+   dictionary FlechinhaOptions {
+@@ -285,6 +286,10 @@
+     static void setAskWhereToSave(
+         boolean ask,
+         DownloadSettingsCallback callback);
++
++    // Whether the browser is quitting, which closes every window: they are
++    // not being closed one by one, and should all come back next time.
++    static void isQuitting(QuittingCallback callback);
+   };
+ 
+   interface Events {
+--- a/chrome/browser/extensions/api/flecha_private/flecha_private_api.h
++++ b/chrome/browser/extensions/api/flecha_private/flecha_private_api.h
+@@ -309,6 +309,15 @@
+   ResponseAction Run() override;
+ };
+ 
++class FlechaPrivateIsQuittingFunction : public ExtensionFunction {
++ public:
++  DECLARE_EXTENSION_FUNCTION("flechaPrivate.isQuitting", UNKNOWN)
++
++ protected:
++  ~FlechaPrivateIsQuittingFunction() override = default;
++  ResponseAction Run() override;
++};
++
+ }  // namespace extensions
+ 
+ #endif  // CHROME_BROWSER_EXTENSIONS_API_FLECHA_PRIVATE_FLECHA_PRIVATE_API_H_
+--- a/chrome/browser/extensions/api/flecha_private/flecha_private_api.cc
++++ b/chrome/browser/extensions/api/flecha_private/flecha_private_api.cc
+@@ -12,6 +12,7 @@
+ #include "chrome/browser/devtools/devtools_toggle_action.h"
+ #include "chrome/browser/devtools/devtools_window.h"
+ #include "chrome/browser/download/download_prefs.h"
++#include "chrome/browser/lifetime/browser_shutdown.h"
+ #include "chrome/common/pref_names.h"
+ #include "components/download/public/common/download_item.h"
+ #include "components/prefs/pref_service.h"
+@@ -895,4 +896,8 @@
+           DownloadSettingsOf(browser_context()))));
+ }
+ 
++ExtensionFunction::ResponseAction FlechaPrivateIsQuittingFunction::Run() {
++  return RespondNow(WithArguments(browser_shutdown::IsTryingToQuit()));
++}
++
+ }  // namespace extensions

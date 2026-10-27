@@ -4,9 +4,11 @@
  */
 import type { FlechaApi, PaletteMode, UiState } from '../shared/types';
 import { spaceTint } from './lib/spaceTint';
+import { SIDEBAR_DEFAULT_WIDTH, clampSidebarWidth } from '../shared/sidebarWidth';
 import { cmd, invoke, on } from './client';
 import { confirmDeleteSpace, copy, setupWindowUi, showMenu } from './windowUi';
 import { incognito } from './incognito';
+import { fetchSuggestions, suggestable } from './lib/suggest';
 
 const surface = document.documentElement.dataset.surface;
 const systemDark = matchMedia('(prefers-color-scheme: dark)');
@@ -25,6 +27,8 @@ const stateListeners: Array<(state: UiState) => void> = [];
 let lastState: UiState | undefined;
 function emitState(state: UiState) {
   lastState = state;
+  // A width you finished dragging to is the saved one now.
+  if (resizing === state.sidebarWidth) resizing = undefined;
   const shown = { ...state, tint: spaceTint(state.tint, systemDark.matches), faviconUrls: siteIcons };
   for (const cb of stateListeners) cb(shown);
   applyFrame();
@@ -39,12 +43,21 @@ on('site-icons', (icons: Record<string, string>) => {
 });
 
 // The frame page lays its window out: the background says how, this page adds the colour.
-let frameState: { sidebar: chrome.flechaPrivate.SidebarMode; overlay: boolean } | undefined;
+let frameState: { sidebar: chrome.flechaPrivate.SidebarMode; overlay: boolean; sidebarInPageFullscreen: boolean } | undefined;
+/** The width the sidebar is being dragged to, until the saved state has it. */
+let resizing: number | undefined;
 const windowId = surface === 'window' && framed ? chrome.flechaPrivate.getWindowId() : undefined;
 function applyFrame() {
   if (!windowId || !frameState || !lastState) return;
   const background = spaceTint(lastState.tint, systemDark.matches);
-  void windowId.then((id) => chrome.flechaPrivate.setFrame({ ...frameState!, background }, id));
+  const sidebarWidth = resizing ?? lastState.sidebarWidth ?? SIDEBAR_DEFAULT_WIDTH;
+  document.documentElement.style.setProperty('--sidebar', `${sidebarWidth}px`);
+  const { sidebarInPageFullscreen, ...frame } = frameState;
+  void windowId.then((id) => {
+    void chrome.flechaPrivate.setFrame({ ...frame, background, sidebarWidth }, id);
+    // Patch 0072; a browser without it lays out a page's full screen as the sidebar's mode says.
+    if (typeof chrome.flechaPrivate.setSidebarInPageFullscreen === 'function') void chrome.flechaPrivate.setSidebarInPageFullscreen(sidebarInPageFullscreen, id);
+  });
 }
 on('frame', (state) => {
   frameState = state;
@@ -53,7 +66,12 @@ on('frame', (state) => {
 
 const paletteListeners: Array<(mode: PaletteMode) => void> = [];
 const renameListeners: Array<(tabId: string) => void> = [];
-setupWindowUi({ rename: (tabId) => renameListeners.forEach((cb) => cb(tabId)), state: () => lastState });
+const editHomeUrlListeners: Array<(tabId: string) => void> = [];
+setupWindowUi({
+  rename: (tabId) => renameListeners.forEach((cb) => cb(tabId)),
+  editHomeUrl: (tabId) => editHomeUrlListeners.forEach((cb) => cb(tabId)),
+  state: () => lastState,
+});
 systemDark.addEventListener('change', () => lastState && emitState(lastState));
 
 const api: FlechaApi = {
@@ -64,17 +82,28 @@ const api: FlechaApi = {
     paletteListeners.push(cb);
     on('palette', cb);
   },
+  onClosePalette: (cb) => {
+    if (surface === 'panel' || surface === 'window') on('close-palette', cb);
+  },
   onEditSpace: (cb) => on('edit-space', cb),
   onRenameTab: (cb) => {
     renameListeners.push(cb);
     on('rename-tab', cb);
   },
+  onEditHomeUrl: (cb) => void editHomeUrlListeners.push(cb),
   onPeek: (cb) => on('peek', cb),
   onDownloads: (cb) => on('downloads', cb),
   onTourKey: (cb) => on('tour-key', cb),
   onFlash: (cb) => on('flash', cb),
   ready: cmd('ready'),
   searchHistory: (query) => invoke('searchHistory', query),
+  // Asked from this page, so a newer query can abort the request. Chromium's omnibox sends none
+  // in incognito, nor while Settings > "Autocomplete searches and URLs" (search.suggest_enabled) is off.
+  searchSuggestions: async (query, signal) => {
+    if (incognito || !suggestable(query)) return [];
+    if (!(await chrome.privacy.services.searchSuggestEnabled.get({})).value) return [];
+    return fetchSuggestions(lastState?.searchEngine, query, signal);
+  },
   topSites: () => invoke('topSites'),
   // Extensions can't read other apps' icons; the onboarding falls back to the name.
   appIcon: async () => undefined,
@@ -120,10 +149,16 @@ const api: FlechaApi = {
   openPalette: surface === 'window' ? cmd('openPalette') : (mode) => paletteListeners.forEach((cb) => cb(mode)),
   closePalette: surface === 'window' ? cmd('closePalette') : () => undefined,
   toggleSidebar: cmd('toggleSidebar'),
+  resizeSidebar: (width, done) => {
+    resizing = clampSidebarWidth(width);
+    applyFrame();
+    if (done) cmd('setSidebarWidth')(resizing);
+  },
   setSidebarPeek: cmd('setSidebarPeek'),
   // The page can write the clipboard itself; the background has no document to do it from.
   copyText: (text) => void copy(String(text), 'Link copied'),
   renameTab: cmd('renameTab'),
+  setHomeUrl: cmd('setHomeUrl'),
   toggleMute: cmd('toggleMute'),
   capturePage: cmd('capturePage'),
   clearSiteData: cmd('clearSiteData'),
@@ -131,6 +166,7 @@ const api: FlechaApi = {
   zoom: cmd('zoom'),
   openDevTools: cmd('openDevTools'),
   openSettings: cmd('openSettings'),
+  openHistory: cmd('openHistory'),
   toggleResponsive: cmd('toggleResponsive'),
   showConsole: cmd('showConsole'),
   editBoost: cmd('editBoost'),
@@ -149,12 +185,24 @@ const api: FlechaApi = {
   },
   revealDownload: cmd('revealDownload'),
   cancelDownload: cmd('cancelDownload'),
+  keepDownload: cmd('keepDownload'),
+  discardDownload: cmd('discardDownload'),
+  resumeDownload: cmd('resumeDownload'),
+  retryDownload: cmd('retryDownload'),
   clearDownloads: cmd('clearDownloads'),
   promotePeek: cmd('promotePeek'),
   finishOnboarding: cmd('finishOnboarding'),
   setPreferences: cmd('setPreferences'),
   makeDefaultBrowser: cmd('makeDefaultBrowser'),
   newFlechinha: cmd('newFlechinha'),
+  newWindow: cmd('newWindow'),
+  newIncognitoWindow: cmd('newIncognitoWindow'),
+  openExtensions: cmd('openExtensions'),
+  openAbout: cmd('openAbout'),
+  openHelp: cmd('openHelp'),
+  print: cmd('print'),
+  quit: cmd('quit'),
+  runCommand: cmd('run'),
 };
 
 window.flecha = api;

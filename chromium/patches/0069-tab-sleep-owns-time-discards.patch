@@ -1,0 +1,213 @@
+# Flecha: chrome.flechaPrivate.setTabSleepManaged(tabId, managed) marks a tab as the shell's tab sleep's to discard; Memory Saver leaves a marked tab alone, since the shell discards it after 4 hours of active use (Dia's rule) where Memory Saver's timer counts any time the device is awake. Memory Saver stays on, for every other tab. The feature FlechaTabSleepOwnsDiscards turns this off; its memory_saver_time_for_testing parameter shortens Memory Saver's time for tests.
+--- a/chrome/common/extensions/api/flecha_private.idl
++++ b/chrome/common/extensions/api/flecha_private.idl
+@@ -318,6 +318,15 @@
+     // Time since an arbitrary start that doesn't advance while the device is
+     // suspended (base::LiveTicks), in milliseconds.
+     static void getLiveTicks(LiveTicksCallback callback);
++
++    // Marks a tab as the shell's tab sleep's to discard (<code>managed</code>),
++    // or takes the mark back. Memory Saver leaves a marked tab alone: the
++    // shell discards it after 4 hours of active use, where Memory Saver's
++    // timer counts any time the device is awake. The mark ends with the page.
++    static void setTabSleepManaged(
++        long tabId,
++        boolean managed,
++        optional DoneCallback callback);
+   };
+ 
+   interface Events {
+--- a/chrome/browser/extensions/api/flecha_private/flecha_private_api.h
++++ b/chrome/browser/extensions/api/flecha_private/flecha_private_api.h
+@@ -345,6 +345,15 @@
+   ResponseAction Run() override;
+ };
+ 
++class FlechaPrivateSetTabSleepManagedFunction : public ExtensionFunction {
++ public:
++  DECLARE_EXTENSION_FUNCTION("flechaPrivate.setTabSleepManaged", UNKNOWN)
++
++ protected:
++  ~FlechaPrivateSetTabSleepManagedFunction() override = default;
++  ResponseAction Run() override;
++};
++
+ }  // namespace extensions
+ 
+ #endif  // CHROME_BROWSER_EXTENSIONS_API_FLECHA_PRIVATE_FLECHA_PRIVATE_API_H_
+--- a/chrome/browser/extensions/api/flecha_private/flecha_private_api.cc
++++ b/chrome/browser/extensions/api/flecha_private/flecha_private_api.cc
+@@ -18,6 +18,7 @@
+ #include "components/download/public/common/download_item.h"
+ #include "base/time/time.h"
+ #include "chrome/browser/performance_manager/policies/discard_eligibility_policy.h"
++#include "chrome/browser/performance_manager/policies/flecha_tab_sleep_mark.h"
+ #include "chrome/browser/performance_manager/policies/page_discarding_helper.h"
+ #include "components/performance_manager/public/freezing/freezing.h"
+ #include "components/performance_manager/public/graph/graph.h"
+@@ -997,4 +998,22 @@
+       (base::LiveTicks::Now() - base::LiveTicks()).InMillisecondsF()));
+ }
+ 
++ExtensionFunction::ResponseAction
++FlechaPrivateSetTabSleepManagedFunction::Run() {
++  auto params = flecha_private::SetTabSleepManaged::Params::Create(args());
++  EXTENSION_FUNCTION_VALIDATE(params);
++  content::WebContents* contents = nullptr;
++  if (!ExtensionTabUtil::GetTabById(params->tab_id, browser_context(),
++                                    /*include_incognito=*/false, &contents)) {
++    return RespondNow(Error(kNoTabError, base::NumberToString(params->tab_id)));
++  }
++  using performance_manager::policies::FlechaTabSleepMark;
++  if (params->managed) {
++    FlechaTabSleepMark::CreateForWebContents(contents);
++  } else {
++    contents->RemoveUserData(FlechaTabSleepMark::UserDataKey());
++  }
++  return RespondNow(NoArguments());
++}
++
+ }  // namespace extensions
+--- a/chrome/browser/performance_manager/BUILD.gn
++++ b/chrome/browser/performance_manager/BUILD.gn
+@@ -74,6 +74,7 @@
+     public += [
+       "metrics/metrics_provider_desktop.h",
+       "policies/flecha_low_ram_policy.h",
++      "policies/flecha_tab_sleep_mark.h",
+       "policies/freezing_opt_out_checker.h",
+       "policies/memory_saver_memory_coordinator_policy.h",
+       "policies/memory_saver_mode_policy.h",
+@@ -214,6 +215,7 @@
+     sources += [
+       "metrics/metrics_provider_desktop.cc",
+       "policies/flecha_low_ram_policy.cc",
++      "policies/flecha_tab_sleep_mark.cc",
+       "policies/freezing_opt_out_checker.cc",
+       "policies/memory_saver_memory_coordinator_policy.cc",
+       "policies/memory_saver_mode_policy.cc",
+--- a/chrome/browser/performance_manager/policies/memory_saver_mode_policy.cc
++++ b/chrome/browser/performance_manager/policies/memory_saver_mode_policy.cc
+@@ -6,6 +6,7 @@
+ 
+ #include "base/feature_list.h"
+ #include "base/notreached.h"
++#include "chrome/browser/performance_manager/policies/flecha_tab_sleep_mark.h"
+ #include "chrome/browser/performance_manager/policies/page_discarding_helper.h"
+ #include "components/performance_manager/public/decorators/tab_page_decorator.h"
+ #include "components/performance_manager/public/features.h"
+@@ -198,6 +199,12 @@
+   // possible to get here and for Memory Saver Mode to be off.
+   DCHECK(IsMemorySaverDiscardingEnabled());
+ 
++  // Flecha: its tab sleep discards the tabs it marks, after 4 hours of active
++  // use rather than of awake time.
++  if (FlechaTabSleepMark::IsManaged(tab_handle->page_node())) {
++    return;
++  }
++
+   // If the time elapsed according to `LiveTicks` is shorter than
+   // `requested_time_before_discard`, it means that the device was in a
+   // suspended state at some point between when the timer was started and now.
+@@ -219,6 +226,11 @@
+ 
+ base::TimeDelta MemorySaverModePolicy::GetTimeBeforeDiscardForCurrentMode()
+     const {
++  if (const base::TimeDelta for_testing =
++          kFlechaMemorySaverTimeForTesting.Get();
++      for_testing.is_positive()) {
++    return for_testing;
++  }
+   switch (mode_) {
+     case MemorySaverModeAggressiveness::kConservative:
+       return base::Hours(6);
+--- /dev/null
++++ b/chrome/browser/performance_manager/policies/flecha_tab_sleep_mark.h
+@@ -0,0 +1,49 @@
++// Copyright 2026 The Flecha Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_PERFORMANCE_MANAGER_POLICIES_FLECHA_TAB_SLEEP_MARK_H_
++#define CHROME_BROWSER_PERFORMANCE_MANAGER_POLICIES_FLECHA_TAB_SLEEP_MARK_H_
++
++#include "base/feature_list.h"
++#include "base/metrics/field_trial_params.h"
++#include "base/time/time.h"
++#include "content/public/browser/web_contents_user_data.h"
++
++namespace performance_manager {
++class PageNode;
++}  // namespace performance_manager
++
++namespace performance_manager::policies {
++
++// Flecha's tab sleep (its shell, through
++// chrome.flechaPrivate.setTabSleepManaged) discards the tabs it marks after 4
++// hours of active use, as Dia does, so Memory Saver, whose timer counts any
++// time the device is awake, leaves them alone. With this disabled, Memory
++// Saver takes every tab again.
++BASE_DECLARE_FEATURE(kFlechaTabSleepOwnsDiscards);
++// For tests only: how long Memory Saver waits before discarding a background
++// tab, in place of its mode's time (zero, the default: its mode's).
++extern const base::FeatureParam<base::TimeDelta>
++    kFlechaMemorySaverTimeForTesting;
++
++// The mark on a tab. It ends with the page, so a discarded tab, which comes
++// back as a new page, needs marking again.
++class FlechaTabSleepMark
++    : public content::WebContentsUserData<FlechaTabSleepMark> {
++ public:
++  ~FlechaTabSleepMark() override;
++
++  // Whether Memory Saver leaves `page_node` to Flecha's tab sleep.
++  static bool IsManaged(const PageNode* page_node);
++
++ private:
++  friend class content::WebContentsUserData<FlechaTabSleepMark>;
++  explicit FlechaTabSleepMark(content::WebContents* contents);
++
++  WEB_CONTENTS_USER_DATA_KEY_DECL();
++};
++
++}  // namespace performance_manager::policies
++
++#endif  // CHROME_BROWSER_PERFORMANCE_MANAGER_POLICIES_FLECHA_TAB_SLEEP_MARK_H_
+--- /dev/null
++++ b/chrome/browser/performance_manager/policies/flecha_tab_sleep_mark.cc
+@@ -0,0 +1,35 @@
++// Copyright 2026 The Flecha Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/performance_manager/policies/flecha_tab_sleep_mark.h"
++
++#include "base/memory/weak_ptr.h"
++#include "components/performance_manager/public/graph/page_node.h"
++#include "content/public/browser/web_contents.h"
++
++namespace performance_manager::policies {
++
++BASE_FEATURE(kFlechaTabSleepOwnsDiscards, base::FEATURE_ENABLED_BY_DEFAULT);
++const base::FeatureParam<base::TimeDelta> kFlechaMemorySaverTimeForTesting = {
++    &kFlechaTabSleepOwnsDiscards, "memory_saver_time_for_testing",
++    base::TimeDelta()};
++
++FlechaTabSleepMark::FlechaTabSleepMark(content::WebContents* contents)
++    : content::WebContentsUserData<FlechaTabSleepMark>(*contents) {}
++
++FlechaTabSleepMark::~FlechaTabSleepMark() = default;
++
++// static
++bool FlechaTabSleepMark::IsManaged(const PageNode* page_node) {
++  if (!base::FeatureList::IsEnabled(kFlechaTabSleepOwnsDiscards)) {
++    return false;
++  }
++  const base::WeakPtr<content::WebContents> contents =
++      page_node->GetWebContents();
++  return contents && FromWebContents(contents.get());
++}
++
++WEB_CONTENTS_USER_DATA_KEY_IMPL(FlechaTabSleepMark);
++
++}  // namespace performance_manager::policies

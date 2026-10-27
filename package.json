@@ -11,12 +11,15 @@
     "shell:typecheck": "tsc -p chromium/shell",
     "host:build": "node chromium/native-host/build.mjs",
     "host:typecheck": "tsc -p chromium/native-host",
-    "typecheck": "tsc -p chromium/shell && tsc -p chromium/native-host"
+    "browser:linux": "node chromium/scripts/run-linux.mjs",
+    "typecheck": "tsc -p chromium/shell && tsc -p chromium/native-host",
+    "typecheck:tsrs": "tsrs -p chromium/shell && tsrs -p chromium/native-host"
   },
   "devDependencies": {
     "@types/chrome": "^0.3.6",
     "@types/node": "^26.6.5",
     "sucrase": "^3.35.1",
+    "tsrs": "0.18.0-ts7.1.0-dev.20260929",
     "typescript": "^7.0.2"
   },
   "dependencies": {

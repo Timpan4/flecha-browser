@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; font-src 'self'; img-src * data: crx: favicon:; style-src 'self' 'unsafe-inline'; script-src 'self'"
+      content="default-src 'self'; connect-src 'self' https://www.google.com https://duckduckgo.com https://www.bing.com https://search.brave.com https://kagisuggest.com https://ac.ecosia.org; font-src 'self'; img-src * data: crx: favicon:; style-src 'self' 'unsafe-inline'; script-src 'self'"
     />
     <title>Flecha</title>
     <link rel="stylesheet" href="tokens.css" />
@@ -16,11 +16,19 @@
     <aside id="sidebar">
       <div class="toolbar">
         <div class="traffic-lights"></div>
+        <div class="window-controls" role="group" aria-label="Window">
+          <button id="wc-close" class="window-control close" aria-label="Close window"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3.75 3.75l4.5 4.5M8.25 3.75l-4.5 4.5" /></svg></button>
+          <button id="wc-minimize" class="window-control minimize" aria-label="Minimize"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3.25 6h5.5" /></svg></button>
+          <button id="wc-maximize" class="window-control maximize" aria-label="Maximize"><svg viewBox="0 0 12 12" aria-hidden="true"><path class="grow" d="M3.5 6.5v-3h3M8.5 5.5v3h-3" /><path class="shrink" d="M6 3v3H3M6 9V6h3" /></svg></button>
+        </div>
         <button id="btn-sidebar" class="icon-button" data-tip="Hide sidebar" data-shortcut="toggleSidebar"><i data-icon="sidebar"></i></button>
+        <button id="btn-menu" class="icon-button" data-tip="Menu" aria-label="Menu" aria-haspopup="menu" aria-expanded="false"><i data-icon="menu"></i></button>
         <span class="spacer"></span>
-        <button id="btn-back" class="icon-button" data-tip="Back" data-shortcut="back"><i data-icon="arrowLeft"></i></button>
-        <button id="btn-forward" class="icon-button" data-tip="Forward" data-shortcut="forward"><i data-icon="arrowRight"></i></button>
-        <button id="btn-reload" class="icon-button" data-tip="Reload" data-shortcut="reload"><i data-icon="reload"></i></button>
+        <span class="toolbar-nav">
+          <button id="btn-back" class="icon-button" data-tip="Back" data-shortcut="back"><i data-icon="arrowLeft"></i></button>
+          <button id="btn-forward" class="icon-button" data-tip="Forward" data-shortcut="forward"><i data-icon="arrowRight"></i></button>
+          <button id="btn-reload" class="icon-button" data-tip="Reload" data-shortcut="reload"><i data-icon="reload"></i></button>
+        </span>
       </div>
 
       <div id="urlbar-wrap">
@@ -33,7 +41,9 @@
         <button id="btn-site" class="url-action" data-tip="Site controls"><i data-icon="sliders"></i></button>
       </div>
 
-      <browser-action-list id="extensions"></browser-action-list>
+      <div id="extensions" role="toolbar" aria-label="Extensions" hidden>
+        <button id="btn-extensions" class="ext-action" data-tip="Extensions" aria-label="Extensions" aria-haspopup="dialog"><i data-icon="puzzle"></i></button>
+      </div>
 
       <div id="agent-status" hidden>
         <span class="agent-dot"></span>
@@ -130,6 +140,7 @@
         <div id="spaces"></div>
         <button id="btn-newspace" class="icon-button" data-tip="New Space" data-shortcut="newSpace"><i data-icon="plus"></i></button>
       </footer>
+      <div id="sidebar-resize" role="separator" aria-orientation="vertical" aria-label="Resize sidebar"></div>
     </aside>
 
     <div id="tooltip" role="tooltip" hidden><span id="tooltip-text"></span><kbd id="tooltip-kbd"></kbd></div>
@@ -179,17 +190,22 @@
     <div id="palette" hidden>
       <div class="palette-box">
         <div class="palette-field">
-          <i data-icon="search"></i>
-          <input id="palette-input" spellcheck="false" autocomplete="off" placeholder="Search tabs, history, or type a URL" />
+          <span id="palette-icon" aria-hidden="true"><i data-icon="search"></i></span>
+          <input
+            id="palette-input"
+            role="combobox"
+            aria-label="Search or enter URL"
+            aria-autocomplete="both"
+            aria-controls="palette-results"
+            aria-expanded="true"
+            spellcheck="false"
+            autocomplete="off"
+            placeholder="Search or Enter URL…"
+          />
           <span id="palette-mode"></span>
         </div>
-        <ul id="palette-results"></ul>
+        <ul id="palette-results" role="listbox" aria-label="Results"></ul>
         <pre id="palette-detail" hidden></pre>
-        <footer class="palette-footer">
-          <span><kbd>↑</kbd><kbd>↓</kbd> Navigate</span>
-          <span><kbd>↵</kbd> Open</span>
-          <span><kbd>esc</kbd> Close</span>
-        </footer>
       </div>
     </div>
 

@@ -13,7 +13,10 @@ export interface TabInfo {
   /** Pinned and favorite tabs remember where they started, like Arc. */
   homeUrl?: string;
   loading?: boolean;
+  /** When it was last shown, or opened if it hasn't been yet. */
   lastActive: number;
+  /** Opened without being shown (in the background, unopened or imported) and not shown since. */
+  unseen?: boolean;
   /** Back/forward entries (with scroll position) so a tab comes back as it was after a restart. */
   history?: { entries: Array<{ url: string; title: string; pageState?: string }>; index: number };
 }
@@ -30,22 +33,51 @@ export type PinnedNode =
   | { kind: 'tab'; tabId: string }
   | { kind: 'folder'; id: string; name: string; open: boolean; children: PinnedNode[] };
 
-export interface Space {
+/** A Space as saved: its name, look and pinned tabs, which every window shares. */
+export interface SavedSpace {
   id: string;
   name: string;
   emoji?: string;
   color: string;
   pinned: PinnedNode[];
-  today: string[];
-  activeTabId?: string;
   /** Separate cookies, storage and logins from the other Spaces. */
   isolated?: boolean;
+}
+
+/**
+ * A Space in one window: Today tabs belong to the window they were opened in, as Arc's
+ * temporary tabs do, and so do the tab on screen and the split.
+ */
+export interface WindowSpace {
+  today: string[];
+  activeTabId?: string;
   /** Two tabs shown side by side (left, right) whenever either one is active. */
   split?: [string, string];
   /** `responsive`: the right side is a phone-sized mirror that follows the left side's navigation. */
   splitMode?: 'responsive';
   /** Share of the width the left pane takes, 0.2–0.8. Half and half when unset. */
   splitRatio?: number;
+}
+
+/** A Space as one window shows it. */
+export interface Space extends SavedSpace, WindowSpace {}
+
+/**
+ * One of Flecha's browser windows. The id is Flecha's own and outlives the Chromium window,
+ * which gets a new id every session.
+ */
+export interface FlechaWindow {
+  id: string;
+  activeSpaceId: string;
+  /** Hidden or shown in this window (Ctrl+S); the last choice anywhere when unset. */
+  sidebarVisible?: boolean;
+  /** By Space id; a Space the window hasn't shown yet has no entry. */
+  spaces: Record<string, WindowSpace>;
+}
+
+/** A window that was closed, with its Today tabs, so it can be reopened. */
+export interface ClosedWindow extends FlechaWindow {
+  closedAt: number;
 }
 
 export interface ArchivedTab {
@@ -61,7 +93,7 @@ export interface HistoryEntry {
   lastVisit: number;
 }
 
-/** Another browser on this Mac with data Flecha can bring over. */
+/** Another browser on this computer with data Flecha can bring over. */
 export interface DetectedBrowser {
   id: string;
   name: string;
@@ -87,6 +119,10 @@ export interface DownloadInfo {
   total: number;
   state: 'progressing' | 'completed' | 'cancelled' | 'interrupted';
   startedAt: number;
+  /** Held until you keep or discard it: a dangerous file, or one sent over plain HTTP. */
+  warning?: 'dangerous' | 'insecure';
+  /** An interrupted download that can carry on where it stopped. */
+  canResume?: boolean;
 }
 
 export interface EnvironmentTarget {
@@ -120,18 +156,25 @@ export interface LocalServer {
 export type SearchEngineId = 'google' | 'duckduckgo' | 'bing' | 'brave' | 'kagi' | 'ecosia';
 
 export interface BrowserState {
-  spaces: Space[];
-  activeSpaceId: string;
+  spaces: SavedSpace[];
+  /** The open windows, the most recently focused first. Never empty. */
+  windows: FlechaWindow[];
+  /** The most recently closed first (store.ts keeps as many as Chromium's tab restore). */
+  closedWindows: ClosedWindow[];
   favorites: string[];
   tabs: Record<string, TabInfo>;
   archive: ArchivedTab[];
   sidebarVisible: boolean;
+  /** The sidebar's width in every window, as you dragged it (sidebarWidth.ts). Default 260. */
+  sidebarWidth?: number;
   window?: WindowBounds;
   theme?: 'system' | 'light' | 'dark';
   /** Links that leave a pinned tab or favorite open in Peek. Default on. */
   peekPinnedLinks?: boolean;
   /** Links arriving from other apps open in a Flechinha instead of a tab. Default on. */
   openLinksInFlechinha?: boolean;
+  /** A page in full screen (a video's button) keeps the sidebar beside it. Default off: the page fills the screen. */
+  sidebarInPageFullscreen?: boolean;
   /** Today tabs untouched this long are archived; 0 keeps them forever. Default 12. */
   archiveAfterHours?: number;
   /** Remembered answers to site permission prompts, by origin then permission. */
@@ -164,7 +207,12 @@ export interface ShortcutInfo {
   fixed?: boolean;
 }
 
-export interface UiState extends BrowserState {
+/** What one window's pages are sent: its Spaces as it shows them, and its active Space. */
+export interface UiState extends Omit<BrowserState, 'spaces' | 'windows' | 'closedWindows'> {
+  /** Flecha's id of the window this state is for. */
+  windowId: string;
+  spaces: Space[];
+  activeSpaceId: string;
   nav: { canGoBack: boolean; canGoForward: boolean; zoom: number };
   searchEngineName: string;
   /** The active Space's colour, darkened in dark mode. */
@@ -272,6 +320,7 @@ export interface SettingsView {
   /** Set after recording a shortcut another command had, which lost it. */
   notice?: string;
   openLinksInFlechinha: boolean;
+  sidebarInPageFullscreen: boolean;
 }
 
 /** The downloads folder is only changed through the folder picker, never set directly. */
@@ -367,15 +416,21 @@ export interface SettingsApi {
 export interface FlechaApi {
   onState(cb: (state: UiState) => void): void;
   onPalette(cb: (mode: PaletteMode) => void): void;
+  /** Main closed the command bar (a tab switch, say): the sidebar hides it. */
+  onClosePalette(cb: () => void): void;
   /** Main asks the sidebar to open the Space editor (new Space, menu, shortcut). */
   onEditSpace(cb: (spaceId: string) => void): void;
   /** Main asks the sidebar to start renaming a tab in place. */
   onRenameTab(cb: (tabId: string) => void): void;
+  /** The tab menu asks the sidebar to edit a pinned tab's or favorite's URL in place. */
+  onEditHomeUrl(cb: (tabId: string) => void): void;
   onPeek(cb: (peek: PeekState | null) => void): void;
   /** `started` is set when this update is a new download beginning. */
   onDownloads(cb: (items: DownloadInfo[], started?: DownloadInfo) => void): void;
   ready(): void;
   searchHistory(query: string): Promise<HistoryEntry[]>;
+  /** The search engine's query suggestions for what was typed; none where Chromium's omnibox would send no request. */
+  searchSuggestions(query: string, signal: AbortSignal): Promise<string[]>;
   /** Most visited sites, one per host. */
   topSites(): Promise<HistoryEntry[]>;
   /** An installed app's icon as a data URL, by its name in /Applications. */
@@ -409,9 +464,13 @@ export interface FlechaApi {
   openPalette(mode: PaletteMode): void;
   closePalette(): void;
   toggleSidebar(): void;
+  /** While you drag the sidebar's edge: lays this window out at `width`; `done` keeps it. */
+  resizeSidebar(width: number, done: boolean): void;
   setSidebarPeek(peek: boolean): void;
   copyText(text: string): void;
   renameTab(tabId: string, title: string): void;
+  /** Sets the URL a pinned tab or favorite goes back to, typed like the address bar. */
+  setHomeUrl(tabId: string, input: string): void;
   toggleMute(tabId: string): void;
   /** Screenshot of the active page, to the clipboard. */
   capturePage(): void;
@@ -422,6 +481,7 @@ export interface FlechaApi {
   /** A short confirmation shown in the address bar ("Link copied"). */
   onFlash(cb: (message: string) => void): void;
   openSettings(pane?: string): void;
+  openHistory(): void;
   toggleResponsive(): void;
   showConsole(tabId: string): void;
   editBoost(kind: 'script' | 'styles'): void;
@@ -435,6 +495,13 @@ export interface FlechaApi {
   openDownload(id: string): void;
   revealDownload(id: string): void;
   cancelDownload(id: string): void;
+  /** Lets a held download (`warning`) finish. */
+  keepDownload(id: string): void;
+  /** Cancels a held download and deletes what it saved. */
+  discardDownload(id: string): void;
+  resumeDownload(id: string): void;
+  /** Downloads the address of a failed download again. */
+  retryDownload(id: string): void;
   clearDownloads(): void;
   promotePeek(): void;
   finishOnboarding(): void;
@@ -442,4 +509,14 @@ export interface FlechaApi {
   makeDefaultBrowser(): void;
   /** An empty Flechinha, for a quick lookup. */
   newFlechinha(): void;
+  /** The window menu's items (Linux and Windows, which have no menu bar). */
+  newWindow(): void;
+  newIncognitoWindow(): void;
+  openExtensions(): void;
+  openAbout(): void;
+  openHelp(): void;
+  print(): void;
+  quit(): void;
+  /** Runs a command from lib/shortcuts.ts by its id, as its shortcut does. */
+  runCommand(id: string): void;
 }

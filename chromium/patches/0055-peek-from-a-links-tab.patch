@@ -1,0 +1,60 @@
+# Flecha: a link's Peek opens in the Space partition of the page the link is on (openPeek's sourceTabId, or the Peek it replaces), for the shell's Open in Peek menu item; closing a Peek gives focus back to the page as it was, instead of its first field.
+--- a/chrome/common/extensions/api/flecha_private.idl
++++ b/chrome/common/extensions/api/flecha_private.idl
+@@ -161,10 +161,13 @@
+ 
+     // Peek: a page in a floating card over the page area of the given window
+     // (default: Flecha's main window), replacing any Peek there. Escape
+-    // closes it; its links to new tabs open as tabs.
++    // closes it; its links to new tabs open as tabs. <code>sourceTabId</code>
++    // is the tab whose link it is, if any: the Peek opens in that tab's Space
++    // partition.
+     static void openPeek(
+         DOMString url,
+         optional long windowId,
++        optional long sourceTabId,
+         optional DoneCallback callback);
+     static void closePeek(optional long windowId, optional DoneCallback callback);
+     // The Peek's page, as it is, becomes a normal tab of its window.
+--- a/chrome/browser/extensions/api/flecha_private/flecha_private_api.cc
++++ b/chrome/browser/extensions/api/flecha_private/flecha_private_api.cc
+@@ -442,7 +442,16 @@
+   if (!host) {
+     return RespondNow(Error(kNoWindowError, "(peek)"));
+   }
+-  host->OpenPeek(url, /*source=*/nullptr);
++  // Flecha: a link's Peek stays in the Space partition of the page it is on.
++  content::WebContents* source = nullptr;
++  if (params->source_tab_id &&
++      !ExtensionTabUtil::GetTabById(*params->source_tab_id, browser_context(),
++                                    /*include_incognito=*/false, &source)) {
++    return RespondNow(
++        Error(kNoTabError, base::NumberToString(*params->source_tab_id)));
++  }
++  // A link in a Peek has no tab: the new Peek takes that Peek's partition.
++  host->OpenPeek(url, source ? source : host->GetPeekContents());
+   return RespondNow(NoArguments());
+ }
+ 
+--- a/chrome/browser/ui/views/frame/flecha_frame_view.cc
++++ b/chrome/browser/ui/views/frame/flecha_frame_view.cc
+@@ -353,6 +353,11 @@
+   if (!peek_) {
+     return;
+   }
++  // Flecha: focus goes back to the page before the Peek's view, which has it,
++  // is hidden. Hiding it first would have the focus manager tab into the page,
++  // which focuses its first field and scrolls there; focusing it restores the
++  // field it had (and its scroll position).
++  FocusPage();
+   if (auto* peek_view = views::AsViewClass<views::WebView>(peek_view_.view())) {
+     peek_view->SetWebContents(nullptr);
+     peek_view->SetVisible(false);
+@@ -361,7 +366,6 @@
+   PreferredSizeChanged();
+   browser_view_->InvalidateLayout();
+   SendPeekChanged();
+-  FocusPage();
+ }
+ 
+ void FlechaFrameView::PromotePeek() {

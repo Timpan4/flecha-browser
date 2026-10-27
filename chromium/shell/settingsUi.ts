@@ -7,10 +7,18 @@ import type { AskOptions } from './lib/tabManager';
 
 /** A menu as data, like Electron's menu templates: items carry whatever `run` the caller picks. */
 export type MenuEntry<T> =
-  | { label: string; run: T; enabled?: boolean; checked?: boolean }
+  /** `accel` is the item's shortcut as shown ("Ctrl+H"). */
+  | { label: string; run: T; enabled?: boolean; checked?: boolean; accel?: string }
   | { label: string; submenu: MenuEntry<T>[]; enabled?: boolean }
   | { separator: true };
 type Picked<T> = { label: string; run: T };
+
+export interface MenuOptions {
+  /** Opens below this element (a menu button) instead of at the pointer. */
+  anchor?: Element;
+  /** Opened from the keyboard: the first item is highlighted at once. */
+  keyboard?: boolean;
+}
 
 // Menus open where the pointer last was, as native context menus do.
 let pointer = { x: 0, y: 0 };
@@ -21,11 +29,13 @@ for (const type of ['pointerdown', 'contextmenu'] as const) {
 let closeOpenMenu: (() => void) | undefined;
 
 /**
- * Shows the menu at the pointer; resolves with the item picked, or undefined if dismissed.
- * It behaves like a macOS menu: one highlighted item, which the pointer and the arrow keys
- * both move; submenus open beside their item, on hover or →.
+ * Shows the menu at the pointer (or below `options.anchor`); resolves with the item picked, or
+ * undefined if dismissed. It behaves like a macOS menu: one highlighted item, which the pointer
+ * and the arrow keys (Home and End too) both move, and which has keyboard focus, so a screen
+ * reader reads it; submenus open beside their item, on hover or →, and ← or Esc goes back to
+ * that item; Esc closes.
  */
-export function popupMenu<T>(items: MenuEntry<T>[]): Promise<Picked<T> | undefined> {
+export function popupMenu<T>(items: MenuEntry<T>[], options: MenuOptions = {}): Promise<Picked<T> | undefined> {
   closeOpenMenu?.();
   return new Promise((resolve) => {
     const layer = document.createElement('div');
@@ -47,7 +57,15 @@ export function popupMenu<T>(items: MenuEntry<T>[]): Promise<Picked<T> | undefin
     /** Closes the submenus deeper than `level`. */
     const closeBelow = (level: number) => {
       while (stack.length > level + 1) stack.pop()!.menu.remove();
-      for (const row of stack[level].rows) row.classList.remove('open');
+      for (const row of stack[level].rows) {
+        row.classList.remove('open');
+        if (row.hasAttribute('aria-expanded')) row.setAttribute('aria-expanded', 'false');
+      }
+    };
+    /** Closes the submenu open at `level + 1` from the keyboard: its item gets focus back. */
+    const leaveSubmenu = (level: number) => {
+      closeBelow(level);
+      highlight(level, stack[level].active);
     };
 
     const highlight = (level: number, row: HTMLButtonElement | undefined) => {
@@ -56,14 +74,17 @@ export function popupMenu<T>(items: MenuEntry<T>[]): Promise<Picked<T> | undefin
       entry.active = row;
       row?.classList.add('active');
       row?.scrollIntoView({ block: 'nearest' });
+      row?.focus({ preventScroll: true });
     };
 
     const openSubmenu = (level: number, row: HTMLButtonElement, entries: MenuEntry<T>[], focusFirst: boolean) => {
       if (stack[level + 1]?.menu.dataset.parent === row.dataset.key) return;
       closeBelow(level);
       row.classList.add('open');
+      row.setAttribute('aria-expanded', 'true');
       const sub = build(entries, level + 1);
       sub.dataset.parent = row.dataset.key;
+      sub.setAttribute('aria-label', row.firstChild?.textContent ?? '');
       layer.append(sub);
       // Beside its item, flipped to the other side when there's no room.
       const at = row.getBoundingClientRect();
@@ -87,6 +108,9 @@ export function popupMenu<T>(items: MenuEntry<T>[]): Promise<Picked<T> | undefin
           continue;
         }
         const row = Object.assign(document.createElement('button'), { className: 'shell-menu-item', textContent: item.label, tabIndex: -1 });
+        if ('accel' in item && item.accel) {
+          row.append(Object.assign(document.createElement('span'), { className: 'shell-menu-accel', textContent: item.accel }));
+        }
         row.dataset.key = String(keys++);
         row.setAttribute('role', 'menuitem');
         menu.append(row);
@@ -101,7 +125,11 @@ export function popupMenu<T>(items: MenuEntry<T>[]): Promise<Picked<T> | undefin
           row.classList.add('checkable');
         }
         const submenu = 'submenu' in item ? item.submenu : undefined;
-        if (submenu) row.classList.add('has-submenu');
+        if (submenu) {
+          row.classList.add('has-submenu');
+          row.setAttribute('aria-haspopup', 'menu');
+          row.setAttribute('aria-expanded', 'false');
+        }
         row.addEventListener('pointerenter', () => {
           highlight(level, row);
           clearTimeout(openTimer);
@@ -128,19 +156,26 @@ export function popupMenu<T>(items: MenuEntry<T>[]): Promise<Picked<T> | undefin
       if (e.key === 'Escape') {
         handled();
         if (level > 0) {
-          closeBelow(level - 1);
+          leaveSubmenu(level - 1);
         } else close();
       } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         handled();
         const step = e.key === 'ArrowDown' ? 1 : -1;
         highlight(level, rows[(i + step + rows.length) % rows.length] ?? rows[0]);
+      } else if (e.key === 'Home' || e.key === 'End') {
+        handled();
+        highlight(level, e.key === 'Home' ? rows[0] : rows[rows.length - 1]);
+      } else if (e.key === 'Tab') {
+        // Like a native menu, Tab leaves it.
+        handled();
+        close();
       } else if (e.key === 'ArrowRight' && active?.classList.contains('has-submenu')) {
         handled();
         active.click();
         if (stack[level + 1]) highlight(level + 1, stack[level + 1].rows[0]);
       } else if (e.key === 'ArrowLeft' && level > 0) {
         handled();
-        closeBelow(level - 1);
+        leaveSubmenu(level - 1);
       } else if (e.key === 'Enter' || e.key === ' ') {
         handled();
         if (active?.classList.contains('has-submenu')) {
@@ -162,14 +197,18 @@ export function popupMenu<T>(items: MenuEntry<T>[]): Promise<Picked<T> | undefin
     const menu = build(items, 0);
     layer.append(menu);
     document.body.append(layer);
-    // Keep the menu on screen.
+    // Below its button, or at the pointer; on screen either way.
+    const anchor = options.anchor?.getBoundingClientRect();
+    const at = anchor ? { x: anchor.left, y: anchor.bottom + 4 } : pointer;
     const { width, height } = menu.getBoundingClientRect();
-    menu.style.left = `${Math.max(4, Math.min(pointer.x, innerWidth - width - 4))}px`;
-    menu.style.top = `${Math.max(4, Math.min(pointer.y, innerHeight - height - 4))}px`;
-    // Like a native menu, nothing is highlighted until the pointer or a key says so; the
-    // layer takes focus so the arrow keys reach it.
+    menu.style.left = `${Math.max(4, Math.min(at.x, innerWidth - width - 4))}px`;
+    menu.style.top = `${Math.max(4, Math.min(at.y, innerHeight - height - 4))}px`;
+    if (options.anchor) menu.setAttribute('aria-label', options.anchor.getAttribute('aria-label') ?? '');
+    // Like a native menu, nothing is highlighted until the pointer or a key says so (or it was
+    // opened from the keyboard); the layer takes focus so the arrow keys reach it.
     layer.tabIndex = -1;
     layer.focus();
+    if (options.keyboard) highlight(0, stack[0].rows[0]);
   });
 }
 
