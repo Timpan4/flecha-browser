@@ -12,3 +12,15 @@ diff --git a/chrome/common/chrome_paths_linux.cc b/chrome/common/chrome_paths_li
  #endif
    *result = config_dir.Append(data_dir_basename + GetChannelSuffixForDataDir());
    return true;
+diff --git a/chrome/common/chrome_paths_unittest.cc b/chrome/common/chrome_paths_unittest.cc
+--- a/chrome/common/chrome_paths_unittest.cc
++++ b/chrome/common/chrome_paths_unittest.cc
+@@ -182,7 +182,7 @@
+   // TODO(skobes): Test channel suffixes with $CHROME_VERSION_EXTRA.
+   expected_branding = "google-chrome";
+ #else
+-  expected_branding = "chromium";
++  expected_branding = "flecha-browser";
+ #endif
+
+   base::FilePath user_data_dir;
