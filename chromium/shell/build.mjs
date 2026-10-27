@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { featureEntries, copyFeatureStatic } from './build-features.mjs';
 import { buildAdblock } from './build-adblock.mjs';
+import { writeManifest } from './build-version.mjs';
 
 const here = path.dirname(new URL(import.meta.url).pathname);
 const root = path.resolve(here, '../..');
@@ -21,7 +22,6 @@ function copyStatic() {
   for (const size of [16, 48, 128]) {
     fs.copyFileSync(path.join(root, `chromium/branding/logo/product_logo_${size}.png`), path.join(out, `icons/${size}.png`));
   }
-  fs.copyFileSync(path.join(here, 'manifest.json'), path.join(out, 'manifest.json'));
   for (const f of fs.readdirSync(ui)) if (f.endsWith('.css')) fs.copyFileSync(path.join(ui, f), path.join(out, f));
   fs.copyFileSync(
     path.join(root, 'node_modules/@fontsource-variable/jetbrains-mono/files/jetbrains-mono-latin-wght-normal.woff2'),
@@ -48,6 +48,8 @@ function copyStatic() {
   fs.writeFileSync(path.join(out, 'flechinha.html'), fs.readFileSync(path.join(ui, 'flechinha.html'), 'utf8'));
   for (const f of ['settings.html', 'settings-shell.css']) fs.copyFileSync(path.join(here, f), path.join(out, f));
   copyFeatureStatic(out);
+  // Last, so the version covers every file above and the bundles.
+  writeManifest(path.join(here, 'manifest.json'), out);
 }
 
 const options = {

@@ -14,6 +14,7 @@
 // rule count far under Chromium's guaranteed 30,000 static rules.
 import fs from 'node:fs';
 import path from 'node:path';
+import { writeManifest } from './build-version.mjs';
 
 const here = path.dirname(new URL(import.meta.url).pathname);
 const cacheDir = path.join(here, '.cache', 'adblock');
@@ -226,5 +227,12 @@ export async function buildAdblock(out, { refresh = false } = {}) {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  await buildAdblock(path.join(here, 'dist'), { refresh: process.argv.includes('--refresh') });
+  const out = path.join(here, 'dist');
+  // Rules alone aren't a shell; the full build (npm run shell:build) makes them too.
+  const built = path.join(out, 'manifest.json');
+  if (!fs.existsSync(built)) throw new Error(`No built shell in ${out}: run npm run shell:build.`);
+  await buildAdblock(out, { refresh: process.argv.includes('--refresh') });
+  // New rules are a new shell: without a new version Chromium keeps the rules it indexed. The
+  // built manifest, not the source one, matches the rest of dist.
+  writeManifest(built, out);
 }
