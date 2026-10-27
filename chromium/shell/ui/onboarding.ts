@@ -289,6 +289,8 @@ export function setupOnboarding(api: FlechaApi, h: H, icon: (name: IconName) => 
             else next.add(i);
             set({ isolate: next });
           } });
+          // A Space that joins one of yours keeps that Space's cookies and logins.
+          const joins = s.matches && current.mode === 'merge';
           return h(
             'li',
             {},
@@ -297,8 +299,8 @@ export function setupOnboarding(api: FlechaApi, h: H, icon: (name: IconName) => 
               'span',
               { class: 'tour-browser-text' },
               h('strong', {}, s.name),
-              h('small', {}, spaceCounts(s), s.matches && current.mode === 'merge' ? ' · joins your Space of this name' : '', s.profile ? ` · Arc Profile “${s.profile}”` : ''),
-              s.profile && preview.canIsolate ? h('label', { class: 'tour-preview-isolate' }, toggle, 'Separate Cookies and Logins') : null,
+              h('small', {}, spaceCounts(s), joins ? ' · joins your Space of this name' : '', s.profile ? ` · Arc Profile “${s.profile}”` : ''),
+              s.profile && preview.canIsolate && !joins ? h('label', { class: 'tour-preview-isolate' }, toggle, 'Separate Cookies and Logins') : null,
             ),
           );
         }),
@@ -311,7 +313,7 @@ export function setupOnboarding(api: FlechaApi, h: H, icon: (name: IconName) => 
         'div',
         { class: 'tour-preview-buttons' },
         h('button', { class: 'tour-ghost', onclick: () => { imports.delete(b.id); draw(); } }, 'Cancel'),
-        h('button', { class: 'tour-ghost tour-confirm', onclick: () => runImport(b, { mode: current.mode, isolate: [...isolate] }) }, 'Import'),
+        h('button', { class: 'tour-ghost tour-confirm', onclick: () => runImport(b, { mode: current.mode, isolate: [...isolate], spacesKey: preview.spacesKey }) }, 'Import'),
       ),
     );
   }

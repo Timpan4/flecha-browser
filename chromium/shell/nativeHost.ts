@@ -48,6 +48,7 @@ function importOptions(raw: unknown, canIsolate: boolean): ImportOptions {
   return {
     mode: options.mode === 'append' ? 'append' : 'merge',
     isolate: canIsolate && Array.isArray(options.isolate) ? options.isolate.filter((i) => Number.isInteger(i) && i >= 0) : [],
+    spacesKey: typeof options.spacesKey === 'string' ? options.spacesKey : undefined,
   };
 }
 
@@ -172,10 +173,11 @@ export function registerNativeHost(ctx: NativeHostContext) {
       try {
         return previewBrowserImport(await call('readBrowser', String(id)), store.state, ctx.canIsolate);
       } catch (err) {
-        return { name: String(id), spaces: [], favorites: 0, archived: 0, history: 0, skipped: [], canIsolate: ctx.canIsolate, warnings: [helperProblem(err)] };
+        return { name: String(id), spaces: [], favorites: 0, archived: 0, history: 0, skipped: [], canIsolate: ctx.canIsolate, warnings: [helperProblem(err)], spacesKey: '' };
       }
     },
     // The browser is read again rather than kept from the preview: the background may have slept since.
+    // The preview's spacesKey makes sure the Spaces it showed are still the ones being imported.
     importBrowser: async (id: string, options: ImportOptions): Promise<ImportResult> => {
       try {
         return await applyBrowserImport(await call('readBrowser', String(id)), importOptions(options, ctx.canIsolate), store, history);

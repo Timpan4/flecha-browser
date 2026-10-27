@@ -112,12 +112,9 @@ export async function importFromBrowser() {
     try {
       const preview = await invoke<ImportPreview>('previewImport', picked.id);
       if (!hasImport(preview)) return note(`Nothing to import from ${picked.name}`, preview.warnings.join('\n') || 'No bookmarks or history were found.');
-      // Spaces from other Arc Profiles get Separate Cookies and Logins, as the tour offers by default.
-      const isolate = preview.canIsolate ? preview.spaces.flatMap((s, i) => (s.profile ? [i] : [])) : [];
       const merging = preview.spaces.some((s) => s.matches);
       const detail = [
         ...previewLines(preview),
-        ...(isolate.length ? [`Spaces from other Arc Profiles get Separate Cookies and Logins.`] : []),
         ...(preview.skipped.length ? ['', 'Won’t come over:', ...preview.skipped] : []),
         ...preview.warnings,
       ].join('\n');
@@ -125,7 +122,20 @@ export async function importFromBrowser() {
       const buttons = merging ? ['Merge', 'Add as New', 'Cancel'] : ['Import', 'Cancel'];
       const answer = await askDialog({ message: `Import from ${picked.name}?`, detail, buttons, defaultId: 0, cancelId: buttons.length - 1 });
       if (answer === buttons.length - 1) return;
-      const r = await invoke<ImportResult>('importBrowser', picked.id, { mode: buttons[answer] === 'Add as New' ? 'append' : 'merge', isolate } satisfies ImportOptions);
+      const mode = buttons[answer] === 'Add as New' ? 'append' : 'merge';
+      // New Spaces from other Arc Profiles can have Separate Cookies and Logins; one that joins yours keeps its own.
+      let isolate = preview.canIsolate ? preview.spaces.flatMap((s, i) => (s.profile && !(s.matches && mode === 'merge') ? [i] : [])) : [];
+      if (isolate.length) {
+        const separate = await askDialog({
+          message: 'Separate Cookies and Logins for Spaces from other Arc Profiles?',
+          detail: `${isolate.map((i) => `“${preview.spaces[i].name}”`).join(', ')} used another Arc Profile. With Separate Cookies and Logins, each is signed in on its own, as in Arc.`,
+          buttons: ['Separate', 'Share with Other Spaces'],
+          defaultId: 0,
+          cancelId: 1,
+        });
+        if (separate !== 0) isolate = [];
+      }
+      const r = await invoke<ImportResult>('importBrowser', picked.id, { mode, isolate, spacesKey: preview.spacesKey } satisfies ImportOptions);
       return note(`Imported from ${picked.name}`, [resultLine(r), ...r.warnings, ...r.details].filter(Boolean).join('\n') || 'Nothing to import');
     } catch {
       return note(`Couldn’t import ${picked.name}`, 'Try again.');

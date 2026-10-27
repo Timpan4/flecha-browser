@@ -126,10 +126,33 @@ test('a merged split uses the tab Flecha already had', () => {
   assert.equal(store.view(spaceNamed(store, 'Work')).split[0], existing);
 });
 
-test('Spaces marked isolated get Separate Cookies and Logins', () => {
+test('new Spaces marked isolated get Separate Cookies and Logins; a Space merged into keeps its own', () => {
   const store = withWork();
   store.importSpaces([{ ...bookmarkSpace('Arc Work'), isolated: true }, bookmarkSpace('Arc Home'), { name: 'Work', pinned: [], today: [], isolated: true }], { mode: 'merge' });
-  assert.deepEqual(store.state.spaces.map((s) => [s.name, !!s.isolated]), [['Work', true], ['Arc Work', true], ['Arc Home', false]]);
+  assert.deepEqual(store.state.spaces.map((s) => [s.name, !!s.isolated]), [['Work', false], ['Arc Work', true], ['Arc Home', false]]);
+});
+
+test('a fresh install’s Space that was renamed, recoloured or given a folder stays, and Merge joins it', () => {
+  for (const change of [
+    (store, id) => store.updateSpace(id, { name: 'Work' }),
+    (store, id) => store.updateSpace(id, { color: '#000000' }),
+    (store, id) => store.state.spaces[0].pinned.push({ kind: 'folder', id: 'f', name: 'Empty', open: false, children: [] }),
+  ]) {
+    const store = newStore();
+    const [original] = store.state.spaces;
+    change(store, original.id);
+    store.importSpaces([{ ...bookmarkSpace(original.name), color: '#ffffff' }], { mode: 'merge' });
+    assert.deepEqual(store.state.spaces.map((s) => s.id), [original.id]);
+    assert.notEqual(original.color, '#ffffff');
+    assert.deepEqual(urls(store, pinnedTabIds(original.pinned)), ['https://example.com/']);
+  }
+});
+
+test('Merge leaves out a Space’s tab that the imported favorites hold', () => {
+  const store = newStore();
+  store.importSpaces([{ name: 'Arc', pinned: [tab('https://mail.example.com/'), tab('https://docs.example.com/')], today: [] }], { mode: 'merge', favorites: [tab('https://mail.example.com/')] });
+  assert.deepEqual(urls(store, store.state.favorites), ['https://mail.example.com/']);
+  assert.deepEqual(urls(store, pinnedTabIds(spaceNamed(store, 'Arc').pinned)), ['https://docs.example.com/']);
 });
 
 test('archived tabs keep title, address and time, newest first, each archiving once, within the archive’s limit', () => {

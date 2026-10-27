@@ -125,6 +125,8 @@ export interface ImportOptions {
   mode: ImportMode;
   /** Imported Spaces (by their index in the preview) that get Separate Cookies and Logins. */
   isolate: number[];
+  /** The preview's `spacesKey`: when the browser's Spaces have changed since, nothing is imported. */
+  spacesKey?: string;
 }
 
 /** What an import would bring over, shown before anything is added. */
@@ -151,6 +153,8 @@ export interface ImportPreview {
   /** Whether this build can give a Space its own cookies and logins. */
   canIsolate: boolean;
   warnings: string[];
+  /** The Spaces previewed, in order, so the import can tell they are still the same. */
+  spacesKey: string;
 }
 
 export interface DownloadInfo {

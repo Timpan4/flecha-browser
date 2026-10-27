@@ -171,6 +171,7 @@ test('Arc on macOS: Space colour, Profile, splits, favorites of every profile an
     assert.deepEqual(arc.favorites.map((t) => t.url), ['https://mail.example.com/', 'https://calendar.example.com/']);
     assert.deepEqual(arc.archive, [
       { url: 'https://old.example.com/', title: 'Old, renamed', closedAt: Date.parse('2025-06-01T10:00:00Z') },
+      { url: 'https://old.example.com/', title: 'Old', closedAt: Date.parse('2025-05-01T10:00:00Z') },
       { url: 'https://older.example.com/', title: 'Older', closedAt: Date.parse('2025-04-01T10:00:00Z') },
     ]);
     assert.deepEqual(arc.skipped, { 'non-web tab': 1, easel: 1 });

@@ -771,6 +771,14 @@ export class Store {
     const favoriteUrls = new Set(s.favorites.map((id) => s.tabs[id]?.url));
     let first: string | undefined;
 
+    // Favorites first, so a merged Space leaves out the tabs they already hold.
+    for (const fav of opts.favorites ?? []) {
+      if (favoriteUrls.has(fav.url)) continue;
+      favoriteUrls.add(fav.url);
+      s.favorites.push(this.importTab(fav, true));
+      out.tabs++;
+    }
+
     for (const imported of spaces) {
       const key = imported.name.trim().toLowerCase();
       let space = opts.mode === 'merge' ? s.spaces.find((sp) => sp.name.trim().toLowerCase() === key) : undefined;
@@ -783,12 +791,13 @@ export class Store {
           emoji: imported.emoji ?? SPACE_EMOJIS[n % SPACE_EMOJIS.length],
           color: imported.color ?? SPACE_COLORS[n % SPACE_COLORS.length],
           pinned: [],
+          // Only a new Space: an existing one keeps its cookies and logins as they are.
+          ...(imported.isolated ? { isolated: true } : {}),
         };
         s.spaces.push(space);
         out.spaces++;
       }
       first ??= space.id;
-      if (imported.isolated) space.isolated = true;
       // Append keeps the other browser's Space as it was, repeats and all.
       const known = opts.mode === 'merge' ? new Set([...favoriteUrls, ...this.spaceTabUrls(space)]) : undefined;
       const add = (t: ImportTab) => {
@@ -811,12 +820,6 @@ export class Store {
       }
     }
 
-    for (const fav of opts.favorites ?? []) {
-      if (favoriteUrls.has(fav.url)) continue;
-      favoriteUrls.add(fav.url);
-      s.favorites.push(this.importTab(fav, true));
-      out.tabs++;
-    }
     if (opts.archive?.length) {
       const merged = mergeArchive(s.archive, opts.archive);
       s.archive = merged.archive;
@@ -948,14 +951,19 @@ export class Store {
     }
   }
 
-  /** A fresh install's single empty Space gives way to imported ones. Returns whether it did. */
+  /** A fresh install's single Space, untouched, gives way to imported ones. Returns whether it did. */
   private dropPristineSpace() {
     const s = this.state;
     const only = s.spaces.length === 1 ? s.spaces[0] : undefined;
+    const initial = this.initialState().spaces[0];
     const pristine =
       !!only &&
+      only.name === initial.name &&
+      only.emoji === initial.emoji &&
+      only.color === initial.color &&
+      !only.isolated &&
       !s.favorites.length &&
-      !pinnedTabIds(only.pinned).length &&
+      !only.pinned.length &&
       [...s.windows, ...s.closedWindows].every((w) => !w.spaces[only.id]?.today.length);
     if (pristine) {
       s.spaces = [];

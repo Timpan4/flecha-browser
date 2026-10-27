@@ -24,7 +24,7 @@ test('the preview lists each Space with its tabs, whether Merge joins it, its Pr
     { name: 'Personal', emoji: '🏠', color: '#336699', pinned: 5, today: 4, splits: 2, matches: false, profile: undefined },
     { name: 'Work', emoji: '💼', color: '#ff0080', pinned: 1, today: 4, splits: 2, matches: true, profile: 'Work profile' },
   ]);
-  assert.deepEqual([preview.favorites, preview.archived, preview.history, preview.canIsolate], [2, 2, 1, true]);
+  assert.deepEqual([preview.favorites, preview.archived, preview.history, preview.canIsolate], [2, 3, 1, true]);
   assert.deepEqual(preview.skipped.slice(0, 4), [
     '1 tab with an address other than a web page (such as arc:)',
     '1 sidebar item of a kind Flecha doesn’t have (Arc calls it “easel”)',
@@ -42,7 +42,7 @@ test('importing merges by name, maps colour, split, archive and isolation, and s
   assert.deepEqual(
     { spaces: result.spaces, merged: result.merged, bookmarks: result.bookmarks, archived: result.archived, history: result.history },
     // 5 + 4 Personal, 1 + 4 Work, 2 favorites.
-    { spaces: 2, merged: 0, bookmarks: 16, archived: 2, history: 1 },
+    { spaces: 2, merged: 0, bookmarks: 16, archived: 3, history: 1 },
   );
   const [personal, work] = store.state.spaces;
   assert.deepEqual([personal.color, personal.isolated, work.color, work.isolated], ['#336699', undefined, '#ff0080', true]);
@@ -51,6 +51,7 @@ test('importing merges by name, maps colour, split, archive and isolation, and s
   assert.deepEqual(store.view(work).split.map(url), ['https://w1.example.com/', 'https://w2.example.com/']);
   assert.deepEqual(store.state.archive.map((a) => [a.url, a.title, new Date(a.closedAt).toISOString()]), [
     ['https://old.example.com/', 'Old, renamed', '2025-06-01T10:00:00.000Z'],
+    ['https://old.example.com/', 'Old', '2025-05-01T10:00:00.000Z'],
     ['https://older.example.com/', 'Older', '2025-04-01T10:00:00.000Z'],
   ]);
   assert.match(result.details.join('\n'), /Arc Profiles \(“Work profile”\)/);
@@ -72,4 +73,63 @@ test('bookmarks from other browsers merge into the Space named after the browser
   assert.equal((await applyBrowserImport(data, { mode: 'merge', isolate: [] }, store, noHistory)).spaces, 1);
   const again = await applyBrowserImport(data, { mode: 'merge', isolate: [] }, store, noHistory);
   assert.deepEqual({ spaces: again.spaces, merged: again.merged, bookmarks: again.bookmarks, details: again.details }, { spaces: 0, merged: 1, bookmarks: 0, details: [] });
+});
+
+/** A one-Space sidebar whose Today holds `items` (id/object pairs) listed by `today`. */
+const oneSpace = (items, today, space = {}) => ({
+  sidebar: {
+    containers: [
+      {
+        spaces: ['s', { id: 's', title: 'S', containerIDs: ['pinned', 'pin', 'unpinned', 'un'], ...space }],
+        items: [...items, 'pin', { id: 'pin', childrenIds: [] }, 'un', { id: 'un', childrenIds: today }],
+      },
+    ],
+  },
+});
+const arcTab = (id, url, title = null) => [id, { id, title, data: { tab: { savedURL: url } } }];
+
+test('a split that lost a tab Flecha can’t open stays as the tabs that came over, and says so', async () => {
+  const json = oneSpace(
+    [
+      ...arcTab('a', 'https://a.example.com/'), ...arcTab('arc', 'arc://settings'), 'two', { id: 'two', data: { splitView: {} }, childrenIds: ['a', 'arc'] },
+      ...arcTab('b', 'https://b.example.com/'), ...arcTab('c', 'https://c.example.com/'), ...arcTab('arc2', 'arc://history'),
+      'three', { id: 'three', data: { splitView: {} }, childrenIds: ['b', 'c', 'arc2'] },
+    ],
+    ['two', 'three'],
+  );
+  const arc = parseArcSidebar(json);
+  assert.deepEqual(arc.spaces[0].splits, []);
+  assert.deepEqual(arc.spaces[0].today.map((t) => t.url), ['https://a.example.com/', 'https://b.example.com/', 'https://c.example.com/']);
+  const store = new Store({ load: () => undefined, save: () => {} });
+  const result = await applyBrowserImport({ name: 'Arc', arc, bookmarkCount: 0, history: [], warnings: [] }, { mode: 'merge', isolate: [] }, store, noHistory);
+  assert.equal(store.view(store.state.spaces[0]).split, undefined);
+  assert.ok(result.details.includes('2 split views with a tab that isn’t a web page, kept as the tabs that came over'));
+});
+
+test('titles and emoji that aren’t text fall back instead of breaking the import', async () => {
+  const json = oneSpace(
+    [...arcTab('a', 'https://a.example.com/', 42), 'f', { id: 'f', title: { x: 1 }, data: { list: {} }, childrenIds: [] }],
+    ['a'],
+    { title: 7, customInfo: { iconType: { emoji_v2: 5 } } },
+  );
+  json.sidebar.containers[0].items.find((i) => i?.id === 'pin').childrenIds = ['f'];
+  const arc = parseArcSidebar(json);
+  assert.deepEqual([arc.spaces[0].name, arc.spaces[0].emoji, arc.spaces[0].pinned[0].name, arc.spaces[0].today[0].title], ['Space', undefined, 'Untitled folder', 'https://a.example.com/']);
+  const store = new Store({ load: () => undefined, save: () => {} });
+  const result = await applyBrowserImport({ name: 'Arc', arc, bookmarkCount: 0, history: [], warnings: [] }, { mode: 'merge', isolate: [] }, store, noHistory);
+  assert.equal(result.spaces, 1);
+});
+
+test('nothing is imported when the browser’s Spaces changed since the preview', async () => {
+  const store = new Store({ load: () => undefined, save: () => {} });
+  const before = store.state.spaces.map((s) => s.id);
+  const { spacesKey } = previewBrowserImport(arcData(), store.state, true);
+  const changed = arcData();
+  changed.arc.spaces.reverse();
+  const result = await applyBrowserImport(changed, { mode: 'merge', isolate: [1], spacesKey }, store, noHistory);
+  assert.deepEqual([result.spaces, result.bookmarks, result.history], [0, 0, 0]);
+  assert.match(result.warnings.join('\n'), /changed since the preview/);
+  assert.deepEqual(store.state.spaces.map((s) => s.id), before);
+  // The preview's own key imports.
+  assert.equal((await applyBrowserImport(arcData(), { mode: 'merge', isolate: [1], spacesKey }, store, noHistory)).spaces, 2);
 });

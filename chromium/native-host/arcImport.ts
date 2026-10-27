@@ -88,7 +88,7 @@ export function parseArcSidebar(json: any, names: Record<string, string> = {}): 
     const url = item.data?.tab?.savedURL;
     if (typeof url !== 'string' || !url) return undefined;
     if (!/^https?:/i.test(url)) return void skip('non-web tab');
-    return { url, title: item.title || item.data?.tab?.savedTitle || url };
+    return { url, title: text(item.title) || text(item.data?.tab?.savedTitle) || url };
   };
 
   /** Splits found while walking a Space, as the addresses of their tabs. */
@@ -100,16 +100,19 @@ export function parseArcSidebar(json: any, names: Record<string, string> = {}): 
       if (!item || seen.has(item.id)) return [];
       seen.add(item.id);
       const data = item.data ?? {};
-      if (data.list) return [{ kind: 'folder', name: item.title || 'Untitled folder', children: toNodes(item.childrenIds, seen) }];
+      if (data.list) return [{ kind: 'folder', name: text(item.title) || 'Untitled folder', children: toNodes(item.childrenIds, seen) }];
       if (data.tab) {
         const tab = toTab(item);
         // Arc can keep tabs under a tab; Flecha can't, so they follow it.
         return [...(tab ? [{ kind: 'tab' as const, ...tab }] : []), ...toNodes(item.childrenIds, seen)];
       }
+      const nonWebBefore = skipped['non-web tab'] ?? 0;
       const children = toNodes(item.childrenIds, seen);
       if (data.splitView) {
         const urls = children.flatMap((n) => (n.kind === 'tab' ? [n.url] : []));
-        if (urls.length > 1) splits.push(urls);
+        // A split that lost a tab (an arc: page, say) stays as the tabs that came over.
+        if ((skipped['non-web tab'] ?? 0) > nonWebBefore) skip('partial split');
+        else if (urls.length > 1) splits.push(urls);
       } else {
         skip(Object.keys(data)[0] ?? 'unknown');
       }
@@ -133,8 +136,8 @@ export function parseArcSidebar(json: any, names: Record<string, string> = {}): 
     const pinned = toNodes(containerChildren(space, 'pinned'));
     const today = flatTabs(toNodes(containerChildren(space, 'unpinned')));
     return {
-      name: space.title || 'Space',
-      emoji: space.customInfo?.iconType?.emoji_v2,
+      name: text(space.title) || 'Space',
+      emoji: text(space.customInfo?.iconType?.emoji_v2),
       color: themeColor(space.customInfo?.windowTheme?.primaryColorPalette?.midTone),
       profile: profileOf(space.profile, names),
       pinned,
@@ -156,20 +159,19 @@ export function parseArcSidebar(json: any, names: Record<string, string> = {}): 
 
 /**
  * StorableArchiveItems.json: `items` alternates an id and `{ archivedAt, reason, sidebarItem }`,
- * `archivedAt` in seconds since 2001 and `sidebarItem` shaped like a sidebar tab. Newest first,
- * each address once (its latest archiving).
+ * `archivedAt` in seconds since 2001 and `sidebarItem` shaped like a sidebar tab. Newest first.
+ * An address archived more than once keeps each time, as Flecha's own archive does.
  */
 export function parseArcArchive(json: any): ArchivedTab[] {
-  const latest = new Map<string, ArchivedTab>();
+  const archive: ArchivedTab[] = [];
   for (const entry of Array.isArray(json?.items) ? json.items : []) {
-    if (!isObject(entry) || typeof entry.archivedAt !== 'number') continue;
+    if (!isObject(entry) || typeof entry.archivedAt !== 'number' || !Number.isFinite(entry.archivedAt)) continue;
     const item = entry.sidebarItem;
     const url = item?.data?.tab?.savedURL;
     if (typeof url !== 'string' || !/^https?:/i.test(url)) continue;
-    const tab = { url, title: String(item.title || item.data.tab.savedTitle || url), closedAt: Math.round((entry.archivedAt + APPLE_EPOCH) * 1000) };
-    if ((latest.get(url)?.closedAt ?? -Infinity) < tab.closedAt) latest.set(url, tab);
+    archive.push({ url, title: text(item.title) || text(item.data.tab.savedTitle) || url, closedAt: Math.round((entry.archivedAt + APPLE_EPOCH) * 1000) });
   }
-  return [...latest.values()].sort((a, b) => b.closedAt - a.closedAt);
+  return archive.sort((a, b) => b.closedAt - a.closedAt);
 }
 
 /** Arc's colours are extended sRGB, 0–1 per channel but able to go past either end. */
@@ -182,6 +184,11 @@ function themeColor(c: { red?: number; green?: number; blue?: number } | undefin
 function profileOf(profile: ArcRawSpace['profile'], names: Record<string, string>): ArcProfile | undefined {
   const dir = profile?.custom?._0?.directoryBasename;
   return typeof dir === 'string' && dir ? { dir, name: names[dir] || dir } : undefined;
+}
+
+/** A string Arc wrote, or undefined when it wrote something else there. */
+function text(v: unknown): string | undefined {
+  return typeof v === 'string' ? v : undefined;
 }
 
 function isObject(v: unknown): v is Record<string, any> {

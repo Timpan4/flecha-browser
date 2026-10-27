@@ -117,7 +117,13 @@ export function previewBrowserImport(
     skipped: skippedLines(data, pairs, archive.length ? mergeArchive(flecha.archive, archive).dropped : 0),
     canIsolate,
     warnings: [...data.warnings],
+    spacesKey: spacesKey(data),
   };
+}
+
+/** The Spaces an import brings, by name and Profile in order: what `isolate`'s indexes point at. */
+function spacesKey(data: BrowserImportData): string {
+  return JSON.stringify(spacesOf(data).map((s) => [s.name, 'profile' in s ? s.profile?.dir ?? '' : '']));
 }
 
 /**
@@ -131,6 +137,10 @@ export async function applyBrowserImport(
   history: { merge(entries: HistoryEntry[]): number | Promise<number> },
 ): Promise<ImportResult> {
   const result: ImportResult = { spaces: 0, merged: 0, bookmarks: 0, history: 0, archived: 0, warnings: [...data.warnings], details: [] };
+  if (options.spacesKey !== undefined && options.spacesKey !== spacesKey(data)) {
+    result.warnings.push(`${data.name}’s Spaces changed since the preview, so nothing was imported. Look at the preview again.`);
+    return result;
+  }
   const spaces = spacesOf(data).map((s, i): ImportSpace => ({ ...s, isolated: options.isolate.includes(i) }));
   if (spaces.length || data.arc) {
     const out = store.importSpaces(spaces, { mode: options.mode, favorites: data.arc?.favorites, archive: data.arc?.archive });
@@ -146,10 +156,11 @@ function skippedLines(data: BrowserImportData, pairs: number, archiveDropped: nu
   const arc = data.arc;
   if (!arc) return [];
   const lines: string[] = [];
-  const { 'non-web tab': nonWeb = 0, ...kinds } = arc.skipped;
+  const { 'non-web tab': nonWeb = 0, 'partial split': partial = 0, ...kinds } = arc.skipped;
   if (nonWeb) lines.push(`${plural(nonWeb, 'tab')} with an address other than a web page (such as arc:)`);
   for (const [kind, n] of Object.entries(kinds)) lines.push(`${plural(n, 'sidebar item')} of a kind Flecha doesn’t have (Arc calls it “${kind}”)`);
   if (pairs) lines.push(`${plural(pairs, 'split view')} kept as tabs side by side: Flecha shows one split of two tabs per Space`);
+  if (partial) lines.push(`${plural(partial, 'split view')} with a tab that isn’t a web page, kept as the tabs that came over`);
   if (archiveDropped) lines.push(`${plural(archiveDropped, 'archived tab')} past the ${ARCHIVE_LIMIT} most recent, which is all Flecha’s archive keeps`);
   const profiles = [...new Set(arc.spaces.flatMap((s) => (s.profile ? [s.profile.name] : [])))];
   if (profiles.length) {

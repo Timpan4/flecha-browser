@@ -68,7 +68,7 @@ export function arcSidebar() {
   return { version: 1, sidebar: { containers: [{ global: {} }, { spaces, items, topAppsContainerIDs }] } };
 }
 
-/** The same address archived twice (the later, renamed one counts) and a page that isn't on the web. */
+/** The same address archived twice (renamed the second time) and a page that isn't on the web. */
 export function arcArchive() {
   return {
     items: [
