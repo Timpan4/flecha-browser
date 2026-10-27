@@ -16,6 +16,7 @@ import { consoleErrors, watchConsoleErrors } from './features/consoleErrors';
 import { watchLocalServers } from './features/localServers';
 import { responsive } from './features/responsive';
 import { setAdBlocking } from './features/adblock';
+import { incognito } from './incognito';
 
 export interface FeaturesContext {
   store: Store;
@@ -66,15 +67,23 @@ export function registerFeatures(ctx: FeaturesContext): Features {
   chrome.tabs.onCreated.addListener(() => setTimeout(phone.sync, 0));
   phone.sync();
 
+  // An incognito window writes no boosts (boosts.save), so it opens the Boosts page in a regular
+  // window, as it does Settings, without the site it is on.
+  const boostsInRegularWindow = () => {
+    if (typeof chrome.flechaPrivate?.runInRegularProfile === 'function') void chrome.flechaPrivate.runInRegularProfile('boosts');
+  };
+
   handle({
     // ⌥⌘B and the site menu: the active site's boost, created from the template the first time.
-    editBoost: async (kind: BoostKind) => {
-      const name = await boosts.fileFor(store.activeTab?.url, kind === 'styles' ? 'styles' : 'script');
-      if (name) boostsChanged();
-      // No site (a blank tab): the list, as Electron opened the folder.
-      await boosts.openPage(name);
-    },
-    openBoostsFolder: () => boosts.openPage(),
+    editBoost: incognito
+      ? boostsInRegularWindow
+      : async (kind: BoostKind) => {
+          const name = await boosts.fileFor(store.activeTab?.url, kind === 'styles' ? 'styles' : 'script');
+          if (name) boostsChanged();
+          // No site (a blank tab): the list, as Electron opened the folder.
+          await boosts.openPage(name);
+        },
+    openBoostsFolder: incognito ? boostsInRegularWindow : () => boosts.openPage(),
     'settings:open-boosts': () => boosts.openPage(),
     'boosts:list': () => boosts.list(),
     'boosts:get': (name: string) => boosts.get(String(name)),

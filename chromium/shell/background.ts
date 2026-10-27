@@ -1328,6 +1328,8 @@ async function start() {
       // Settings on a pane, asked for by an incognito window (runInRegularProfile).
       const pane = /^openSettings:(\w+)$/.exec(command);
       if (pane) return void openSettings(pane[1]);
+      // The Boosts page, asked for by an incognito window, which writes no boosts.
+      if (command === 'boosts') return void call('openBoostsFolder');
       const numbered = /^select(Tab|Space):(\d)$/.exec(command);
       // The shortcut acts in the window it was pressed in.
       asWindow(windowId !== undefined && windowId >= 0 ? windowId : undefined, () => runCommand(numbered ? `${numbered[1].toLowerCase()}${numbered[2]}` : command));
