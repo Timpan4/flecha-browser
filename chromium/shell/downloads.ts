@@ -28,8 +28,8 @@ const since: Promise<string> = (async () => {
   return now;
 })();
 
-// Windows paths (C:\… or \\server\…) also separate with backslashes, which elsewhere can be part of a file name.
-const basename = (file: string) => file.split(/^([a-z]:)?\\/i.test(file) ? /[\\/]/ : '/').pop() ?? file;
+// Windows paths (C:\…, C:/… or \\server\…) also separate with backslashes, which elsewhere can be part of a file name.
+const basename = (file: string) => file.split(/^([a-z]:|\\)/i.test(file) ? /[\\/]/ : '/').pop() ?? file;
 
 const native = typeof chrome.flechaPrivate?.getDownloadWarnings === 'function';
 

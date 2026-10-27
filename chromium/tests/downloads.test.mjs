@@ -12,6 +12,7 @@ test('a download is listed by its file name on Linux, macOS and Windows', () => 
   assert.equal(toInfo(item('/home/me/Downloads/report.pdf')).filename, 'report.pdf');
   assert.equal(toInfo(item('C:\\Users\\me\\Downloads\\report.pdf')).filename, 'report.pdf');
   assert.equal(toInfo(item('\\\\server\\share\\report.pdf')).filename, 'report.pdf');
+  assert.equal(toInfo(item('C:/Users/me\\Downloads\\report.pdf')).filename, 'report.pdf');
   assert.equal(toInfo(item('C:\\Users\\me\\Downloads\\report.pdf')).path, 'C:\\Users\\me\\Downloads\\report.pdf');
   // Elsewhere a backslash can be part of the name.
   assert.equal(toInfo(item('/home/me/Downloads/a\\b.txt')).filename, 'a\\b.txt');
