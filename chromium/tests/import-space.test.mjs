@@ -14,6 +14,18 @@ test('a fresh install’s empty Space gives way to the imported one', () => {
   assert.deepEqual(store.state.spaces.map((s) => s.id), [space.id]);
 });
 
+test('a Space is kept when a closed window holds its only tabs, so reopening that window brings them back', () => {
+  const store = newStore();
+  const [original] = store.state.spaces;
+  const second = store.openWindow().id;
+  const tab = store.addTab('https://example.org/', { windowId: second });
+  store.closeWindow(second);
+  store.importBookmarks('Imported', bookmarks);
+  assert.ok(store.state.spaces.some((s) => s.id === original.id));
+  const reopened = store.reopenWindow();
+  assert.equal(store.activeTabIn(reopened.id)?.id, tab.id);
+});
+
 test('a Space is kept when favorites are its only tabs', () => {
   const store = newStore();
   const [original] = store.state.spaces;
