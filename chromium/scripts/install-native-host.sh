@@ -10,11 +10,13 @@
 #
 # Chromium looks for user-level hosts in <user data dir>/NativeMessagingHosts
 # (chrome::DIR_USER_NATIVE_MESSAGING in chrome/common/chrome_paths.cc), and the user data dir
-# is ~/Library/Application Support/Flecha Browser unless --user-data-dir says otherwise
-# (patch 0001). Each of those folders gets the host's manifest.
+# is ~/Library/Application Support/Flecha Browser on macOS (patch 0001) and
+# ${CHROME_CONFIG_HOME:-${XDG_CONFIG_HOME:-~/.config}}/flecha-browser on Linux (patch 0073,
+# chrome/common/chrome_paths_linux.cc), unless --user-data-dir says otherwise. Each of those
+# folders gets the host's manifest.
 #
 # The host itself (a launcher and the bundled script) is copied to $FLECHA_HOST_DIR,
-# ~/Library/Application Support/Flecha Browser/native-host by default: Chromium starts hosts
+# <Flecha's own profile folder>/native-host by default. On macOS: Chromium starts hosts
 # disclaiming responsibility for them (launch_context_posix.cc), so macOS privacy rules
 # treat the host as its own app, which may not read ~/Documents, external disks and the
 # like. Run this again after changing the host.
@@ -27,7 +29,12 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
 name="dev.oprimo.flecha.host"
 origin="chrome-extension://abdiaepfgbbhdjaecjipmaailijaaide/"
-host_dir="${FLECHA_HOST_DIR:-$HOME/Library/Application Support/Flecha Browser/native-host}"
+if [ "$(uname -s)" = Darwin ]; then
+  own="$HOME/Library/Application Support/Flecha Browser"
+else
+  own="${CHROME_CONFIG_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}}/flecha-browser"
+fi
+host_dir="${FLECHA_HOST_DIR:-$own/native-host}"
 
 targets=()
 default=1
@@ -49,7 +56,7 @@ while [ $# -gt 0 ]; do
   shift
 done
 [ -n "${FLECHA_PROFILE:-}" ] && targets+=("$FLECHA_PROFILE")
-[ "$default" = 1 ] && targets+=("$HOME/Library/Application Support/Flecha Browser")
+[ "$default" = 1 ] && targets+=("$own")
 if [ "${#targets[@]}" = 0 ]; then
   echo "error: --only needs a profile folder" >&2
   exit 1
