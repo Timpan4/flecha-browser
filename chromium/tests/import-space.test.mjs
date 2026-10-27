@@ -193,3 +193,10 @@ test('a split of two tabs at the same address uses both, the ones this import ad
   const view = store.view(work);
   assert.deepEqual(view.split, view.today);
 });
+
+test('Merge keeps a new Space’s folders of the same name apart, as the other browser had them', () => {
+  const store = newStore();
+  const folder = (url) => ({ kind: 'folder', name: 'Work', children: [tab(url)] });
+  store.importSpaces([{ name: 'Chrome', pinned: [folder('https://a.example.com/'), folder('https://b.example.com/')], today: [] }], { mode: 'merge' });
+  assert.deepEqual(spaceNamed(store, 'Chrome').pinned.map((n) => `${n.name}: ${urls(store, pinnedTabIds(n.children))}`), ['Work: https://a.example.com/', 'Work: https://b.example.com/']);
+});

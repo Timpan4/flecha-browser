@@ -112,14 +112,13 @@ export async function importFromBrowser() {
     try {
       const preview = await invoke<ImportPreview>('previewImport', picked.id);
       if (!hasImport(preview)) return note(`Nothing to import from ${picked.name}`, preview.warnings.join('\n') || 'No bookmarks or history were found.');
-      const merging = preview.spaces.some((s) => s.matches);
       const detail = [
         ...previewLines(preview),
         ...(preview.skipped.length ? ['', 'Won’t come over:', ...preview.skipped] : []),
         ...preview.warnings,
       ].join('\n');
-      // Merge or add as new only differ when a Space's name is taken: both keep repeats within the import.
-      const buttons = merging ? ['Merge', 'Add as New', 'Cancel'] : ['Import', 'Cancel'];
+      // Merge joins Spaces of the same name and leaves out tabs you or the favorites have; Add as New keeps everything.
+      const buttons = preview.spaces.length ? ['Merge', 'Add as New', 'Cancel'] : ['Import', 'Cancel'];
       const answer = await askDialog({ message: `Import from ${picked.name}?`, detail, buttons, defaultId: 0, cancelId: buttons.length - 1 });
       if (answer === buttons.length - 1) return;
       const mode = buttons[answer] === 'Add as New' ? 'append' : 'merge';

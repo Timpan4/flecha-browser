@@ -837,7 +837,8 @@ export class Store {
         return true;
       };
       const had = new Set(this.allTabIds(space, win.id));
-      this.mergeNodes(space.pinned, imported.pinned, add, !!known);
+      // Folders join only inside a Space Flecha had; a new Space keeps the other browser's folders as they were.
+      this.mergeNodes(space.pinned, imported.pinned, add, !!match);
       const ws = this.windowSpace(space.id, win.id);
       for (const t of imported.today) if (add(t)) ws.today.push(this.importTab(t, false));
 
