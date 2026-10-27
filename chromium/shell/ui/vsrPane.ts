@@ -1,4 +1,4 @@
-/** Native VSR controls and live processed-frame evidence while the pane is visible. */
+/** Native VSR controls, with processed-frame counts read each time the pane is shown. */
 import type { SettingsApi, VsrSettings, VsrState } from '../../shared/types';
 
 export function setupVsrPane(api: SettingsApi) {
@@ -40,7 +40,7 @@ export function setupVsrPane(api: SettingsApi) {
     if (idle !== undefined) cancelIdleCallback(idle);
     idle = undefined;
     if (stopped || pane.hidden || document.hidden || reading || writing) return;
-    // Use the browser's idle scheduler, with no timer or accumulated requests.
+    // One read each time the pane or page becomes visible, in idle time.
     idle = requestIdleCallback(() => { idle = undefined; void refresh(); });
   }
 
@@ -58,7 +58,6 @@ export function setupVsrPane(api: SettingsApi) {
       controls.disabled = true;
     } finally {
       reading = false;
-      schedule();
     }
   }
 
@@ -77,7 +76,6 @@ export function setupVsrPane(api: SettingsApi) {
     } finally {
       writing = false;
       controls.disabled = !available;
-      schedule();
     }
   }
 

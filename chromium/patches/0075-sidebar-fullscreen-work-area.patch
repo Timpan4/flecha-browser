@@ -15,10 +15,19 @@ index e1ad5c2..005e858 100755
    // updates the UI by showing/hiding the tab strip, toolbar and bookmark bar
    // in the browser fullscreen. Currently only supported on Mac.
 diff --git a/chrome/browser/ui/exclusive_access/fullscreen_controller.cc b/chrome/browser/ui/exclusive_access/fullscreen_controller.cc
-index 8559775..50b6a52 100755
+index 8559775..3af2bb2 100755
 --- a/chrome/browser/ui/exclusive_access/fullscreen_controller.cc
 +++ b/chrome/browser/ui/exclusive_access/fullscreen_controller.cc
-@@ -396,6 +396,34 @@ void FullscreenController::OnTabDetachedFromView(WebContents* old_contents) {
+@@ -213,6 +213,8 @@ void FullscreenController::EnterFullscreenModeForTab(
+   CHECK(web_contents, base::NotFatalUntil::M162);
+ 
+   if (MaybeToggleFullscreenWithinTab(web_contents, true)) {
++    // Flecha: UpdateFullscreenWithinTab() promotes this request later.
++    within_tab_requesting_frame_ = requesting_frame->GetGlobalId();
+     // During tab capture of fullscreen-within-tab views, the browser window
+     // fullscreen state is unchanged, so return now.
+     return;
+@@ -396,6 +398,39 @@ void FullscreenController::OnTabDetachedFromView(WebContents* old_contents) {
    old_contents->Resize(gfx::Rect(old_contents->GetPreferredSize()));
  }
  
@@ -40,9 +49,14 @@ index 8559775..50b6a52 100755
 +      exclusive_access_manager()->context()->ShouldKeepFullscreenWithinTab()) {
 +    return;
 +  }
-+  // The page's fullscreen element stays as it is. Its main frame stands in for
-+  // the requesting frame, which the within-tab path does not keep.
-+  content::RenderFrameHost* frame = web_contents->GetPrimaryMainFrame();
++  // The page's fullscreen element stays as it is. The frame that requested it
++  // names the origin in the exit bubble; the main frame stands in only if that
++  // frame is gone.
++  content::RenderFrameHost* frame =
++      content::RenderFrameHost::FromID(within_tab_requesting_frame_);
++  if (!frame || WebContents::FromRenderFrameHost(frame) != web_contents) {
++    frame = web_contents->GetPrimaryMainFrame();
++  }
 +  if (!CanEnterFullscreenModeForTab(frame)) {
 +    return;
 +  }
@@ -53,7 +67,7 @@ index 8559775..50b6a52 100755
  void FullscreenController::OnTabClosing(WebContents* web_contents) {
    if (IsFullscreenWithinTab(web_contents)) {
      web_contents->ExitFullscreen(
-@@ -711,15 +739,23 @@ bool FullscreenController::MaybeToggleFullscreenWithinTab(
+@@ -711,15 +746,23 @@ bool FullscreenController::MaybeToggleFullscreenWithinTab(
    }
  
    if (enter_fullscreen) {
@@ -102,7 +116,7 @@ index 15b611e..44c6fce 100755
  
    void UpdateUIForTabFullscreen() override {
 diff --git a/chrome/browser/ui/views/frame/flecha_frame_view.cc b/chrome/browser/ui/views/frame/flecha_frame_view.cc
-index 58222b8..a067129 100755
+index 58222b8..24730d0 100755
 --- a/chrome/browser/ui/views/frame/flecha_frame_view.cc
 +++ b/chrome/browser/ui/views/frame/flecha_frame_view.cc
 @@ -1005,6 +1005,7 @@ void FlechaFrameView::SetFrameState(const FlechaFrameState& new_state) {
@@ -129,19 +143,21 @@ index 58222b8..a067129 100755
  }
  
  void FlechaFrameView::FocusFrame() {
-@@ -1090,9 +1100,13 @@ void FlechaFrameView::OnWindowFullscreenChanged() {
+@@ -1090,9 +1100,15 @@ void FlechaFrameView::OnWindowFullscreenChanged() {
    const bool fullscreen = browser_view_->IsFullscreen();
    ExclusiveAccessManager* access =
        ExclusiveAccessManager::From(browser_view_->browser());
 +  // Flecha: content fullscreen can leave the native window maximized, with the
 +  // desktop taskbar visible. It is independent of the window fullscreen state.
++  // A captured tab's fullscreen leaves the browser UI alone, as upstream does.
++  content::WebContents* active = browser_view_->GetActiveWebContents();
    const bool page_fullscreen =
 -      fullscreen && access &&
 -      access->fullscreen_controller()->IsWindowFullscreenForTabOrPending();
 +      access &&
 +      (access->fullscreen_controller()->IsWindowFullscreenForTabOrPending() ||
-+       access->fullscreen_controller()->IsFullscreenWithinTab(
-+           browser_view_->GetActiveWebContents()));
++       (active && !active->IsBeingVisiblyCaptured() &&
++        access->fullscreen_controller()->IsFullscreenWithinTab(active)));
    if (fullscreen == state_.fullscreen &&
        page_fullscreen == state_.page_fullscreen) {
      return;
@@ -288,10 +304,18 @@ index 0000000..a39528f
 +  return false;
 +}
 diff --git a/chrome/browser/ui/exclusive_access/fullscreen_controller.h b/chrome/browser/ui/exclusive_access/fullscreen_controller.h
-index 6c4711d..7f2dd97 100755
+index 6c4711d..41f2d46 100755
 --- a/chrome/browser/ui/exclusive_access/fullscreen_controller.h
 +++ b/chrome/browser/ui/exclusive_access/fullscreen_controller.h
-@@ -125,6 +125,10 @@ class FullscreenController : public ExclusiveAccessControllerBase {
+@@ -17,6 +17,7 @@
+ #include "chrome/browser/ui/exclusive_access/fullscreen_tab_params.h"
+ #include "components/content_settings/core/common/content_settings.h"
+ #include "content/public/browser/fullscreen_types.h"
++#include "content/public/browser/global_routing_id.h"
+ #include "ui/display/types/display_constants.h"
+ #include "url/origin.h"
+ 
+@@ -125,6 +126,10 @@ class FullscreenController : public ExclusiveAccessControllerBase {
    // tab. See 'FullscreenWithinTab Note'.
    bool IsFullscreenWithinTab(const content::WebContents* web_contents) const;
  
@@ -302,7 +326,7 @@ index 6c4711d..7f2dd97 100755
    // True if fullscreen was entered because of tab fullscreen (was not
    // previously in user-initiated fullscreen).
    bool IsFullscreenCausedByTab() const;
-@@ -162,6 +166,7 @@ class FullscreenController : public ExclusiveAccessControllerBase {
+@@ -162,6 +167,7 @@ class FullscreenController : public ExclusiveAccessControllerBase {
    // Platform Fullscreen ///////////////////////////////////////////////////////
  
    // Override from ExclusiveAccessControllerBase.
@@ -310,6 +334,17 @@ index 6c4711d..7f2dd97 100755
    void OnTabDetachedFromView(content::WebContents* web_contents) override;
    void OnTabClosing(content::WebContents* web_contents) override;
    bool HandleUserPressedEscape() override;
+@@ -239,6 +245,10 @@ class FullscreenController : public ExclusiveAccessControllerBase {
+   // the exclusive_access_tab()'s origin, if an embedded frame made the request.
+   url::Origin requesting_origin_;
+ 
++  // Flecha: the frame that entered fullscreen within the tab, so promoting it
++  // to window fullscreen names that frame's origin.
++  content::GlobalRenderFrameHostId within_tab_requesting_frame_;
++
+   // The URL of the extension which triggered "browser fullscreen" mode,
+   // std::nullopt if it is not in extension fullscreen.
+   std::optional<GURL> extension_url_;
 diff --git a/chrome/browser/ui/views/frame/flecha_frame_view.h b/chrome/browser/ui/views/frame/flecha_frame_view.h
 index 65093e5..44ccbca 100644
 --- a/chrome/browser/ui/views/frame/flecha_frame_view.h
