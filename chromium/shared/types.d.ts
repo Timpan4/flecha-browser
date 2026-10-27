@@ -286,6 +286,8 @@ export interface UiState extends Omit<BrowserState, 'spaces' | 'windows' | 'clos
   agent?: { connected: boolean; tabId?: string; action?: string; busy: boolean };
   /** Current shortcut per command, for display ("⌘T"); empty when removed. */
   shortcuts: Record<string, string>;
+  /** What Undo would take back ("Delete “Work”"), if anything. */
+  undo?: string;
   defaultBrowser: { isDefault: boolean; canSet: boolean };
 }
 
@@ -419,7 +421,8 @@ export type TabsEdit =
   | { op: 'newSpace' }
   | { op: 'updateSpace'; spaceId: string; name?: string; emoji?: string; color?: string }
   | { op: 'deleteSpace'; spaceId: string }
-  | { op: 'moveSpace'; spaceId: string; beforeSpaceId?: string };
+  | { op: 'moveSpace'; spaceId: string; beforeSpaceId?: string }
+  | { op: 'undo' };
 
 export interface TabsEditResult {
   view: TabsView;
@@ -502,6 +505,10 @@ export interface FlechaApi {
   updateSpace(spaceId: string, patch: { name?: string; emoji?: string; color?: string }): void;
   setSpaceIsolated(spaceId: string, isolated: boolean): void;
   deleteSpace(spaceId: string): void;
+  /** Puts the Space before `beforeSpaceId`, or last. */
+  moveSpace(spaceId: string, beforeSpaceId?: string): void;
+  /** Takes back the last Space deletion, bulk close or bulk move. */
+  undo(): void;
   tabMenu(tabId: string): void;
   spaceMenu(spaceId: string): void;
   toggleFolder(folderId: string): void;
@@ -510,6 +517,8 @@ export interface FlechaApi {
   clearToday(): void;
   /** Pops up a menu of the other browsers to import from. */
   importMenu(): void;
+  /** Puts back the Spaces and tabs the last Flecha state import replaced. */
+  restoreBeforeImport(): void;
   openPalette(mode: PaletteMode): void;
   closePalette(): void;
   toggleSidebar(): void;

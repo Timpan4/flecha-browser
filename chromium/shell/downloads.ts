@@ -28,7 +28,8 @@ const since: Promise<string> = (async () => {
   return now;
 })();
 
-const basename = (file: string) => file.split('/').pop() ?? file;
+// Windows paths (C:\…, C:/… or \\server\…) also separate with backslashes, which elsewhere can be part of a file name.
+const basename = (file: string) => file.split(/^([a-z]:|\\)/i.test(file) ? /[\\/]/ : '/').pop() ?? file;
 
 const native = typeof chrome.flechaPrivate?.getDownloadWarnings === 'function';
 
@@ -38,7 +39,7 @@ async function heldDownloads(found: chrome.downloads.DownloadItem[]): Promise<Ma
   return new Map(found.filter((d) => d.state === 'in_progress' && d.danger !== 'safe' && d.danger !== 'accepted').map((d) => [d.id, 'dangerous']));
 }
 
-function toInfo(item: chrome.downloads.DownloadItem, warning?: DownloadInfo['warning']): DownloadInfo {
+export function toInfo(item: chrome.downloads.DownloadItem, warning?: DownloadInfo['warning']): DownloadInfo {
   const name = basename(item.filename) || basename(new URL(item.finalUrl || item.url).pathname) || 'download';
   return {
     id: String(item.id),

@@ -9,6 +9,7 @@ import { cmd, invoke, on } from './client';
 import { confirmDeleteSpace, copy, setupWindowUi, showMenu } from './windowUi';
 import { incognito } from './incognito';
 import { fetchSuggestions, suggestable } from './lib/suggest';
+import { chooseFlechaState } from './lib/flechaImport';
 
 const surface = document.documentElement.dataset.surface;
 const systemDark = matchMedia('(prefers-color-scheme: dark)');
@@ -124,6 +125,8 @@ const api: FlechaApi = {
   setSpaceIsolated: cmd('setSpaceIsolated'),
   // Electron asks first, in a message box; the page asks in its own dialog.
   deleteSpace: (id) => void confirmDeleteSpace(id),
+  moveSpace: cmd('moveSpace'),
+  undo: cmd('undo'),
   // Electron pops native menus; the page draws them, from items the background builds.
   tabMenu: (id) => void showMenu('tabMenu', id),
   spaceMenu: (id) => void showMenu('spaceMenu', id),
@@ -133,18 +136,21 @@ const api: FlechaApi = {
   clearToday: cmd('clearToday'),
   // Brings over Flecha's own Electron state (~/Library/Application Support/Flecha/flecha-state.json).
   importMenu: async () => {
-    // Flecha's native host reads it straight from disk; the file picker is for when it isn't installed.
-    const json = await invoke<string | undefined>('nativeHost:flechaState').catch(() => undefined);
-    if (json) {
-      if (confirm('Replace your Spaces and tabs with those of Flecha (Electron)?')) cmd('importFlechaState')(json);
-      return;
-    }
-    const input = Object.assign(document.createElement('input'), { type: 'file', accept: '.json,application/json' });
-    input.onchange = async () => {
-      const file = input.files?.[0];
-      if (file) cmd('importFlechaState')(await file.text());
-    };
-    input.click();
+    const json = await chooseFlechaState({
+      readNative: () => invoke<string | undefined>('nativeHost:flechaState').catch(() => undefined),
+      pickFile: () =>
+        new Promise((resolve) => {
+          const input = Object.assign(document.createElement('input'), { type: 'file', accept: '.json,application/json' });
+          input.onchange = () => resolve(input.files?.[0]?.text());
+          input.oncancel = () => resolve(undefined);
+          input.click();
+        }),
+      confirm: (message) => confirm(message),
+    });
+    if (json) cmd('importFlechaState')(json);
+  },
+  restoreBeforeImport: () => {
+    if (confirm('Replace your Spaces and tabs with those you had before your last import?')) cmd('restoreBeforeImport')();
   },
   // The frame grows over the page first, as in Electron; the side panel just opens it.
   openPalette: surface === 'window' ? cmd('openPalette') : (mode) => paletteListeners.forEach((cb) => cb(mode)),

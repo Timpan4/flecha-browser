@@ -15,6 +15,7 @@
  */
 import { boostHostFor, boostMatches, boostName, parseBoostName, type BoostKind } from '../lib/boostFiles';
 import { hold, release, send } from './debuggee';
+import { incognito } from '../incognito';
 
 const STORE_KEY = 'boosts';
 /** Compiled scripts, by boost name: compiling happens on save, not on every page load. */
@@ -223,14 +224,18 @@ export async function create(host: string, kind: BoostKind) {
   host = String(host).trim().toLowerCase().replace(/^www\./, '');
   if (!/^[a-z0-9-]+(\.[a-z0-9-]+)*$/.test(host) || (kind !== 'script' && kind !== 'styles')) return undefined;
   const name = boostName(host, kind);
-  if (files[name] === undefined) await save(name, TEMPLATES[kind](host), { reload: false });
-  return name;
+  if (files[name] !== undefined) return name;
+  return (await save(name, TEMPLATES[kind](host), { reload: false })) && name;
 }
 
-/** Stores a boost and applies it to open pages: styles in place, scripts by reloading. */
+/**
+ * Stores a boost and applies it to open pages: styles in place, scripts by reloading. An
+ * incognito window applies your boosts but writes none: a boost names its site, and both copies
+ * of the shell share chrome.storage.local.
+ */
 export async function save(name: string, code: string, { reload = true, build }: { reload?: boolean; build?: CompiledBoost } = {}): Promise<BoostFile | undefined> {
   const parsed = parseBoostName(name);
-  if (!parsed || !/^[a-z0-9.-]+$/i.test(parsed.host)) return undefined;
+  if (incognito || !parsed || !/^[a-z0-9.-]+$/i.test(parsed.host)) return undefined;
   files[name] = String(code);
   // The Boosts page compiles (compileBoost) and sends both; a new template has nothing to run.
   if (parsed.kind === 'script') compiled[name] = build ? { code: build.code && String(build.code), error: build.error && String(build.error) } : {};
@@ -242,7 +247,7 @@ export async function save(name: string, code: string, { reload = true, build }:
 
 export async function remove(name: string) {
   const parsed = parseBoostName(name);
-  if (!parsed || files[name] === undefined) return;
+  if (incognito || !parsed || files[name] === undefined) return;
   delete files[name];
   delete compiled[name];
   await persist();

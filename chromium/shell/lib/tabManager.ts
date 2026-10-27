@@ -1,6 +1,7 @@
 import type { FolderPlacement, PinnedNode, SavedSpace, TabPlacement, TabsEdit, TabsEditResult, TabsMenuAction, TabsView } from '../../shared/types';
 import { findFolder, pinnedTabIds, type Store } from '../../shared/store';
 import { pinnableAddress } from './url';
+import { DELETE_SPACE_DETAIL } from './undo';
 
 /** A question with buttons; resolves with the index of the button chosen. */
 export interface AskOptions {
@@ -133,9 +134,12 @@ export class TabManager {
         if (!to || !ids.length) return {};
         // Moving the tab it's dropped before would lose the spot; the end of the list it is, then.
         if (to.beforeId && ids.includes(to.beforeId)) delete to.beforeId;
-        this.keepingSessions(ids, () => {
-          for (const id of ids) this.store.placeTab(id, to, this.windowId());
-        });
+        // One undo puts every tab back.
+        this.keepingSessions(ids, () =>
+          this.store.undoable(`Move ${ids.length === 1 ? 'Tab' : `${ids.length} Tabs`}`, () => {
+            for (const id of ids) this.store.placeTab(id, to, this.windowId());
+          }),
+        );
         return {};
       }
       case 'delete':
@@ -160,9 +164,13 @@ export class TabManager {
         const folder = this.folder(String(e.folderId));
         const to = folderPlacement(e.to);
         if (!folder || !to) return {};
-        this.keepingSessions(pinnedTabIds(folder.children), () => this.store.moveFolder(folder.id, to));
+        this.keepingSessions(pinnedTabIds(folder.children), () => this.store.undoable(`Move “${folder.name}”`, () => this.store.moveFolder(folder.id, to)));
         return {};
       }
+      case 'undo':
+        // A tab back in a Space with other cookies reopens there, as after a move.
+        this.keepingSessions(Object.keys(this.store.state.tabs), () => this.store.undo());
+        return {};
       case 'newSpace':
         return { created: this.store.newSpace(false).id };
       case 'updateSpace':
@@ -224,7 +232,7 @@ export class TabManager {
     if (!space || this.store.state.spaces.length < 2) return;
     const response = await this.host.ask({
       message: `Delete “${space.name}”?`,
-      detail: 'Its pinned and today tabs are closed. This can’t be undone.',
+      detail: DELETE_SPACE_DETAIL,
       buttons: ['Delete Space', 'Cancel'],
       defaultId: 1,
       cancelId: 1,

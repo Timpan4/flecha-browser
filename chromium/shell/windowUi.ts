@@ -13,6 +13,7 @@ import { hasImport, previewLines, resultLine } from '../shared/importText';
 import { cmd, invoke, on } from './client';
 import type { MenuRun } from './protocol';
 import { askDialog, popupMenu, type MenuEntry, type MenuOptions } from './settingsUi';
+import { DELETE_SPACE_DETAIL } from './lib/undo';
 
 const framed = typeof chrome.flechaPrivate?.setFrame === 'function';
 const surface = document.documentElement.dataset.surface;
@@ -167,7 +168,7 @@ export async function confirmDeleteSpace(spaceId: string) {
   const response = await overWindow('dialog', () =>
     askDialog({
       message: `Delete “${space.name}”?`,
-      detail: 'Its pinned and today tabs are closed. This can’t be undone.',
+      detail: DELETE_SPACE_DETAIL,
       buttons: ['Delete Space', 'Cancel'],
       defaultId: 1,
       cancelId: 1,

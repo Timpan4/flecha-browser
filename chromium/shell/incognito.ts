@@ -7,6 +7,16 @@
  *
  * Both copies share chrome.storage, so the incognito one keeps its keys apart (sessionKey)
  * and only reads the regular state, for your preferences (theme, search engine, shortcuts…).
+ *
+ * What an incognito window leaves behind: nothing in chrome.storage.local, which is on disk.
+ *  - Tabs, console error counts (diagnostics) and this session's downloads list: in
+ *    chrome.storage.session, in memory, under the incognito copy's own keys.
+ *  - Site icons it fetches: in memory only (siteIcons.ts). Tab sleep doesn't run there.
+ *  - Boosts apply to its pages, but it writes none, since a boost names its site: editing one
+ *    opens the Boosts page in a regular window (features/boosts.ts).
+ *  - Screenshots (capturePage) go to the clipboard only, as in a regular window.
+ *  - The coding agent's bridge and imports run in the regular copy only, and that copy's calls
+ *    never reach incognito windows or tabs (flechaPrivate.d.ts), so an agent can't see them.
  */
 import type { BrowserState } from '../shared/types';
 

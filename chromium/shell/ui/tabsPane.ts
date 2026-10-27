@@ -1,6 +1,9 @@
 import type { PinnedNode, TabPlacement, TabsEdit, TabsView } from '../../shared/types';
 import type { IconName } from './icons.js';
 import { SPACE_COLORS, SPACE_EMOJIS } from './spaceChoices.js';
+import { isMac, primaryModifier } from '../lib/platform';
+import { isEnter } from '../lib/keys';
+import { isUndoKey } from '../lib/undo';
 
 /**
  * Settings → Tabs & Spaces: favorites and every Space's pinned tree and Today tabs in one
@@ -65,6 +68,19 @@ function plural(n: number, one: string, many = `${one}s`) {
   return `${n} ${n === 1 ? one : many}`;
 }
 
+type SelectionChange = 'range' | 'toggle' | 'only';
+
+/** How a click changes the selection: ⇧ extends it, ⌘ (Ctrl off macOS, where ⌘ is the Super key) adds or removes the row. */
+export function selectionChange(e: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean }): SelectionChange {
+  return e.shiftKey ? 'range' : primaryModifier(e) ? 'toggle' : 'only';
+}
+
+/** The pane's own shortcuts: ⌘F finds and ⌘A selects every tab, with Ctrl off macOS. */
+export function paneShortcut(e: { key: string; metaKey: boolean; ctrlKey: boolean }): 'find' | 'selectAll' | undefined {
+  if (!primaryModifier(e)) return undefined;
+  return e.key === 'f' ? 'find' : e.key === 'a' ? 'selectAll' : undefined;
+}
+
 export function setupTabsPane(icon: (name: IconName) => SVGSVGElement) {
   const api = window.settings;
   const pane = document.querySelector<HTMLElement>('.pane[data-pane="tabs-spaces"]')!;
@@ -72,6 +88,7 @@ export function setupTabsPane(icon: (name: IconName) => SVGSVGElement) {
   const search = document.getElementById('tm-search') as HTMLInputElement;
   const selectionBar = document.getElementById('tm-selection')!;
   const selectionCount = document.getElementById('tm-selection-count')!;
+  if (!isMac) document.getElementById('tm-modifier')!.textContent = 'Ctrl';
 
   let view: TabsView | undefined;
   /** A view that arrived mid-edit or mid-drag; drawn once that's over. */
@@ -343,7 +360,7 @@ export function setupTabsPane(icon: (name: IconName) => SVGSVGElement) {
     for (const input of inputs) {
       input.addEventListener('keydown', (e) => {
         e.stopPropagation();
-        if (e.key === 'Enter') void finish(true);
+        if (isEnter(e)) void finish(true);
         else if (e.key === 'Escape') void finish(false);
       });
       input.addEventListener('blur', (e) => {
@@ -482,12 +499,12 @@ export function setupTabsPane(icon: (name: IconName) => SVGSVGElement) {
     selectionCount.textContent = folder ? '1 folder' : plural(tabs, 'tab');
   }
 
-  function select(key: string, e: { metaKey?: boolean; shiftKey?: boolean }) {
+  function select(key: string, change: SelectionChange = 'only') {
     const isTab = key.startsWith('t:');
-    if (isTab && e.shiftKey && anchor?.startsWith('t:')) {
+    if (isTab && change === 'range' && anchor?.startsWith('t:')) {
       const [a, b] = [order.indexOf(anchor), order.indexOf(key)].sort((x, y) => x - y);
       selected = new Set(order.slice(a, b + 1).filter((k) => k.startsWith('t:')));
-    } else if (isTab && e.metaKey) {
+    } else if (isTab && change === 'toggle') {
       if (selectedFolder()) selected.clear();
       if (selected.has(key)) selected.delete(key);
       else selected.add(key);
@@ -530,8 +547,8 @@ export function setupTabsPane(icon: (name: IconName) => SVGSVGElement) {
     const target = e.target as HTMLElement;
     if (target.closest('button, input')) return;
     const row = target.closest<HTMLElement>('.tm-row[data-key]');
-    if (row) select(row.dataset.key!, e);
-    else if (!e.metaKey && !e.shiftKey) clearSelection();
+    if (row) select(row.dataset.key!, selectionChange(e));
+    else if (selectionChange(e) === 'only') clearSelection();
   });
 
   tree.addEventListener('dblclick', (e) => {
@@ -546,7 +563,7 @@ export function setupTabsPane(icon: (name: IconName) => SVGSVGElement) {
     if (!row) return;
     e.preventDefault();
     const key = row.dataset.key!;
-    if (!selected.has(key)) select(key, {});
+    if (!selected.has(key)) select(key);
     const folder = selectedFolder();
     void contextMenu(folder ? { folderId: folder, context: true } : { tabIds: selectedTabIds(), context: true });
   });
@@ -579,7 +596,7 @@ export function setupTabsPane(icon: (name: IconName) => SVGSVGElement) {
       e.preventDefault();
       const first = order[0];
       if (first) {
-        select(first, {});
+        select(first);
         rowFor(first)?.focus();
       }
     }
@@ -587,17 +604,21 @@ export function setupTabsPane(icon: (name: IconName) => SVGSVGElement) {
 
   document.addEventListener('keydown', (e) => {
     if (pane.hidden || editing || spaceEditor) return;
-    if (e.metaKey && e.key === 'f') {
+    const shortcut = paneShortcut(e);
+    if (shortcut === 'find') {
       e.preventDefault();
       search.focus();
       search.select();
       return;
     }
     if ((e.target as HTMLElement).closest('input, textarea, select')) return;
-    if (e.metaKey && e.key === 'a') {
+    if (shortcut === 'selectAll') {
       e.preventDefault();
       selected = new Set(order.filter((k) => k.startsWith('t:')));
       updateSelection();
+    } else if (isUndoKey(e)) {
+      e.preventDefault();
+      void send({ op: 'undo' });
     } else if (e.key === 'Backspace' || e.key === 'Delete') {
       e.preventDefault();
       deleteSelection();
@@ -618,7 +639,7 @@ export function setupTabsPane(icon: (name: IconName) => SVGSVGElement) {
         const [a, b] = [order.indexOf(anchor), order.indexOf(next)].sort((x, y) => x - y);
         selected = new Set(order.slice(a, b + 1).filter((k) => k.startsWith('t:')));
         updateSelection();
-      } else select(next, {});
+      } else select(next);
       cursor = next;
       const row = rowFor(next);
       row?.focus({ preventScroll: true });
@@ -738,10 +759,10 @@ export function setupTabsPane(icon: (name: IconName) => SVGSVGElement) {
     const row = target.closest<HTMLElement>('.tm-row[data-key]');
     if (head) drag = { kind: 'space', id: head.dataset.space! };
     else if (row?.classList.contains('folder')) {
-      select(row.dataset.key!, {});
+      select(row.dataset.key!);
       drag = { kind: 'folder', id: row.dataset.id! };
     } else if (row) {
-      if (!selected.has(row.dataset.key!)) select(row.dataset.key!, {});
+      if (!selected.has(row.dataset.key!)) select(row.dataset.key!);
       drag = { kind: 'tabs', ids: selectedTabIds() };
     } else return;
     e.dataTransfer!.effectAllowed = 'move';
@@ -831,7 +852,7 @@ export function setupTabsPane(icon: (name: IconName) => SVGSVGElement) {
       name = el('input', { class: 'tm-pop-name', maxlength: '40', placeholder: 'Space name', spellcheck: 'false' });
       emoji = el('input', { class: 'tm-pop-emoji', title: 'Choose any emoji', spellcheck: 'false' });
       name.addEventListener('change', () => name!.value.trim() && update({ name: name!.value }));
-      name.addEventListener('keydown', (e) => e.key === 'Enter' && name!.blur());
+      name.addEventListener('keydown', (e) => isEnter(e) && name!.blur());
       // The macOS emoji picker types into this field; keep its last emoji.
       emoji.addEventListener('focus', () => void api.showEmojiPanel());
       emoji.addEventListener('input', () => {

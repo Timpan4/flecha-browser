@@ -1,6 +1,7 @@
 import type { IconName } from './icons.js';
 import type { FlechaApi, ImportMode, ImportOptions, ImportPreview, UiState } from '../../shared/types';
 import { hasImport, plural, resultLine, spaceCounts } from '../../shared/importText';
+import { isEnter } from '../lib/keys';
 
 /**
  * The first-run tour, full window: steps on the left, a live miniature Flecha on the right
@@ -185,7 +186,7 @@ export function setupOnboarding(api: FlechaApi, h: H, icon: (name: IconName) => 
     if (!sp) return h('div');
     const name = h('input', { class: 'tour-input', value: sp.name, maxlength: '40', spellcheck: 'false', placeholder: 'Personal, Work, Side project…' }) as HTMLInputElement;
     name.addEventListener('input', () => name.value.trim() && api.updateSpace(sp.id, { name: name.value }));
-    name.addEventListener('keydown', (e) => e.key === 'Enter' && next());
+    name.addEventListener('keydown', (e) => isEnter(e) && next());
     const theme = state?.theme ?? 'system';
     return h(
       'div',
