@@ -3,7 +3,7 @@
  * (lib/settingsCore.ts, lib/tabManager.ts), answering the Settings page over the hub.
  * Every name starts with `settings:` so it never clashes with the sidebar's.
  */
-import type { SettingsPatch, SettingsView, TabsEdit } from '../shared/types';
+import type { SettingsPatch, SettingsView, TabsEdit, VsrSettings, VsrState } from '../shared/types';
 import type { Store } from '../shared/store';
 import { applySettings, renewAgentToken, settingsView } from './lib/settingsCore';
 import { TabManager, type AskOptions, type TabsMenuRequest, type TabsMenuRun } from './lib/tabManager';
@@ -88,6 +88,16 @@ export function registerSettings(ctx: SettingsContext) {
     });
 
   handle({
+    'settings:vsr-state': (): Promise<VsrState> =>
+      typeof chrome.flechaPrivate?.getVsrState === 'function'
+        ? chrome.flechaPrivate.getVsrState()
+        : Promise.resolve({ enabled: true, quality: 2, maxOutputHeight: 1440, available: false,
+            processedFrames: '0', inputWidth: 0, inputHeight: 0, outputWidth: 0, outputHeight: 0,
+            error: 'Native VSR is unavailable in this browser build.' }),
+    'settings:vsr-set': (settings: VsrSettings) => {
+      if (typeof chrome.flechaPrivate?.setVsrSettings !== 'function') throw new Error('Native VSR is unavailable in this browser build.');
+      return chrome.flechaPrivate.setVsrSettings(settings.enabled, settings.quality, settings.maxOutputHeight);
+    },
     'settings:get': view,
     'settings:set': async (patch: SettingsPatch) => {
       if (downloadPrefs && typeof patch?.askWhereToSave === 'boolean') mirrorDownloads(await chrome.flechaPrivate.setAskWhereToSave(patch.askWhereToSave));

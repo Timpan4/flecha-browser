@@ -267,6 +267,11 @@ declare namespace chrome.flechaPrivate {
   function keepDownload(id: number): Promise<void>;
   function discardDownload(id: number): Promise<void>;
   /** Where downloads go and whether Chromium asks each time (download.default_directory, download.prompt_for_download). */
+  // Native video controls, available in the VSR-enabled Chromium build.
+  type VsrState = import('../shared/types').VsrState;
+  function getVsrState(): Promise<VsrState>;
+  function setVsrSettings(enabled: boolean, quality: 1 | 2 | 3 | 4, maxOutputHeight: number): Promise<VsrState>;
+
   interface DownloadSettings {
     folder: string;
     askWhereToSave: boolean;
