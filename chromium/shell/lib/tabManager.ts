@@ -224,7 +224,7 @@ export class TabManager {
     if (!space || this.store.state.spaces.length < 2) return;
     const response = await this.host.ask({
       message: `Delete “${space.name}”?`,
-      detail: 'Its pinned and today tabs are closed. This can’t be undone.',
+      detail: 'Its pinned and today tabs are closed and archived. The command bar can still find them.',
       buttons: ['Delete Space', 'Cancel'],
       defaultId: 1,
       cancelId: 1,

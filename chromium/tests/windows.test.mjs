@@ -157,6 +157,18 @@ test('deleting a Space removes its Today tabs from every window', () => {
   assert.equal(store.state.windows.some((w) => w.spaces[work]), false);
 });
 
+test('deleting a Space archives its pinned and Today tabs', () => {
+  const { store, first, second, work } = twoWindows();
+  store.switchSpace(work, first);
+  store.switchSpace(work, second);
+  const pinned = store.addTab('https://example.com/pinned', { windowId: first });
+  store.togglePin(pinned.id, first);
+  store.addTab('https://example.com/a', { windowId: first });
+  store.addTab('https://example.com/b', { windowId: second });
+  store.deleteSpace(work);
+  assert.deepEqual(store.state.archive.map((a) => a.url).sort(), ['https://example.com/a', 'https://example.com/b', 'https://example.com/pinned']);
+});
+
 test('a window without a choice of its own acts as the focused window', () => {
   const { store, first, second } = twoWindows();
   store.focusWindow(second);

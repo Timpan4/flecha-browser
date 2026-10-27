@@ -142,7 +142,7 @@ export async function confirmDeleteSpace(spaceId: string) {
   const response = await overWindow('dialog', () =>
     askDialog({
       message: `Delete “${space.name}”?`,
-      detail: 'Its pinned and today tabs are closed. This can’t be undone.',
+      detail: 'Its pinned and today tabs are closed and archived. The command bar can still find them.',
       buttons: ['Delete Space', 'Cancel'],
       defaultId: 1,
       cancelId: 1,

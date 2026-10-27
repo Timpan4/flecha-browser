@@ -567,7 +567,7 @@ export class Store {
     this.changed();
   }
 
-  /** Deletes a Space with its pinned tabs and every window's Today tabs in it. Returns the ids of tabs that were dropped, so their views can be destroyed. */
+  /** Deletes a Space, archiving its pinned tabs and every window's Today tabs in it. Returns the ids of those tabs, so their views can be destroyed. */
   deleteSpace(spaceId: string): string[] {
     if (this.state.spaces.length < 2) return [];
     const space = this.savedSpace(spaceId);
@@ -577,7 +577,10 @@ export class Store {
       ids.push(...(win.spaces[spaceId]?.today ?? []));
       delete win.spaces[spaceId];
     }
-    for (const id of ids) delete this.state.tabs[id];
+    for (const id of ids) {
+      this.archive(this.state.tabs[id]);
+      delete this.state.tabs[id];
+    }
     this.state.spaces = this.state.spaces.filter((s) => s !== space);
     for (const win of [...this.state.windows, ...this.state.closedWindows]) if (win.activeSpaceId === spaceId) win.activeSpaceId = this.state.spaces[0].id;
     this.state.closedWindows = this.state.closedWindows.filter((w) => Object.keys(w.spaces).length);
