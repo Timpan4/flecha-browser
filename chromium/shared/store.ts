@@ -856,13 +856,13 @@ export class Store {
     return space;
   }
 
-  /** Takes over another Flecha's whole state (its Spaces, tabs and settings), as if it had been loaded. */
   /** Takes on preferences (theme, search engine…) changed elsewhere, keeping the tabs and undo. */
   followPreferences(prefs: Partial<BrowserState>) {
     Object.assign(this.state, prefs);
     this.changed();
   }
 
+  /** Takes over another Flecha's whole state (its Spaces, tabs and settings), as if it had been loaded. */
   replaceState(state: BrowserState): boolean {
     if (!state?.spaces?.length || !state.tabs || !state.windows?.length) return false;
     this.state = state;
