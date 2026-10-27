@@ -49,3 +49,14 @@ test('the written manifest keeps the base version and is one Chromium accepts', 
   writeManifest(source, dir);
   assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8')).version, version);
 });
+
+test('restamping a built shell from its own manifest gives the version a full build would', () => {
+  const dir = shell({ 'background.js': 'code' });
+  const source = path.join(shell({ 'manifest.json': JSON.stringify(manifest) }), 'manifest.json');
+  writeManifest(source, dir);
+  fs.writeFileSync(path.join(dir, 'rules.json'), '[]');
+  writeManifest(path.join(dir, 'manifest.json'), dir);
+  const restamped = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8'));
+  writeManifest(source, dir);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8')), restamped);
+});
