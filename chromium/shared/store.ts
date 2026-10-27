@@ -836,14 +836,20 @@ export class Store {
         out.tabs++;
         return true;
       };
+      const had = new Set(this.allTabIds(space, win.id));
       this.mergeNodes(space.pinned, imported.pinned, add, !!known);
       const ws = this.windowSpace(space.id, win.id);
       for (const t of imported.today) if (add(t)) ws.today.push(this.importTab(t, false));
 
-      const tabByUrl = (url: string) => this.allTabIds(space, win.id).find((id) => s.tabs[id]?.url === url);
+      // Each half is a different tab with that address, one this import added when there is one.
+      const tabByUrl = (url: string, taken?: string) => {
+        const ids = this.allTabIds(space, win.id).filter((id) => id !== taken && s.tabs[id]?.url === url);
+        return ids.find((id) => !had.has(id)) ?? ids[0];
+      };
       for (const urls of imported.splits ?? []) {
-        const [left, right] = urls.map(tabByUrl);
-        if (urls.length === 2 && !ws.split && left && right && left !== right) {
+        const left = tabByUrl(urls[0]);
+        const right = urls.length === 2 ? tabByUrl(urls[1], left) : undefined;
+        if (urls.length === 2 && !ws.split && left && right) {
           ws.split = [left, right];
           out.splits++;
         } else out.pairs++;

@@ -183,3 +183,13 @@ test('a favorite browsed away from still counts as its first address', () => {
   store.importSpaces([], { mode: 'merge', favorites: [tab('https://mail.example.com/')] });
   assert.equal(store.state.favorites.length, 1);
 });
+
+test('a split of two tabs at the same address uses both, the ones this import added', () => {
+  const store = newStore();
+  const same = 'https://same.example.com/';
+  store.importSpaces([{ name: 'Work', pinned: [tab(same)], today: [] }], { mode: 'append' });
+  store.importSpaces([{ name: 'Work', pinned: [], today: [tab(same), tab(same)], splits: [[same, same]] }], { mode: 'append' });
+  const work = store.state.spaces.at(-1);
+  const view = store.view(work);
+  assert.deepEqual(view.split, view.today);
+});

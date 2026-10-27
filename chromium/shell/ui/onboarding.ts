@@ -485,7 +485,8 @@ export function setupOnboarding(api: FlechaApi, h: H, icon: (name: IconName) => 
 
   api.onTourKey(tourKey);
   document.addEventListener('keydown', (e) => {
-    if (root.hidden || e.key !== 'Enter' || (e.target as HTMLElement).tagName === 'INPUT') return;
+    // Enter on a focused field, button or disclosure does what it does there, not the next step.
+    if (root.hidden || e.key !== 'Enter' || ['INPUT', 'BUTTON', 'SUMMARY'].includes((e.target as HTMLElement).tagName)) return;
     e.preventDefault();
     root.querySelector<HTMLButtonElement>('.tour-primary')?.click();
   });
