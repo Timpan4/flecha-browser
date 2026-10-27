@@ -1,5 +1,5 @@
 diff --git a/components/viz/service/display_embedder/flecha_video_processor.h b/components/viz/service/display_embedder/flecha_video_processor.h
-index be82380..81a56a9 100755
+index be82380..e8d3ef9 100755
 --- a/components/viz/service/display_embedder/flecha_video_processor.h
 +++ b/components/viz/service/display_embedder/flecha_video_processor.h
 @@ -6,6 +6,8 @@
@@ -11,7 +11,7 @@ index be82380..81a56a9 100755
  #include "components/viz/common/resources/transferable_resource.h"
  #include "third_party/skia/include/core/SkImage.h"
  #include "third_party/skia/include/gpu/ganesh/GrBackendSemaphore.h"
-@@ -17,6 +19,12 @@ class SharedContextState;
+@@ -17,6 +19,15 @@ class SharedContextState;
  
  namespace viz {
  
@@ -21,10 +21,13 @@ index be82380..81a56a9 100755
 +// on a backend the processor supports.
 +bool IsFlechaVideoAvailable();
 +
++// Turns native VSR off for the rest of this GPU process.
++void DisableFlechaVideo();
++
  std::optional<gfx::Size> GetFlechaVideoOutputSize(
      const TransferableResource& resource);
  
-@@ -25,7 +33,9 @@ class FlechaVideoProcessor {
+@@ -25,7 +36,9 @@ class FlechaVideoProcessor {
    static std::unique_ptr<FlechaVideoProcessor> Create(
        gpu::SharedContextState* context,
        const gfx::Size& input_size,
@@ -35,7 +38,7 @@ index be82380..81a56a9 100755
    ~FlechaVideoProcessor();
  
    bool Process(sk_sp<SkImage> source,
-@@ -34,9 +44,33 @@ class FlechaVideoProcessor {
+@@ -34,9 +47,33 @@ class FlechaVideoProcessor {
    void OnContextLost();
  
   private:
@@ -71,7 +74,7 @@ index be82380..81a56a9 100755
  }  // namespace viz
  #endif
 diff --git a/components/viz/service/display_embedder/flecha_video_processor.cc b/components/viz/service/display_embedder/flecha_video_processor.cc
-index 87ebeb0..08281b8 100644
+index 87ebeb0..f200b3b 100644
 --- a/components/viz/service/display_embedder/flecha_video_processor.cc
 +++ b/components/viz/service/display_embedder/flecha_video_processor.cc
 @@ -6,10 +6,12 @@
@@ -130,7 +133,7 @@ index 87ebeb0..08281b8 100644
  GrBackendTexture WrapImage(gpu::VulkanImage* image) {
    GrVkImageInfo info;
    info.fImage = image->image();
-@@ -90,10 +122,15 @@ void DrawSource(SkSurface* surface, SkImage* source) {
+@@ -90,10 +122,19 @@ void DrawSource(SkSurface* surface, SkImage* source) {
  }
  }  // namespace
  
@@ -138,6 +141,10 @@ index 87ebeb0..08281b8 100644
 +  return base::FeatureList::IsEnabled(features::kFlechaVsr) &&
 +         Bridge().available() &&
 +         g_vulkan_compositing.load(std::memory_order_relaxed);
++}
++
++void DisableFlechaVideo() {
++  Bridge().disabled.store(true, std::memory_order_relaxed);
 +}
 +
  std::optional<gfx::Size> GetFlechaVideoOutputSize(
@@ -148,7 +155,7 @@ index 87ebeb0..08281b8 100644
        resource.resource_source !=
            TransferableResource::ResourceSource::kVideo ||
        resource.GetColorSpace().IsHDR() || resource.hdr_metadata.HasAgtm() ||
-@@ -104,12 +141,15 @@ std::optional<gfx::Size> GetFlechaVideoOutputSize(
+@@ -104,12 +145,15 @@ std::optional<gfx::Size> GetFlechaVideoOutputSize(
      return std::nullopt;
    }
    const auto size = resource.GetSize();
@@ -166,7 +173,7 @@ index 87ebeb0..08281b8 100644
    const auto scaled = gfx::ScaleToCeiledSize(size, scale);
    return gfx::Size(
        base::bits::AlignUp(static_cast<uint32_t>(scaled.width()), 16u),
-@@ -131,6 +171,14 @@ struct FlechaVideoProcessor::Resources {
+@@ -131,6 +175,14 @@ struct FlechaVideoProcessor::Resources {
    VkSemaphore input_ready = VK_NULL_HANDLE;
    VkSemaphore output_ready = VK_NULL_HANDLE;
    bool context_lost = false;
@@ -181,7 +188,7 @@ index 87ebeb0..08281b8 100644
  
    ~Resources() {
      // A lost GPU may never signal an outstanding external semaphore. Abandon
-@@ -138,10 +186,10 @@ struct FlechaVideoProcessor::Resources {
+@@ -138,10 +190,10 @@ struct FlechaVideoProcessor::Resources {
      // waiting.
      if (!context_lost) {
        if (frame) {
@@ -194,7 +201,7 @@ index 87ebeb0..08281b8 100644
        }
      }
      promise.reset();
-@@ -166,12 +214,15 @@ struct FlechaVideoProcessor::Resources {
+@@ -166,12 +218,15 @@ struct FlechaVideoProcessor::Resources {
  std::unique_ptr<FlechaVideoProcessor> FlechaVideoProcessor::Create(
      gpu::SharedContextState* context,
      const gfx::Size& input_size,
@@ -211,7 +218,7 @@ index 87ebeb0..08281b8 100644
    resources->queue = context->vk_context_provider()->GetDeviceQueue();
    constexpr VkImageUsageFlags usage =
        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
-@@ -203,8 +254,8 @@ std::unique_ptr<FlechaVideoProcessor> FlechaVideoProcessor::Create(
+@@ -203,8 +258,8 @@ std::unique_ptr<FlechaVideoProcessor> FlechaVideoProcessor::Create(
    properties.pNext = &id;
    vkGetPhysicalDeviceProperties2(queue->GetVulkanPhysicalDevice(), &properties);
    resources->processor =
@@ -222,7 +229,7 @@ index 87ebeb0..08281b8 100644
    if (resources->processor &&
        gpu::IsVkOpaqueExternalSemaphoreSupported(queue)) {
      resources->input_ready =
-@@ -221,7 +272,7 @@ std::unique_ptr<FlechaVideoProcessor> FlechaVideoProcessor::Create(
+@@ -221,7 +276,7 @@ std::unique_ptr<FlechaVideoProcessor> FlechaVideoProcessor::Create(
                           queue->GetVulkanDevice(), resources->output_ready)
                           .TakeHandle();
        resources->frame =
@@ -231,7 +238,7 @@ index 87ebeb0..08281b8 100644
                          {in_fd.get(), resources->input->device_size(),
                           static_cast<uint32_t>(input_size.width()),
                           static_cast<uint32_t>(input_size.height())},
-@@ -232,14 +283,18 @@ std::unique_ptr<FlechaVideoProcessor> FlechaVideoProcessor::Create(
+@@ -232,14 +287,18 @@ std::unique_ptr<FlechaVideoProcessor> FlechaVideoProcessor::Create(
      }
    }
    if (!resources->frame) {
@@ -254,7 +261,7 @@ index 87ebeb0..08281b8 100644
  
  FlechaVideoProcessor::~FlechaVideoProcessor() {
    // Keep the imported storage alive until all compositor sampling has finished.
-@@ -252,14 +307,75 @@ FlechaVideoProcessor::~FlechaVideoProcessor() {
+@@ -252,14 +311,80 @@ FlechaVideoProcessor::~FlechaVideoProcessor() {
    }
    auto* queue = resources_->queue.get();
    queue->GetFenceHelper()->EnqueueCleanupTaskForSubmittedWork(base::BindOnce(
@@ -308,6 +315,11 @@ index 87ebeb0..08281b8 100644
 +
 +void FlechaVideoProcessorPool::Recycle(
 +    std::unique_ptr<FlechaVideoProcessor::Resources> resources) {
++  // A slot without a CUDA binding only does GPU scaling. Dropping it lets a
++  // later Acquire() retry the bridge.
++  if (!resources->frame) {
++    return;
++  }
 +  idle_bytes_ += resources->allocation_bytes();
 +  idle_.push_back(std::move(resources));
 +  TrimIdleResources();
@@ -332,7 +344,7 @@ index 87ebeb0..08281b8 100644
  }
  
  bool FlechaVideoProcessor::Process(
-@@ -287,6 +403,7 @@ bool FlechaVideoProcessor::Process(
+@@ -287,6 +412,7 @@ bool FlechaVideoProcessor::Process(
    if (!context->setBackendTextureState(r.output_texture, external)) {
      return false;
    }
@@ -340,7 +352,7 @@ index 87ebeb0..08281b8 100644
    GrBackendSemaphore ready = GrBackendSemaphores::MakeVk(r.input_ready);
    GrFlushInfo flush{.fNumSemaphores = 1, .fSignalSemaphores = &ready};
    auto result = context->flush(r.input_surface.get(), flush, &external);
-@@ -294,9 +411,10 @@ bool FlechaVideoProcessor::Process(
+@@ -294,9 +420,10 @@ bool FlechaVideoProcessor::Process(
        !context->submit(GrSyncCpu::kNo)) {
      return false;
    }
@@ -353,7 +365,7 @@ index 87ebeb0..08281b8 100644
      r.context_lost = true;
      Bridge().disabled.store(true, std::memory_order_relaxed);
      r.context->MarkContextLost();
-@@ -314,10 +432,15 @@ bool FlechaVideoProcessor::Process(
+@@ -314,10 +441,15 @@ bool FlechaVideoProcessor::Process(
      return false;
    }
    if (!processed) {
@@ -1266,3 +1278,40 @@ index 0000000..41be0cd
 +}
 +}  // namespace flecha
 +#endif
+diff --git a/content/gpu/gpu_main.cc b/content/gpu/gpu_main.cc
+index fef23f2..513fd5c 100755
+--- a/content/gpu/gpu_main.cc
++++ b/content/gpu/gpu_main.cc
+@@ -43,6 +43,11 @@
+ #include "components/viz/common/features.h"
+ #include "components/viz/service/gl/gpu_log_message_manager.h"
+ #include "components/viz/service/main/viz_main_impl.h"
++#include "gpu/vulkan/buildflags.h"
++// Flecha: native VSR is turned off when the GPU sandbox did not start.
++#if BUILDFLAG(IS_LINUX) && BUILDFLAG(ENABLE_VULKAN)
++#include "components/viz/service/display_embedder/flecha_video_processor.h"
++#endif
+ #include "content/child/child_process.h"
+ #include "content/common/content_constants_internal.h"
+ #include "content/common/content_switches_internal.h"
+@@ -574,10 +579,16 @@ bool StartSandboxLinux(gpu::GpuWatchdogThread* watchdog_thread,
+           *base::CommandLine::ForCurrentProcess()),
+       base::BindOnce(GpuPreSandboxHook), sandbox_options);
+ 
+-  // Flecha: never silently run native VSR after sandbox setup was skipped.
+-  CHECK(!native_vsr ||
+-        (res &&
+-         sandbox::policy::SandboxLinux::GetInstance()->seccomp_bpf_started()));
++  // Flecha: never run native VSR after sandbox setup was skipped, but keep the
++  // GPU process usable without it.
++  if (native_vsr &&
++      !(res &&
++        sandbox::policy::SandboxLinux::GetInstance()->seccomp_bpf_started())) {
++    LOG(ERROR) << "Flecha VSR: GPU sandbox inactive, native VSR disabled";
++#if BUILDFLAG(IS_LINUX) && BUILDFLAG(ENABLE_VULKAN)
++    viz::DisableFlechaVideo();
++#endif
++  }
+ 
+   if (watchdog_thread) {
+     watchdog_thread->Start();

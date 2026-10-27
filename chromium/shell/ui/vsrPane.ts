@@ -11,7 +11,6 @@ export function setupVsrPane(api: SettingsApi) {
   const status = document.getElementById('vsr-status')!;
   const frames = document.getElementById('vsr-frames')!;
   const output = document.getElementById('vsr-output')!;
-  let initialized = false;
   let reading = false;
   let writing = false;
   let stopped = false;
@@ -52,7 +51,9 @@ export function setupVsrPane(api: SettingsApi) {
     reading = true;
     try {
       const state = await api.getVsrState();
-      if (!stopped && !writing) { render(state, !initialized); initialized = true; }
+      // Settings are browser-wide and each change saves at once, so the controls
+      // follow other pages' changes unless the user is editing one right now.
+      if (!stopped && !writing) render(state, !form.contains(document.activeElement));
     } catch (error) {
       status.textContent = String(error);
       controls.disabled = true;
