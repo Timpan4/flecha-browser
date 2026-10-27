@@ -44,8 +44,8 @@ interface UndoStep {
   archived: Map<string, ArchivedTab>;
   /** Older entries those pushed out of the archive. */
   dropped: ArchivedTab[];
-  /** Tabs (`t:<id>`) and folders (`f:<id>`) it moved or deleted. */
-  touched: Set<string>;
+  /** Tabs (`t:<id>`) and folders (`f:<id>`) it moved or deleted, to the list it left each in (none if deleted). */
+  touched: Map<string, string | undefined>;
   /** The Spaces it deleted. */
   deletedSpaces: Set<string>;
   /** The splits it ended, as `<window>:<space>`. */
@@ -894,7 +894,9 @@ export class Store {
     } finally {
       this.recording = undefined;
     }
-    const touched = changedPlaces(listsOf(before), listsOf(this.state), moved);
+    const after = listsOf(this.state);
+    const leftIn = listOfEach(after);
+    const touched = new Map([...changedPlaces(listsOf(before), after, moved)].map((key) => [key, leftIn.get(key)]));
     const deletedSpaces = new Set(before.spaces.filter((s) => !this.savedSpace(s.id)).map((s) => s.id));
     if (touched.size || deletedSpaces.size) {
       const removed = Object.fromEntries(Object.entries(tabs).filter(([id]) => !this.state.tabs[id]));
@@ -953,10 +955,12 @@ export class Store {
       if (restoredSpaces.has(win.activeSpaceId) && step.switched.get(win.id) === now.activeSpaceId) now.activeSpaceId = win.activeSpaceId;
     }
 
-    // Folders, then tabs, back in their lists, in the order they had there.
+    // Folders, then tabs, back in their lists, in the order they had there: those still where the
+    // change left them, not those you have moved again since.
+    const where = listOfEach(listsOf(this.state));
     for (const [list, keys] of listsOf(before)) {
       keys.forEach((key, i) => {
-        if (step.touched.has(key)) this.putBack(key, list, keys.slice(0, i), before, step.homes);
+        if (step.touched.has(key) && where.get(key) === step.touched.get(key)) this.putBack(key, list, keys.slice(0, i), before, step.homes);
       });
     }
 
@@ -1261,13 +1265,19 @@ function listsOf(layout: Layout): Map<string, string[]> {
   return lists;
 }
 
+/** The list each item is in. */
+function listOfEach(lists: Map<string, string[]>): Map<string, string> {
+  const listOf = new Map<string, string>();
+  for (const [name, keys] of lists) for (const key of keys) listOf.set(key, name);
+  return listOf;
+}
+
 /**
  * The items that left their list, and the `moved` ones that changed places within it. Items a
  * move only shifted aren't counted: the order alone can't tell which of two swapped tabs moved.
  */
 function changedPlaces(before: Map<string, string[]>, after: Map<string, string[]>, moved: Set<string>): Set<string> {
-  const listOf = new Map<string, string>();
-  for (const [name, keys] of after) for (const key of keys) listOf.set(key, name);
+  const listOf = listOfEach(after);
   const changed = new Set<string>();
   for (const [name, keys] of before) {
     const stayed = keys.filter((key) => listOf.get(key) === name);

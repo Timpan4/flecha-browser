@@ -336,3 +336,16 @@ test('undoing a Space deletion brings back a closed window it emptied', () => {
   assert.equal(reopened.activeSpaceId, work);
   assert.deepEqual(reopened.spaces[work].today, [tab.id]);
 });
+
+test('undo leaves a tab you moved again since where you put it', () => {
+  const { store, first, work } = twoWindows();
+  const third = store.newSpace(false).id;
+  const tab = store.addTab('https://example.com/x', { windowId: first });
+  store.togglePin(tab.id, first);
+  store.undoable('Move Tab', () => store.moveToSpace(tab.id, work));
+  store.moveToSpace(tab.id, third);
+  store.undo();
+  const space = (id) => store.state.spaces.find((s) => s.id === id);
+  assert.deepEqual(space(third).pinned, [{ kind: 'tab', tabId: tab.id }]);
+  assert.deepEqual(space(store.state.spaces[0].id).pinned, []);
+});
