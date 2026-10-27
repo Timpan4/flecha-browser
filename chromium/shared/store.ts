@@ -48,6 +48,10 @@ interface UndoStep {
   touched: Set<string>;
   /** The splits it ended, as `<window>:<space>`. */
   endedSplits: Set<string>;
+  /** The window Spaces it left with no tab on screen, as `<window>:<space>`. */
+  leftEmpty: Set<string>;
+  /** The windows it switched to another Space, to the Space it switched them to. */
+  switched: Map<string, string>;
   /** The closed windows it dropped, as it deleted their last tabs. */
   droppedWindows: Set<string>;
 }
@@ -880,13 +884,18 @@ export class Store {
       const kept = new Set(this.state.archive);
       const dropped = archive.filter((a) => !kept.has(a));
       const endedSplits = new Set<string>();
+      const leftEmpty = new Set<string>();
+      const switched = new Map<string, string>();
       for (const win of [...before.windows, ...before.closedWindows]) {
+        const now = windowIn(this.state, win.id);
+        if (now && now.activeSpaceId !== win.activeSpaceId) switched.set(win.id, now.activeSpaceId);
         for (const [spaceId, ws] of Object.entries(win.spaces)) {
-          if (ws.split && !windowIn(this.state, win.id)?.spaces[spaceId]?.split) endedSplits.add(`${win.id}:${spaceId}`);
+          if (ws.split && !now?.spaces[spaceId]?.split) endedSplits.add(`${win.id}:${spaceId}`);
+          if (ws.activeTabId && !now?.spaces[spaceId]?.activeTabId) leftEmpty.add(`${win.id}:${spaceId}`);
         }
       }
       const droppedWindows = new Set(before.closedWindows.filter((w) => !windowIn(this.state, w.id)).map((w) => w.id));
-      this.undoSteps.push({ label, before, removed, homes, archived, dropped, touched, endedSplits, droppedWindows });
+      this.undoSteps.push({ label, before, removed, homes, archived, dropped, touched, endedSplits, leftEmpty, switched, droppedWindows });
       this.undoSteps.splice(0, this.undoSteps.length - UNDO_LIMIT);
       this.changed();
     }
@@ -922,7 +931,8 @@ export class Store {
       for (const [spaceId, { today, activeTabId, split, splitMode, ...rest }] of Object.entries(win.spaces)) {
         if (this.savedSpace(spaceId)) now.spaces[spaceId] ??= { ...rest, today: [] };
       }
-      if (restoredSpaces.has(win.activeSpaceId)) now.activeSpaceId = win.activeSpaceId;
+      // Back to the Space it showed, unless you have switched Spaces since.
+      if (restoredSpaces.has(win.activeSpaceId) && step.switched.get(win.id) === now.activeSpaceId) now.activeSpaceId = win.activeSpaceId;
     }
 
     // Folders, then tabs, back in their lists, in the order they had there.
@@ -943,7 +953,8 @@ export class Store {
     this.state.archive.push(...step.dropped.filter((a) => !archive.has(a)));
     this.state.archive.length = Math.min(this.state.archive.length, ARCHIVE_LIMIT);
 
-    // Where each window was, unless a tab has gone on screen in another window since (claim).
+    // The tab and split the change took off screen, unless the tab has gone on screen in another
+    // window since (claim), or you have picked or closed one since.
     const heldElsewhere = (tabId: string, windowId: string) =>
       this.state.windows.some((w) => w.id !== windowId && Object.values(w.spaces).some((ws) => ws.activeTabId === tabId || ws.split?.includes(tabId)));
     for (const win of [...before.windows, ...before.closedWindows]) {
@@ -954,7 +965,7 @@ export class Store {
         const shown = (this.hasWindow(win.id) ? this.allTabIds({ id: spaceId, pinned: this.savedSpace(spaceId)?.pinned ?? [] }, win.id) : current.today).filter(
           (id) => !heldElsewhere(id, win.id),
         );
-        if (!current.activeTabId && ws.activeTabId && shown.includes(ws.activeTabId)) current.activeTabId = ws.activeTabId;
+        if (step.leftEmpty.has(`${win.id}:${spaceId}`) && !current.activeTabId && shown.includes(ws.activeTabId!)) current.activeTabId = ws.activeTabId;
         if (step.endedSplits.has(`${win.id}:${spaceId}`) && !current.split && ws.split?.every((id) => shown.includes(id))) {
           current.split = ws.split;
           if (ws.splitMode) current.splitMode = ws.splitMode;

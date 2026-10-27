@@ -260,3 +260,25 @@ test('undo puts no tab on screen in two windows', () => {
   assert.notEqual(ws(first).activeTabId, pinned.id);
   assert.equal(ws(second).activeTabId, pinned.id);
 });
+
+test('undoing a Space deletion keeps a Space you switched to since', () => {
+  const { store, first, work } = twoWindows();
+  const third = store.newSpace(false).id;
+  store.switchSpace(work, first);
+  store.deleteSpace(work);
+  store.switchSpace(third, first);
+  store.undo();
+  assert.equal(store.state.windows.find((w) => w.id === first).activeSpaceId, third);
+});
+
+test('undo brings back no tab you closed after the change', () => {
+  const { store, first, personal } = twoWindows();
+  const pinned = store.addTab('https://example.com/pinned', { windowId: first });
+  store.togglePin(pinned.id, first);
+  const other = store.addTab('https://example.com/other', { windowId: first, activate: false });
+  store.activate(pinned.id, { windowId: first });
+  store.removeTabs([other.id]);
+  store.closeTab(pinned.id);
+  store.undo();
+  assert.notEqual(store.state.windows.find((w) => w.id === first).spaces[personal].activeTabId, pinned.id);
+});
