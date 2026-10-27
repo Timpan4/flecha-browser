@@ -128,3 +128,40 @@ test('a change that changes nothing leaves nothing to undo', () => {
   store.undoable('Nothing', () => {});
   assert.equal(store.undoLabel, undefined);
 });
+
+test('undo leaves a window reopened since closed no more', () => {
+  const { store, first, second } = twoWindows();
+  store.addTab('https://example.com/kept', { windowId: second });
+  const gone = store.addTab('https://example.com/gone', { windowId: first });
+  store.closeWindow(second);
+  store.removeTabs([gone.id]);
+  store.reopenWindow();
+  store.undo();
+  assert.deepEqual(store.state.closedWindows, []);
+  assert.equal(store.state.windows.filter((w) => w.id === second).length, 1);
+});
+
+test('undoing a reorder moves back only the tab that was moved', () => {
+  const { store, first, personal, work } = twoWindows();
+  for (const n of ['a', 'b', 'c']) store.addTab(`https://example.com/${n}`, { windowId: first });
+  const [top, middle, moved] = today(store, first, personal);
+  store.undoable('Move Tab', () => store.moveTab(moved, { zone: 'today', beforeTabId: top }, first));
+  store.moveToSpace(top, work);
+  assert.equal(store.undo(), 'Move Tab');
+  assert.deepEqual(today(store, first, work), [top]);
+  assert.deepEqual(today(store, first, personal), [middle, moved]);
+});
+
+test('undoing a Space deletion brings back its split view', () => {
+  const { store, first, work } = twoWindows();
+  store.switchSpace(work, first);
+  const left = store.addTab('https://example.com/left', { windowId: first });
+  const right = store.addTab('https://example.com/right', { windowId: first, activate: false });
+  store.splitWith(right.id, 'right', first);
+  const before = structuredClone(store.state.windows.find((w) => w.id === first).spaces[work]);
+  store.deleteSpace(work);
+  store.undo();
+  const ws = store.state.windows.find((w) => w.id === first).spaces[work];
+  assert.deepEqual(ws.split, [left.id, right.id]);
+  assert.deepEqual(ws, before);
+});

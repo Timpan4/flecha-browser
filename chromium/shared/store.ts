@@ -891,11 +891,10 @@ export class Store {
       this.state.spaces.splice(Math.max(-1, ...previous) + 1, 0, { ...space, pinned: [] });
       restoredSpaces.add(space.id);
     });
-    for (const win of before.closedWindows) {
-      if (!this.state.closedWindows.some((w) => w.id === win.id)) this.state.closedWindows.push({ ...win, spaces: {} });
-    }
-    this.state.closedWindows.sort((a, b) => b.closedAt - a.closedAt);
     const windowNow = (id: string) => [...this.state.windows, ...this.state.closedWindows].find((w) => w.id === id);
+    // A closed window the change dropped, unless it has been reopened since.
+    for (const win of before.closedWindows) if (!windowNow(win.id)) this.state.closedWindows.push({ ...win, spaces: {} });
+    this.state.closedWindows.sort((a, b) => b.closedAt - a.closedAt);
     for (const win of [...before.windows, ...before.closedWindows]) {
       const now = windowNow(win.id);
       if (!now) continue;
@@ -916,9 +915,14 @@ export class Store {
       const now = windowNow(win.id);
       for (const [spaceId, ws] of Object.entries(win.spaces)) {
         const current = now?.spaces[spaceId];
-        if (!current || current.activeTabId || !ws.activeTabId) continue;
+        if (!current) continue;
         const shown = this.hasWindow(win.id) ? this.allTabIds({ id: spaceId, pinned: this.savedSpace(spaceId)?.pinned ?? [] }, win.id) : current.today;
-        if (shown.includes(ws.activeTabId)) current.activeTabId = ws.activeTabId;
+        if (!current.activeTabId && ws.activeTabId && shown.includes(ws.activeTabId)) current.activeTabId = ws.activeTabId;
+        // A split the change ended by taking one of its halves away.
+        if (!current.split && ws.split?.some((id) => step.touched.has(`t:${id}`)) && ws.split.every((id) => shown.includes(id))) {
+          current.split = ws.split;
+          if (ws.splitMode) current.splitMode = ws.splitMode;
+        }
       }
     }
     this.forgetMissingActive();
@@ -1189,7 +1193,10 @@ function listsOf(layout: Layout): Map<string, string[]> {
   return lists;
 }
 
-/** The items that left their list, or changed places among the items that stayed in it. */
+/**
+ * The items that left their list, or were moved within it: the fewest items whose moving explains
+ * the new order, so items a move only shifted aren't counted.
+ */
 function changedPlaces(before: Map<string, string[]>, after: Map<string, string[]>): Set<string> {
   const listOf = new Map<string, string>();
   for (const [name, keys] of after) for (const key of keys) listOf.set(key, name);
@@ -1198,9 +1205,30 @@ function changedPlaces(before: Map<string, string[]>, after: Map<string, string[
     const stayed = keys.filter((key) => listOf.get(key) === name);
     const order = (after.get(name) ?? []).filter((key) => stayed.includes(key));
     for (const key of keys) if (listOf.get(key) !== name) changed.add(key);
-    stayed.forEach((key, i) => key !== order[i] && changed.add(key));
+    const kept = new Set(longestCommonOrder(stayed, order));
+    for (const key of stayed) if (!kept.has(key)) changed.add(key);
   }
   return changed;
+}
+
+/** The longest run of items that `a` and `b`, the same items reordered, have in the same order. */
+function longestCommonOrder(a: string[], b: string[]): string[] {
+  const position = new Map(a.map((key, i) => [key, i]));
+  const at = b.map((key) => position.get(key)!);
+  // For each item of b: the longest run ending there, and the item before it in that run.
+  const length = at.map(() => 1);
+  const previous = at.map(() => -1);
+  at.forEach((p, i) => {
+    for (let j = 0; j < i; j++) {
+      if (at[j] < p && length[j] + 1 > length[i]) {
+        length[i] = length[j] + 1;
+        previous[i] = j;
+      }
+    }
+  });
+  const run: string[] = [];
+  for (let i = length.indexOf(Math.max(0, ...length)); i >= 0; i = previous[i]) run.unshift(b[i]);
+  return run;
 }
 
 function removePinned(nodes: PinnedNode[], tabId: string) {
