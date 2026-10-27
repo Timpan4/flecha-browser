@@ -4,6 +4,7 @@ import { setupOnboarding } from './onboarding.js';
 import { SPACE_COLORS, SPACE_EMOJIS } from './spaceChoices.js';
 import { displayKeys } from '../lib/shortcuts';
 import { isMac } from '../lib/platform';
+import { isEnter } from '../lib/keys';
 import { EMPTY_ACTIONS, EMPTY_TABS, type Match, type ResultKind, displayUrl, historyQuery, inlineCompletion, matchQuality, rank, score } from '../lib/commandBar';
 import { suggestable, suggestionRequests } from '../lib/suggest';
 import { searchUrl } from '../lib/url';
@@ -514,7 +515,7 @@ function editInline(el: HTMLElement, current: string, commit: (value: string) =>
     else if (!changed && state) render(state);
   };
   const onKey = (e: KeyboardEvent) => {
-    if (e.key === 'Enter') e.preventDefault(), finish(true);
+    if (isEnter(e)) e.preventDefault(), finish(true);
     if (e.key === 'Escape') finish(false);
   };
   const onBlur = () => finish(true);
@@ -706,7 +707,7 @@ function renderSpaceEditor() {
 }
 
 spaceName.addEventListener('input', () => editingSpace && spaceName.value.trim() && api.updateSpace(editingSpace, { name: spaceName.value }));
-spaceName.addEventListener('keydown', (e) => (e.key === 'Enter' || e.key === 'Escape') && closeSpaceEditor());
+spaceName.addEventListener('keydown', (e) => (isEnter(e) || e.key === 'Escape') && closeSpaceEditor());
 $('space-isolated-toggle').addEventListener('change', (e) => {
   if (editingSpace) api.setSpaceIsolated(editingSpace, (e.target as HTMLInputElement).checked);
 });
@@ -1141,7 +1142,7 @@ paletteInput.addEventListener('keydown', (e) => {
   const plain = !e.ctrlKey && !e.metaKey && !e.altKey;
   if (e.key === 'Escape') closePalette();
   // Shift+Enter is Enter: Arc's Shift+Enter (Instant Links) is an Arc Max AI feature.
-  else if (e.key === 'Enter') runItem(selected);
+  else if (isEnter(e)) runItem(selected);
   else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
     e.preventDefault();
     const n = paletteItems.length;

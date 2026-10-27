@@ -1,6 +1,7 @@
 import type { RecordedKey, SettingsApi, SettingsView } from '../../shared/types';
 import { ICONS, type IconName } from './icons.js';
 import { setupTabsPane } from './tabsPane.js';
+import { isEnter } from '../lib/keys';
 
 declare global {
   interface Window {
@@ -140,7 +141,7 @@ function reveal(hit: SearchHit) {
 
 search.addEventListener('input', runSearch);
 search.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') results.querySelector<HTMLButtonElement>('.result')?.click();
+  if (isEnter(e)) results.querySelector<HTMLButtonElement>('.result')?.click();
   if (e.key === 'Escape') {
     search.value = '';
     closeSearch();

@@ -2,6 +2,7 @@ import type { PinnedNode, TabPlacement, TabsEdit, TabsView } from '../../shared/
 import type { IconName } from './icons.js';
 import { SPACE_COLORS, SPACE_EMOJIS } from './spaceChoices.js';
 import { isMac, primaryModifier } from '../lib/platform';
+import { isEnter } from '../lib/keys';
 
 /**
  * Settings → Tabs & Spaces: favorites and every Space's pinned tree and Today tabs in one
@@ -358,7 +359,7 @@ export function setupTabsPane(icon: (name: IconName) => SVGSVGElement) {
     for (const input of inputs) {
       input.addEventListener('keydown', (e) => {
         e.stopPropagation();
-        if (e.key === 'Enter') void finish(true);
+        if (isEnter(e)) void finish(true);
         else if (e.key === 'Escape') void finish(false);
       });
       input.addEventListener('blur', (e) => {
@@ -847,7 +848,7 @@ export function setupTabsPane(icon: (name: IconName) => SVGSVGElement) {
       name = el('input', { class: 'tm-pop-name', maxlength: '40', placeholder: 'Space name', spellcheck: 'false' });
       emoji = el('input', { class: 'tm-pop-emoji', title: 'Choose any emoji', spellcheck: 'false' });
       name.addEventListener('change', () => name!.value.trim() && update({ name: name!.value }));
-      name.addEventListener('keydown', (e) => e.key === 'Enter' && name!.blur());
+      name.addEventListener('keydown', (e) => isEnter(e) && name!.blur());
       // The macOS emoji picker types into this field; keep its last emoji.
       emoji.addEventListener('focus', () => void api.showEmojiPanel());
       emoji.addEventListener('input', () => {
