@@ -112,7 +112,7 @@ async function start() {
       if (area !== 'local' || !changes[STATE_KEY]) return;
       const prefs = followedPreferences(decodeState(changes[STATE_KEY].newValue));
       const keys = Object.keys(prefs) as Array<keyof BrowserState>;
-      if (keys.some((k) => JSON.stringify(prefs[k]) !== JSON.stringify(store.state[k]))) store.replaceState({ ...store.state, ...prefs });
+      if (keys.some((k) => JSON.stringify(prefs[k]) !== JSON.stringify(store.state[k]))) store.followPreferences(prefs);
     });
     // The last incognito window closed: its tabs are forgotten.
     chrome.windows.onRemoved.addListener(async () => {

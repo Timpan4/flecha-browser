@@ -46,6 +46,8 @@ interface UndoStep {
   dropped: ArchivedTab[];
   /** Tabs (`t:<id>`) and folders (`f:<id>`) it moved or deleted. */
   touched: Set<string>;
+  /** The Spaces it deleted. */
+  deletedSpaces: Set<string>;
   /** The splits it ended, as `<window>:<space>`. */
   endedSplits: Set<string>;
   /** The window Spaces it left with no tab on screen, as `<window>:<space>`. */
@@ -692,7 +694,16 @@ export class Store {
 
   popArchive() {
     const item = this.state.archive.shift();
-    if (item) this.changed();
+    if (!item) return item;
+    // Reopening a closed tab takes it out of what undo would bring back, so it isn't open twice.
+    for (const step of this.undoSteps) {
+      for (const [id, entry] of step.archived) {
+        if (entry !== item) continue;
+        delete step.removed[id];
+        step.archived.delete(id);
+      }
+    }
+    this.changed();
     return item;
   }
 
@@ -846,6 +857,12 @@ export class Store {
   }
 
   /** Takes over another Flecha's whole state (its Spaces, tabs and settings), as if it had been loaded. */
+  /** Takes on preferences (theme, search engine…) changed elsewhere, keeping the tabs and undo. */
+  followPreferences(prefs: Partial<BrowserState>) {
+    Object.assign(this.state, prefs);
+    this.changed();
+  }
+
   replaceState(state: BrowserState): boolean {
     if (!state?.spaces?.length || !state.tabs || !state.windows?.length) return false;
     this.state = state;
@@ -878,8 +895,8 @@ export class Store {
       this.recording = undefined;
     }
     const touched = changedPlaces(listsOf(before), listsOf(this.state), moved);
-    const spaceGone = before.spaces.some((s) => !this.savedSpace(s.id));
-    if (touched.size || spaceGone) {
+    const deletedSpaces = new Set(before.spaces.filter((s) => !this.savedSpace(s.id)).map((s) => s.id));
+    if (touched.size || deletedSpaces.size) {
       const removed = Object.fromEntries(Object.entries(tabs).filter(([id]) => !this.state.tabs[id]));
       const kept = new Set(this.state.archive);
       const dropped = archive.filter((a) => !kept.has(a));
@@ -895,7 +912,7 @@ export class Store {
         }
       }
       const droppedWindows = new Set(before.closedWindows.filter((w) => !windowIn(this.state, w.id)).map((w) => w.id));
-      this.undoSteps.push({ label, before, removed, homes, archived, dropped, touched, endedSplits, leftEmpty, switched, droppedWindows });
+      this.undoSteps.push({ label, before, removed, homes, archived, dropped, touched, deletedSpaces, endedSplits, leftEmpty, switched, droppedWindows });
       this.undoSteps.splice(0, this.undoSteps.length - UNDO_LIMIT);
       this.changed();
     }
@@ -910,11 +927,12 @@ export class Store {
     const step = this.undoSteps.pop();
     if (!step) return undefined;
     const { before } = step;
-    for (const [id, tab] of Object.entries(step.removed)) this.state.tabs[id] ??= tab;
+    // Their pages closed with them: nothing is loading or playing.
+    for (const [id, { loading, audible, ...tab }] of Object.entries(step.removed)) this.state.tabs[id] ??= tab;
 
     const restoredSpaces = new Set<string>();
     before.spaces.forEach((space, i) => {
-      if (this.savedSpace(space.id)) return;
+      if (!step.deletedSpaces.has(space.id) || this.savedSpace(space.id)) return;
       const previous = before.spaces.slice(0, i).map((s) => this.state.spaces.findIndex((n) => n.id === s.id));
       this.state.spaces.splice(Math.max(-1, ...previous) + 1, 0, { ...space, pinned: [] });
       restoredSpaces.add(space.id);

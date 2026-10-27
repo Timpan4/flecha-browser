@@ -282,3 +282,57 @@ test('undo brings back no tab you closed after the change', () => {
   store.undo();
   assert.notEqual(store.state.windows.find((w) => w.id === first).spaces[personal].activeTabId, pinned.id);
 });
+
+test('a closed tab reopened from the archive is not brought back again by undo', () => {
+  const { store, first, personal } = twoWindows();
+  const tab = store.addTab('https://example.com/x', { windowId: first });
+  store.clearToday(first);
+  const entry = store.popArchive();
+  const reopened = store.addTab(entry.url, { windowId: first });
+  store.undo();
+  assert.deepEqual(today(store, first, personal), [reopened.id]);
+  assert.equal(store.state.tabs[tab.id], undefined);
+});
+
+test('a restored tab is neither loading nor playing', () => {
+  const { store, first } = twoWindows();
+  const tab = store.addTab('https://example.com/x', { windowId: first });
+  store.updateTab(tab.id, { loading: true, audible: true });
+  store.clearToday(first);
+  store.undo();
+  assert.equal(store.state.tabs[tab.id].loading, undefined);
+  assert.equal(store.state.tabs[tab.id].audible, undefined);
+});
+
+test('undo brings back no Space an import removed since', () => {
+  const store = new Store({ load: () => undefined, save: () => {} });
+  const first = store.focusedWindowId;
+  store.addTab('https://example.com/x', { windowId: first });
+  store.clearToday(first);
+  store.importBookmarks('Chrome', []);
+  store.undo();
+  assert.deepEqual(store.state.spaces.map((s) => s.name), ['Chrome']);
+});
+
+test('following preferences changed elsewhere keeps undo', () => {
+  const { store, first } = twoWindows();
+  store.addTab('https://example.com/x', { windowId: first });
+  store.clearToday(first);
+  store.followPreferences({ theme: 'dark' });
+  assert.equal(store.state.theme, 'dark');
+  assert.equal(store.undoLabel, 'Clear Today Tabs');
+});
+
+test('undoing a Space deletion brings back a closed window it emptied', () => {
+  const { store, second, work } = twoWindows();
+  store.switchSpace(work, second);
+  const tab = store.addTab('https://example.com/x', { windowId: second });
+  store.closeWindow(second);
+  store.deleteSpace(work);
+  assert.deepEqual(store.state.closedWindows, []);
+  store.undo();
+  const reopened = store.reopenWindow();
+  assert.equal(reopened.id, second);
+  assert.equal(reopened.activeSpaceId, work);
+  assert.deepEqual(reopened.spaces[work].today, [tab.id]);
+});
