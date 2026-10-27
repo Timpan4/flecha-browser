@@ -129,10 +129,11 @@ export async function importFromBrowser() {
         const separate = await askDialog({
           message: 'Separate Cookies and Logins for Spaces from other Arc Profiles?',
           detail: `${isolate.map((i) => `“${preview.spaces[i].name}”`).join(', ')} used another Arc Profile. With Separate Cookies and Logins, each is signed in on its own, as in Arc.`,
-          buttons: ['Separate', 'Share with Other Spaces'],
+          buttons: ['Separate', 'Share with Other Spaces', 'Cancel'],
           defaultId: 0,
-          cancelId: 1,
+          cancelId: 2,
         });
+        if (separate === 2) return;
         if (separate !== 0) isolate = [];
       }
       const r = await invoke<ImportResult>('importBrowser', picked.id, { mode, isolate, spacesKey: preview.spacesKey } satisfies ImportOptions);
