@@ -15,19 +15,23 @@ index e1ad5c2..005e858 100755
    // updates the UI by showing/hiding the tab strip, toolbar and bookmark bar
    // in the browser fullscreen. Currently only supported on Mac.
 diff --git a/chrome/browser/ui/exclusive_access/fullscreen_controller.cc b/chrome/browser/ui/exclusive_access/fullscreen_controller.cc
-index 8559775..3af2bb2 100755
+index 8559775..0a6a3a0 100755
 --- a/chrome/browser/ui/exclusive_access/fullscreen_controller.cc
 +++ b/chrome/browser/ui/exclusive_access/fullscreen_controller.cc
-@@ -213,6 +213,8 @@ void FullscreenController::EnterFullscreenModeForTab(
+@@ -213,6 +213,12 @@ void FullscreenController::EnterFullscreenModeForTab(
    CHECK(web_contents, base::NotFatalUntil::M162);
  
    if (MaybeToggleFullscreenWithinTab(web_contents, true)) {
-+    // Flecha: UpdateFullscreenWithinTab() promotes this request later.
-+    within_tab_requesting_frame_ = requesting_frame->GetGlobalId();
++    // Flecha: UpdateFullscreenWithinTab() promotes this request later. Only
++    // the active, uncaptured tab is kept beside the sidebar, so captured tabs
++    // never take its slot.
++    if (!web_contents->IsBeingVisiblyCaptured()) {
++      within_tab_requesting_frame_ = requesting_frame->GetGlobalId();
++    }
      // During tab capture of fullscreen-within-tab views, the browser window
      // fullscreen state is unchanged, so return now.
      return;
-@@ -396,6 +398,39 @@ void FullscreenController::OnTabDetachedFromView(WebContents* old_contents) {
+@@ -396,6 +402,39 @@ void FullscreenController::OnTabDetachedFromView(WebContents* old_contents) {
    old_contents->Resize(gfx::Rect(old_contents->GetPreferredSize()));
  }
  
@@ -67,7 +71,7 @@ index 8559775..3af2bb2 100755
  void FullscreenController::OnTabClosing(WebContents* web_contents) {
    if (IsFullscreenWithinTab(web_contents)) {
      web_contents->ExitFullscreen(
-@@ -711,15 +746,23 @@ bool FullscreenController::MaybeToggleFullscreenWithinTab(
+@@ -711,15 +750,23 @@ bool FullscreenController::MaybeToggleFullscreenWithinTab(
    }
  
    if (enter_fullscreen) {
