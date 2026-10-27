@@ -72,7 +72,7 @@ Split layout fields (orientation, sizes) are unverified and not read. Flecha use
 | `sidebarItem` | Same shape as a sidebar tab item | `url` from `data.tab.savedURL`, `title` from the item's `title`, else `savedTitle` |
 | `source.space._0` | The Space's id | Not used: Flecha's archive isn't per Space |
 
-An address archived more than once keeps each archiving, as Flecha's own archive does. Flecha's archive holds the 500 most recent entries (`ARCHIVE_LIMIT` in `chromium/shared/store.ts`); the preview and the summary say how many didn't fit.
+An address archived more than once keeps each archiving, as Flecha's own archive does. Flecha's archive holds the 500 most recent entries (`ARCHIVE_LIMIT` in `chromium/shared/store.ts`); the preview and the summary say how many didn't fit, Arc's or Flecha's own, since the newest are kept whichever browser they came from.
 
 ## Little Arc
 
@@ -100,7 +100,7 @@ An address archived more than once keeps each archiving, as Flecha's own archive
 
 Merge and Add as new:
 
-- **Merge into matching Spaces** joins an imported Space to the Flecha Space of the same name (ignoring case and surrounding spaces). A tab is left out when that Space's pinned or Today tabs, or the favorites, already have its address. Folders of the same name are joined. The existing Space keeps its own colour, emoji and Separate Cookies and Logins. Imported favorites count too: a Space's tab whose address an imported favorite has is left out.
+- **Merge into matching Spaces** joins an imported Space to the Flecha Space of the same name (ignoring case and surrounding spaces). A tab is left out when that Space's pinned or Today tabs, or the favorites, already had its address before the import (where a tab is now or the address it started at). An address the import itself repeats stays, as in Add as new. Folders of the same name are joined. The existing Space keeps its own colour, emoji and Separate Cookies and Logins. Imported favorites count too: a Space's tab whose address an imported favorite has is left out.
 - **Add as new Spaces** adds every imported Space, even when the name is taken, as Arc had it.
 - Either way, a favorite is never added twice, and an archive entry with the same address and time is never added twice.
 - A fresh install's Space is replaced by the imported ones only while untouched: still named Personal with its first emoji and colour, with no pinned tabs, folders, Today tabs or favorites.

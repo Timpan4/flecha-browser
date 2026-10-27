@@ -21,6 +21,26 @@ import { clampSidebarWidth } from './sidebarWidth';
 
 const SPACE_COLORS = ['#cdd9f7', '#f6d6cc', '#d3ecd5', '#e8d6f3', '#f5e7c4', '#cfe8ec'];
 const SPACE_EMOJIS = ['🏠', '💼', '🎨', '📚', '🧪', '🎮'];
+/** The Space a fresh install starts with. */
+const INITIAL_SPACE = { name: 'Personal', emoji: SPACE_EMOJIS[0], color: SPACE_COLORS[0] };
+
+/**
+ * A fresh install's Space while still untouched (its first name, emoji and colour, nothing in it
+ * and no favorites), which imported Spaces replace instead of joining.
+ */
+export function pristineSpace(s: Pick<BrowserState, 'spaces' | 'favorites' | 'windows' | 'closedWindows'>): SavedSpace | undefined {
+  const only = s.spaces.length === 1 ? s.spaces[0] : undefined;
+  const untouched =
+    !!only &&
+    only.name === INITIAL_SPACE.name &&
+    only.emoji === INITIAL_SPACE.emoji &&
+    only.color === INITIAL_SPACE.color &&
+    !only.isolated &&
+    !only.pinned.length &&
+    !s.favorites.length &&
+    [...s.windows, ...s.closedWindows].every((w) => !w.spaces[only.id]?.today.length);
+  return untouched ? only : undefined;
+}
 export const ARCHIVE_LIMIT = 500;
 /** Closed windows kept for reopening: as many entries as Chromium's tab restore keeps (TabRestoreServiceHelper::kMaxEntries). */
 const CLOSED_WINDOW_LIMIT = 25;
@@ -768,7 +788,8 @@ export class Store {
     const pristine = spaces.length > 0 && this.dropPristineSpace();
     const win = this.window(opts.windowId);
     const out: ImportOutcome = { spaces: 0, merged: 0, tabs: 0, splits: 0, pairs: 0, archived: 0, archiveDropped: 0 };
-    const favoriteUrls = new Set(s.favorites.map((id) => s.tabs[id]?.url));
+    // Where a favorite is and where it started, as for pinned tabs.
+    const favoriteUrls = new Set(s.favorites.flatMap((id) => (s.tabs[id] ? [s.tabs[id].url, s.tabs[id].homeUrl] : [])));
     let first: string | undefined;
 
     // Favorites first, so a merged Space leaves out the tabs they already hold.
@@ -798,11 +819,10 @@ export class Store {
         out.spaces++;
       }
       first ??= space.id;
-      // Append keeps the other browser's Space as it was, repeats and all.
+      // Merge leaves out what Flecha already had (and the favorites); repeats within the import stay, as Append keeps them.
       const known = opts.mode === 'merge' ? new Set([...favoriteUrls, ...this.spaceTabUrls(space)]) : undefined;
       const add = (t: ImportTab) => {
         if (known?.has(t.url)) return false;
-        known?.add(t.url);
         out.tabs++;
         return true;
       };
@@ -954,22 +974,12 @@ export class Store {
   /** A fresh install's single Space, untouched, gives way to imported ones. Returns whether it did. */
   private dropPristineSpace() {
     const s = this.state;
-    const only = s.spaces.length === 1 ? s.spaces[0] : undefined;
-    const initial = this.initialState().spaces[0];
-    const pristine =
-      !!only &&
-      only.name === initial.name &&
-      only.emoji === initial.emoji &&
-      only.color === initial.color &&
-      !only.isolated &&
-      !s.favorites.length &&
-      !only.pinned.length &&
-      [...s.windows, ...s.closedWindows].every((w) => !w.spaces[only.id]?.today.length);
-    if (pristine) {
+    const only = pristineSpace(s);
+    if (only) {
       s.spaces = [];
-      for (const win of s.windows) delete win.spaces[only!.id];
+      for (const win of s.windows) delete win.spaces[only.id];
     }
-    return pristine;
+    return !!only;
   }
 
   /** Windows whose Space went away (the pristine one), or every window after a fresh start, show `spaceId`. */
@@ -1024,7 +1034,7 @@ export class Store {
   }
 
   private initialState(): BrowserState {
-    const space: SavedSpace = { id: randomUUID(), name: 'Personal', emoji: '🏠', color: SPACE_COLORS[0], pinned: [] };
+    const space: SavedSpace = { id: randomUUID(), ...INITIAL_SPACE, pinned: [] };
     return { spaces: [space], windows: [{ id: randomUUID(), activeSpaceId: space.id, spaces: {} }], closedWindows: [], favorites: [], tabs: {}, archive: [], sidebarVisible: true };
   }
 }

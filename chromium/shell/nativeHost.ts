@@ -12,7 +12,7 @@
 import type { DetectedBrowser, HistoryEntry, ImportOptions, ImportPreview, ImportResult, UiState } from '../shared/types';
 import { pinnedTabIds, type Store } from '../shared/store';
 import type { AgentResult, AgentTab, AgentToolName } from '../shared/agentTools';
-import { applyBrowserImport, previewBrowserImport } from '../shared/importApply';
+import { applyBrowserImport, importOptions, previewBrowserImport } from '../shared/importApply';
 import { HOST_NAME, type HostMethods, type ToHost, type ToShell } from '../native-host/protocol';
 import { handle } from './hub';
 
@@ -40,16 +40,6 @@ const IDLE_CLOSE = 60_000;
 function helperProblem(err: unknown) {
   const message = String(err instanceof Error ? err.message : err);
   return /native messaging host|not found|forbidden/i.test(message) ? NOT_INSTALLED : message;
-}
-
-/** Options as a page sent them: anything unexpected falls back to merging, without isolation. */
-function importOptions(raw: unknown, canIsolate: boolean): ImportOptions {
-  const options: Partial<ImportOptions> = typeof raw === 'object' && raw ? raw : {};
-  return {
-    mode: options.mode === 'append' ? 'append' : 'merge',
-    isolate: canIsolate && Array.isArray(options.isolate) ? options.isolate.filter((i) => Number.isInteger(i) && i >= 0) : [],
-    spacesKey: typeof options.spacesKey === 'string' ? options.spacesKey : undefined,
-  };
 }
 
 export function registerNativeHost(ctx: NativeHostContext) {

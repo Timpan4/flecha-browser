@@ -133,3 +133,17 @@ test('nothing is imported when the browser’s Spaces changed since the preview'
   // The preview's own key imports.
   assert.equal((await applyBrowserImport(arcData(), { mode: 'merge', isolate: [1], spacesKey }, store, noHistory)).spaces, 2);
 });
+
+test('on a fresh install, an Arc Space named like Flecha’s first Space doesn’t claim to join it', () => {
+  const store = new Store({ load: () => undefined, save: () => {} });
+  const preview = previewBrowserImport(arcData(), store.state, true);
+  assert.deepEqual(preview.spaces.map((s) => [s.name, s.matches]), [['Personal', false], ['Work', false]]);
+});
+
+test('import options from the page fall back to merging without isolation', async () => {
+  const { importOptions } = await loadModule('chromium/shared/importApply.ts');
+  assert.deepEqual(importOptions(null, true), { mode: 'merge', isolate: [], spacesKey: undefined });
+  assert.deepEqual(importOptions({ mode: 'replace', isolate: 'all', spacesKey: 3 }, true), { mode: 'merge', isolate: [], spacesKey: undefined });
+  assert.deepEqual(importOptions({ mode: 'append', isolate: [0, -1, 1.5, '2', 3], spacesKey: 'k' }, true), { mode: 'append', isolate: [0, 3], spacesKey: 'k' });
+  assert.deepEqual(importOptions({ mode: 'append', isolate: [0] }, false).isolate, []);
+});

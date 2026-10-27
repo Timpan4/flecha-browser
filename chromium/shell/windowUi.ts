@@ -118,7 +118,7 @@ export async function importFromBrowser() {
         ...(preview.skipped.length ? ['', 'Won’t come over:', ...preview.skipped] : []),
         ...preview.warnings,
       ].join('\n');
-      // Merge or add as new only differ when a Space's name is taken.
+      // Merge or add as new only differ when a Space's name is taken: both keep repeats within the import.
       const buttons = merging ? ['Merge', 'Add as New', 'Cancel'] : ['Import', 'Cancel'];
       const answer = await askDialog({ message: `Import from ${picked.name}?`, detail, buttons, defaultId: 0, cancelId: buttons.length - 1 });
       if (answer === buttons.length - 1) return;

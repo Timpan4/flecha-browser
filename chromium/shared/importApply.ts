@@ -1,5 +1,5 @@
-import type { ArchivedTab, HistoryEntry, ImportOptions, ImportPreview, ImportResult } from './types';
-import { ARCHIVE_LIMIT, mergeArchive, type Store } from './store';
+import type { ArchivedTab, BrowserState, HistoryEntry, ImportOptions, ImportPreview, ImportResult } from './types';
+import { ARCHIVE_LIMIT, mergeArchive, pristineSpace, type Store } from './store';
 import { plural } from './importText';
 
 export type ImportTab = { url: string; title: string };
@@ -91,10 +91,12 @@ function spacesOf(data: BrowserImportData): Array<ArcSpace | ImportSpace> {
 /** What an import would bring over, given the Spaces and archive Flecha has now. */
 export function previewBrowserImport(
   data: BrowserImportData,
-  flecha: { spaces: Array<{ name: string }>; archive: ArchivedTab[] },
+  flecha: Pick<BrowserState, 'spaces' | 'favorites' | 'windows' | 'closedWindows' | 'archive'>,
   canIsolate: boolean,
 ): ImportPreview {
-  const names = new Set(flecha.spaces.map((s) => s.name.trim().toLowerCase()));
+  // A fresh install's untouched Space makes way for the import, so nothing joins it.
+  const replaced = spacesOf(data).length ? pristineSpace(flecha) : undefined;
+  const names = new Set(flecha.spaces.filter((s) => s !== replaced).map((s) => s.name.trim().toLowerCase()));
   const spaces = spacesOf(data).map((s) => ({
     name: s.name,
     emoji: s.emoji,
@@ -151,6 +153,16 @@ export async function applyBrowserImport(
   return result;
 }
 
+/** Options as a page sent them: anything unexpected falls back to merging, without isolation. */
+export function importOptions(raw: unknown, canIsolate: boolean): ImportOptions {
+  const options: Partial<ImportOptions> = typeof raw === 'object' && raw ? raw : {};
+  return {
+    mode: options.mode === 'append' ? 'append' : 'merge',
+    isolate: canIsolate && Array.isArray(options.isolate) ? options.isolate.filter((i) => Number.isInteger(i) && i >= 0) : [],
+    spacesKey: typeof options.spacesKey === 'string' ? options.spacesKey : undefined,
+  };
+}
+
 /** What doesn't come over, one line each, for the preview and the summary. */
 function skippedLines(data: BrowserImportData, pairs: number, archiveDropped: number): string[] {
   const arc = data.arc;
@@ -161,7 +173,7 @@ function skippedLines(data: BrowserImportData, pairs: number, archiveDropped: nu
   for (const [kind, n] of Object.entries(kinds)) lines.push(`${plural(n, 'sidebar item')} of a kind Flecha doesn’t have (Arc calls it “${kind}”)`);
   if (pairs) lines.push(`${plural(pairs, 'split view')} kept as tabs side by side: Flecha shows one split of two tabs per Space`);
   if (partial) lines.push(`${plural(partial, 'split view')} with a tab that isn’t a web page, kept as the tabs that came over`);
-  if (archiveDropped) lines.push(`${plural(archiveDropped, 'archived tab')} past the ${ARCHIVE_LIMIT} most recent, which is all Flecha’s archive keeps`);
+  if (archiveDropped) lines.push(`${plural(archiveDropped, 'archived tab')}, Arc’s or Flecha’s own, past the ${ARCHIVE_LIMIT} most recent, which is all Flecha’s archive keeps`);
   const profiles = [...new Set(arc.spaces.flatMap((s) => (s.profile ? [s.profile.name] : [])))];
   if (profiles.length) {
     lines.push(`Arc Profiles (${profiles.map((p) => `“${p}”`).join(', ')}): Flecha has no Profiles yet. Their Spaces can have Separate Cookies and Logins instead`);

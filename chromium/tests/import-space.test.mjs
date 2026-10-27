@@ -168,3 +168,18 @@ test('archived tabs keep title, address and time, newest first, each archiving o
   // The same archive again adds nothing.
   assert.deepEqual(mergeArchive(store.state.archive, archived.slice(100)), { archive: store.state.archive, added: 0, dropped: 0 });
 });
+
+test('Merge keeps an address the import itself repeats, as Append does', () => {
+  const store = newStore();
+  const folder = (name) => ({ kind: 'folder', name, children: [tab('https://x.example.com/')] });
+  store.importSpaces([{ name: 'Chrome', pinned: [folder('A'), folder('B')], today: [] }], { mode: 'merge' });
+  assert.deepEqual(spaceNamed(store, 'Chrome').pinned.map((n) => `${n.name}: ${urls(store, pinnedTabIds(n.children))}`), ['A: https://x.example.com/', 'B: https://x.example.com/']);
+});
+
+test('a favorite browsed away from still counts as its first address', () => {
+  const store = newStore();
+  store.importSpaces([], { mode: 'merge', favorites: [tab('https://mail.example.com/')] });
+  store.state.tabs[store.state.favorites[0]].url = 'https://mail.example.com/inbox/1';
+  store.importSpaces([], { mode: 'merge', favorites: [tab('https://mail.example.com/')] });
+  assert.equal(store.state.favorites.length, 1);
+});
