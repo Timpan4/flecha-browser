@@ -287,6 +287,8 @@ function renderLoading(s: UiState, active: TabInfo | undefined) {
   const reload = $('btn-reload');
   reload.replaceChildren(icon(loading ? 'close' : 'reload'));
   reload.dataset.tip = loading ? 'Stop' : 'Reload';
+  // The tooltip is Flecha's own, which screen readers don't see.
+  reload.setAttribute('aria-label', loading ? 'Stop' : 'Reload');
   reload.dataset.action = loading ? 'stop' : 'reload';
   // The reload shortcut doesn't stop.
   if (loading) delete reload.dataset.kbd;
@@ -311,7 +313,8 @@ function renderLoading(s: UiState, active: TabInfo | undefined) {
 }
 
 function spinner() {
-  const el = h('span', { class: 'favicon spinner' });
+  // Named, so a screen reader reads the row as "Loading" and its title.
+  const el = h('span', { class: 'favicon spinner', role: 'img', 'aria-label': 'Loading' });
   // Rows are redrawn on every change: every spinner's turn counts from the same start, so a
   // redrawn one carries on where the one it replaced was instead of jumping.
   if (!reducedMotion.matches) el.animate([{ transform: 'rotate(0)' }, { transform: 'rotate(360deg)' }], { duration: 800, iterations: Infinity }).startTime = 0;
