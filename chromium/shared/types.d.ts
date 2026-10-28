@@ -364,6 +364,8 @@ export interface SettingsView {
   /** Edited as text: one `label origin` per line. */
   environments: Array<{ id: string; name: string; targetsText: string }>;
   agent: { enabled: boolean; endpoint?: string; token?: string };
+  /** Why Flecha's native host (imports, the agent bridge) last failed; undefined while it works. */
+  hostError?: string;
   theme: 'system' | 'light' | 'dark';
   archiveAfterHours: number;
   peekPinnedLinks: boolean;
@@ -468,6 +470,8 @@ export interface SettingsApi {
   onPane(cb: (pane: string) => void): void;
   /** ⌘F while Settings is in front: focus its search field. */
   onFind(cb: () => void): void;
+  /** Something the background shows here changed on its own (the agent bridge, the native host); `get` again. */
+  onChange(cb: () => void): void;
   /** While recording, every key goes to `onKey` instead of the page or the menus. */
   recordShortcut(recording: boolean): Promise<void>;
   onKey(cb: (key: RecordedKey) => void): void;
@@ -536,7 +540,7 @@ export interface FlechaApi {
   renameFolder(folderId: string, name: string): void;
   moveTab(tabId: string, target: DropTarget): void;
   clearToday(): void;
-  /** Pops up a menu of the other browsers to import from. */
+  /** Brings over the Spaces and tabs of Flecha's Electron version. */
   importMenu(): void;
   /** Puts back the Spaces and tabs the last Flecha state import replaced. */
   restoreBeforeImport(): void;
@@ -546,7 +550,8 @@ export interface FlechaApi {
   /** While you drag the sidebar's edge: lays this window out at `width`; `done` keeps it. */
   resizeSidebar(width: number, done: boolean): void;
   setSidebarPeek(peek: boolean): void;
-  copyText(text: string): void;
+  /** Copies text and says so in the address field: "Link copied" unless `message` says otherwise. */
+  copyText(text: string, message?: string): void;
   renameTab(tabId: string, title: string): void;
   /** Sets the URL a pinned tab or favorite goes back to, typed like the address bar. */
   setHomeUrl(tabId: string, input: string): void;

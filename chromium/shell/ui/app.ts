@@ -1127,7 +1127,7 @@ function queryItems(q: string): PaletteItem[] {
     add({ kind: 'developer', icon: 'zap', label: `Edit boost styles for ${site}`, sub: 'CSS, live', speak: `Edit boost styles for ${site}`, run: () => api.editBoost('styles') }, 'developer');
   }
   for (const dev of devSuggestions(q, activeUrl)) {
-    const run = () => (dev.url ? open(dev.url) : api.copyText(dev.copy ?? ''));
+    const run = () => (dev.url ? open(dev.url) : api.copyText(dev.copy ?? '', 'Copied'));
     add({ kind: 'developer', icon: dev.url ? dev.url : 'code', label: dev.label, sub: dev.sub, speak: dev.label, detail: dev.copy, run }, 'developer');
   }
   items.push(...actionItems(q).slice(0, 4));
