@@ -1173,15 +1173,45 @@ try {
   await rpc('activate', pageTab);
   console.log('PASS the menu\'s Settings and Ctrl+, open Settings');
   // Import from another browser offers the browsers the import helper finds, as the onboarding
-  // tour does: here the Chrome and Helium fixtures. Cancel leaves it.
-  await evaluate(session, "document.querySelector('#btn-menu').click()");
-  await domWhere("() => document.querySelector('.shell-menu')");
-  await evaluate(session, "[...document.querySelectorAll('.shell-menu-item')].find(r => r.textContent === 'Import from another browser…').click()");
-  await domWhere("() => document.querySelector('.shell-dialog[open] strong')?.textContent === 'Import from which browser?' && [...document.querySelectorAll('.shell-dialog[open] button')].map(b => b.textContent).join() === 'Chrome,Helium,Cancel'");
+  // tour does: here the Chrome and Helium fixtures, then a bookmarks file. Cancel leaves it.
+  const openImport = async () => {
+    await evaluate(session, "document.querySelector('#btn-menu').click()");
+    await domWhere("() => document.querySelector('.shell-menu')");
+    await evaluate(session, "[...document.querySelectorAll('.shell-menu-item')].find(r => r.textContent === 'Import from another browser…').click()");
+    await domWhere("() => document.querySelector('.shell-dialog[open] strong')?.textContent === 'Import from which browser?' && [...document.querySelectorAll('.shell-dialog[open] button')].map(b => b.textContent).join() === 'Chrome,Helium,Bookmarks File…,Cancel'");
+  };
+  const dialogButton = (label) => evaluate(session, `[...document.querySelectorAll('.shell-dialog[open] button')].find(b => b.textContent === ${JSON.stringify(label)}).getBoundingClientRect().toJSON()`);
+  await openImport();
   await evaluate(session, "[...document.querySelectorAll('.shell-dialog[open] button')].at(-1).click()");
   await domWhere("() => !document.querySelector('.shell-dialog[open]')");
   await rpc('activate', pageTab);
   console.log('PASS the menu\'s Import from another browser looks for browsers to import');
+  // Bookmarks File… takes the file any browser exports: a real click opens the file chooser, which
+  // DevTools answers with the sample export, then the same preview and import as a browser.
+  const bookmarksFile = path.join(profile, 'bookmarks.html');
+  await fs.copyFile('chromium/native-host/fixtures/bookmarks.html', bookmarksFile);
+  await send('Page.setInterceptFileChooserDialog', { enabled: true }, session);
+  const chooser = new Promise(resolve => {
+    const listener = (message) => { if (message.sessionId === session && message.method === 'Page.fileChooserOpened') { listeners.delete(listener); resolve(message.params); } };
+    listeners.add(listener);
+  });
+  await openImport();
+  const fileButton = await dialogButton('Bookmarks File…');
+  xclick(fileButton.x + fileButton.width / 2, fileButton.y + fileButton.height / 2);
+  await send('DOM.setFileInputFiles', { files: [bookmarksFile], backendNodeId: (await chooser).backendNodeId }, session);
+  await send('Page.setInterceptFileChooserDialog', { enabled: false }, session);
+  await domWhere("() => document.querySelector('.shell-dialog[open] strong')?.textContent === 'Import from “bookmarks.html”?'");
+  await evaluate(session, "document.querySelector('.shell-dialog[open] button').click()");
+  await domWhere("() => document.querySelector('.shell-dialog[open] strong')?.textContent === 'Imported from “bookmarks.html”'");
+  const fromFile = (await stateWhere("s => s.spaces.some(sp => sp.name === 'Imported Bookmarks')")).spaces.find(sp => sp.name === 'Imported Bookmarks');
+  assert.ok(fromFile.pinned.some(n => n.kind === 'folder' && n.name === 'Work'), JSON.stringify(fromFile.pinned));
+  await evaluate(session, "document.querySelector('.shell-dialog[open] button').click()");
+  await domWhere("() => !document.querySelector('.shell-dialog[open]')");
+  // Later checks count on the Spaces they made, so the imported one goes again.
+  await rpc('deleteSpace', fromFile.id);
+  await stateWhere(`s => !s.spaces.some(sp => sp.id === ${JSON.stringify(fromFile.id)})`);
+  await rpc('activate', pageTab);
+  console.log('PASS Import from another browser takes an exported bookmarks file into a Space of its own');
   // The close circle closes its window.
   const windowsBeforeClose = await evaluate(session, 'chrome.windows.getAll().then(ws => ws.length)');
   await rpc('newWindow');

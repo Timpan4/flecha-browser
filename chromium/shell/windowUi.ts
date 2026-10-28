@@ -86,9 +86,43 @@ async function runMenuItem(run: MenuRun) {
   else if ('clearSpaceData' in run) await confirmClearSpaceData(run.clearSpaceData);
 }
 
+/** Where an import comes from: a browser the import helper found, or a bookmarks file one exported. */
+interface ImportSource {
+  name: string;
+  preview(): Promise<ImportPreview>;
+  run(options: ImportOptions): Promise<ImportResult>;
+}
+
+const BOOKMARKS_FILE = 'Bookmarks File…';
+
+const browserSource = (b: DetectedBrowser): ImportSource => ({
+  name: b.name,
+  preview: () => invoke<ImportPreview>('previewImport', b.id),
+  run: (options) => invoke<ImportResult>('importBrowser', b.id, options),
+});
+
+/** A bookmarks file exported as HTML, which any browser can save; undefined when none is chosen. */
+async function bookmarksFileSource(): Promise<ImportSource | undefined> {
+  const file = await new Promise<File | undefined>((resolve) => {
+    const input = Object.assign(document.createElement('input'), { type: 'file', accept: '.html,.htm,text/html' });
+    input.onchange = () => resolve(input.files?.[0]);
+    input.oncancel = () => resolve(undefined);
+    input.click();
+  });
+  if (!file) return;
+  // The page keeps the text and sends it again to import, as a browser is read again. It's awaited
+  // in preview, so a file that can't be read ends as a failed import.
+  const html = file.text();
+  return {
+    name: `“${file.name}”`,
+    preview: async () => invoke<ImportPreview>('previewBookmarksFile', await html, file.name),
+    run: async (options) => invoke<ImportResult>('importBookmarksFile', await html, file.name, options),
+  };
+}
+
 /**
  * Import from another browser, from the window menu or the command bar: one of the browsers the
- * import helper finds (as the onboarding tour lists them), then what came over.
+ * import helper finds (as the onboarding tour lists them) or a bookmarks file, then what came over.
  */
 export async function importFromBrowser() {
   await overWindow('dialog', async () => {
@@ -99,19 +133,23 @@ export async function importFromBrowser() {
     } catch (error) {
       return note('Couldn’t look for your browsers', error instanceof Error ? error.message : 'Browser discovery failed.');
     }
-    if (!browsers.length) {
-      return note('No browsers to import from', 'No supported browser data found in the standard profile folders on this computer. Custom locations and sandboxed installations may not be detected.');
-    }
-    const picked = browsers[await askDialog({
-      message: 'Import from which browser?',
-      detail: 'Its bookmarks and history come over to Flecha.',
-      buttons: [...browsers.map((b) => b.name), 'Cancel'],
+    const fileDetail = 'A bookmarks file exported from any browser as HTML brings its bookmarks; history can’t come in a file.';
+    const buttons = [...browsers.map((b) => b.name), BOOKMARKS_FILE, 'Cancel'];
+    const answer = await askDialog({
+      ...(browsers.length
+        ? { message: 'Import from which browser?', detail: `Its bookmarks and history come over to Flecha. ${fileDetail}` }
+        : {
+            message: 'No browsers to import from',
+            detail: `No supported browser data found in the standard profile folders on this computer. Custom locations and sandboxed installations may not be detected. ${fileDetail}`,
+          }),
+      buttons,
       defaultId: 0,
-      cancelId: browsers.length,
-    })];
+      cancelId: buttons.length - 1,
+    });
+    const picked = answer < browsers.length ? browserSource(browsers[answer]) : buttons[answer] === BOOKMARKS_FILE ? await bookmarksFileSource() : undefined;
     if (!picked) return;
     try {
-      const preview = await invoke<ImportPreview>('previewImport', picked.id);
+      const preview = await picked.preview();
       if (!hasImport(preview)) return note(`Nothing to import from ${picked.name}`, preview.warnings.join('\n') || 'No bookmarks or history were found.');
       const detail = [
         ...previewLines(preview),
@@ -136,7 +174,7 @@ export async function importFromBrowser() {
         if (separate === 2) return;
         if (separate !== 0) isolate = [];
       }
-      const r = await invoke<ImportResult>('importBrowser', picked.id, { mode, isolate, spacesKey: preview.spacesKey } satisfies ImportOptions);
+      const r = await picked.run({ mode, isolate, spacesKey: preview.spacesKey });
       return note(`Imported from ${picked.name}`, [resultLine(r), ...r.warnings, ...r.details].filter(Boolean).join('\n') || 'Nothing to import');
     } catch {
       return note(`Couldn’t import ${picked.name}`, 'Try again.');
