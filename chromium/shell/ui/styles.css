@@ -1936,6 +1936,49 @@ body[data-sidebar='floating'] #sidebar.peek-leaving {
   opacity: 0.4;
 }
 
+.site-shield {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px var(--inset);
+  border-bottom: 0.5px solid var(--surface-line);
+}
+
+.site-shield > svg {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  color: var(--green);
+  fill: color-mix(in srgb, var(--green) 18%, transparent);
+}
+
+.site-shield.off > svg {
+  color: var(--text-3);
+  fill: none;
+}
+
+.site-shield-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.site-shield-text > span,
+.site-shield-text small {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.site-shield-text small {
+  font-size: var(--text-xs);
+  color: var(--text-3);
+}
+
+.site-shield .switch:disabled {
+  opacity: 0.4;
+}
+
 .site-label {
   margin: 0;
   padding: 10px var(--inset) 2px;

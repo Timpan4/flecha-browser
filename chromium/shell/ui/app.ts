@@ -14,6 +14,8 @@ import { searchUrl } from '../lib/url';
 import type { MenuEntry } from '../settingsUi';
 import { importFromBrowser, showPageMenu } from '../windowUi';
 import { SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH } from '../../shared/sidebarWidth';
+import { blocksAdsOn, isSiteHost } from '../../shared/adBlockSites';
+import { incognito } from '../incognito';
 import type { DownloadInfo, DropTarget, FlechaApi, HistoryEntry, PaletteMode, PeekState, PinnedNode, Space, TabInfo, UiState } from '../../shared/types';
 
 declare global {
@@ -623,12 +625,44 @@ function renderSitePanel() {
       return h('label', { class: 'site-row' }, h('span', {}, label), select);
     }),
   );
+  renderSiteShield(tab.url);
   $('zoom-reset').textContent = `${state.nav.zoom}%`;
   for (const id of ['site-copy', 'site-shot', 'site-boost', 'site-devtools', 'site-clear', 'zoom-in', 'zoom-out', 'zoom-reset']) {
     ($(id) as HTMLButtonElement).disabled = !origin;
   }
 }
 
+/** The shield: ad and tracker blocking for this page's site, as uBlock Origin's power button. */
+function renderSiteShield(url: string) {
+  let hostname = '';
+  try {
+    const parsed = new URL(url);
+    if (/^https?:$/.test(parsed.protocol) && isSiteHost(parsed.hostname)) hostname = parsed.hostname;
+  } catch {
+    // Not a web page.
+  }
+  const everywhere = state!.adBlock !== false;
+  const on = everywhere && !!hostname && blocksAdsOn(state!.adBlockAllowed, hostname);
+  const toggle = $<HTMLInputElement>('site-adblock');
+  toggle.checked = on;
+  toggle.disabled = !everywhere || !hostname || incognito;
+  toggle.dataset.host = hostname;
+  $('site-shield').classList.toggle('off', !on);
+  $('site-shield-note').textContent = !everywhere
+    ? 'Off for every site in Settings'
+    : !hostname
+      ? 'Not for this page'
+      : incognito
+        ? 'Change it in a regular window'
+        : on
+          ? `On for ${hostname}`
+          : `Off for ${hostname}`;
+}
+
+$('site-adblock').addEventListener('change', (e) => {
+  const toggle = e.currentTarget as HTMLInputElement;
+  if (toggle.dataset.host) api.setSiteAdBlock(toggle.dataset.host, toggle.checked);
+});
 $('btn-site').onclick = () => toggleSitePanel();
 $('btn-copy-link').onclick = () => {
   const tab = activeTab();

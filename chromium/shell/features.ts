@@ -55,13 +55,15 @@ export function registerFeatures(ctx: FeaturesContext): Features {
   // ---- responsive view ----
   const phone = responsive(ctx);
 
-  // ---- ad blocker: follows state.adBlock, whoever changes it (Settings, the tour) ----
-  const adBlockOn = () => store.state.adBlock !== false;
-  void setAdBlocking(adBlockOn());
+  // ---- ad blocker: follows state.adBlock and adBlockAllowed, whoever changes them (Settings, the tour, the site panel) ----
+  // Only the regular copy applies them. Chromium keeps one set of rules and registered scripts for
+  // both profiles (RulesMonitorService and UserScriptManager use the original profile), and the
+  // incognito copy's followed preferences can be out of date (incognito.ts).
+  if (!incognito) void setAdBlocking(store.state);
 
   store.onChange(() => {
     phone.sync();
-    void setAdBlocking(adBlockOn());
+    if (!incognito) void setAdBlocking(store.state);
   });
   // A mirror's Chromium tab can open without a Store change (the background opening it on show).
   chrome.tabs.onCreated.addListener(() => setTimeout(phone.sync, 0));

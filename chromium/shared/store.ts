@@ -16,6 +16,7 @@ import type {
   WindowSpace,
 } from './types';
 import type { ImportNode, ImportOutcome, ImportSpace, ImportTab } from './importApply';
+import { withAdBlocking } from './adBlockSites';
 import { STATE_VERSION } from './savedState';
 import { clampSidebarWidth } from './sidebarWidth';
 
@@ -806,6 +807,13 @@ export class Store {
 
   setAdBlock(enabled: boolean) {
     this.state.adBlock = enabled;
+    this.changed();
+  }
+
+  /** The site panel's shield: blocking on or off for one hostname (adBlockSites.ts). */
+  setAdBlockOn(host: string, block: boolean) {
+    // Kept as [] when empty: incognito windows follow only the keys the regular state has.
+    this.state.adBlockAllowed = withAdBlocking(this.state.adBlockAllowed, host, block);
     this.changed();
   }
 

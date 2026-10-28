@@ -1,10 +1,13 @@
 /**
  * The URL bar's site panel in the Chromium shell, as the Electron spike's capturePage,
  * clearSiteData and site permissions: Chromium's browsingData and contentSettings, and a
- * screenshot of the page for the clipboard.
+ * screenshot of the page for the clipboard. Its shield turns the ad blocker off for one site.
  */
 import type { Store } from '../shared/store';
+import { isSiteHost } from '../shared/adBlockSites';
+import { setAdBlocking } from './features/adblock';
 import { broadcast, handle } from './hub';
+import { incognito } from './incognito';
 
 export interface SiteControlsContext {
   store: Store;
@@ -66,6 +69,16 @@ export function registerSiteControls(ctx: SiteControlsContext) {
       const chromeId = ctx.activeChromeId();
       if (chromeId !== undefined) await chrome.tabs.reload(chromeId);
       broadcast('flash', 'Site data cleared');
+    },
+    // Not from an incognito window: the list is saved to disk, and it would name the site.
+    setSiteAdBlock: async (host: string, block: boolean) => {
+      if (incognito || typeof host !== 'string' || !isSiteHost(host)) return;
+      // The calling window's page, read before the first await: after it, activeChromeId() is the focused window's.
+      const chromeId = ctx.activeChromeId();
+      store.setAdBlockOn(host, !!block);
+      await setAdBlocking(store.state);
+      // The page's own request decided what it may load; it has to load again.
+      if (chromeId !== undefined) await chrome.tabs.reload(chromeId);
     },
     setSitePermission: async (origin: string, permission: string, decision: Decision) => {
       const settings = SETTINGS[String(permission)];
