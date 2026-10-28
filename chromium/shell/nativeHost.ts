@@ -12,7 +12,7 @@
 import type { DetectedBrowser, HistoryEntry, ImportOptions, ImportPreview, ImportResult, UiState } from '../shared/types';
 import { pinnedTabIds, type Store } from '../shared/store';
 import type { AgentResult, AgentTab, AgentToolName } from '../shared/agentTools';
-import { applyBrowserImport, importOptions, previewBrowserImport } from '../shared/importApply';
+import { applyBrowserImport, importOptions, previewBrowserImport, type BrowserImportData } from '../shared/importApply';
 import { HOST_NAME, type HostMethods, type ToHost, type ToShell } from '../native-host/protocol';
 import { handle } from './hub';
 
@@ -150,6 +150,23 @@ export function registerNativeHost(ctx: NativeHostContext) {
     },
   };
 
+  /** What an import read by `read` would bring over; `name` stands in for the source when the helper fails. */
+  async function preview(name: string, read: () => Promise<BrowserImportData>): Promise<ImportPreview> {
+    try {
+      return previewBrowserImport(await read(), store.state, ctx.canIsolate);
+    } catch (err) {
+      return { name, spaces: [], favorites: 0, archived: 0, history: 0, skipped: [], canIsolate: ctx.canIsolate, warnings: [helperProblem(err)], spacesKey: '' };
+    }
+  }
+
+  async function apply(options: ImportOptions, read: () => Promise<BrowserImportData>): Promise<ImportResult> {
+    try {
+      return await applyBrowserImport(await read(), importOptions(options, ctx.canIsolate), store, history);
+    } catch (err) {
+      return { spaces: 0, merged: 0, bookmarks: 0, history: 0, archived: 0, warnings: [helperProblem(err)], details: [] };
+    }
+  }
+
   handle({
     detectBrowsers: async (): Promise<DetectedBrowser[]> => {
       try {
@@ -159,22 +176,14 @@ export function registerNativeHost(ctx: NativeHostContext) {
         throw new Error('Browser import is unavailable because Flecha could not connect to its import helper.');
       }
     },
-    previewImport: async (id: string): Promise<ImportPreview> => {
-      try {
-        return previewBrowserImport(await call('readBrowser', String(id)), store.state, ctx.canIsolate);
-      } catch (err) {
-        return { name: String(id), spaces: [], favorites: 0, archived: 0, history: 0, skipped: [], canIsolate: ctx.canIsolate, warnings: [helperProblem(err)], spacesKey: '' };
-      }
-    },
+    previewImport: (id: string) => preview(String(id), () => call('readBrowser', String(id))),
     // The browser is read again rather than kept from the preview: the background may have slept since.
     // The preview's spacesKey makes sure the Spaces it showed are still the ones being imported.
-    importBrowser: async (id: string, options: ImportOptions): Promise<ImportResult> => {
-      try {
-        return await applyBrowserImport(await call('readBrowser', String(id)), importOptions(options, ctx.canIsolate), store, history);
-      } catch (err) {
-        return { spaces: 0, merged: 0, bookmarks: 0, history: 0, archived: 0, warnings: [helperProblem(err)], details: [] };
-      }
-    },
+    importBrowser: (id: string, options: ImportOptions) => apply(options, () => call('readBrowser', String(id))),
+    /** A bookmarks file exported from any browser as HTML, by its text; the page sends it again to import. */
+    previewBookmarksFile: (html: string, fileName: string) => preview(String(fileName), () => call('readBookmarksHtml', String(html), String(fileName))),
+    importBookmarksFile: (html: string, fileName: string, options: ImportOptions) =>
+      apply(options, () => call('readBookmarksHtml', String(html), String(fileName))),
     /** The Electron spike's saved state as text, or undefined when there's none or no helper. */
     'nativeHost:flechaState': async () => call('readFlechaState').catch(() => undefined),
   });
