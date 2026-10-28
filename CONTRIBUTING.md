@@ -13,7 +13,10 @@ Shell and import-helper development needs Node 22.5 or newer. Native setup depen
 ```bash
 npm ci
 npm run typecheck
+npm test
 ```
+
+CI runs these on every pull request, along with the tsrs check below, the shell and host builds, shellcheck on the scripts, and `chromium/scripts/check-patches.sh`, which checks that every patch still applies to the Chromium in `chromium/CHROMIUM_VERSION` without a checkout. The `CI passed` check sums them up for branch protection.
 
 The shell and native host can also be checked with the pinned [tsrs compiler](https://github.com/oxc-project/tsrs):
 
@@ -58,7 +61,7 @@ chromium/scripts/run.sh                # relaunch the dev build with the new she
 1. Run `chromium/scripts/apply.sh` so the checkout has every existing patch.
 2. Edit the checkout under `$CHROMIUM_SRC` (see `chromium/scripts/env.sh`).
 3. Turn your edit into a patch and number it after the last one. For a change that stands alone, add a new file with `git diff > chromium/patches/00NN-short-name.patch`, containing only your edit. For a follow-up to an existing patch, regenerate that patch's diff for the files it covers.
-4. Run `chromium/scripts/apply.sh` again on its own: it resets every file it touches, then applies all patches in order, so it proves the set still applies cleanly.
+4. Run `chromium/scripts/apply.sh` again on its own: it resets every file it touches, then applies all patches in order, so it proves the set still applies cleanly. Without a checkout, `chromium/scripts/check-patches.sh` proves the same against `chromium/CHROMIUM_VERSION`.
 5. Build with `chromium/scripts/build.sh` and try it.
 
 Keep a patch small and about one thing. Put a comment at the top of new files, and `// Flecha:` comments at the edits inside Chromium's files, saying why. New code goes in new files where possible, so Chromium upgrades hurt less. Packaging patches are numbered from 0050.
