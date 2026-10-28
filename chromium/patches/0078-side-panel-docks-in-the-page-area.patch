@@ -1,0 +1,188 @@
+# Flecha: Chromium's side panel (an extension's, say) docks inside the page area on the side its alignment pref picks, the right by default, instead of under the sidebar at the window's left edge. It fits and slides within the page area, and bubbles that drop into the page anchor beside it.
+--- a/chrome/browser/ui/views/frame/flecha_frame_view.cc
++++ b/chrome/browser/ui/views/frame/flecha_frame_view.cc
+@@ -10,6 +10,7 @@
+ 
+ #include "base/auto_reset.h"
+ #include "base/base64.h"
++#include "base/scoped_observation.h"
+ #include "base/strings/string_number_conversions.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "build/build_config.h"
+@@ -72,17 +73,20 @@
+ #include "ui/views/border.h"
+ #include "ui/views/controls/webview/web_contents_set_background_color.h"
+ #include "ui/views/focus/focus_manager.h"
++#include "ui/views/view_observer.h"
+ 
+ namespace {
+ 
+ // The window background behind the page area; the frame page draws over it.
+ // It also holds the anchors Chromium's bubbles point at in place of the
+ // hidden toolbar; they draw nothing.
+-class FlechaFrameBackgroundView : public views::View {
++class FlechaFrameBackgroundView : public views::View,
++                                  public views::ViewObserver {
+   METADATA_HEADER(FlechaFrameBackgroundView, views::View)
+ 
+  public:
+-  FlechaFrameBackgroundView() {
++  // `contents` is the view that shows the page, a sibling of this one.
++  explicit FlechaFrameBackgroundView(views::View* contents) {
+     // Only paints: clicks fall through to the window (and drag it).
+     SetCanProcessEventsWithinSubtree(false);
+     SetVisible(false);
+@@ -91,27 +95,48 @@
+     action_anchor_->SetVisible(false);
+     menu_anchor_ = AddChildView(std::make_unique<views::View>());
+     menu_anchor_->SetVisible(false);
++    contents_observation_.Observe(contents);
+   }
+ 
+-  // A strip along the top of the page area, a gap in from its sides: bubbles
+-  // drop into the page there, as they do below Chromium's toolbar.
++  // A strip along the top of the page, a gap in from its sides: bubbles drop
++  // into the page there, as they do below Chromium's toolbar.
+   views::View* page_anchor() { return page_anchor_; }
+   // An extension action's button in the sidebar, for its popup.
+   views::View* action_anchor() { return action_anchor_; }
+   // The sidebar's extensions button, for the extensions menu.
+   views::View* menu_anchor() { return menu_anchor_; }
+ 
+-  void Layout(PassKey) override {
++  void Layout(PassKey) override { LayOutPageAnchor(); }
++
++  // A Chromium side panel docked in the page area narrows the page without
++  // changing this view's bounds.
++  void OnViewBoundsChanged(views::View* observed_view) override {
++    LayOutPageAnchor();
++  }
++  void OnViewIsDeleting(views::View* observed_view) override {
++    contents_observation_.Reset();
++  }
++
++ private:
++  void LayOutPageAnchor() {
+     gfx::Rect page = GetLocalBounds();
+     page.Inset(GetInsets());
++    // As wide as the page itself, beside any side panel.
++    if (contents_observation_.IsObserving()) {
++      const gfx::Rect contents = contents_observation_.GetSource()->bounds() -
++                                 bounds().OffsetFromOrigin();
++      page.set_x(contents.x());
++      page.set_width(contents.width());
++    }
+     page.Inset(gfx::Insets::VH(0, std::min(kFlechaGap, page.width() / 2)));
+     page_anchor_->SetBounds(page.x(), page.y(), page.width(), 0);
+   }
+ 
+- private:
+   raw_ptr<views::View> page_anchor_;
+   raw_ptr<views::View> action_anchor_;
+   raw_ptr<views::View> menu_anchor_;
++  base::ScopedObservation<views::View, views::ViewObserver>
++      contents_observation_{this};
+ };
+ 
+ BEGIN_METADATA(FlechaFrameBackgroundView)
+@@ -443,7 +468,9 @@
+   SetVisible(false);
+   // Under every other view of the window.
+   background_view_.SetView(browser_view->AddChildViewAt(
+-      std::make_unique<FlechaFrameBackgroundView>(), 0));
++      std::make_unique<FlechaFrameBackgroundView>(
++          browser_view->contents_container()),
++      0));
+   if (const auto& state = FlechaFrameHost::DefaultState()) {
+     state_ = *state;
+   }
+--- a/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
++++ b/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+@@ -1465,6 +1465,62 @@
+ 
+     gfx::Rect page = window;
+     page.Inset(views().flecha_frame_background->GetInsets());
++    const auto child_layout = [&layout](views::View* view) -> ProposedLayout* {
++      auto child = layout.children.find(view);
++      return child == layout.children.end() ? nullptr : &child->second;
++    };
++
++    // Chromium's background and shadow around the page area and its side
++    // panel stay hidden: the page area draws its own.
++    for (views::View* chromium_frame :
++         {static_cast<views::View*>(views().main_background_region.get()),
++          static_cast<views::View*>(views().main_shadow_overlay.get())}) {
++      if (ProposedLayout* frame_layout = child_layout(chromium_frame)) {
++        frame_layout->visibility = false;
++      }
++    }
++
++    // Chromium's side panel (an extension's, say) docks inside the page area,
++    // on the side its alignment pref picks, kFlechaGap from the page, and the
++    // page narrows as it slides in. Chromium put it at the window's edge,
++    // where the frame covers it.
++    if (ProposedLayout* panel = child_layout(views().side_panel);
++        panel && horizontal_layout.has_side_panel()) {
++      // Chromium sized the panel against the whole window. Here the page
++      // keeps Chromium's minimum width beside it, unless that would take the
++      // panel below its own minimum, and the panel never leaves the page area.
++      const int room = std::max(0, page.width() - kFlechaGap);
++      const int target_width = std::min(
++          room, std::max(views().side_panel->GetMinimumSize().width(),
++                         std::min(horizontal_layout.side_panel_width,
++                                  room - kContentsContainerMinimumWidth)));
++      const int visible_width =
++          base::ClampFloor(target_width * side_panel_reveal_amount);
++      const gfx::Rect final_bounds(
++          side_panel_leading ? page.x() : page.right() - target_width,
++          page.y(), target_width, page.height());
++      panel->bounds = final_bounds;
++      panel->bounds.Offset(side_panel_leading ? visible_width - target_width
++                                              : target_width - visible_width,
++                           0);
++      if (ProposedLayout* content =
++              child_layout(views().side_panel_animation_content)) {
++        content->bounds =
++            views().side_panel->GetContentAnimationBounds(final_bounds);
++      }
++      const int gap = base::ClampRound(kFlechaGap * side_panel_reveal_amount);
++      InsetHorizontal(page, std::min(page.width(), visible_width + gap),
++                      side_panel_leading);
++    }
++    if (ProposedLayout* scrim =
++            child_layout(views().side_panel_content_transition_scrim);
++        scrim && scrim->visibility.value_or(false)) {
++      scrim->bounds = page;
++    }
++    // The page's bounds change with the panel's on every frame, so Chromium's
++    // clipped contents, sized for the bounds it laid out above, would not fit.
++    views().multi_contents_view->SetTargetContentBounds(std::nullopt);
++
+     if (auto infobar = layout.children.find(
+             static_cast<views::View*>(views().infobar_container.get()));
+         infobar_visible && infobar != layout.children.end()) {
+@@ -2029,12 +2085,21 @@
+ 
+   // Clip the side panel so it doesn't run off the edge of the browser or into
+   // the vertical tab strip.
++  int side_panel_end = layout_data_->revised_params.visual_client_area.right();
++  // Flecha: the panel docks in the page area, so it slides in from that, not
++  // from the window's edge.
++  if (views().flecha_frame_background &&
++      IsParentedToAndVisible(views().flecha_frame, views().browser_view)) {
++    gfx::Rect page_area = views().flecha_frame_background->bounds();
++    page_area.Inset(views().flecha_frame_background->GetInsets());
++    side_panel_start = page_area.x();
++    side_panel_end = page_area.right();
++  }
+   if (IsParentedToAndVisible(views().side_panel, views().browser_view)) {
+     const int left_overlap =
+         std::max(0, side_panel_start - views().side_panel->x());
+-    const int right_overlap = std::max(
+-        0, views().side_panel->bounds().right() -
+-               layout_data_->revised_params.visual_client_area.right());
++    const int right_overlap =
++        std::max(0, views().side_panel->bounds().right() - side_panel_end);
+     if (left_overlap > 0 || right_overlap > 0) {
+       gfx::Rect side_panel_visible_bounds =
+           views().side_panel->GetLocalBounds();
