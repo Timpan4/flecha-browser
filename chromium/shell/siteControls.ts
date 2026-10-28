@@ -73,10 +73,11 @@ export function registerSiteControls(ctx: SiteControlsContext) {
     // Not from an incognito window: the list is saved to disk, and it would name the site.
     setSiteAdBlock: async (host: string, block: boolean) => {
       if (incognito || typeof host !== 'string' || !isSiteHost(host)) return;
+      // The calling window's page, read before the first await: after it, activeChromeId() is the focused window's.
+      const chromeId = ctx.activeChromeId();
       store.setAdBlockOn(host, !!block);
       await setAdBlocking(store.state);
       // The page's own request decided what it may load; it has to load again.
-      const chromeId = ctx.activeChromeId();
       if (chromeId !== undefined) await chrome.tabs.reload(chromeId);
     },
     setSitePermission: async (origin: string, permission: string, decision: Decision) => {
