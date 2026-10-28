@@ -1103,6 +1103,11 @@ code {
   color: var(--red);
 }
 
+/* An error replaces the one-line endpoint, and its last words say what to do, so it wraps. */
+.row-text small.mono.host-error {
+  white-space: normal;
+}
+
 .tm-error {
   flex-basis: 100%;
   padding: 0 0 2px 54px;

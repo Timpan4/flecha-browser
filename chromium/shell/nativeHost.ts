@@ -40,7 +40,8 @@ const RETRY_FIRST = 2_000;
 const RETRY_MAX = 60_000;
 
 /** Chromium's reasons for not starting a host at all (native_message_process_host.cc), as opposed to one that stopped. */
-const isMissing = (reason: string) => /host not found|host is forbidden|invalid native messaging host/i.test(reason);
+const isMissing = (reason: string) =>
+  /host not found|host is forbidden|invalid native messaging host|failed to start native messaging host/i.test(reason);
 
 /** Why the helper couldn't be used, in words for the person importing. */
 function helperProblem(err: unknown) {

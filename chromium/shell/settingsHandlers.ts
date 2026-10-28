@@ -23,7 +23,7 @@ export interface SettingsContext {
   load?(tabId: string, url: string): void;
   /** The agent bridge's address while it runs (nativeHost.ts). */
   agentEndpoint?(): string | undefined;
-  /** Why Flecha's native host last failed, for the Import and Coding Agents panes (nativeHost.ts). */
+  /** Why Flecha's native host last failed, for the Coding Agents pane (nativeHost.ts). */
   hostError?(): string | undefined;
   /** Whether Flecha is the default browser, and whether it can become it (patch 0027). */
   defaultBrowser?(): { isDefault: boolean; canSet: boolean };
