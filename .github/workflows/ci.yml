@@ -54,17 +54,8 @@ jobs:
   patches:
     name: Patches apply to Chromium
     runs-on: ubuntu-latest
-    env:
-      FLECHA_CHROMIUM_FILES: ${{ github.workspace }}/.chromium-files
     steps:
       - uses: actions/checkout@v7
-      # Files at a Chromium tag never change. Keeping them spares googlesource, which answers
-      # a burst of fetches with HTTP 429, and turns a minute of downloads into a restore.
-      - uses: actions/cache@v6
-        with:
-          path: ${{ env.FLECHA_CHROMIUM_FILES }}
-          key: chromium-files-${{ hashFiles('chromium/CHROMIUM_VERSION') }}-${{ hashFiles('chromium/patches/*.patch') }}
-          restore-keys: chromium-files-${{ hashFiles('chromium/CHROMIUM_VERSION') }}-
       - run: chromium/scripts/check-patches.sh
 
   ci-passed:
