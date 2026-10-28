@@ -1,0 +1,59 @@
+# Flecha: Chromium's side panel (an extension's, say) docks inside the page area on the side its alignment pref picks, the right by default, instead of under the sidebar at the window's left edge.
+--- a/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
++++ b/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+@@ -1465,6 +1465,55 @@
+ 
+     gfx::Rect page = window;
+     page.Inset(views().flecha_frame_background->GetInsets());
++    const auto child_layout = [&layout](views::View* view) -> ProposedLayout* {
++      auto child = layout.children.find(view);
++      return child == layout.children.end() ? nullptr : &child->second;
++    };
++
++    // Chromium's background and shadow around the page area and its side
++    // panel stay hidden: the page area draws its own.
++    for (views::View* chromium_frame :
++         {static_cast<views::View*>(views().main_background_region.get()),
++          static_cast<views::View*>(views().main_shadow_overlay.get())}) {
++      if (ProposedLayout* frame_layout = child_layout(chromium_frame)) {
++        frame_layout->visibility = false;
++      }
++    }
++
++    // Chromium's side panel (an extension's, say) docks inside the page area,
++    // on the side its alignment pref picks, kFlechaGap from the page, and the
++    // page narrows as it slides in. Chromium put it at the window's edge,
++    // where the frame covers it.
++    if (ProposedLayout* panel = child_layout(views().side_panel);
++        panel && horizontal_layout.has_side_panel()) {
++      const int target_width = horizontal_layout.side_panel_width;
++      const int visible_width =
++          base::ClampFloor(target_width * side_panel_reveal_amount);
++      const gfx::Rect final_bounds(
++          side_panel_leading ? page.x() : page.right() - target_width,
++          page.y(), target_width, page.height());
++      panel->bounds = final_bounds;
++      panel->bounds.Offset(side_panel_leading ? visible_width - target_width
++                                              : target_width - visible_width,
++                           0);
++      if (ProposedLayout* content =
++              child_layout(views().side_panel_animation_content)) {
++        content->bounds =
++            views().side_panel->GetContentAnimationBounds(final_bounds);
++      }
++      const int gap = base::ClampRound(kFlechaGap * side_panel_reveal_amount);
++      InsetHorizontal(page, std::min(page.width(), visible_width + gap),
++                      side_panel_leading);
++    }
++    if (ProposedLayout* scrim =
++            child_layout(views().side_panel_content_transition_scrim);
++        scrim && scrim->visibility.value_or(false)) {
++      scrim->bounds = page;
++    }
++    // The page's bounds change with the panel's on every frame, so Chromium's
++    // clipped contents, sized for the bounds it laid out above, would not fit.
++    views().multi_contents_view->SetTargetContentBounds(std::nullopt);
++
+     if (auto infobar = layout.children.find(
+             static_cast<views::View*>(views().infobar_container.get()));
+         infobar_visible && infobar != layout.children.end()) {
