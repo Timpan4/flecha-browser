@@ -254,6 +254,16 @@ body {
   }
 }
 
+/* Loading: a line along the bottom of the address that fills as the page loads; app.ts
+   animates its width. A background, so the address's rounded corners clip it. */
+#urlbar-progress {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(var(--blue), var(--blue)) left bottom / 0% 2px no-repeat;
+  pointer-events: none;
+}
+
 #urlbar-icon {
   display: grid;
   color: var(--text-3);
@@ -675,8 +685,31 @@ body {
   filter: brightness(0.9);
 }
 
-.row.loading .favicon {
-  animation: pulse 0.9s ease-in-out infinite alternate;
+/* Loading: a spinner in place of the favicon. Its turn is 800ms (SPIN_MS in app.ts). */
+.favicon.spinner {
+  width: 14px;
+  height: 14px;
+  margin: 1px;
+  border: 2px solid color-mix(in srgb, var(--blue) 25%, transparent);
+  border-top-color: var(--blue);
+  border-radius: 50%;
+  animation: spin 800ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .favicon.spinner {
+    animation: none;
+  }
+}
+
+.row.loading .title {
+  color: var(--text-2);
 }
 
 @keyframes pulse {

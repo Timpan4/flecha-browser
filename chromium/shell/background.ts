@@ -968,6 +968,8 @@ async function start() {
     back: onActive((id) => chrome.tabs.goBack(id).catch(() => undefined)),
     forward: onActive((id) => chrome.tabs.goForward(id).catch(() => undefined)),
     reload: onActive((id) => chrome.tabs.reload(id)),
+    // At once: by default a script waits for the page to be idle, which a loading page isn't.
+    stop: onActive((id) => chrome.scripting.executeScript({ target: { tabId: id }, func: () => window.stop(), injectImmediately: true }).catch(() => undefined)),
     switchSpace: (id: string) => store.switchSpace(id, here()),
     newSpace: spacesOnly(() => editSpace(store.newSpace(true, here()).id)),
     editSpace: spacesOnly((id: string) => editSpace(String(id))),

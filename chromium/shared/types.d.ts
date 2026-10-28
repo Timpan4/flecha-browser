@@ -520,6 +520,7 @@ export interface FlechaApi {
   back(): void;
   forward(): void;
   reload(): void;
+  stop(): void;
   switchSpace(spaceId: string): void;
   newSpace(): void;
   updateSpace(spaceId: string, patch: { name?: string; emoji?: string; color?: string }): void;
