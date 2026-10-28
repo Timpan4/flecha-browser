@@ -1316,6 +1316,21 @@ async function start() {
     void siteIcons.all().then((icons) => broadcastTo(chromeWindowId, 'site-icons', icons));
   });
 
+  /** A shortcut pressed in `windowId`, once it is known whether that window is a Flechinha. */
+  const runShortcut = (command: string, windowId?: number) => {
+    // In a Flechinha, its own toolbar answers the few shortcuts it has.
+    if (isFlechinha(windowId)) return broadcast('flechinha:command', windowId, command);
+    if (runInPeek(command, windowId)) return;
+    // Settings on a pane, asked for by an incognito window (runInRegularProfile).
+    const pane = /^openSettings:(\w+)$/.exec(command);
+    if (pane) return void openSettings(pane[1]);
+    // The Boosts page, asked for by an incognito window, which writes no boosts.
+    if (command === 'boosts') return void call('openBoostsFolder');
+    const numbered = /^select(Tab|Space):(\d)$/.exec(command);
+    // The shortcut acts in the window it was pressed in.
+    asWindow(windowId !== undefined && windowId >= 0 ? windowId : undefined, () => runCommand(numbered ? `${numbered[1].toLowerCase()}${numbered[2]}` : command));
+  };
+
   // Flecha's keyboard shortcuts, taken by the browser before the page (patch 0016).
   registerNative({
     store,
@@ -1325,17 +1340,13 @@ async function start() {
     chromeTabId: (id) => live.get(id),
     flechaTabId: (chromeId) => flechaIdFor(chromeId),
     run: (command, windowId) => {
-      // In a Flechinha, its own toolbar answers the few shortcuts it has.
-      if (isFlechinha(windowId)) return broadcast('flechinha:command', windowId, command);
-      if (runInPeek(command, windowId)) return;
-      // Settings on a pane, asked for by an incognito window (runInRegularProfile).
-      const pane = /^openSettings:(\w+)$/.exec(command);
-      if (pane) return void openSettings(pane[1]);
-      // The Boosts page, asked for by an incognito window, which writes no boosts.
-      if (command === 'boosts') return void call('openBoostsFolder');
-      const numbered = /^select(Tab|Space):(\d)$/.exec(command);
-      // The shortcut acts in the window it was pressed in.
-      asWindow(windowId !== undefined && windowId >= 0 ? windowId : undefined, () => runCommand(numbered ? `${numbered[1].toLowerCase()}${numbered[2]}` : command));
+      // A window that isn't one of Flecha's may be a Flechinha the browser opened (a link from
+      // another app) that this background hasn't seen yet, so the browser is asked first.
+      // Flecha's own windows go on at once, so a held ⌃Tab stays in step with its release.
+      if (windowId !== undefined && windowId >= 0 && !windowMap.has(windowId) && !isFlechinha(windowId)) {
+        return void isFlechinhaWindow(windowId).then(() => runShortcut(command, windowId));
+      }
+      runShortcut(command, windowId);
     },
     // Into a Flechinha: the page leaves its Space without closing.
     releaseTab: (id) => {

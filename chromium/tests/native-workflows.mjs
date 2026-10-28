@@ -889,7 +889,8 @@ try {
   // The browser opened this Flechinha, not the shell: Control-W still closes it, not a Flecha tab.
   const tabsBeforeClose = Object.keys((await stateWhere('s => true')).tabs).sort();
   await until(async () => (await evaluate(session, 'chrome.windows.getLastFocused()')).id === flechinhaWindows[0]);
-  await key('w', ['Control_L']);
+  // Pressed where focus is: key() would focus Flecha's main window first.
+  hold('down', 'Control_L', 'w'); hold('up', 'w', 'Control_L');
   await until(async () => (await evaluate(session, 'chrome.flechaPrivate.getFlechinhas()')).length === 0);
   assert.deepEqual(Object.keys((await stateWhere('s => true')).tabs).sort(), tabsBeforeClose);
   await rpc('settings:set', { openLinksInFlechinha: false });
