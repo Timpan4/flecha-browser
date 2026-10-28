@@ -51,18 +51,25 @@
      return;
    }
    // The page's fullscreen element stays as it is. The frame that requested it
-@@ -477,6 +506,15 @@
+@@ -477,6 +506,22 @@
    tab_fullscreen_target_display_id_ = display::kInvalidDisplayId;
    started_fullscreen_transition_ = false;
  
 +  // Flecha: the sidebar may have changed while the native transition was
-+  // pending. Reconcile only after that transition has finished.
-+  auto weak_ptr = weak_ptr_factory_.GetWeakPtr();
-+  UpdateFullscreenWithinTab(
-+      exclusive_access_context->GetWebContentsForExclusiveAccess());
-+  if (!weak_ptr) {
-+    return;
-+  }
++  // pending. BrowserView can notify us before ProcessFullscreen() returns,
++  // when a nested fullscreen request would be ignored. A non-nestable task
++  // waits for that operation, including any nested event loop, to return.
++  base::SingleThreadTaskRunner::GetCurrentDefault()->PostNonNestableTask(
++      FROM_HERE, base::BindOnce(
++                     [](base::WeakPtr<FullscreenController> controller) {
++                       if (controller) {
++                         controller->UpdateFullscreenWithinTab(
++                             controller->exclusive_access_manager()
++                                 ->context()
++                                 ->GetWebContentsForExclusiveAccess());
++                       }
++                     },
++                     weak_ptr_factory_.GetWeakPtr()));
 +
  #if !BUILDFLAG(IS_ANDROID)
    if (!IsTabFullscreen()) {
