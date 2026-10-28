@@ -17,6 +17,7 @@
 # uploaded here: publish-release.sh does that.
 set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=env.sh
 . "$here/scripts/env.sh"
 
 if [ $# -lt 1 ] || [ $# -gt 2 ]; then
