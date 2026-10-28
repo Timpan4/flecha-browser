@@ -577,7 +577,12 @@ try {
   await rpc('openPeek', base + '/peek');
   const peek = await findTarget(t => t.type === 'page' && t.url === base + '/peek');
   assert.ok(peek.targetId);
-  await rpc('closePeek');
+  // Control-W closes the Peek, not the tab behind it.
+  await domWhere("() => !document.querySelector('#peek').hidden");
+  const tabsUnderPeek = Object.keys((await stateWhere('s => true')).tabs).sort();
+  await key('w', ['Control_L']);
+  await domWhere("() => document.querySelector('#peek').hidden");
+  assert.deepEqual(Object.keys((await stateWhere('s => true')).tabs).sort(), tabsUnderPeek);
   await preserved('Peek');
   // "Open in Peek" on a link's own context menu: the item above Inspect, picked by keyboard.
   await rpc('activate', a);
@@ -877,7 +882,16 @@ try {
   const flechinhaWindows = await evaluate(session, 'chrome.flechaPrivate.getFlechinhas()');
   assert.equal(flechinhaWindows.length, 1);
   assert.equal(await evaluate(session, `chrome.tabs.query({ windowId: ${flechinhaWindows[0]} }).then(tabs => tabs[0]?.url)`), base + '/from-another-app');
-  await evaluate(session, `chrome.windows.remove(${flechinhaWindows[0]})`);
+  // Linux gives it no title bar: its toolbar draws close, minimize and maximize.
+  const flechinhaToolbar = await attach((await findTarget(t => t.url.startsWith(extension + 'flechinha.html') && t.url.includes(`window=${flechinhaWindows[0]}`))).targetId);
+  await loaded(flechinhaToolbar, extension + 'flechinha.html');
+  assert.equal(await evaluate(flechinhaToolbar, "getComputedStyle(document.querySelector('.window-controls')).display"), 'flex');
+  // The browser opened this Flechinha, not the shell: Control-W still closes it, not a Flecha tab.
+  const tabsBeforeClose = Object.keys((await stateWhere('s => true')).tabs).sort();
+  await until(async () => (await evaluate(session, 'chrome.windows.getLastFocused()')).id === flechinhaWindows[0]);
+  await key('w', ['Control_L']);
+  await until(async () => (await evaluate(session, 'chrome.flechaPrivate.getFlechinhas()')).length === 0);
+  assert.deepEqual(Object.keys((await stateWhere('s => true')).tabs).sort(), tabsBeforeClose);
   await rpc('settings:set', { openLinksInFlechinha: false });
   launchLink(base + '/as-a-tab');
   await stateWhere(`s => Object.values(s.tabs).some(t => t.url === ${JSON.stringify(base + '/as-a-tab')})`);

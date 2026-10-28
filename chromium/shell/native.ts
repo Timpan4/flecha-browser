@@ -98,9 +98,25 @@ function registerDevToolsAndDefaultBrowser() {
 
 // ---- Peek (patch 0026) -------------------------------------------------------------------
 
+/** The windows with a Peek open, from onPeekChanged. */
+const peeks = new Set<number>();
+
+/**
+ * A Peek answers ⌘W (closes it) and ⌘O (keeps its page as a tab) as a Flechinha does, not the
+ * tab behind it. Returns whether `command` was the Peek's.
+ */
+export function runInPeek(command: string, windowId: number | undefined) {
+  if (windowId === undefined || !peeks.has(windowId)) return false;
+  if (command === 'closeTab') void chrome.flechaPrivate.closePeek(windowId);
+  else if (command === 'openInFlecha') void chrome.flechaPrivate.promotePeek(windowId);
+  else return false;
+  return true;
+}
+
 // The frame pages draw Peek's backdrop and toolbar from the 'peek' event, as in Electron's
 // sendPeek(); while a Peek is open the browser keeps the frame over the whole window.
 if (has('openPeek')) {
+  chrome.flechaPrivate.onPeekChanged.addListener((windowId, peek) => void (peek ? peeks.add(windowId) : peeks.delete(windowId)));
   chrome.flechaPrivate.onPeekChanged.addListener(
     // Each window has its own Peek, and its own toolbar for it.
     when((_ctx, windowId: number, peek?: chrome.flechaPrivate.PeekState) => broadcastTo(windowId, 'peek', peek ?? null, windowId)),
@@ -215,7 +231,11 @@ function registerFlechinha(ctx: NativeContext) {
     applyLinks();
     ctx.store.onChange(applyLinks);
   }
-  void chrome.flechaPrivate.getFlechinhas().then((ids) => ids.forEach((id) => flechinhas.add(id)));
+  const learnFlechinhas = () => void chrome.flechaPrivate.getFlechinhas().then((ids) => ids.forEach((id) => flechinhas.add(id)));
+  learnFlechinhas();
+  // The browser opens Flechinhas of its own (links from other apps), not through open():
+  // isFlechinha() must know them before their first shortcut, or ⌘W closes a Flecha tab.
+  chrome.windows.onCreated.addListener((win) => win.type === 'normal' && learnFlechinhas());
   chrome.windows.onRemoved.addListener((id) => flechinhas.delete(id));
 
   async function open(url?: string, flechaId?: string) {

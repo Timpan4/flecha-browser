@@ -57,9 +57,29 @@ body {
   flex: none;
 }
 
+/* macOS draws its traffic lights in the room .traffic-lights keeps. Elsewhere the window has
+   no title bar of the platform's, so the room holds Flecha's own circles (windowControls.css). */
+.window-controls {
+  display: none;
+}
+
+:root:not([data-platform='mac']) .traffic-lights {
+  display: none;
+}
+
+:root:not([data-platform='mac']) .window-controls {
+  display: flex;
+  align-items: center;
+  width: 72px;
+  flex: none;
+  padding-left: 4px;
+  -webkit-app-region: no-drag;
+}
+
 /* In fullscreen the traffic lights aren't in the toolbar (patch 0039). */
 @media (display-mode: fullscreen) {
-  .traffic-lights {
+  .traffic-lights,
+  :root:not([data-platform='mac']) .window-controls {
     display: none;
   }
 }

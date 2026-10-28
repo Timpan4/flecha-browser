@@ -25,7 +25,7 @@ import { SiteIcons } from './siteIcons';
 // Loaded on the first turn: its modules add webNavigation and message listeners as they load.
 import { registerFeatures, type Features } from './features';
 // Also loaded on the first turn, for the shortcut event that may have woken the background.
-import { defaultBrowserState, isFlechinha, isFlechinhaWindow, registerNative } from './native';
+import { defaultBrowserState, isFlechinha, isFlechinhaWindow, registerNative, runInPeek } from './native';
 import { registerDownloads } from './downloads';
 import { registerSiteControls } from './siteControls';
 import { Favicons } from './favicons';
@@ -1327,6 +1327,7 @@ async function start() {
     run: (command, windowId) => {
       // In a Flechinha, its own toolbar answers the few shortcuts it has.
       if (isFlechinha(windowId)) return broadcast('flechinha:command', windowId, command);
+      if (runInPeek(command, windowId)) return;
       // Settings on a pane, asked for by an incognito window (runInRegularProfile).
       const pane = /^openSettings:(\w+)$/.exec(command);
       if (pane) return void openSettings(pane[1]);
