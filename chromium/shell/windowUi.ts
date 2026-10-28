@@ -110,12 +110,13 @@ async function bookmarksFileSource(): Promise<ImportSource | undefined> {
     input.click();
   });
   if (!file) return;
-  // The page keeps the text and sends it again to import, as a browser is read again.
-  const html = await file.text();
+  // The page keeps the text and sends it again to import, as a browser is read again. It's awaited
+  // in preview, so a file that can't be read ends as a failed import.
+  const html = file.text();
   return {
     name: `“${file.name}”`,
-    preview: () => invoke<ImportPreview>('previewBookmarksFile', html, file.name),
-    run: (options) => invoke<ImportResult>('importBookmarksFile', html, file.name, options),
+    preview: async () => invoke<ImportPreview>('previewBookmarksFile', await html, file.name),
+    run: async (options) => invoke<ImportResult>('importBookmarksFile', await html, file.name, options),
   };
 }
 
