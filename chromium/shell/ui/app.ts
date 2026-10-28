@@ -2,6 +2,7 @@ import { devSuggestions } from './devCommands.js';
 import { ICONS, type IconName } from './icons.js';
 import { setupOnboarding } from './onboarding.js';
 import { SPACE_COLORS, SPACE_EMOJIS } from './spaceChoices.js';
+import { setupWindowControls } from './windowControls.js';
 import { displayKeys } from '../lib/shortcuts';
 import { isMac } from '../lib/platform';
 import { isEnter } from '../lib/keys';
@@ -1261,6 +1262,7 @@ peek.addEventListener('mousedown', (e) => {
   if (e.target === peek) api.closePeek();
 });
 $('peek-open').onclick = () => api.promotePeek();
+$('peek-open').dataset.kbd = displayKeys('CmdOrCtrl+O');
 $('peek-close').onclick = () => api.closePeek();
 
 // ---- downloads --------------------------------------------------------------------
@@ -1500,25 +1502,7 @@ document.documentElement.dataset.platform = isMac ? 'mac' : 'other';
 const ownWindow = !isMac && document.documentElement.dataset.frame !== undefined && typeof chrome.flechaPrivate?.getWindowId === 'function';
 
 if (ownWindow) {
-  const root = document.documentElement;
-  const windowId = chrome.flechaPrivate.getWindowId();
-  const maximize = $('wc-maximize');
-  const showState = (win: chrome.windows.Window) => {
-    root.dataset.windowState = win.state ?? 'normal';
-    maximize.setAttribute('aria-label', win.state === 'maximized' ? 'Restore' : 'Maximize');
-  };
-  const showFocused = async (focusedId: number) => (root.dataset.windowFocused = String(focusedId === (await windowId)));
-  void windowId.then((id) => chrome.windows.get(id)).then(showState);
-  void chrome.windows.getLastFocused().then((win) => showFocused(win.id ?? chrome.windows.WINDOW_ID_NONE));
-  chrome.windows.onBoundsChanged.addListener(async (win) => win.id === (await windowId) && showState(win));
-  chrome.windows.onFocusChanged.addListener((id) => void showFocused(id));
-  $('wc-close').onclick = async () => chrome.windows.remove(await windowId);
-  $('wc-minimize').onclick = async () => chrome.windows.update(await windowId, { state: 'minimized' });
-  maximize.onclick = async () => {
-    const id = await windowId;
-    const win = await chrome.windows.get(id);
-    showState(await chrome.windows.update(id, { state: win.state === 'maximized' ? 'normal' : 'maximized' }));
-  };
+  setupWindowControls(chrome.flechaPrivate.getWindowId());
 
   const menuButton = $('btn-menu');
   const openMenu = async (keyboard: boolean) => {

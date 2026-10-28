@@ -8,7 +8,7 @@
 import type { Store } from '../shared/store';
 import { SHORTCUTS, fixedShortcuts, keysFor } from './lib/shortcuts';
 import { broadcast, broadcastTo, callerWindow, handle } from './hub';
-import { incognito } from './incognito';
+import { incognito, sessionKey } from './incognito';
 
 export interface NativeContext {
   store: Store;
@@ -39,10 +39,21 @@ export interface NativeContext {
 const api = () => (chrome as { flechaPrivate?: typeof chrome.flechaPrivate }).flechaPrivate;
 const has = <K extends keyof typeof chrome.flechaPrivate>(name: K) => typeof api()?.[name] === 'function';
 
+/**
+ * The windows with a Peek open, from onPeekChanged. Kept across background restarts: the
+ * browser can't be asked (patch 0026), and a ⌘W that wakes the background must still find the Peek.
+ */
+const PEEKS_KEY = sessionKey('peeks');
+const peeks = new Set<number>();
+const peeksLoaded = has('openPeek')
+  ? chrome.storage.session.get(PEEKS_KEY).then((saved) => (saved[PEEKS_KEY] as number[] | undefined)?.forEach((id) => peeks.add(id)))
+  : Promise.resolve();
+
 // Events go on in the module's first turn, or Chromium drops the one that woke the
-// background; they wait here until registerNative() hands over the context.
+// background; they wait here until registerNative() hands over the context and the
+// saved Peeks are back.
 let resolveCtx!: (ctx: NativeContext) => void;
-const ready = new Promise<NativeContext>((resolve) => (resolveCtx = resolve));
+const ready = Promise.all([new Promise<NativeContext>((resolve) => (resolveCtx = resolve)), peeksLoaded]).then(([ctx]) => ctx);
 const when =
   <A extends unknown[]>(fn: (ctx: NativeContext, ...args: A) => void) =>
   (...args: A) =>
@@ -98,13 +109,36 @@ function registerDevToolsAndDefaultBrowser() {
 
 // ---- Peek (patch 0026) -------------------------------------------------------------------
 
+/**
+ * A Peek answers ⌘W (closes it) and ⌘O (keeps its page as a tab) as a Flechinha does, not the
+ * tab behind it. Returns whether `command` was the Peek's.
+ */
+export function runInPeek(command: string, windowId: number | undefined) {
+  if (windowId === undefined || !peeks.has(windowId)) return false;
+  if (command === 'closeTab') void chrome.flechaPrivate.closePeek(windowId);
+  else if (command === 'openInFlecha') void chrome.flechaPrivate.promotePeek(windowId);
+  else return false;
+  return true;
+}
+
 // The frame pages draw Peek's backdrop and toolbar from the 'peek' event, as in Electron's
 // sendPeek(); while a Peek is open the browser keeps the frame over the whole window.
 if (has('openPeek')) {
+  const rememberPeek = (windowId: number, open: boolean) => {
+    if (open === peeks.has(windowId)) return;
+    if (open) peeks.add(windowId);
+    else peeks.delete(windowId);
+    void chrome.storage.session.set({ [PEEKS_KEY]: [...peeks] });
+  };
   chrome.flechaPrivate.onPeekChanged.addListener(
-    // Each window has its own Peek, and its own toolbar for it.
-    when((_ctx, windowId: number, peek?: chrome.flechaPrivate.PeekState) => broadcastTo(windowId, 'peek', peek ?? null, windowId)),
+    when((_ctx, windowId: number, peek?: chrome.flechaPrivate.PeekState) => {
+      rememberPeek(windowId, !!peek);
+      // Each window has its own Peek, and its own toolbar for it.
+      broadcastTo(windowId, 'peek', peek ?? null, windowId);
+    }),
   );
+  // A window closes without saying its Peek did.
+  chrome.windows.onRemoved.addListener(when((_ctx, windowId: number) => rememberPeek(windowId, false)));
   chrome.contextMenus.onClicked.addListener(
     when((_ctx, info: chrome.contextMenus.OnClickData, tab?: chrome.tabs.Tab) => {
       if (info.menuItemId === PEEK_MENU_ID && info.linkUrl) void openLinkInPeek(info.linkUrl, tab);
@@ -192,12 +226,15 @@ const flechinhas = new Set<number>();
 export const isFlechinha = (windowId: number | undefined) => windowId !== undefined && flechinhas.has(windowId);
 /**
  * Whether a window is a Flechinha, asking the browser. Use this in tabs.onCreated: the event
- * for a new Flechinha's first tab arrives before openFlechinha() resolves.
+ * for a new Flechinha's first tab arrives before openFlechinha() resolves. The browser also
+ * opens Flechinhas of its own (links from other apps), which only this finds.
  */
 export async function isFlechinhaWindow(windowId: number | undefined) {
   if (windowId === undefined || !has('getFlechinhas')) return false;
   if (flechinhas.has(windowId)) return true;
-  return (await chrome.flechaPrivate.getFlechinhas()).includes(windowId);
+  const ids = await chrome.flechaPrivate.getFlechinhas();
+  ids.forEach((id) => flechinhas.add(id));
+  return flechinhas.has(windowId);
 }
 
 function registerFlechinha(ctx: NativeContext) {

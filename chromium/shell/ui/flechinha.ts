@@ -1,7 +1,8 @@
 import { ICONS, type IconName } from './icons.js';
+import { setupWindowControls } from './windowControls.js';
 import type { FlechinhaApi, FlechinhaState } from '../../shared/types';
 import { displayKeys } from '../lib/shortcuts';
-import { primaryModifier } from '../lib/platform';
+import { isMac, primaryModifier } from '../lib/platform';
 
 declare global {
   interface Window {
@@ -35,6 +36,10 @@ function icon(name: IconName) {
 }
 
 for (const el of document.querySelectorAll<HTMLElement>('i[data-icon]')) el.replaceWith(icon(el.dataset.icon as IconName));
+
+// The window has no title bar off macOS: close, minimize and maximize are Flecha's own circles.
+document.documentElement.dataset.platform = isMac ? 'mac' : 'other';
+if (!isMac) setupWindowControls(chrome.flechaPrivate.getWindowId());
 
 /** What the address shows: the site, quieter for the URL schemes people don't type. */
 function siteOf(url: string) {
