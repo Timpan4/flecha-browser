@@ -55,13 +55,12 @@ export function registerFeatures(ctx: FeaturesContext): Features {
   // ---- responsive view ----
   const phone = responsive(ctx);
 
-  // ---- ad blocker: follows state.adBlock, whoever changes it (Settings, the tour) ----
-  const adBlockOn = () => store.state.adBlock !== false;
-  void setAdBlocking(adBlockOn());
+  // ---- ad blocker: follows state.adBlock and adBlockAllowed, whoever changes them (Settings, the tour, the site panel) ----
+  void setAdBlocking(store.state);
 
   store.onChange(() => {
     phone.sync();
-    void setAdBlocking(adBlockOn());
+    void setAdBlocking(store.state);
   });
   // A mirror's Chromium tab can open without a Store change (the background opening it on show).
   chrome.tabs.onCreated.addListener(() => setTimeout(phone.sync, 0));

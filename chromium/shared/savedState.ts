@@ -4,6 +4,7 @@
  * last started the shell, and sets the damaged blob aside so it can still be recovered by hand.
  */
 import type { BrowserState, ClosedWindow, FlechaWindow, PinnedNode, SavedSpace, TabInfo, WindowSpace } from './types';
+import { isSiteHost } from './adBlockSites';
 import { SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH } from './sidebarWidth';
 
 /**
@@ -158,6 +159,8 @@ const SETTINGS: Record<string, Check> = {
   askWhereToSave: isBoolean,
   environments: (v) => Array.isArray(v) && v.every(fields({ id: isString, name: isString, targets: (t) => Array.isArray(t) && t.every(fields({ label: isString, origin: isString })) })),
   adBlock: isBoolean,
+  // One bad hostname would make Chromium refuse the whole allow rule (features/adblock.ts).
+  adBlockAllowed: (v) => Array.isArray(v) && v.every((host) => isString(host) && isSiteHost(host)),
   agent: fields({ enabled: isBoolean, token: isString }),
   onboarded: isBoolean,
   keybindings: recordOf((v) => v === null || isString(v)),

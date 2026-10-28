@@ -233,6 +233,8 @@ export interface BrowserState {
   environments?: Environment[];
   /** Built-in ad and tracker blocking; on unless turned off. */
   adBlock?: boolean;
+  /** Hostnames where ad and tracker blocking is off, with their subdomains (adBlockSites.ts). */
+  adBlockAllowed?: string[];
   /** The MCP bridge for coding agents: off unless turned on in Settings. */
   agent?: { enabled: boolean; token: string };
   /** The welcome tour has been finished (or skipped). */
@@ -552,6 +554,8 @@ export interface FlechaApi {
   capturePage(): void;
   clearSiteData(origin: string): void;
   setSitePermission(origin: string, permission: string, decision: 'allow' | 'block' | 'ask'): void;
+  /** The site panel's shield: ad and tracker blocking on or off for a hostname, then a reload. */
+  setSiteAdBlock(host: string, block: boolean): void;
   zoom(step: 1 | -1 | 0): void;
   openDevTools(): void;
   /** A short confirmation shown in the address bar ("Link copied"). */

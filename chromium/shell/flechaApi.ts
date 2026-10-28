@@ -170,6 +170,7 @@ const api: FlechaApi = {
   capturePage: cmd('capturePage'),
   clearSiteData: cmd('clearSiteData'),
   setSitePermission: cmd('setSitePermission'),
+  setSiteAdBlock: cmd('setSiteAdBlock'),
   zoom: cmd('zoom'),
   openDevTools: cmd('openDevTools'),
   openSettings: cmd('openSettings'),
