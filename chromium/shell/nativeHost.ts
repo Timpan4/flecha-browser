@@ -39,7 +39,7 @@ const IDLE_CLOSE = 60_000;
 const RETRY_FIRST = 2_000;
 const RETRY_MAX = 60_000;
 
-/** Chromium's reasons for not starting a host at all (native_message_process_host.cc), as opposed to one that stopped. */
+/** Chromium's reasons for not starting a host at all (native_message_host.cc), as opposed to one that stopped. */
 const isMissing = (reason: string) =>
   /host not found|host is forbidden|invalid native messaging host|failed to start native messaging host/i.test(reason);
 
@@ -62,6 +62,8 @@ export function registerNativeHost(ctx: NativeHostContext) {
   let sentAgent = '';
   /** Why the host last failed, for Settings; cleared once it answers. */
   let hostError: string | undefined;
+  /** Why the running host couldn't start the bridge; only the bridge's next report clears it. */
+  let agentError: string | undefined;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let retryDelay = RETRY_FIRST;
 
@@ -87,6 +89,7 @@ export function registerNativeHost(ctx: NativeHostContext) {
       const reason = chrome.runtime.lastError?.message ?? 'The helper stopped';
       if (port === p) port = undefined;
       endpoint = undefined;
+      agentError = undefined;
       for (const call of calls.values()) call.reject(new Error(reason));
       calls.clear();
       chunks.clear();
@@ -154,7 +157,8 @@ export function registerNativeHost(ctx: NativeHostContext) {
       else pending?.resolve(message.value);
     } else if (message.type === 'agent') {
       endpoint = message.endpoint;
-      hostError = message.error ? `The agent bridge couldn’t start: ${message.error}` : undefined;
+      hostError = undefined;
+      agentError = message.error ? `The agent bridge couldn’t start: ${message.error}` : undefined;
       if (message.error) console.error('Flecha shell: agent bridge failed:', message.error);
       changed();
     } else if (message.type === 'tool') {
@@ -226,13 +230,13 @@ export function registerNativeHost(ctx: NativeHostContext) {
     const agent = store.state.agent;
     const wanted = JSON.stringify({ enabled: !!agent?.enabled, token: agent?.token ?? '' });
     if (wanted === sentAgent) return;
+    if (!agent?.enabled) clearTimeout(retryTimer);
     // Nothing to stop if the host isn't running.
     if (!agent?.enabled && !port) {
       sentAgent = wanted;
       return;
     }
     sentAgent = wanted;
-    if (!agent?.enabled) clearTimeout(retryTimer);
     try {
       post({ type: 'agent', enabled: !!agent?.enabled, token: agent?.token ?? '' });
     } catch (err) {
@@ -534,8 +538,8 @@ export function registerNativeHost(ctx: NativeHostContext) {
     },
     /** The bridge's address while it runs, for Settings. */
     agentEndpoint: () => endpoint,
-    /** Why the host last failed to start or stopped, for Settings; undefined once it works. */
-    hostError: () => hostError,
+    /** Why the host or its bridge last failed, for Settings; undefined once they work. */
+    hostError: () => hostError ?? agentError,
   };
 }
 

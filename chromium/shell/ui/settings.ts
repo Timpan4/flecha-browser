@@ -382,14 +382,7 @@ function render(view: SettingsView) {
   }
   openLinksInFlechinha.checked = view.openLinksInFlechinha;
   sidebarInPageFullscreen.checked = view.sidebarInPageFullscreen;
-  agent = view.agent;
-  agentEnabled.checked = agent.enabled;
-  for (const row of document.querySelectorAll<HTMLElement>('[data-agent-only]')) row.hidden = !agent.enabled;
-  // Without the native host the bridge never starts; say why rather than "Starting…".
-  const endpoint = document.getElementById('agentEndpoint')!;
-  endpoint.textContent = agent.endpoint ?? (agent.enabled ? view.hostError : undefined) ?? 'Starting…';
-  endpoint.classList.toggle('host-error', !agent.endpoint && !!view.hostError);
-  for (const id of ['copyClaudeCommand', 'copyAgentJson']) (document.getElementById(id) as HTMLButtonElement).disabled = !agent.endpoint;
+  renderAgent(view);
   if (!environments.length) {
     environments = view.environments;
     renderEnvironments();
@@ -405,11 +398,23 @@ function render(view: SettingsView) {
       : 'Not available in this build of Flecha.';
 }
 
+function renderAgent(view: SettingsView) {
+  agent = view.agent;
+  agentEnabled.checked = agent.enabled;
+  for (const row of document.querySelectorAll<HTMLElement>('[data-agent-only]')) row.hidden = !agent.enabled;
+  // Without the native host the bridge never starts; say why rather than "Starting…".
+  const endpoint = document.getElementById('agentEndpoint')!;
+  endpoint.textContent = agent.endpoint ?? (agent.enabled ? view.hostError : undefined) ?? 'Starting…';
+  endpoint.classList.toggle('host-error', !agent.endpoint && !!view.hostError);
+  for (const id of ['copyClaudeCommand', 'copyAgentJson']) (document.getElementById(id) as HTMLButtonElement).disabled = !agent.endpoint;
+}
+
 makeDefault.addEventListener('click', async () => render(await api.makeDefaultBrowser()));
 // macOS asks for confirmation in its own dialog, so check again when the window regains focus.
 window.addEventListener('focus', async () => render(await api.get()));
 // The agent bridge's address and the native host's errors come later than the change that asked for them.
-api.onChange(async () => render(await api.get()));
+// Only the agent card redraws, so a shortcut keycap with focus keeps it.
+api.onChange(async () => renderAgent(await api.get()));
 
 document.getElementById('openBoosts')!.addEventListener('click', () => api.openBoosts());
 document.getElementById('showTour')!.addEventListener('click', () => api.showTour());
