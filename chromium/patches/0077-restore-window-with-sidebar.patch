@@ -12,7 +12,7 @@
  
    if (was_window_fullscreen_for_tab_or_pending) {
      // While an element is in fullscreen, requesting fullscreen for a different
-@@ -415,9 +418,31 @@
+@@ -415,9 +418,35 @@
  
  void FullscreenController::UpdateFullscreenWithinTab(
      WebContents* web_contents) {
@@ -39,7 +39,11 @@
 +    FullscreenWithinTabHelper::CreateForWebContents(web_contents);
 +    FullscreenWithinTabHelper::FromWebContents(web_contents)
 +        ->SetIsFullscreenWithinTab(true);
++    auto weak_ptr = weak_ptr_factory_.GetWeakPtr();
 +    ExitFullscreenModeInternal();
++    if (!weak_ptr) {
++      return;
++    }
 +    PostFullscreenChangeNotification();
 +    return;
 +  }
@@ -47,14 +51,18 @@
      return;
    }
    // The page's fullscreen element stays as it is. The frame that requested it
-@@ -477,6 +502,11 @@
+@@ -477,6 +506,15 @@
    tab_fullscreen_target_display_id_ = display::kInvalidDisplayId;
    started_fullscreen_transition_ = false;
  
 +  // Flecha: the sidebar may have changed while the native transition was
 +  // pending. Reconcile only after that transition has finished.
++  auto weak_ptr = weak_ptr_factory_.GetWeakPtr();
 +  UpdateFullscreenWithinTab(
 +      exclusive_access_context->GetWebContentsForExclusiveAccess());
++  if (!weak_ptr) {
++    return;
++  }
 +
  #if !BUILDFLAG(IS_ANDROID)
    if (!IsTabFullscreen()) {
