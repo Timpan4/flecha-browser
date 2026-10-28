@@ -1282,6 +1282,7 @@ async function start() {
       if (chromeId !== undefined) void chrome.tabs.update(chromeId, { url });
     },
     agentEndpoint: () => nativeHost?.agentEndpoint(),
+    hostError: () => nativeHost?.hostError(),
     defaultBrowser: () => defaultBrowser,
     makeDefaultBrowser: async () => {
       await call('makeDefaultBrowser');
