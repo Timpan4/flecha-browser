@@ -164,7 +164,7 @@ const api: FlechaApi = {
   },
   setSidebarPeek: cmd('setSidebarPeek'),
   // The page can write the clipboard itself; the background has no document to do it from.
-  copyText: (text) => void copy(String(text), 'Link copied'),
+  copyText: (text, message) => void copy(String(text), typeof message === 'string' ? message : 'Link copied'),
   renameTab: cmd('renameTab'),
   setHomeUrl: cmd('setHomeUrl'),
   toggleMute: cmd('toggleMute'),
