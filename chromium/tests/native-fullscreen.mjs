@@ -15,6 +15,7 @@ const env = { ...process.env, DISPLAY: `:${number}`, HOME: profile, XDG_CONFIG_H
 for (const key of ['WAYLAND_DISPLAY', 'DBUS_SESSION_BUS_ADDRESS', '__PYVENV_LAUNCHER__']) delete env[key];
 const browser = spawn(binary, [`--user-data-dir=${profile}`, `--flecha-shell-dir=${path.resolve('chromium/shell/dist')}`, '--no-first-run', '--no-default-browser-check', '--disable-gpu', '--ozone-platform=x11', '--password-store=basic', '--remote-debugging-pipe'], { env, stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'] });
 let id = 0;
+let waitingFor = 'browser initialization';
 const pending = new Map();
 browser.once('exit', code => {
   for (const call of pending.values()) call.reject(new Error(`Browser exited ${code}`));
@@ -46,7 +47,8 @@ async function evaluate(sessionId, expression) {
   if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description ?? result.exceptionDetails.text);
   return result.result.value;
 }
-async function target(predicate) {
+async function target(predicate, label) {
+  waitingFor = label;
   for (;;) {
     const { targetInfos } = await send('Target.getTargets');
     const found = targetInfos.find(predicate);
@@ -54,6 +56,7 @@ async function target(predicate) {
   }
 }
 async function loaded(session) {
+  waitingFor = 'page readiness';
   for (;;) {
     try { if (await evaluate(session, `document.readyState === 'complete' && !!document.body`)) return; }
     catch (error) { if (!/context|navigat/i.test(error.message)) throw error; }
@@ -66,33 +69,45 @@ async function cleanup() {
 }
 for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, async () => { await cleanup(); process.exit(1); });
 
-try {
+async function run() {
   await send('Target.setDiscoverTargets', { discover: true });
-  const frame = await target(t => t.url.includes('/window.html'));
+  const frame = await target(t => t.url.includes('/window.html'), 'native frame target');
+  waitingFor = 'shell readiness';
   for (;;) {
     try { if (await evaluate(frame, `document.readyState === 'complete' && !!window.flecha`)) break; }
     catch (error) { if (!/context|navigat/i.test(error.message)) throw error; }
   }
   await evaluate(frame, `globalThis.calls = new Map(); globalThis.nextCall = 0; globalThis.port = chrome.runtime.connect({ name: 'flecha' }); port.onMessage.addListener(m => { if (m.type === 'result') { const call = calls.get(m.id); calls.delete(m.id); m.error ? call?.reject(new Error(m.error)) : call?.resolve(m.value); } }); globalThis.rpc = (name, ...args) => new Promise((resolve, reject) => { const id = ++nextCall; calls.set(id, { resolve, reject }); port.postMessage({ type: 'invoke', id, name, args }); });`);
-  const rpc = (name, ...args) => evaluate(frame, `rpc(${JSON.stringify(name)}, ...${JSON.stringify(args)})`);
+  const rpc = (name, ...args) => {
+    waitingFor = `shell command ${name}`;
+    return evaluate(frame, `rpc(${JSON.stringify(name)}, ...${JSON.stringify(args)})`);
+  };
   await rpc('finishOnboarding');
   await rpc('settings:set', { sidebarInPageFullscreen: true });
   const url = 'data:text/html,<title>Fullscreen regression</title><body style="background:teal">Fullscreen regression';
   await rpc('newTab', url);
-  const page = await target(t => t.url === url);
+  const page = await target(t => t.url === url, 'fullscreen page target');
   await loaded(page);
-  const waitFrame = expression => evaluate(frame, `new Promise(resolve => { const check = () => (${expression}) ? resolve(true) : requestAnimationFrame(check); check(); })`);
+  const waitFrame = expression => {
+    waitingFor = expression;
+    return evaluate(frame, `new Promise(resolve => { const check = () => (${expression}) ? resolve(true) : requestAnimationFrame(check); check(); })`);
+  };
+  const waitWindow = state => {
+    waitingFor = `native window state ${state}`;
+    return evaluate(frame, `new Promise((resolve, reject) => { const check = async () => { try { (await chrome.windows.getCurrent()).state === ${JSON.stringify(state)} ? resolve(true) : requestAnimationFrame(check); } catch (error) { reject(error); } }; check(); })`);
+  };
   const windowState = () => evaluate(frame, 'chrome.windows.getCurrent().then(w => w.state)');
   await waitFrame(`document.body.dataset.sidebar === 'docked'`);
   await evaluate(page, 'document.documentElement.requestFullscreen()');
   assert.equal(await windowState(), 'normal');
   assert.equal(await evaluate(page, '!!document.fullscreenElement'), true);
   await rpc('toggleSidebar');
-  await evaluate(frame, `new Promise(resolve => { const check = async () => (await chrome.windows.getCurrent()).state === 'fullscreen' ? resolve(true) : requestAnimationFrame(check); check(); })`);
+  await waitWindow('fullscreen');
   console.log('PASS hiding the sidebar moves page fullscreen to the native window');
   await rpc('toggleSidebar');
   await waitFrame(`document.body.dataset.sidebar === 'docked'`);
-  // A window-state query is a barrier after the frame applied the docked sidebar.
+  // The sidebar can be painted before the native fullscreen exit completes.
+  await waitWindow('normal');
   assert.equal(await windowState(), 'normal', 'restoring the sidebar must restore the native window');
   assert.equal(await evaluate(page, '!!document.fullscreenElement'), true, 'the page keeps its fullscreen element');
   await waitFrame(`!matchMedia('(display-mode: fullscreen)').matches`);
@@ -106,8 +121,9 @@ try {
   }
   console.log('PASS restoring the sidebar restores window controls and keeps page fullscreen');
   await rpc('settings:set', { sidebarInPageFullscreen: false });
-  await evaluate(frame, `new Promise(resolve => { const check = async () => (await chrome.windows.getCurrent()).state === 'fullscreen' ? resolve(true) : requestAnimationFrame(check); check(); })`);
+  await waitWindow('fullscreen');
   await rpc('settings:set', { sidebarInPageFullscreen: true });
+  await waitWindow('normal');
   await waitFrame(`!matchMedia('(display-mode: fullscreen)').matches`);
   assert.equal(await windowState(), 'normal');
   assert.equal(await evaluate(page, '!!document.fullscreenElement'), true);
@@ -128,6 +144,21 @@ try {
   await evaluate(page, 'document.exitFullscreen()');
   assert.equal(await windowState(), 'fullscreen');
   console.log('PASS explicit browser fullscreen survives restoring the sidebar and exiting page fullscreen');
+}
+
+// Reuse native-workflows.mjs's whole-run deadline and override. Its default
+// comes from the measured full native workflow duration, rather than a new
+// per-transition timeout for this focused check.
+const deadline = Number(process.env.FLECHA_HARNESS_TIMEOUT_MS) || 10 * 60 * 1000;
+let timer;
+try {
+  await Promise.race([
+    run(),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`Fullscreen regression exceeded ${deadline} ms while waiting for ${waitingFor}`)), deadline);
+    }),
+  ]);
 } finally {
+  clearTimeout(timer);
   await cleanup();
 }
