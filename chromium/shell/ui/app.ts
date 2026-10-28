@@ -130,6 +130,7 @@ function render(s: UiState) {
   const toggle = $('btn-sidebar');
   toggle.dataset.tip = s.sidebarMode === 'floating' ? 'Keep sidebar open' : 'Hide sidebar';
   renderUrlbar(s, active);
+  renderLoading(s, active);
   // In the Chromium build the sidebar and the new tab page are separate pages: the sidebar
   // never draws the empty state, the new tab page always does.
   renderEmptyState(s, space, surface === 'newtab' || (!active && surface !== 'panel'));
@@ -256,6 +257,67 @@ function renderUrlbar(s: UiState, active: TabInfo | undefined) {
   );
 }
 
+// ---- loading --------------------------------------------------------------------
+
+/** When each loading tab started, so the progress line picks up where it was after a tab switch. */
+const loadStarts = new Map<string, number>();
+/** The tab the progress line is running for. */
+let progressTab: string | undefined;
+/** Stop was clicked for it: its load ends without the line filling, which would read as loaded. */
+let stoppedTab: string | undefined;
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+/**
+ * Chromium tells the shell only that a page is loading, not how far along it is, so the line
+ * runs a curve instead: quickly to a third, then ever slower, never full until the page is.
+ */
+const PROGRESS: Keyframe[] = [
+  { backgroundSize: '0% 2px' },
+  { backgroundSize: '30% 2px', offset: 0.03, easing: 'cubic-bezier(0.2, 0.6, 0.35, 1)' },
+  { backgroundSize: '90% 2px' },
+];
+const PROGRESS_MS = 10_000;
+
+/** Reload turns into Stop, and the address fills along its bottom, while the shown page loads. */
+function renderLoading(s: UiState, active: TabInfo | undefined) {
+  const now = performance.now();
+  for (const id of loadStarts.keys()) if (!s.tabs[id]?.loading) loadStarts.delete(id);
+  for (const [id, tab] of Object.entries(s.tabs)) if (tab.loading && !loadStarts.has(id)) loadStarts.set(id, now);
+
+  const loading = active?.loading ? active.id : undefined;
+  const reload = $('btn-reload');
+  reload.replaceChildren(icon(loading ? 'close' : 'reload'));
+  reload.dataset.tip = loading ? 'Stop' : 'Reload';
+  reload.dataset.action = loading ? 'stop' : 'reload';
+  // The reload shortcut doesn't stop.
+  if (loading) delete reload.dataset.kbd;
+
+  if (loading === progressTab) return;
+  const bar = $('urlbar-progress');
+  // The page it ran for has loaded (rather than another tab being shown): the line fills, then fades.
+  const loaded = progressTab !== undefined && progressTab === active?.id && progressTab !== stoppedTab;
+  const from = getComputedStyle(bar).backgroundSize;
+  for (const animation of bar.getAnimations()) animation.cancel();
+  progressTab = loading;
+  stoppedTab = undefined;
+  const duration = (ms: number) => (reducedMotion.matches ? 0 : ms);
+  if (loaded) {
+    bar.animate([{ backgroundSize: from }, { backgroundSize: '100% 2px', opacity: 1, offset: 0.5 }, { backgroundSize: '100% 2px', opacity: 0 }], {
+      duration: duration(400),
+      easing: 'ease-out',
+    });
+  } else if (loading) {
+    bar.animate(PROGRESS, { duration: duration(PROGRESS_MS), fill: 'forwards' }).currentTime = now - loadStarts.get(loading)!;
+  }
+}
+
+function spinner() {
+  const el = h('span', { class: 'favicon spinner' });
+  // Rows are redrawn on every change: every spinner's turn counts from the same start, so a
+  // redrawn one carries on where the one it replaced was instead of jumping.
+  if (!reducedMotion.matches) el.animate([{ transform: 'rotate(0)' }, { transform: 'rotate(360deg)' }], { duration: 800, iterations: Infinity }).startTime = 0;
+  return el;
+}
+
 /** Shows when a coding agent is connected and what it is doing right now. */
 function renderAgent(s: UiState) {
   const status = $('agent-status');
@@ -373,7 +435,7 @@ function tabRow(tab: TabInfo, space: Space, target: DropTarget) {
         state?.agent?.busy && state.agent.tabId === tab.id ? ' agent-driving' : ''
       }`,
     },
-    favicon(tab),
+    tab.loading ? spinner() : favicon(tab),
     h('span', { class: 'title' }, tabTitle(tab)),
     tab.audible || tab.muted
       ? h(
@@ -1601,7 +1663,11 @@ function windowMenu(): MenuEntry<() => void>[] {
 $('btn-sidebar').onclick = () => api.toggleSidebar();
 $('btn-back').onclick = () => api.back();
 $('btn-forward').onclick = () => api.forward();
-$('btn-reload').onclick = () => api.reload();
+$('btn-reload').onclick = () => {
+  if ($('btn-reload').dataset.action !== 'stop') return api.reload();
+  stoppedTab = progressTab;
+  api.stop();
+};
 $('urlbar').onclick = () => api.openPalette('navigate');
 $('btn-newtab').onclick = () => api.openPalette('new-tab');
 $('btn-clear').onclick = () => api.clearToday();

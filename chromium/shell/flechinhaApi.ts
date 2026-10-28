@@ -77,7 +77,8 @@ const api: FlechinhaApi = {
   back: onPage((id) => chrome.tabs.goBack(id).catch(() => undefined)),
   forward: onPage((id) => chrome.tabs.goForward(id).catch(() => undefined)),
   reload: onPage((id) => chrome.tabs.reload(id)),
-  stop: onPage((id) => chrome.scripting.executeScript({ target: { tabId: id }, func: () => window.stop() }).catch(() => undefined)),
+  // At once: by default a script waits for the page to be idle, which a loading page isn't.
+  stop: onPage((id) => chrome.scripting.executeScript({ target: { tabId: id }, func: () => window.stop(), injectImmediately: true }).catch(() => undefined)),
   navigate: (input) => void onPage((id) => chrome.tabs.update(id, { url: resolveInput(input, ui?.searchEngine) }))(),
   copyLink: () => {
     const url = tab?.url;
