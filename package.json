@@ -12,6 +12,7 @@
     "host:build": "node chromium/native-host/build.mjs",
     "host:typecheck": "tsc -p chromium/native-host",
     "browser:linux": "node chromium/scripts/run-linux.mjs",
+    "test": "node --test chromium/tests/*.test.mjs",
     "typecheck": "tsc -p chromium/shell && tsc -p chromium/native-host",
     "typecheck:tsrs": "tsrs -p chromium/shell && tsrs -p chromium/native-host"
   },
