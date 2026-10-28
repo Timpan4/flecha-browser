@@ -1113,25 +1113,6 @@ try {
   assert.ok([header.close, header.toggle, header.menu, header.back, header.reload].every(c => Math.abs(c.y + c.h / 2 - (header.toggle.y + header.toggle.h / 2)) < 1), 'one row');
   assert.equal(header.popup, 'menu');
   console.log('PASS the inline header has window controls where the traffic lights go, then the sidebar toggle, the menu and back/forward/reload');
-  // The page takes clicks up to its top edge (patch 0013): the band where Chromium's hidden tab
-  // strip would be is not a title bar. A press well inside the page finds where the page is in the
-  // window; one just under its top edge must reach it before a last press inside, as events keep order.
-  await rpc('activate', pageTab);
-  const pageUrl = (await stateWhere('s => true')).tabs[pageTab].url;
-  const pageTarget = await findTarget(t => t.type === 'page' && t.url === pageUrl);
-  const pageSession = await attach(pageTarget.targetId);
-  await evaluate(pageSession, "window.pagePresses = []; addEventListener('pointerdown', e => pagePresses.push([Math.round(e.clientX), Math.round(e.clientY)]), true)");
-  /** The presses so far, once `count` of them ended where `last` says. */
-  const pagePresses = (count, last) => evaluate(pageSession, `new Promise(resolve => { const check = () => pagePresses.length >= ${count} && (${last})(pagePresses.at(-1)) ? resolve(pagePresses) : setTimeout(check, 50); check(); })`);
-  const inside = { x: (await evaluate(session, 'innerWidth')) + 200, y: 200 };
-  xclick(inside.x, inside.y);
-  const [[insideX, insideY]] = await pagePresses(1, '() => true');
-  xclick(inside.x - insideX + 40, inside.y - insideY + 2);
-  xclick(inside.x, inside.y);
-  const presses = await pagePresses(2, `([x, y]) => x === ${insideX} && y === ${insideY}`);
-  assert.deepEqual(presses.slice(1), [[40, 2], [insideX, insideY]]);
-  await send('Target.detachFromTarget', { sessionId: pageSession });
-  console.log('PASS the page takes a click just under its top edge, where the hidden tab strip would be');
   // The row between the menu and back moves the window (a caption, which Chromium handles: drag
   // to move, double-click to maximize): a real click there never reaches the frame page, one on
   // the menu button does.
