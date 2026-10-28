@@ -263,6 +263,8 @@ function renderUrlbar(s: UiState, active: TabInfo | undefined) {
 const loadStarts = new Map<string, number>();
 /** The tab the progress line is running for. */
 let progressTab: string | undefined;
+/** Stop was clicked for it: its load ends without the line filling, which would read as loaded. */
+let stoppedTab: string | undefined;
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 /**
  * Chromium tells the shell only that a page is loading, not how far along it is, so the line
@@ -274,8 +276,6 @@ const PROGRESS: Keyframe[] = [
   { backgroundSize: '90% 2px' },
 ];
 const PROGRESS_MS = 10_000;
-/** One turn of the row spinner, as in styles.css. */
-const SPIN_MS = 800;
 
 /** Reload turns into Stop, and the address fills along its bottom, while the shown page loads. */
 function renderLoading(s: UiState, active: TabInfo | undefined) {
@@ -294,10 +294,11 @@ function renderLoading(s: UiState, active: TabInfo | undefined) {
   if (loading === progressTab) return;
   const bar = $('urlbar-progress');
   // The page it ran for has loaded (rather than another tab being shown): the line fills, then fades.
-  const loaded = progressTab !== undefined && progressTab === active?.id;
+  const loaded = progressTab !== undefined && progressTab === active?.id && progressTab !== stoppedTab;
   const from = getComputedStyle(bar).backgroundSize;
   for (const animation of bar.getAnimations()) animation.cancel();
   progressTab = loading;
+  stoppedTab = undefined;
   const duration = (ms: number) => (reducedMotion.matches ? 0 : ms);
   if (loaded) {
     bar.animate([{ backgroundSize: from }, { backgroundSize: '100% 2px', opacity: 1, offset: 0.5 }, { backgroundSize: '100% 2px', opacity: 0 }], {
@@ -309,9 +310,12 @@ function renderLoading(s: UiState, active: TabInfo | undefined) {
   }
 }
 
-/** Rows are redrawn on every change; starting each spinner at the same point of its turn keeps it from jumping. */
 function spinner() {
-  return h('span', { class: 'favicon spinner', style: `animation-delay: -${Math.round(performance.now() % SPIN_MS)}ms` });
+  const el = h('span', { class: 'favicon spinner' });
+  // Rows are redrawn on every change: every spinner's turn counts from the same start, so a
+  // redrawn one carries on where the one it replaced was instead of jumping.
+  if (!reducedMotion.matches) el.animate([{ transform: 'rotate(0)' }, { transform: 'rotate(360deg)' }], { duration: 800, iterations: Infinity }).startTime = 0;
+  return el;
 }
 
 /** Shows when a coding agent is connected and what it is doing right now. */
@@ -1659,7 +1663,11 @@ function windowMenu(): MenuEntry<() => void>[] {
 $('btn-sidebar').onclick = () => api.toggleSidebar();
 $('btn-back').onclick = () => api.back();
 $('btn-forward').onclick = () => api.forward();
-$('btn-reload').onclick = () => ($('btn-reload').dataset.action === 'stop' ? api.stop() : api.reload());
+$('btn-reload').onclick = () => {
+  if ($('btn-reload').dataset.action !== 'stop') return api.reload();
+  stoppedTab = progressTab;
+  api.stop();
+};
 $('urlbar').onclick = () => api.openPalette('navigate');
 $('btn-newtab').onclick = () => api.openPalette('new-tab');
 $('btn-clear').onclick = () => api.clearToday();

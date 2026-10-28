@@ -685,7 +685,7 @@ body {
   filter: brightness(0.9);
 }
 
-/* Loading: a spinner in place of the favicon. Its turn is 800ms (SPIN_MS in app.ts). */
+/* Loading: a spinner in place of the favicon; app.ts turns it. */
 .favicon.spinner {
   width: 14px;
   height: 14px;
@@ -693,19 +693,6 @@ body {
   border: 2px solid color-mix(in srgb, var(--blue) 25%, transparent);
   border-top-color: var(--blue);
   border-radius: 50%;
-  animation: spin 800ms linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .favicon.spinner {
-    animation: none;
-  }
 }
 
 .row.loading .title {
