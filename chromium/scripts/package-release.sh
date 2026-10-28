@@ -30,6 +30,7 @@
 # goes along with it.
 set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=env.sh
 . "$here/scripts/env.sh"
 
 dmg="${FLECHA_DMG:-0}"
