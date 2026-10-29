@@ -1,0 +1,29 @@
+# Flecha: a dma-buf imported into Vulkan no longer asks to export its own dma-buf type. On
+# the NVIDIA 615 driver that request leaves Vulkan writing to memory the Wayland compositor
+# never sees, so every Vulkan-composited window was black.
+diff --git a/gpu/vulkan/vulkan_image_linux.cc b/gpu/vulkan/vulkan_image_linux.cc
+index 2ca3580..6094fb1 100644
+--- a/gpu/vulkan/vulkan_image_linux.cc
++++ b/gpu/vulkan/vulkan_image_linux.cc
+@@ -103,10 +103,18 @@ bool VulkanImage::InitializeFromGpuMemoryBufferHandle(
+       VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
+       &external_memory_properties);
+   if (vk_result == VK_SUCCESS) {
++    // Flecha: never ask to export the dma-buf type being imported; the fd
++    // already exists. With that request the NVIDIA 615 driver, which reports
++    // dma-buf as the only compatible type, binds memory other than the
++    // imported buffer, so a Wayland compositor never sees Vulkan's writes and
++    // the window stays black. Other types (OPAQUE_FD on Mesa) stay exportable
++    // for GL and Dawn interop.
+     export_memory_info.handleTypes =
+-        external_memory_properties.compatibleHandleTypes;
+-
+-    import_memory_fd_info.pNext = &export_memory_info;
++        external_memory_properties.compatibleHandleTypes &
++        ~VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
++    if (export_memory_info.handleTypes) {
++      import_memory_fd_info.pNext = &export_memory_info;
++    }
+   }
+ 
+   VkMemoryRequirements* requirements = nullptr;
