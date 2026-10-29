@@ -1,0 +1,30 @@
+diff --git a/gpu/vulkan/vulkan_image_linux.cc b/gpu/vulkan/vulkan_image_linux.cc
+index 2ca3580..7dc4953 100644
+--- a/gpu/vulkan/vulkan_image_linux.cc
++++ b/gpu/vulkan/vulkan_image_linux.cc
+@@ -93,21 +93,10 @@ bool VulkanImage::InitializeFromGpuMemoryBufferHandle(
+       .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
+       .fd = memory_fd,
+   };
+-
+-  VkExportMemoryAllocateInfo export_memory_info = {
+-      VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO_KHR};
+-  VkExternalMemoryProperties external_memory_properties;
+-  VkResult vk_result = QueryVkExternalMemoryProperties(
+-      device_queue->GetVulkanPhysicalDevice(), format, VK_IMAGE_TYPE_2D,
+-      image_tiling, usage, flags,
+-      VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
+-      &external_memory_properties);
+-  if (vk_result == VK_SUCCESS) {
+-    export_memory_info.handleTypes =
+-        external_memory_properties.compatibleHandleTypes;
+-
+-    import_memory_fd_info.pNext = &export_memory_info;
+-  }
++  // Flecha: no VkExportMemoryAllocateInfo here. The dma-buf already exists,
++  // and the NVIDIA 615 driver binds new memory instead of the imported buffer
++  // when an import also requests export, so a Wayland compositor never sees
++  // Vulkan's writes and the window stays black.
+ 
+   VkMemoryRequirements* requirements = nullptr;
+   // TODO support multiple plane
