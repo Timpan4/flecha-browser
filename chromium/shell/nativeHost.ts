@@ -450,6 +450,11 @@ export function registerNativeHost(ctx: NativeHostContext) {
    * extensions out (patch 0080), but your own tabs don't: this names the extension in the way.
    */
   async function attachRefused(chromeId: number, error: unknown): Promise<unknown> {
+    // Only Chromium's refusals and detaches: other errors say what went wrong themselves.
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/Cannot access a chrome-extension:\/\/ URL of different extension|Cannot attach to this target|Detached while handling command/.test(message)) {
+      return error;
+    }
     // webNavigation leaves other extensions' frames out, so they are read from the page: the
     // frame elements, in closed shadow roots too, where password managers put theirs.
     const results = await chrome.scripting

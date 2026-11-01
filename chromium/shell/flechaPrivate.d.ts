@@ -314,8 +314,8 @@ declare namespace chrome.flechaPrivate {
   /**
    * Marks a tab as one a coding agent drives, or takes the mark back (patch 0080). Only the
    * shell's scripts run in a marked tab: other extensions' content scripts and executeScript()
-   * calls don't. Mark it before its page loads. The mark ends with the tab. Absent from older
-   * browsers.
+   * calls don't. Mark it before its page loads. The mark stays with the tab when it is
+   * discarded. Absent from older browsers.
    */
   function setAgentTab(tabId: number, agent: boolean): Promise<void>;
 

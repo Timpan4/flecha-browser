@@ -1,15 +1,26 @@
-# Flecha: in a tab a coding agent drives, only the shell's scripts run. chrome.flechaPrivate.setAgentTab() marks the tab; TabHelper sends the mark to each frame, now and as frames are created, and the renderer skips other extensions' content scripts and executeScript() calls there. A password manager's frames (Proton Pass adds them to every page) would otherwise stop the shell's debugger from driving the page, since Chromium keeps one extension's debugger out of a page holding another extension's frame. Chromium's debugger checks are unchanged.
+# Flecha: in a tab a coding agent drives, only the shell's scripts run. chrome.flechaPrivate.setAgentTab() marks the tab (FlechaAgentTab, which hands the mark to the page that replaces a discarded one). Each frame gets the mark as it is created, and a child frame made in its parent's process starts with its parent's mark. The renderer then skips other extensions' content scripts and executeScript() calls there. A password manager's frames (Proton Pass adds them to every page) would otherwise stop the shell's debugger from driving the page, since Chromium keeps one extension's debugger out of a page holding another extension's frame. Chromium's debugger checks are unchanged.
+--- a/chrome/browser/extensions/api/flecha_private/BUILD.gn
++++ b/chrome/browser/extensions/api/flecha_private/BUILD.gn
+@@ -6,6 +6,8 @@
+ 
+ source_set("flecha_private") {
+   sources = [
++    "flecha_agent_tab.cc",
++    "flecha_agent_tab.h",
+     "flecha_private_api.cc",
+     "flecha_private_api.h",
+   ]
 --- a/chrome/browser/extensions/api/flecha_private/flecha_private_api.cc
 +++ b/chrome/browser/extensions/api/flecha_private/flecha_private_api.cc
 @@ -65,6 +65,7 @@
  #include "content/public/browser/web_contents.h"
  #include "content/public/browser/web_contents_user_data.h"
  #include "extensions/browser/extensions_browser_client.h"
-+#include "chrome/browser/extensions/tab_helper.h"
++#include "chrome/browser/extensions/api/flecha_private/flecha_agent_tab.h"
  
  namespace extensions {
  
-@@ -1052,6 +1053,24 @@
+@@ -1052,6 +1053,20 @@
    return RespondNow(NoArguments());
  }
  
@@ -21,11 +32,7 @@
 +                                    /*include_incognito=*/false, &contents)) {
 +    return RespondNow(Error(kNoTabError, base::NumberToString(params->tab_id)));
 +  }
-+  TabHelper* tab_helper = TabHelper::FromWebContents(contents);
-+  if (!tab_helper) {
-+    return RespondNow(Error(kNoTabError, base::NumberToString(params->tab_id)));
-+  }
-+  tab_helper->SetFlechaAgentTab(params->agent
++  FlechaAgentTab::Set(contents, params->agent
 +                                    ? std::optional<ExtensionId>(extension_id())
 +                                    : std::nullopt);
 +  return RespondNow(NoArguments());
@@ -52,81 +59,6 @@
  class FlechaPrivateQuitFunction : public ExtensionFunction {
   public:
    DECLARE_EXTENSION_FUNCTION("flechaPrivate.quit", UNKNOWN)
---- a/chrome/browser/extensions/tab_helper.cc
-+++ b/chrome/browser/extensions/tab_helper.cc
-@@ -374,9 +374,29 @@
-       return;
-     }
-     local_frame->SetTabId(id.id());
-+    if (flecha_agent_tab_only_extension_) {
-+      local_frame->SetFlechaAgentTab(flecha_agent_tab_only_extension_);
-+    }
-   }
- }
- 
-+void TabHelper::SetFlechaAgentTab(
-+    const std::optional<ExtensionId>& only_extension_id) {
-+  flecha_agent_tab_only_extension_ = only_extension_id;
-+  web_contents()->ForEachRenderFrameHost(
-+      [this](content::RenderFrameHost* host) {
-+        if (!host->IsRenderFrameLive()) {
-+          return;
-+        }
-+        auto* local_frame =
-+            ExtensionWebContentsObserver::GetForWebContents(web_contents())
-+                ->GetLocalFrame(host);
-+        if (local_frame) {
-+          local_frame->SetFlechaAgentTab(flecha_agent_tab_only_extension_);
-+        }
-+      });
-+}
-+
- WEB_CONTENTS_USER_DATA_KEY_IMPL(TabHelper);
- 
- }  // namespace extensions
---- a/chrome/browser/extensions/tab_helper.h
-+++ b/chrome/browser/extensions/tab_helper.h
-@@ -6,6 +6,7 @@
- #define CHROME_BROWSER_EXTENSIONS_TAB_HELPER_H_
- 
- #include <memory>
-+#include <optional>
- #include <set>
- #include <string>
- 
-@@ -71,6 +72,11 @@
- 
-   void OnWatchedPageChanged(const std::vector<std::string>& css_selectors);
- 
-+  // Flecha: marks this tab as one a coding agent drives. Only
-+  // `only_extension_id` runs scripts in its frames, now and in frames created
-+  // later. Null lifts the limit.
-+  void SetFlechaAgentTab(const std::optional<ExtensionId>& only_extension_id);
-+
-  private:
-   // Utility function to invoke member functions on all relevant
-   // ContentRulesRegistries.
-@@ -101,7 +107,8 @@
-                            const Extension* extension,
-                            UnloadedExtensionReason reason) override;
- 
--  // Sends our tab ID to `render_frame_host`.
-+  // Sends our tab ID to `render_frame_host`, and Flecha's agent-tab limit when
-+  // it is set.
-   void SetTabId(content::RenderFrameHost* render_frame_host);
- 
-   // Displays the reload page bubble if the tab is visible and reload extensions
-@@ -127,6 +134,10 @@
-   // Extensions that require a page reload to apply changes.
-   std::vector<scoped_refptr<const Extension>> reload_extensions_;
- 
-+  // Flecha: the only extension that runs scripts in this tab, when a coding
-+  // agent drives it.
-+  std::optional<ExtensionId> flecha_agent_tab_only_extension_;
-+
-   base::ScopedObservation<ExtensionRegistry, ExtensionRegistryObserver>
-       registry_observation_{this};
- 
 --- a/chrome/common/extensions/api/flecha_private.idl
 +++ b/chrome/common/extensions/api/flecha_private.idl
 @@ -354,6 +354,17 @@
@@ -137,8 +69,8 @@
 +    // the mark back. In a marked tab only the caller's scripts run: other
 +    // extensions' content scripts and executeScript() calls don't, in its
 +    // frames now and in frames it loads later. Mark the tab before it loads a
-+    // page; a page already loaded keeps scripts that ran. The mark ends with
-+    // the tab's WebContents.
++    // page; a page already loaded keeps scripts that ran. The mark stays with
++    // the tab when it is discarded.
 +    static void setAgentTab(
 +        long tabId,
 +        boolean agent,
@@ -162,7 +94,28 @@
  
 --- a/extensions/renderer/extension_frame_helper.cc
 +++ b/extensions/renderer/extension_frame_helper.cc
-@@ -465,6 +465,11 @@
+@@ -148,6 +148,20 @@
+     has_started_first_navigation_ = true;
+   }
+ 
++  // Flecha: a child frame created in this process runs document_start scripts
++  // in its initial empty document right away, before the browser's
++  // SetFlechaAgentTab() can reach it. It starts with its parent's limit.
++  blink::WebFrame* parent = render_frame->GetWebFrame()->Parent();
++  if (parent && parent->IsWebLocalFrame()) {
++    content::RenderFrame* parent_frame =
++        content::RenderFrame::FromWebFrame(parent->ToWebLocalFrame());
++    if (ExtensionFrameHelper* parent_helper =
++            parent_frame ? Get(parent_frame) : nullptr) {
++      flecha_agent_tab_only_extension_ =
++          parent_helper->flecha_agent_tab_only_extension_;
++    }
++  }
++
+   render_frame->GetAssociatedInterfaceRegistry()
+       ->AddInterface<mojom::LocalFrame>(
+           base::BindRepeating(&ExtensionFrameHelper::BindLocalFrame,
+@@ -465,6 +479,11 @@
    tab_id_ = tab_id;
  }
  
@@ -237,3 +190,123 @@
      case PermissionsData::PageAccess::kDenied:
        NotifyWillNotInject(ScriptInjector::InjectFailureReason::kNotAllowed);
        return InjectionResult::kFinished;  // We're done.
+--- /dev/null
++++ b/chrome/browser/extensions/api/flecha_private/flecha_agent_tab.cc
+@@ -0,0 +1,66 @@
++// Copyright 2026 The Flecha Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/extensions/api/flecha_private/flecha_agent_tab.h"
++
++#include <utility>
++
++#include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/web_contents.h"
++#include "extensions/browser/extension_web_contents_observer.h"
++#include "extensions/common/mojom/frame.mojom.h"
++
++namespace extensions {
++
++namespace {
++
++void SendToFrame(content::WebContents* contents,
++                 content::RenderFrameHost* host,
++                 const std::optional<ExtensionId>& only_extension_id) {
++  if (!host->IsRenderFrameLive()) {
++    return;
++  }
++  auto* observer = ExtensionWebContentsObserver::GetForWebContents(contents);
++  mojom::LocalFrame* frame = observer ? observer->GetLocalFrame(host) : nullptr;
++  if (frame) {
++    frame->SetFlechaAgentTab(only_extension_id);
++  }
++}
++
++}  // namespace
++
++// static
++void FlechaAgentTab::Set(content::WebContents* contents,
++                         std::optional<ExtensionId> only_extension_id) {
++  contents->RemoveUserData(UserDataKey());
++  if (only_extension_id) {
++    CreateForWebContents(contents, *only_extension_id);
++  }
++  contents->ForEachRenderFrameHost([&](content::RenderFrameHost* host) {
++    SendToFrame(contents, host, only_extension_id);
++  });
++}
++
++FlechaAgentTab::FlechaAgentTab(content::WebContents* contents,
++                               ExtensionId only_extension_id)
++    : content::WebContentsObserver(contents),
++      content::WebContentsUserData<FlechaAgentTab>(*contents),
++      only_extension_id_(std::move(only_extension_id)) {}
++
++FlechaAgentTab::~FlechaAgentTab() = default;
++
++void FlechaAgentTab::RenderFrameCreated(content::RenderFrameHost* host) {
++  // Sent before the frame commits a navigation: the commit goes over the same
++  // channel, after this.
++  SendToFrame(web_contents(), host, only_extension_id_);
++}
++
++void FlechaAgentTab::AboutToBeDiscarded(content::WebContents* new_contents) {
++  // The replacement has no frames yet; it sends the mark as they are created.
++  Set(new_contents, only_extension_id_);
++}
++
++WEB_CONTENTS_USER_DATA_KEY_IMPL(FlechaAgentTab);
++
++}  // namespace extensions
+--- /dev/null
++++ b/chrome/browser/extensions/api/flecha_private/flecha_agent_tab.h
+@@ -0,0 +1,48 @@
++// Copyright 2026 The Flecha Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_EXTENSIONS_API_FLECHA_PRIVATE_FLECHA_AGENT_TAB_H_
++#define CHROME_BROWSER_EXTENSIONS_API_FLECHA_PRIVATE_FLECHA_AGENT_TAB_H_
++
++#include <optional>
++
++#include "content/public/browser/web_contents_observer.h"
++#include "content/public/browser/web_contents_user_data.h"
++#include "extensions/common/extension_id.h"
++
++namespace extensions {
++
++// A tab a coding agent drives (flechaPrivate.setAgentTab()). Only one
++// extension, Flecha's shell, runs scripts in its frames. Each frame gets the
++// limit as it is created (ExtensionFrameHelper::SetFlechaAgentTab()), and a
++// discarded tab hands the mark to the page that replaces it.
++class FlechaAgentTab : public content::WebContentsObserver,
++                       public content::WebContentsUserData<FlechaAgentTab> {
++ public:
++  // Marks `contents` so that only `only_extension_id` runs scripts in it, or,
++  // with null, takes the mark back. Frames already live get the change now.
++  static void Set(content::WebContents* contents,
++                  std::optional<ExtensionId> only_extension_id);
++
++  FlechaAgentTab(const FlechaAgentTab&) = delete;
++  FlechaAgentTab& operator=(const FlechaAgentTab&) = delete;
++  ~FlechaAgentTab() override;
++
++ private:
++  friend class content::WebContentsUserData<FlechaAgentTab>;
++
++  FlechaAgentTab(content::WebContents* contents, ExtensionId only_extension_id);
++
++  // content::WebContentsObserver:
++  void RenderFrameCreated(content::RenderFrameHost* host) override;
++  void AboutToBeDiscarded(content::WebContents* new_contents) override;
++
++  const ExtensionId only_extension_id_;
++
++  WEB_CONTENTS_USER_DATA_KEY_DECL();
++};
++
++}  // namespace extensions
++
++#endif  // CHROME_BROWSER_EXTENSIONS_API_FLECHA_PRIVATE_FLECHA_AGENT_TAB_H_

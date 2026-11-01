@@ -333,12 +333,13 @@ async function start() {
    */
   function unmarkAgentTabs() {
     const now = new Set(Object.keys(store.state.tabs).filter((id) => store.state.tabs[id].agent));
-    for (const id of agentTabIds) {
-      const chromeId = live.get(id);
-      if (now.has(id) || chromeId === undefined || typeof chrome.flechaPrivate?.setAgentTab !== 'function') continue;
-      void chrome.flechaPrivate.setAgentTab(chromeId, false).catch(() => undefined);
-    }
+    for (const id of agentTabIds) if (!now.has(id)) unmarkAgentTab(id);
     agentTabIds = now;
+  }
+  function unmarkAgentTab(id: string) {
+    const chromeId = live.get(id);
+    if (chromeId === undefined || typeof chrome.flechaPrivate?.setAgentTab !== 'function') return;
+    void chrome.flechaPrivate.setAgentTab(chromeId, false).catch(() => undefined);
   }
 
   async function openChromeTab(id: string, active: boolean, windowId: string) {
@@ -702,7 +703,10 @@ async function start() {
       if (active && !live.has(active.id)) {
         live.set(active.id, tab.id!);
         rememberLive();
-        if (active.url !== 'about:blank') void markAgentTab(active.id, tab.id!).then(() => chrome.tabs.update(tab.id!, { url: active.url }));
+        // Marked even when blank: the agent's next page loads in this tab.
+        void markAgentTab(active.id, tab.id!).then(() => {
+          if (active.url !== 'about:blank') void chrome.tabs.update(tab.id!, { url: active.url });
+        });
         return;
       }
       if (!active && !placeholders.has(tab.windowId)) return void placeholders.set(tab.windowId, tab.id!);
@@ -1398,6 +1402,8 @@ async function start() {
     },
     // Into a Flechinha: the page leaves its Space without closing.
     releaseTab: (id) => {
+      // The page stays open in the Flechinha, as yours: other extensions run in it again.
+      if (store.state.tabs[id]?.agent) unmarkAgentTab(id);
       live.delete(id);
       livePartition.delete(id);
       rememberLive();

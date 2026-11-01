@@ -363,16 +363,17 @@ try {
       version: '1',
       // With an action, the extensions menu (and the bridge's error) knows its name.
       action: {},
-      content_scripts: [{ matches: ['http://127.0.0.1/*'], js: ['content.js'], run_at: 'document_start' }],
+      content_scripts: [{ matches: ['http://127.0.0.1/*'], js: ['content.js'], run_at: 'document_start', all_frames: true, match_about_blank: true }],
       web_accessible_resources: [{ resources: ['frame.html'], matches: ['http://127.0.0.1/*'] }],
     }),
   );
   await fs.writeFile(path.join(frameExtension, 'frame.html'), '<title>Extension frame</title><p>Extension frame</p>');
   // From document_start, before the page's own parsing: a page loaded without the mark never ran it.
+  // It also runs in a blank frame the page adds, as soon as the frame exists.
   await fs.writeFile(
     path.join(frameExtension, 'content.js'),
-    `if (location.pathname === '/login') {
-      document.documentElement.dataset.otherExtension = 'ran';
+    `document.documentElement.dataset.otherExtension = 'ran';
+    if (window === top && location.pathname === '/login') {
       const add = (name) => {
         const frame = document.createElement('iframe');
         frame.className = name;
@@ -398,6 +399,12 @@ try {
       page,
       "({ other: document.documentElement.dataset.otherExtension ?? null, frames: document.querySelectorAll('iframe').length, shell: !String(console.error).includes('[native code]') })",
     );
+  /** Whether other extensions ran in a blank frame the page adds, in its own process. */
+  const scriptsInBlankChild = (page) =>
+    evaluate(
+      page,
+      "(() => { const frame = document.createElement('iframe'); document.body.append(frame); const other = frame.contentDocument.documentElement.dataset.otherExtension ?? null; frame.remove(); return other; })()",
+    );
 
   // Your own sign-in page: the extension runs there, and the agent can't drive it.
   await rpc('newTab', base + '/login?yours');
@@ -406,6 +413,7 @@ try {
   const yourLoginPage = await attach((await findTarget((t) => t.type === 'page' && t.url === base + '/login?yours')).targetId);
   await frameLoaded(yourLoginPage, 'notification');
   assert.deepEqual(await scriptsIn(yourLoginPage), { other: 'ran', frames: 1, shell: true });
+  assert.equal(await scriptsInBlankChild(yourLoginPage), 'ran');
   const readYours = await client.callTool({ name: 'read_page', arguments: { tabId: yourLogin } });
   assert.equal(readYours.isError, true, `read_page drove a tab holding another extension's frame: ${readYours.content?.[0]?.text}`);
   assert.match(readYours.content[0].text, /another extension \(Frames like a password manager\)/);
@@ -416,12 +424,31 @@ try {
   const agentLoginPage = await attach((await findTarget((t) => t.type === 'page' && t.url === base + '/login?agent')).targetId);
   await loaded(agentLoginPage, base + '/login?agent');
   assert.deepEqual(await scriptsIn(agentLoginPage), { other: null, frames: 0, shell: true });
+  assert.equal(await scriptsInBlankChild(agentLoginPage), null);
   await call('read_page', { tabId: agentLogin });
   await call('click', { tabId: agentLogin, selector: '#field' });
   await call('type', { tabId: agentLogin, selector: '#field', text: 'agent' });
   assert.equal(await evaluate(agentLoginPage, "document.querySelector('#field').value"), 'agent');
   assert.deepEqual(await scriptsIn(agentLoginPage), { other: null, frames: 0, shell: true });
   console.log("PASS other extensions stay out of the agent's tab, and the agent reads, clicks and types there");
+
+  // A discarded agent tab comes back, on the agent's next call, still closed to other extensions.
+  const discardedLogin = JSON.parse((await call('open_tab', { url: base + '/login?discard' })).content[0].text).tabId;
+  // Loaded, seen from the shell: a DevTools session on the tab would keep Chromium from discarding it.
+  await stateWhere(`s => s.tabs[${JSON.stringify(discardedLogin)}]?.url === ${JSON.stringify(base + '/login?discard')} && s.tabs[${JSON.stringify(discardedLogin)}].loading === false`);
+  const discardedLoginGone = await evaluate(
+    session,
+    `chrome.tabs.query({}).then(async (tabs) => {
+      const tabId = tabs.find((t) => t.url === ${JSON.stringify(base + '/login?discard')}).id;
+      return (await chrome.flechaPrivate.discardTab(tabId)) && (await chrome.tabs.get(tabId)).discarded;
+    })`,
+  );
+  assert.equal(discardedLoginGone, true, 'Chromium discarded the agent sign-in tab');
+  const otherAfterDiscard = await call('evaluate', { tabId: discardedLogin, expression: 'document.documentElement.dataset.otherExtension ?? null' });
+  assert.equal(otherAfterDiscard.content[0].text, 'null');
+  console.log('PASS a discarded agent tab comes back without other extensions');
+  await call('close_tab', { tabId: discardedLogin });
+  await stateWhere(`s => !s.tabs[${JSON.stringify(discardedLogin)}]`);
 
   // Taken from the agent, the tab is yours: its next page runs your extensions again.
   await rpc('togglePin', agentLogin);
