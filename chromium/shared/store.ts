@@ -503,16 +503,30 @@ export class Store {
     this.detachEverywhere(tabId);
     if (from.zone === 'pinned') to.pinned.push({ kind: 'tab', tabId });
     else this.windowSpace(to.id, win.id).today.unshift(tabId);
+    delete this.state.tabs[tabId].agent;
     if (fromWs.activeTabId === tabId) fromWs.activeTabId = fromWs.today[0];
     this.forgetMissingActive();
     this.changed();
   }
 
-  /** Closes the today tabs after `tabId`, or all others when `others` is set. Returns their ids. */
+  /**
+   * Whether a Today tab shows in the agent's folder rather than among Today's tabs: a tab an agent
+   * opened, unless it is half of the split, which Today draws as one row.
+   */
+  inAgentFolder(tabId: string, ws: WindowSpace): boolean {
+    return !!this.state.tabs[tabId]?.agent && !ws.split?.includes(tabId);
+  }
+
+  /**
+   * Closes the today tabs after `tabId`, or all others when `others` is set, among the tabs listed
+   * with it: Today's or the agent's folder. Returns their ids.
+   */
   closeTodayTabs(tabId: string, which: 'below' | 'others'): string[] {
     const loc = this.locate(tabId);
     if (loc?.zone !== 'today' || !loc.space) return [];
-    const today = this.windowSpace(loc.space.id, loc.windowId).today;
+    const ws = this.windowSpace(loc.space.id, loc.windowId);
+    const folder = this.inAgentFolder(tabId, ws);
+    const today = ws.today.filter((id) => this.inAgentFolder(id, ws) === folder);
     const index = today.indexOf(tabId);
     const ids = today.filter((id, i) => (which === 'below' ? i > index : id !== tabId));
     if (!ids.length) return [];
@@ -675,13 +689,17 @@ export class Store {
     this.changed();
   }
 
-  /** Archives every Today tab in the window's active Space. Returns the removed ids. */
+  /**
+   * Archives every Today tab in the window's active Space, leaving the agent's folder, which has a
+   * Clear of its own. Returns the removed ids.
+   */
   clearToday(windowId?: string): string[] {
     const win = this.window(windowId);
     const ws = this.windowSpace(win.activeSpaceId, win.id);
-    if (!ws.today.length) return [];
+    const ids = ws.today.filter((id) => !this.inAgentFolder(id, ws));
+    if (!ids.length) return [];
     return this.undoable('Clear Today Tabs', () => {
-      const ids = ws.today.splice(0);
+      ws.today = ws.today.filter((id) => !ids.includes(id));
       for (const id of ids) {
         this.archive(this.state.tabs[id]);
         delete this.state.tabs[id];
