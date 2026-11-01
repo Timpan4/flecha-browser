@@ -64,14 +64,15 @@ let waitingFor;
 let diagnose;
 const deadline = Number(process.env.FLECHA_HARNESS_TIMEOUT_MS) || 5 * 60 * 1000;
 /** Stops a child that is still running; one that exited, or died from a signal, has nothing to wait for. */
-async function stop(child) {
+async function stop(child, signal) {
   if (child.exitCode !== null || child.signalCode !== null) return;
-  child.kill('SIGTERM');
+  child.kill(signal);
   await once(child, 'exit');
 }
-async function cleanUp() {
-  if (browser) await stop(browser);
-  await stop(display);
+/** `signal` is SIGKILL once the run has failed its deadline: a hung browser can't ignore it. */
+async function cleanUp(signal = 'SIGTERM') {
+  if (browser) await stop(browser, signal);
+  await stop(display, signal);
   server.close();
   await fs.rm(profile, { recursive: true, force: true });
 }
@@ -86,7 +87,7 @@ const watchdog = setTimeout(async () => {
     diagnostic = { error: error.message };
   }
   console.error(`FAIL the run took longer than ${deadline} ms (FLECHA_HARNESS_TIMEOUT_MS); the last step is the last PASS above, waiting for ${waitingFor}`);
-  await cleanUp();
+  await cleanUp('SIGKILL');
   if (diagnostic) console.error('DIAGNOSTIC', { ...diagnostic, page: await diagnostic.page });
   process.exit(1);
 }, deadline);
@@ -157,6 +158,9 @@ try {
     for (const call of pending.values()) call.reject(new Error(`Browser exited ${code}`));
     pending.clear();
   });
+  // A browser that dies, or that the deadline kills, resets its pipes; its exit fails the calls
+  // still waiting, and an unhandled pipe error would stop the run before it cleans up.
+  for (const pipe of [browser.stdio[3], browser.stdio[4]]) pipe.on('error', () => undefined);
   let buffer = '';
   browser.stdio[4].on('data', (data) => {
     buffer += data.toString();
