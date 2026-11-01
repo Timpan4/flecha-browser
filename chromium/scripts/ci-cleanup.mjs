@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 
 export async function cleanupXcodes(applications, selected, remove) {
+  const selectedPath = await fs.realpath(selected);
   // Resolve aliases before deleting their targets, so discovery cannot break mid-cleanup.
   const names = (await fs.readdir(applications)).filter(name => /^Xcode.*\.app$/.test(name));
   const apps = await Promise.all(names.map(async name => {
@@ -12,7 +13,8 @@ export async function cleanupXcodes(applications, selected, remove) {
     return { app, real: await fs.realpath(app) };
   }));
   for (const { app, real } of apps) {
-    if (selected.startsWith(`${real}/`)) continue;
+    const relative = path.relative(real, selectedPath);
+    if (relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))) continue;
     await remove(app);
   }
 }
@@ -33,7 +35,7 @@ async function main() {
     execFileSync('sudo', ['rm', '-rf', '/usr/local/lib/android', '/usr/local/.ghcup',
       '/usr/lib/jvm', '/usr/lib/google-cloud-sdk', '/usr/share/dotnet', '/usr/share/swift'], { stdio: 'inherit' });
   } else if (process.platform === 'darwin') {
-    const selected = await fs.realpath(execFileSync('xcode-select', ['-p'], { encoding: 'utf8' }).trim());
+    const selected = execFileSync('xcode-select', ['-p'], { encoding: 'utf8' }).trim();
     await cleanupXcodes('/Applications', selected,
       app => execFileSync('sudo', ['rm', '-rf', app], { stdio: 'inherit' }));
     execFileSync('sudo', ['rm', '-rf', '/Users/runner/Library/Android/sdk'], { stdio: 'inherit' });

@@ -18,8 +18,10 @@ test('Xcode cleanup handles aliases without removing the selected SDK', async t 
   // Junctions do not require Windows developer mode or symlink privileges.
   await fs.symlink(old, path.join(dir, 'Xcode_26.0.app'), 'junction');
   await fs.symlink(selected, path.join(dir, 'Xcode.app'), 'junction');
-  await cleanupXcodes(dir, developer, app => fs.rm(app, { recursive: true, force: true }));
-  assert.equal(await fs.realpath(path.join(dir, 'Xcode.app/Contents/Developer')), developer);
+  const canonicalDeveloper = await fs.realpath(developer);
+  const aliasDeveloper = path.join(dir, 'Xcode.app/Contents/Developer');
+  await cleanupXcodes(dir, aliasDeveloper, app => fs.rm(app, { recursive: true, force: true }));
+  assert.equal(await fs.realpath(aliasDeveloper), canonicalDeveloper);
   await assert.rejects(fs.stat(old), { code: 'ENOENT' });
 });
 
