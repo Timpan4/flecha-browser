@@ -165,7 +165,9 @@ async function start() {
     if (isStartPage(tab) && active && !live.has(active.id)) {
       live.set(active.id, tab.id!);
       // A blank tab reloads the new tab page: Chromium drew its own before the shell was loaded.
-      void chrome.tabs.update(tab.id!, { url: active.url === 'about:blank' ? 'chrome://newtab/' : active.url, active: true });
+      void markAgentTab(active.id, tab.id!).then(() =>
+        chrome.tabs.update(tab.id!, { url: active.url === 'about:blank' ? 'chrome://newtab/' : active.url, active: true }),
+      );
     } else if (isStartPage(tab) && !active && !placeholders.has(tab.windowId)) {
       placeholders.set(tab.windowId, tab.id!);
       void chrome.tabs.update(tab.id!, { url: 'chrome://newtab/' });
@@ -314,6 +316,15 @@ async function start() {
   /** The focused Flecha window's Chromium window: where tabs from no window in particular go. */
   const focusedChromeWindow = () => chromeWindowFor(store.focusedWindowId);
 
+  /**
+   * A coding agent's tab keeps other extensions' scripts out (patch 0080): a password manager's
+   * frames there stop the agent from driving the page. The mark has to be on the Chromium tab
+   * before it loads the page, so call this first.
+   */
+  async function markAgentTab(id: string, chromeId: number) {
+    if (!store.state.tabs[id]?.agent || typeof chrome.flechaPrivate?.setAgentTab !== 'function') return;
+    await chrome.flechaPrivate.setAgentTab(chromeId, true).catch((err) => console.error('Flecha shell: marking an agent tab failed', err));
+  }
   /** The agent's tabs as of the last change: see unmarkAgentTabs(). */
   let agentTabIds = new Set(Object.keys(store.state.tabs).filter((id) => store.state.tabs[id].agent));
   /**
@@ -334,9 +345,7 @@ async function start() {
     const tab = store.state.tabs[id];
     const partition = partitionFor(id);
     const url = tab.url === 'about:blank' ? undefined : tab.url;
-    // A coding agent's tab keeps other extensions' scripts out (patch 0080): a password
-    // manager's frames there stop the agent from driving the page. The mark has to be on the
-    // tab before its page loads, so it opens blank and loads the page once marked.
+    // An agent's tab opens blank and loads its page once marked.
     const agent = !!tab.agent && typeof chrome.flechaPrivate?.setAgentTab === 'function';
     creating++;
     try {
@@ -348,7 +357,7 @@ async function start() {
       live.set(id, chromeId);
       livePartition.set(id, partition);
       if (agent) {
-        await chrome.flechaPrivate.setAgentTab(chromeId, true).catch((err) => console.error('Flecha shell: marking an agent tab failed', err));
+        await markAgentTab(id, chromeId);
         if (url) void chrome.tabs.update(chromeId, { url });
       }
       if (tab.muted) void chrome.tabs.update(chromeId, { muted: true });
@@ -693,7 +702,7 @@ async function start() {
       if (active && !live.has(active.id)) {
         live.set(active.id, tab.id!);
         rememberLive();
-        if (active.url !== 'about:blank') void chrome.tabs.update(tab.id!, { url: active.url });
+        if (active.url !== 'about:blank') void markAgentTab(active.id, tab.id!).then(() => chrome.tabs.update(tab.id!, { url: active.url }));
         return;
       }
       if (!active && !placeholders.has(tab.windowId)) return void placeholders.set(tab.windowId, tab.id!);
