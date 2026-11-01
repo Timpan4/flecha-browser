@@ -407,22 +407,12 @@ function renderAgentFolder(s: UiState, space: Space) {
   const busy = !!s.agent?.busy;
   folder.classList.toggle('open', agentFolderOpen);
   folder.classList.toggle('busy', busy);
-  const clear = h(
-    'span',
-    {
-      class: 'text-button',
-      title: 'Close the agent’s tabs',
-      onclick: (e: Event) => {
-        e.stopPropagation();
-        for (const tab of tabs) api.close(tab.id);
-      },
-    },
-    'Clear',
-  );
-  const header = h(
+  // The toggle and Clear are buttons side by side, as Today's header has them, so each is a
+  // keyboard stop of its own.
+  const toggle = h(
     'button',
     {
-      class: 'row',
+      class: 'row agent-folder-toggle',
       'aria-expanded': String(agentFolderOpen),
       onclick: () => {
         agentFolderOpen = !agentFolderOpen;
@@ -431,10 +421,14 @@ function renderAgentFolder(s: UiState, space: Space) {
     },
     h('span', { class: 'row-icon folder-icon' }, busy ? h('span', { class: 'agent-dot' }) : icon('sparkle')),
     h('span', { class: 'title folder-name' }, busy ? 'Agent is working…' : 'Agent’s tabs'),
-    clear,
     h('span', { class: 'chevron' }, icon('chevron')),
   );
-  folder.replaceChildren(header, h('div', { class: 'folder-children' }, ...tabs.map((tab) => tabRow(tab, space, { zone: 'today', beforeTabId: tab.id }))));
+  const clear = h('button', { class: 'text-button', title: 'Close the agent’s tabs', onclick: () => tabs.forEach((tab) => api.close(tab.id)) }, 'Clear');
+  // Its rows take no drops: a tab dropped among them would land in Today and leave the folder.
+  folder.replaceChildren(
+    h('div', { class: 'agent-folder-header' }, toggle, clear),
+    h('div', { class: 'folder-children' }, ...tabs.map((tab) => tabRow(tab, space, undefined))),
+  );
 }
 
 /** Today's tabs, with the two halves of a split drawn together as one row, as in Arc. */
@@ -466,12 +460,13 @@ function todayRows(s: UiState, space: Space): HTMLElement[] {
   return rows;
 }
 
-function tabRow(tab: TabInfo, space: Space, target: DropTarget) {
+/** A tab's row; `target` is where a tab dropped on it goes, and a row without one takes no drops. */
+function tabRow(tab: TabInfo, space: Space, target: DropTarget | undefined) {
   const close = h(
     'span',
     {
       class: 'close',
-      title: target.zone === 'today' ? 'Close tab' : 'Unload tab',
+      title: !target || target.zone === 'today' ? 'Close tab' : 'Unload tab',
       onclick: (e: Event) => {
         e.stopPropagation();
         api.close(tab.id);
@@ -617,7 +612,7 @@ function spaceDrag(s: UiState, spaceId: string): Props {
   };
 }
 
-function wireTab(el: HTMLElement, tab: TabInfo, target: DropTarget) {
+function wireTab(el: HTMLElement, tab: TabInfo, target: DropTarget | undefined) {
   el.dataset.tabId = tab.id;
   el.draggable = true;
   el.addEventListener('click', () => api.activate(tab.id));
@@ -636,7 +631,7 @@ function wireTab(el: HTMLElement, tab: TabInfo, target: DropTarget) {
     $('favorites').classList.remove('show-empty');
     hideSplitDrop();
   });
-  acceptDrops(el, target, 'drop-before');
+  if (target) acceptDrops(el, target, 'drop-before');
 }
 
 function acceptDrops(el: HTMLElement, target: DropTarget, hoverClass = 'drag-over') {

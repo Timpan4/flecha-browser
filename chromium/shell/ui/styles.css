@@ -785,27 +785,47 @@ body {
   display: none;
 }
 
-.agent-folder > .row .folder-icon,
-.agent-folder > .row .folder-name {
+/* The header holds the folder's toggle row and its Clear button side by side. */
+.agent-folder-header {
+  display: flex;
+  align-items: center;
+}
+
+.agent-folder-toggle {
+  flex: 1;
+  min-width: 0;
+}
+
+.agent-folder-toggle .folder-icon,
+.agent-folder-toggle .folder-name {
   color: var(--agent);
 }
 
-.agent-folder > .row .folder-icon .agent-dot {
+.agent-folder-toggle .folder-icon .agent-dot {
   animation: agent-pulse 0.9s ease-in-out infinite alternate;
 }
 
-.agent-folder > .row .text-button {
+.agent-folder-toggle .chevron {
+  display: grid;
   margin-left: auto;
+  color: var(--text-3);
+  opacity: 0;
+  transition: transform var(--fast) var(--ease), opacity var(--fast) var(--ease);
+}
+
+.agent-folder.open .agent-folder-toggle .chevron {
+  transform: rotate(90deg);
+}
+
+.agent-folder-header .text-button {
   opacity: 0;
   transition: opacity var(--fast) var(--ease);
 }
 
-.agent-folder > .row:hover .text-button {
+.agent-folder-header:hover .chevron,
+.agent-folder-header:hover .text-button,
+.agent-folder-header .text-button:focus-visible {
   opacity: 1;
-}
-
-.agent-folder > .row .text-button + .chevron {
-  margin-left: 0;
 }
 
 .agent-folder > .folder-children::before {
