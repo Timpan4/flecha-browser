@@ -26,10 +26,11 @@ export const text = (value: unknown): AgentResult => ({
 });
 export const fail = (message: string): AgentResult => ({ content: [{ type: 'text', text: message }], isError: true });
 
-const tabId = z
-  .string()
-  .optional()
-  .describe('Flecha tab id from list_tabs; defaults to the tab you last opened or used, or else the one the user is looking at');
+/**
+ * Required: several agents can share the bridge, which can't tell them apart, so no default tab
+ * would be the same one for each.
+ */
+const tabId = z.string().describe('Flecha tab id, from open_tab or list_tabs');
 
 /**
  * Every tool a coding agent gets, by name. They all work in the background: no tool but
@@ -38,11 +39,11 @@ const tabId = z
 export const AGENT_TOOLS = {
   list_tabs: {
     description:
-      'List open tabs in Flecha with their ids, titles, URLs and Space. `active` marks the tabs the user is looking at; `agent` marks the ones you opened.',
+      'List open tabs in Flecha with their ids, titles, URLs and Space. `active` marks the tabs the user is looking at; `agent` marks tabs coding agents opened.',
   },
   open_tab: {
     description:
-      "Open a URL in a new background tab, in the sidebar's agent folder, and return its id. The user's view and keyboard stay where they are; every other tool works on the tab without showing it.",
+      "Open a URL in a new background tab, in the sidebar's agent folder, and return its id for the other tools. The user's view and keyboard stay where they are; the other tools work on the tab without showing it.",
     inputSchema: { url: z.string() },
   },
   activate_tab: {

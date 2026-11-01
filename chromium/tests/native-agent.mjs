@@ -226,21 +226,25 @@ try {
   await loaded(agentPage, base + '/agent');
   assert.equal(await evaluate(agentPage, 'document.visibilityState'), 'hidden');
 
-  // Tools without a tab id go to the agent's tab, not the one you are looking at.
-  await call('click', { selector: '#count' });
+  // A page tool names its tab: several agents share the bridge, so there is no default tab to guess.
+  const unnamed = await client.callTool({ name: 'click', arguments: { selector: '#count' } });
+  assert.equal(unnamed.isError, true);
+  console.log('PASS a page tool without a tab id is refused');
+  const agentTab = opened.tabId;
+  await call('click', { tabId: agentTab, selector: '#count' });
   await yours('click');
   // You keep typing while the agent types into its own page.
-  const typing = call('type', { selector: '#field', text: 'from the agent', submit: true });
+  const typing = call('type', { tabId: agentTab, selector: '#field', text: 'from the agent', submit: true });
   x11('type', 'cd');
   await typing;
   await yours('type');
-  await call('press_key', { key: 'Escape' });
+  await call('press_key', { tabId: agentTab, key: 'Escape' });
   await yours('press_key');
-  const shot = await call('screenshot');
+  const shot = await call('screenshot', { tabId: agentTab });
   assert.equal(shot.content[0].type, 'image');
   assert.ok(shot.content[0].data.length > 1000);
   await yours('screenshot');
-  const read = await call('read_page');
+  const read = await call('read_page', { tabId: agentTab });
   assert.match(read.content[0].text, /Agent page/);
   assert.deepEqual(
     await evaluate(agentPage, "({ counter, field: document.querySelector('#field').value, keys: keys.filter(k => k === 'Enter' || k === 'Escape') })"),

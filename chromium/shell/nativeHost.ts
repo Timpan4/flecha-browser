@@ -290,18 +290,12 @@ export function registerNativeHost(ctx: NativeHostContext) {
     }
   }
 
-  /** The tab the agent last opened or used: where tools without a tab id go. */
-  let current: string | undefined;
-
   /**
-   * The tool's tab with its Chromium tab, after telling the sidebar. Without an id, the agent's
-   * current tab, or else the one the user is looking at. It stays where it is: tools drive tabs
-   * through chrome.debugger, which needs no tab on screen and no window focus.
+   * The tool's tab with its Chromium tab, after telling the sidebar. It stays where it is: tools
+   * drive tabs through chrome.debugger, which needs no tab on screen and no window focus.
    */
-  async function target(id: string | undefined, action: string) {
-    const tabId = id ?? (current && store.locate(current) ? current : store.activeTab?.id);
-    if (!tabId || !store.state.tabs[tabId]) throw new Error(id ? `No tab with id ${id}` : 'There is no active tab');
-    current = tabId;
+  async function target(tabId: string, action: string) {
+    if (!store.state.tabs[tabId]) throw new Error(`No tab with id ${tabId}`);
     showActivity(tabId, action);
     const chromeId = await ctx.tabs.chromeTab(tabId);
     if (chromeId === undefined) throw new Error(`Tab ${tabId} couldn’t be opened`);
@@ -315,7 +309,6 @@ export function registerNativeHost(ctx: NativeHostContext) {
     },
     open_tab: async ({ url }) => {
       const tabId = ctx.tabs.open(String(url));
-      current = tabId;
       showActivity(tabId, 'opening a tab');
       const chromeId = await ctx.tabs.chromeTab(tabId);
       if (chromeId !== undefined) await settle(chromeId);
@@ -324,7 +317,6 @@ export function registerNativeHost(ctx: NativeHostContext) {
     },
     activate_tab: async ({ tabId }) => {
       if (!store.state.tabs[tabId]) return fail(`No tab with id ${tabId}`);
-      current = tabId;
       ctx.tabs.activate(tabId);
       showActivity(tabId, 'switching tab');
       return text('ok');
