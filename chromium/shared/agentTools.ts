@@ -12,6 +12,8 @@ export interface AgentTab {
   space: string;
   zone: 'favorites' | 'pinned' | 'today';
   active: boolean;
+  /** In the agent's folder: a tab an agent opened. */
+  agent: boolean;
 }
 
 export type AgentResult = {
@@ -24,16 +26,29 @@ export const text = (value: unknown): AgentResult => ({
 });
 export const fail = (message: string): AgentResult => ({ content: [{ type: 'text', text: message }], isError: true });
 
-const tabId = z.string().optional().describe('Flecha tab id from list_tabs; defaults to the active tab');
+const tabId = z
+  .string()
+  .optional()
+  .describe('Flecha tab id from list_tabs; defaults to the tab you last opened or used, or else the one the user is looking at');
 
-/** Every tool a coding agent gets, by name. */
+/**
+ * Every tool a coding agent gets, by name. They all work in the background: no tool but
+ * activate_tab changes which tab the user sees or where their keystrokes go.
+ */
 export const AGENT_TOOLS = {
-  list_tabs: { description: 'List open tabs in Flecha with their ids, titles, URLs, Space and whether they are active.' },
-  open_tab: {
-    description: 'Open a URL in a new tab and return its id.',
-    inputSchema: { url: z.string(), background: z.boolean().optional().describe('Open without switching to it') },
+  list_tabs: {
+    description:
+      'List open tabs in Flecha with their ids, titles, URLs and Space. `active` marks the tabs the user is looking at; `agent` marks the ones you opened.',
   },
-  activate_tab: { description: 'Bring a tab on screen.', inputSchema: { tabId: z.string() } },
+  open_tab: {
+    description:
+      "Open a URL in a new background tab, in the sidebar's agent folder, and return its id. The user's view and keyboard stay where they are; every other tool works on the tab without showing it.",
+    inputSchema: { url: z.string() },
+  },
+  activate_tab: {
+    description: "Switch the user's view to a tab. Only when the user asks to see it: the other tools don't need the tab on screen.",
+    inputSchema: { tabId: z.string() },
+  },
   close_tab: { description: 'Close a tab (pinned tabs and favorites are unloaded instead).', inputSchema: { tabId: z.string() } },
   navigate: {
     description: 'Load a URL in a tab, or go back/forward/reload, and wait for the page to settle.',
@@ -43,7 +58,7 @@ export const AGENT_TOOLS = {
     description: "Read a tab's content: visible text (default), full HTML, or its links.",
     inputSchema: { tabId, format: z.enum(['text', 'html', 'links']).optional(), maxChars: z.number().optional() },
   },
-  screenshot: { description: 'Screenshot a tab (brings it on screen first).', inputSchema: { tabId } },
+  screenshot: { description: "Screenshot a tab's viewport, in the background.", inputSchema: { tabId } },
   console_logs: {
     description: "A tab's recent console messages (errors, warnings, logs), newest last.",
     inputSchema: { tabId, level: z.enum(['error', 'warning', 'info', 'debug']).optional(), limit: z.number().optional() },

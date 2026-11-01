@@ -501,8 +501,15 @@ async function start() {
       .catch((err) => console.error('Flecha shell: sync failed', err));
   }
 
-  // Tab sleep, as Dia does it (tabSleep.ts). An incognito window's tabs are left alone.
-  const tabSleep = !incognito && tabSleepSupported() ? createTabSleep(store, live, () => new Set(store.state.windows.flatMap((win) => store.visibleTabIds(win.id)))) : undefined;
+  // Tab sleep, as Dia does it (tabSleep.ts). An incognito window's tabs are left alone. A tab a
+  // coding agent is working in counts as on screen: it is in use, though in the background.
+  const tabsInUse = () => {
+    const agent = nativeHost?.agentTabsInUse() ?? new Set<number>();
+    const ids = new Set(store.state.windows.flatMap((win) => store.visibleTabIds(win.id)));
+    for (const [id, chromeId] of live) if (agent.has(chromeId)) ids.add(id);
+    return ids;
+  };
+  const tabSleep = !incognito && tabSleepSupported() ? createTabSleep(store, live, tabsInUse) : undefined;
 
   async function syncWindow(windowId: string, chromeWindowId: number) {
     const active = store.activeTabIn(windowId);
@@ -1301,7 +1308,7 @@ async function start() {
     canIsolate,
     broadcastState: sendState,
     tabs: {
-      open: (url, background) => openTab(url, !background).id,
+      open: (url) => addTab(resolveInput(url, store.state.searchEngine), { activate: false, agent: true }).id,
       chromeTab: async (id) => {
         await syncing;
         return live.get(id) ?? (store.state.tabs[id] ? openChromeTab(id, false, store.locate(id)?.windowId ?? store.focusedWindowId) : undefined);
@@ -1312,6 +1319,7 @@ async function start() {
         void unload([id]);
       },
     },
+    agentTabsChanged: () => void tabSleep?.shownChanged(),
   });
 
   onConnect((_port, chromeWindowId) => {

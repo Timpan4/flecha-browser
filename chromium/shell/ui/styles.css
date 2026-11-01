@@ -780,6 +780,38 @@ body {
   display: none;
 }
 
+/* The tabs a coding agent opened: a folder in the agent's colour, above Today. */
+.agent-folder[hidden] {
+  display: none;
+}
+
+.agent-folder > .row .folder-icon,
+.agent-folder > .row .folder-name {
+  color: var(--agent);
+}
+
+.agent-folder > .row .folder-icon .agent-dot {
+  animation: agent-pulse 0.9s ease-in-out infinite alternate;
+}
+
+.agent-folder > .row .text-button {
+  margin-left: auto;
+  opacity: 0;
+  transition: opacity var(--fast) var(--ease);
+}
+
+.agent-folder > .row:hover .text-button {
+  opacity: 1;
+}
+
+.agent-folder > .row .text-button + .chevron {
+  margin-left: 0;
+}
+
+.agent-folder > .folder-children::before {
+  background: color-mix(in srgb, var(--agent) 40%, transparent);
+}
+
 /* ---- drag and drop ------------------------------------------------------ */
 
 .drop-before::before {

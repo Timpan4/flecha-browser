@@ -160,6 +160,7 @@ function render(s: UiState) {
   if (!document.querySelector('#scroll [contenteditable="true"]')) {
     $('pinned').replaceChildren(...space.pinned.map((node) => renderNode(node, space, undefined)));
     $('today').replaceChildren(...todayRows(s, space));
+    renderAgentFolder(s, space);
   }
 
   $('spaces').replaceChildren(
@@ -388,14 +389,65 @@ function renderNode(node: PinnedNode, space: Space, folderId: string | undefined
   );
 }
 
+const todaySplit = (s: UiState, space: Space) =>
+  space.split && space.split.every((id) => space.today.includes(id) && s.tabs[id]) ? space.split : undefined;
+
+/** Tabs a coding agent opened in this Space, outside a split, which the split row keeps. */
+const agentTabs = (s: UiState, space: Space) =>
+  space.today.map((id) => s.tabs[id]).filter((tab) => tab?.agent && !todaySplit(s, space)?.includes(tab.id));
+
+let agentFolderOpen = true;
+
+/**
+ * The tabs a coding agent opened, in a folder of their own above Today. The agent works in them
+ * in the background; dragging one out makes it an ordinary tab.
+ */
+function renderAgentFolder(s: UiState, space: Space) {
+  const folder = $('agent-folder');
+  const tabs = agentTabs(s, space);
+  folder.hidden = !tabs.length;
+  if (!tabs.length) return folder.replaceChildren();
+  const busy = !!s.agent?.busy;
+  folder.classList.toggle('open', agentFolderOpen);
+  folder.classList.toggle('busy', busy);
+  const clear = h(
+    'span',
+    {
+      class: 'text-button',
+      title: 'Close the agent’s tabs',
+      onclick: (e: Event) => {
+        e.stopPropagation();
+        for (const tab of tabs) api.close(tab.id);
+      },
+    },
+    'Clear',
+  );
+  const header = h(
+    'button',
+    {
+      class: 'row',
+      'aria-expanded': String(agentFolderOpen),
+      onclick: () => {
+        agentFolderOpen = !agentFolderOpen;
+        renderAgentFolder(state!, space);
+      },
+    },
+    h('span', { class: 'row-icon folder-icon' }, busy ? h('span', { class: 'agent-dot' }) : icon('sparkle')),
+    h('span', { class: 'title folder-name' }, busy ? 'Agent is working…' : 'Agent’s tabs'),
+    clear,
+    h('span', { class: 'chevron' }, icon('chevron')),
+  );
+  folder.replaceChildren(header, h('div', { class: 'folder-children' }, ...tabs.map((tab) => tabRow(tab, space, { zone: 'today', beforeTabId: tab.id }))));
+}
+
 /** Today's tabs, with the two halves of a split drawn together as one row, as in Arc. */
 function todayRows(s: UiState, space: Space): HTMLElement[] {
-  const pair = space.split && space.split.every((id) => space.today.includes(id) && s.tabs[id]) ? space.split : undefined;
+  const pair = todaySplit(s, space);
   const rows: HTMLElement[] = [];
   let pairDrawn = false;
   for (const id of space.today) {
     const tab = s.tabs[id];
-    if (!tab) continue;
+    if (!tab || (tab.agent && !pair?.includes(id))) continue;
     // The row sits where whichever half comes first in the list is; the other half is skipped.
     if (pair && pair.includes(id)) {
       if (pairDrawn) continue;

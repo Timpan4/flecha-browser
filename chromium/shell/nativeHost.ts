@@ -23,13 +23,15 @@ export interface NativeHostContext {
   /** Sends every page the new state (the sidebar shows what an agent is doing). */
   broadcastState(): void;
   tabs: {
-    /** Opens an address in a new Flecha tab, as the command bar does; returns its id. */
-    open(url: string, background: boolean): string;
+    /** Opens an address in a new background Today tab, in the agent's folder; returns its id. */
+    open(url: string): string;
     /** The Chromium tab showing a Flecha tab, opened (in the background) if it has none yet. */
     chromeTab(tabId: string): Promise<number | undefined>;
     activate(tabId: string): void;
     close(tabId: string): void;
   };
+  /** The agent started working in a tab (`agentTabsInUse` changed): tab sleep wakes it and lets it be. */
+  agentTabsChanged(): void;
 }
 
 const NOT_INSTALLED =
@@ -269,7 +271,7 @@ export function registerNativeHost(ctx: NativeHostContext) {
     const tabs: AgentTab[] = [];
     const add = (id: string, space: string, zone: AgentTab['zone']) => {
       const tab = store.state.tabs[id];
-      if (tab) tabs.push({ id, title: tab.customTitle || tab.title, url: tab.url, space, zone, active: visible.has(id) });
+      if (tab) tabs.push({ id, title: tab.customTitle || tab.title, url: tab.url, space, zone, active: visible.has(id), agent: !!tab.agent });
     };
     for (const id of store.state.favorites) add(id, '', 'favorites');
     for (const space of store.state.spaces) {
@@ -288,21 +290,22 @@ export function registerNativeHost(ctx: NativeHostContext) {
     }
   }
 
-  /** The tool's tab (the active one by default) with its Chromium tab, after telling the sidebar. */
+  /** The tab the agent last opened or used: where tools without a tab id go. */
+  let current: string | undefined;
+
+  /**
+   * The tool's tab with its Chromium tab, after telling the sidebar. Without an id, the agent's
+   * current tab, or else the one the user is looking at. It stays where it is: tools drive tabs
+   * through chrome.debugger, which needs no tab on screen and no window focus.
+   */
   async function target(id: string | undefined, action: string) {
-    const tabId = id ?? store.activeTab?.id;
+    const tabId = id ?? (current && store.locate(current) ? current : store.activeTab?.id);
     if (!tabId || !store.state.tabs[tabId]) throw new Error(id ? `No tab with id ${id}` : 'There is no active tab');
+    current = tabId;
     showActivity(tabId, action);
     const chromeId = await ctx.tabs.chromeTab(tabId);
     if (chromeId === undefined) throw new Error(`Tab ${tabId} couldn’t be opened`);
     return { tabId, chromeId };
-  }
-
-  /** Brings a tab on screen and waits for Chromium to show it. */
-  async function bringForward(tabId: string, chromeId: number) {
-    ctx.tabs.activate(tabId);
-    const deadline = Date.now() + 3000;
-    while (Date.now() < deadline && !(await chrome.tabs.get(chromeId)).active) await wait(50);
   }
 
   const tools: Record<AgentToolName, (args: Record<string, any>) => Promise<AgentResult>> = {
@@ -310,8 +313,9 @@ export function registerNativeHost(ctx: NativeHostContext) {
       showActivity(undefined, 'listing tabs');
       return text(listTabs());
     },
-    open_tab: async ({ url, background }) => {
-      const tabId = ctx.tabs.open(String(url), !!background);
+    open_tab: async ({ url }) => {
+      const tabId = ctx.tabs.open(String(url));
+      current = tabId;
       showActivity(tabId, 'opening a tab');
       const chromeId = await ctx.tabs.chromeTab(tabId);
       if (chromeId !== undefined) await settle(chromeId);
@@ -320,6 +324,7 @@ export function registerNativeHost(ctx: NativeHostContext) {
     },
     activate_tab: async ({ tabId }) => {
       if (!store.state.tabs[tabId]) return fail(`No tab with id ${tabId}`);
+      current = tabId;
       ctx.tabs.activate(tabId);
       showActivity(tabId, 'switching tab');
       return text('ok');
@@ -354,8 +359,7 @@ export function registerNativeHost(ctx: NativeHostContext) {
     },
     screenshot: async ({ tabId }) => {
       const t = await target(tabId, 'taking a screenshot');
-      await bringForward(t.tabId, t.chromeId);
-      await wait(300);
+      // Chromium has a tab that isn't on screen draw a frame for this (page_handler.cc).
       const shot = (await debug(t.chromeId, 'Page.captureScreenshot', { format: 'png' })) as { data: string };
       return { content: [{ type: 'image', data: await shrink(shot.data, 1280), mimeType: 'image/png' }] };
     },
@@ -367,7 +371,6 @@ export function registerNativeHost(ctx: NativeHostContext) {
     },
     click: async ({ tabId, selector }) => {
       const t = await target(tabId, `clicking ${selector}`);
-      await bringForward(t.tabId, t.chromeId);
       const point = (await evaluate(t.chromeId, centerOf(String(selector)))) as { x: number; y: number } | undefined;
       if (!point) return fail(`No visible element matches ${selector}`);
       for (const type of ['mousePressed', 'mouseReleased']) {
@@ -378,7 +381,6 @@ export function registerNativeHost(ctx: NativeHostContext) {
     },
     type: async ({ tabId, selector, text: value, clear, submit }) => {
       const t = await target(tabId, `typing into ${selector ?? 'the page'}`);
-      await bringForward(t.tabId, t.chromeId);
       if (selector) {
         const found = await evaluate(
           t.chromeId,
@@ -400,7 +402,6 @@ export function registerNativeHost(ctx: NativeHostContext) {
     },
     press_key: async ({ tabId, key }) => {
       const t = await target(tabId, `pressing ${key}`);
-      await bringForward(t.tabId, t.chromeId);
       await pressKey(t.chromeId, String(key));
       await settle(t.chromeId);
       return text('ok');
@@ -426,7 +427,8 @@ export function registerNativeHost(ctx: NativeHostContext) {
 
   // ---- chrome.debugger --------------------------------------------------------
   // Attached on first use and kept while the agent works, so console messages keep coming
-  // (Runtime.enable replays the ones logged before); let go after two quiet minutes.
+  // (Runtime.enable replays the ones logged before); let go after two quiet minutes. While
+  // attached, the page acts focused although its tab isn't on screen, and tab sleep leaves it be.
 
   const DEBUG_IDLE = 120_000;
   const attached = new Map<number, ReturnType<typeof setTimeout>>();
@@ -443,8 +445,9 @@ export function registerNativeHost(ctx: NativeHostContext) {
 
   function forget(chromeId: number) {
     clearTimeout(attached.get(chromeId));
-    attached.delete(chromeId);
+    const was = attached.delete(chromeId);
     consoleLogs.delete(chromeId);
+    if (was) ctx.agentTabsChanged();
   }
 
   function attach(chromeId: number): Promise<void> {
@@ -458,6 +461,10 @@ export function registerNativeHost(ctx: NativeHostContext) {
         await chrome.debugger.attach({ tabId: chromeId }, '1.3');
         keepAttached(chromeId);
         consoleLogs.set(chromeId, []);
+        // A frozen tab answers nothing; tab sleep wakes it now that it's in use.
+        ctx.agentTabsChanged();
+        // focus(), :focus and key events work as on screen, without taking the window's focus.
+        await chrome.debugger.sendCommand({ tabId: chromeId }, 'Emulation.setFocusEmulationEnabled', { enabled: true });
         await chrome.debugger.sendCommand({ tabId: chromeId }, 'Runtime.enable');
         await chrome.debugger.sendCommand({ tabId: chromeId }, 'Log.enable');
         // The replayed messages arrive right after enabling.
@@ -545,6 +552,8 @@ export function registerNativeHost(ctx: NativeHostContext) {
         }
       );
     },
+    /** The Chromium tabs the agent is working in (debugger attached), which tab sleep treats as in use. */
+    agentTabsInUse: (): Set<number> => new Set(attached.keys()),
     /** The bridge's address while it runs, for Settings. */
     agentEndpoint: () => endpoint,
     /** Why the host or its bridge last failed, for Settings; undefined once they work. */

@@ -275,9 +275,10 @@ export class Store {
 
   // ---- tabs -----------------------------------------------------------------
 
-  addTab(url: string, opts: { activate?: boolean; afterTabId?: string; windowId?: string } = {}): TabInfo {
+  addTab(url: string, opts: { activate?: boolean; afterTabId?: string; windowId?: string; agent?: boolean } = {}): TabInfo {
     const tab: TabInfo = { id: randomUUID(), url, title: url, lastActive: Date.now() };
     if (opts.activate === false) tab.unseen = true;
+    if (opts.agent) tab.agent = true;
     this.state.tabs[tab.id] = tab;
     const win = this.window(opts.windowId);
     const ws = this.windowSpace(win.activeSpaceId, win.id);
@@ -386,6 +387,8 @@ export class Store {
 
     if (target.zone === 'today') delete tab.homeUrl;
     else tab.homeUrl ??= tab.url;
+    // A tab you moved yourself is yours now, out of the agent's folder.
+    delete tab.agent;
     this.forgetMissingActive();
     this.changed();
   }
@@ -401,6 +404,7 @@ export class Store {
     this.insert(tabId, to, windowId);
     if (to.zone === 'today') delete tab.homeUrl;
     else tab.homeUrl ??= tab.url;
+    delete tab.agent;
     this.forgetMissingActive();
     this.changed();
     return true;
