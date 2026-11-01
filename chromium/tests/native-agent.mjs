@@ -154,10 +154,14 @@ try {
     [`--user-data-dir=${profile}`, `--flecha-shell-dir=${shellDir}`, '--no-first-run', '--no-default-browser-check', '--disable-gpu', '--ozone-platform=x11', '--password-store=basic', '--remote-debugging-pipe'],
     { env, stdio: ['ignore', 'ignore', 'inherit', 'pipe', 'pipe'] },
   );
-  browser.once('exit', (code) => {
-    for (const call of pending.values()) call.reject(new Error(`Browser exited ${code}`));
+  // A browser that exits, or that never starts (a wrong path emits 'error' and no 'exit'), fails
+  // the calls still waiting, so the run reaches its cleanup.
+  const browserGone = (reason) => {
+    for (const call of pending.values()) call.reject(new Error(reason));
     pending.clear();
-  });
+  };
+  browser.once('exit', (code) => browserGone(`Browser exited ${code}`));
+  browser.once('error', (error) => browserGone(`Browser failed to start: ${error.message}`));
   // A browser that dies, or that the deadline kills, resets its pipes; its exit fails the calls
   // still waiting, and an unhandled pipe error would stop the run before it cleans up.
   for (const pipe of [browser.stdio[3], browser.stdio[4]]) pipe.on('error', () => undefined);
