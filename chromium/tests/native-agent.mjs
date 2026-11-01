@@ -399,11 +399,37 @@ try {
   await evaluate(session, 'window.detachedTabs = []; chrome.debugger.onDetach.addListener((source) => detachedTabs.push(source.tabId)); undefined');
   const loginChromeId = await evaluate(session, `chrome.tabs.query({}).then((tabs) => tabs.find((t) => t.url === ${JSON.stringify(base + '/login')}).id)`);
   // The extension's frame stays closed to the shell's own debugger connection, which the bridge
-  // holds on this tab: no attaching to the frame, and nothing of it through the page's session.
+  // holds on this tab: no attaching to the frame, directly or as an auto-attached child, and
+  // nothing of it through the page's session. A cross-site web frame (another site, so its own
+  // process) shows auto-attach works.
+  const webChild = `http://localhost:${server.address().port}/child`;
+  waitingFor = 'the web child frame to load';
+  await evaluate(
+    loginPage,
+    `new Promise((resolve) => { const frame = document.createElement('iframe'); frame.onload = () => resolve(true); frame.src = ${JSON.stringify(webChild)}; document.body.append(frame); })`,
+  );
   const frameProbe = await evaluate(
     session,
     `(async () => {
       const tabId = ${loginChromeId};
+      const events = [];
+      const listener = (source, method, params) => source.tabId === tabId && events.push({ method, params });
+      chrome.debugger.onEvent.addListener(listener);
+      const autoAttach = (on) => chrome.debugger.sendCommand({ tabId }, 'Target.setAutoAttach', { autoAttach: on, waitForDebuggerOnStart: false, flatten: true });
+      const attachedUrls = () => events.filter((e) => e.method === 'Target.attachedToTarget').map((e) => e.params.targetInfo.url);
+      await autoAttach(true);
+      // Chromium auto-attaches the page's existing children in one pass; the web child shows it ran.
+      await new Promise((resolve) => { const check = () => (attachedUrls().includes(${JSON.stringify(webChild)}) ? resolve() : setTimeout(check, 50)); check(); });
+      const childUrls = attachedUrls();
+      await autoAttach(false);
+      events.length = 0;
+      await chrome.debugger.sendCommand({ tabId }, 'Runtime.disable');
+      await chrome.debugger.sendCommand({ tabId }, 'Runtime.enable');
+      // A document's own context, not the content-script worlds Chromium shows any page debugger.
+      const contextOrigins = events
+        .filter((e) => e.method === 'Runtime.executionContextCreated' && e.params.context.auxData?.isDefault)
+        .map((e) => e.params.context.origin);
+      chrome.debugger.onEvent.removeListener(listener);
       const target = (await chrome.debugger.getTargets()).find((t) => t.url === ${JSON.stringify(`chrome-extension://${frameExtensionId}/frame.html`)});
       let attach = 'no frame target';
       if (target) {
@@ -420,12 +446,22 @@ try {
         returnByValue: true,
       });
       const dom = await chrome.debugger.sendCommand({ tabId }, 'DOM.getDocument', { depth: -1, pierce: true });
-      return { attach, script: script.result.value, dom: JSON.stringify(dom).includes('private-frame-marker') };
+      return {
+        attach,
+        script: script.result.value,
+        dom: JSON.stringify(dom).includes('private-frame-marker'),
+        children: childUrls.filter((url) => url.startsWith('chrome-extension://')),
+        contexts: contextOrigins.filter((origin) => origin.startsWith('chrome-extension://')),
+        pageContext: contextOrigins.includes(${JSON.stringify(base)}),
+      };
     })()`,
   );
   // Chromium refuses with one of its restriction errors; 'attached' or 'no frame target' fail here.
   assert.match(frameProbe.attach, /^(Cannot attach to this target\.|Cannot access a chrome-extension:\/\/ URL of different extension)$/);
-  assert.deepEqual({ script: frameProbe.script, dom: frameProbe.dom }, { script: 'null', dom: false });
+  assert.deepEqual(
+    { script: frameProbe.script, dom: frameProbe.dom, children: frameProbe.children, contexts: frameProbe.contexts, pageContext: frameProbe.pageContext },
+    { script: 'null', dom: false, children: [], contexts: [], pageContext: true },
+  );
   console.log("PASS the shell can't attach to or read the extension's frame inside the page");
   await call('click', { tabId: login, selector: '#field' });
   await frameLoaded('dropdown');
