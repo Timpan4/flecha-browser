@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { checkIdentity, compile, releaseArgs, saveCheckpoint, restoreCheckpoint } from '../scripts/ci-release.mjs';
 import { verifyRelease } from '../scripts/ci-publish.mjs';
 
@@ -14,9 +15,6 @@ test('checkpoint archives restore the tree, and completed checkpoints carry only
   await fs.mkdir(path.join(work, 'src/out/Release'), { recursive: true });
   await fs.writeFile(path.join(work, 'state.json'), '{"complete":false}');
   await fs.writeFile(path.join(work, 'src/out/Release/chrome'), 'compiled object');
-  await fs.symlink('src/out/Release/chrome', path.join(work, 'a-forward-link'), 'file');
-  await fs.symlink('src/out/Release', path.join(work, 'a-directory-link'), 'dir');
-  await fs.symlink('missing-target', path.join(work, 'dangling-link'), 'file');
   for (const complete of [false, true]) {
     const archive = path.join(dir, `checkpoint-${complete}.tar.gz`);
     const restored = path.join(dir, `restored tree-${complete}`);
@@ -26,16 +24,38 @@ test('checkpoint archives restore the tree, and completed checkpoints carry only
     assert.equal(await fs.readFile(path.join(restored, 'state.json'), 'utf8'), '{"complete":false}');
     const binary = path.join(restored, 'src/out/Release/chrome');
     if (complete) await assert.rejects(fs.stat(binary), { code: 'ENOENT' });
-    else {
-      assert.equal(await fs.readFile(binary, 'utf8'), 'compiled object');
-      for (const link of ['a-forward-link', 'a-directory-link', 'dangling-link']) {
-        assert.equal((await fs.lstat(path.join(restored, link))).isSymbolicLink(), true, link);
-      }
-      assert.equal(await fs.readFile(path.join(restored, 'a-forward-link'), 'utf8'), 'compiled object');
-      assert.equal(await fs.readFile(path.join(restored, 'a-directory-link/chrome'), 'utf8'), 'compiled object');
-      await assert.rejects(fs.stat(path.join(restored, 'dangling-link')), { code: 'ENOENT' });
-    }
+    else assert.equal(await fs.readFile(binary, 'utf8'), 'compiled object');
   }
+  await t.test('restore preserves dangling links and links archived before their targets', async t => {
+    try {
+      await fs.symlink('src/out/Release/chrome', path.join(work, 'a-forward-link'), 'file');
+      await fs.symlink('src/out/Release', path.join(work, 'a-directory-link'), 'dir');
+      await fs.symlink('missing-target', path.join(work, 'dangling-link'), 'file');
+    } catch (error) {
+      if (process.platform === 'win32' && process.env.GITHUB_ACTIONS !== 'true' && error.code === 'EPERM') {
+        t.skip('Local Windows account lacks native symlink privileges. Hosted CI requires this test.');
+        return;
+      }
+      throw error;
+    }
+    const archive = path.join(dir, 'links-first.tar.gz');
+    const restored = path.join(dir, 'restored links');
+    const tar = process.platform === 'win32' ? path.join(process.env.ProgramFiles, 'Git/usr/bin/tar.exe') : 'tar';
+    const flags = process.platform === 'win32' ? ['--force-local'] : [];
+    const archivePath = archive.replaceAll(path.sep, '/');
+    const links = ['a-directory-link', 'a-forward-link', 'dangling-link'];
+    // Explicit arguments control member order, independent of filesystem enumeration.
+    execFileSync(tar, [...flags, '-czf', archivePath, ...links, 'src'], { cwd: work });
+    const members = execFileSync(tar, [...flags, '-tzf', archivePath], { encoding: 'utf8' }).trim().split(/\r?\n/);
+    assert.deepEqual(members.slice(0, links.length), links);
+    await restoreCheckpoint(restored, archive);
+    for (const link of links) {
+      assert.equal((await fs.lstat(path.join(restored, link))).isSymbolicLink(), true, link);
+    }
+    assert.equal(await fs.readFile(path.join(restored, 'a-forward-link'), 'utf8'), 'compiled object');
+    assert.equal(await fs.readFile(path.join(restored, 'a-directory-link/chrome'), 'utf8'), 'compiled object');
+    await assert.rejects(fs.stat(path.join(restored, 'dangling-link')), { code: 'ENOENT' });
+  });
 });
 
 test('release checkpoints reject another source, toolchain or platform', () => {
