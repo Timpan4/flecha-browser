@@ -2,8 +2,9 @@
 // which install-native-host.sh points Chromium at. Needs Node 22.5+ to run (node:sqlite).
 import { build } from 'esbuild';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const here = path.dirname(new URL(import.meta.url).pathname);
+const here = path.dirname(fileURLToPath(import.meta.url));
 
 await build({
   entryPoints: [path.join(here, 'host.ts')],

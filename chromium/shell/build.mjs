@@ -5,11 +5,12 @@
 import { build, context } from 'esbuild';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { featureEntries, copyFeatureStatic } from './build-features.mjs';
 import { buildAdblock } from './build-adblock.mjs';
 import { writeManifest } from './build-version.mjs';
 
-const here = path.dirname(new URL(import.meta.url).pathname);
+const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '../..');
 const out = process.env.FLECHA_SHELL_OUT || path.join(here, 'dist');
 if (!path.isAbsolute(out)) throw new Error('FLECHA_SHELL_OUT must be an absolute path.');

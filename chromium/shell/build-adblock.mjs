@@ -14,9 +14,10 @@
 // rule count far under Chromium's guaranteed 30,000 static rules.
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { writeManifest } from './build-version.mjs';
 
-const here = path.dirname(new URL(import.meta.url).pathname);
+const here = path.dirname(fileURLToPath(import.meta.url));
 const cacheDir = path.join(here, '.cache', 'adblock');
 const MAX_AGE_MS = 4 * 24 * 60 * 60 * 1000;
 
