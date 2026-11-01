@@ -257,9 +257,15 @@ try {
   await domWhere(`() => !document.querySelector('#agent-folder').hidden && document.querySelector('#agent-folder').textContent.includes('Agent page')`);
   assert.equal(await evaluate(session, "[...document.querySelectorAll('#today .title')].some(t => t.textContent === 'Agent page')"), false);
   console.log("PASS the agent's tab opens in the background, in the agent's folder and not among Today's tabs");
-  // The folder reads busy for 3.5 s after a call, so check right after a fresh one.
+  // The folder reads busy for 3.5 s after a call. The sidebar watches for it before a fresh call,
+  // so a slow test process can't miss it.
+  await evaluate(
+    session,
+    `void (window.busySeen = new Promise(resolve => { const check = () => { if (document.querySelector('#agent-folder .folder-name')?.textContent === 'Agent is working…') { observer.disconnect(); resolve(true); } }; const observer = new MutationObserver(check); observer.observe(document.body, {subtree:true,childList:true,attributes:true,characterData:true}); check(); }))`,
+  );
   await call('list_tabs');
-  await domWhere(`() => document.querySelector('#agent-folder .folder-name')?.textContent === 'Agent is working…'`);
+  waitingFor = 'the agent folder to read "Agent is working…"';
+  await evaluate(session, 'window.busySeen');
   console.log('PASS the folder says the agent is working while it works');
   if (artifacts) {
     await fs.mkdir(artifacts, { recursive: true });
