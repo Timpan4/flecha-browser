@@ -1,4 +1,4 @@
-# Flecha: the shell's debugger drives a web page that holds another extension's frame, such as the autofill dropdown a password manager adds, instead of Chromium refusing it ("Cannot access a chrome-extension:// URL of different extension") or detaching it when the frame appears. The shell still can't attach to that frame or to a tab showing an extension's own page.
+# Flecha: the shell's debugger drives a web page that holds another extension's frame, such as the autofill dropdown a password manager adds, instead of Chromium refusing it ("Cannot access a chrome-extension:// URL of different extension") or detaching it when the frame loads. DevTools clients get MayStayAttachedWhileSubframeNavigates(), asked for frames below the agent host's own frame; MayAttachToURL(), which also guards storage, network and other access by origin, is unchanged. The shell still can't attach to that frame, reach a tab showing an extension's own page, or touch an extension's data.
 --- a/chrome/browser/extensions/api/debugger/debugger_api.cc
 +++ b/chrome/browser/extensions/api/debugger/debugger_api.cc
 @@ -281,6 +281,21 @@
@@ -39,20 +39,102 @@
  #if BUILDFLAG(ENABLE_EXTENSIONS)
          // If `rfh` is attached to an inner MimeHandlerViewGuest, skip it when
          // checking an ancestor frame. This is done to fix crbug.com/40213673
-@@ -1116,6 +1140,16 @@
-   if (is_webui) {
-     return false;
-   }
-+  // Flecha: when a subframe of the page navigates to another extension's page
-+  // (a password manager adding its autofill dropdown), the shell stays
-+  // attached. This check can't tell a subframe from the page itself; when the
-+  // page itself commits another extension's page, Chromium checks the new
-+  // frame with MayAttachToRenderFrameHost(), which refuses it, and detaches
-+  // the shell.
-+  if (IsFlechaShell(extension_->id()) &&
+@@ -623,6 +647,8 @@
+   bool MayAttachToRenderFrameHost(
+       content::RenderFrameHost* render_frame_host) override;
+   bool MayAttachToURL(const GURL& url, bool is_webui) override;
++  bool MayStayAttachedWhileSubframeNavigates(const GURL& url,
++                                             bool is_webui) override;
+   bool IsTrusted() override;
+   bool MayReadLocalFiles() override;
+   bool MayWriteLocalFiles() override;
+@@ -1121,6 +1147,21 @@
+                                            &error);
+ }
+ 
++bool ExtensionDevToolsClientHost::MayStayAttachedWhileSubframeNavigates(
++    const GURL& url,
++    bool is_webui) {
++  // Flecha: the shell stays attached to a page while one of the page's frames
++  // loads another extension's page, such as a password manager's autofill
++  // dropdown. That frame runs in its extension's process, out of the page
++  // session's reach. MayAttachToURL(), which also guards storage, network and
++  // other access by origin, still refuses other extensions' URLs.
++  if (IsFlechaShell(extension_->id()) && !is_webui &&
 +      url.SchemeIs(extensions::kExtensionScheme)) {
 +    return true;
 +  }
-   std::string error;
-   return ExtensionMayAttachToURLOrInnerURL(*extension_, profile_, url, nullptr,
-                                            &error);
++  return MayAttachToURL(url, is_webui);
++}
++
+ bool ExtensionDevToolsClientHost::IsTrusted() {
+   return ExtensionIsTrusted(*extension_);
+ }
+--- a/content/browser/devtools/protocol/target_handler.cc
++++ b/content/browser/devtools/protocol/target_handler.cc
+@@ -652,6 +652,13 @@
+     return GetRootClient()->MayAttachToURL(url, is_webui);
+   }
+ 
++  // Flecha: as for the other checks, the root client decides.
++  bool MayStayAttachedWhileSubframeNavigates(const GURL& url,
++                                             bool is_webui) override {
++    return GetRootClient()->MayStayAttachedWhileSubframeNavigates(url,
++                                                                  is_webui);
++  }
++
+   bool IsTrusted() override { return GetRootClient()->IsTrusted(); }
+ 
+   bool MayReadLocalFiles() override {
+--- a/content/browser/devtools/render_frame_devtools_agent_host.cc
++++ b/content/browser/devtools/render_frame_devtools_agent_host.cc
+@@ -823,9 +823,17 @@
+     url = frame_host_->GetLastCommittedURL();
+   std::vector<DevToolsSession*> restricted_sessions;
+   bool is_webui = frame_host_ && frame_host_->web_ui();
++  // Flecha: for a frame below this host's own frame, the client decides
++  // whether it may stay attached, which can differ from attaching to the URL.
++  const bool is_subframe =
++      navigation_request.frame_tree_node() != frame_tree_node_;
+   for (DevToolsSession* session : sessions()) {
+-    if (!session->GetClient()->MayAttachToURL(url, is_webui))
++    DevToolsAgentHostClient* client = session->GetClient();
++    if (is_subframe
++            ? !client->MayStayAttachedWhileSubframeNavigates(url, is_webui)
++            : !client->MayAttachToURL(url, is_webui)) {
+       restricted_sessions.push_back(session);
++    }
+   }
+   if (!restricted_sessions.empty())
+     ForceDetachRestrictedSessions(restricted_sessions);
+--- a/content/public/browser/devtools_agent_host_client.cc
++++ b/content/public/browser/devtools_agent_host_client.cc
+@@ -15,6 +15,12 @@
+   return true;
+ }
+ 
++bool DevToolsAgentHostClient::MayStayAttachedWhileSubframeNavigates(
++    const GURL& url,
++    bool is_webui) {
++  return MayAttachToURL(url, is_webui);
++}
++
+ // Defaults to true, restricted clients must override this to false.
+ bool DevToolsAgentHostClient::IsTrusted() {
+   return true;
+--- a/content/public/browser/devtools_agent_host_client.h
++++ b/content/public/browser/devtools_agent_host_client.h
+@@ -46,6 +46,13 @@
+   // Note: this method may be called before navigation commits.
+   virtual bool MayAttachToURL(const GURL& url, bool is_webui);
+ 
++  // Flecha: returns true if the client may stay attached while a frame below
++  // the agent host's own frame navigates to the given URL. Unlike
++  // MayAttachToURL(), it grants no access to `url` itself. Defaults to
++  // MayAttachToURL().
++  virtual bool MayStayAttachedWhileSubframeNavigates(const GURL& url,
++                                                     bool is_webui);
++
+   // Returns true if the client is allowed to attach to the given
+   // RenderFrameHost.
+   virtual bool MayAttachToRenderFrameHost(RenderFrameHost* render_frame_host);
