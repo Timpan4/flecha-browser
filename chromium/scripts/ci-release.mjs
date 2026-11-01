@@ -34,6 +34,13 @@ export function checkIdentity(actual, expected) {
   if (typeof actual.complete !== 'boolean') throw new Error('Checkpoint has no completion state.');
 }
 
+export function saveCheckpoint(work, archive, complete) {
+  // Windows' system tar crashes on the Chromium tree. Git ships GNU tar.
+  const tar = windows ? path.join(process.env.ProgramFiles, 'Git/usr/bin/tar.exe') : 'tar';
+  execFileSync(tar, [...(windows ? ['--force-local'] : []), '-czf', archive, '-C', work,
+    ...(complete ? ['state.json'] : ['.'])], { stdio: 'inherit' });
+}
+
 export async function compile(command, args, { cwd, env, milliseconds, signal }) {
   signal?.throwIfAborted();
   const child = spawn(command, args, { cwd, env, stdio: 'inherit', detached: !windows });
@@ -124,7 +131,7 @@ async function main() {
   checkIdentity(state, identity);
   if (mode === 'checkpoint') {
     // Completed stages carry only a marker; browser packages have a separate artifact.
-    run('tar', ['-czf', archive, '-C', work, ...(state.complete ? ['state.json'] : ['.'])], root);
+    saveCheckpoint(work, archive, state.complete);
     showDisk();
     return;
   }
