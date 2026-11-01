@@ -19,9 +19,22 @@ if (!binary) throw new Error('Usage: node chromium/tests/native-agent.mjs /absol
 const shellDir = process.env.FLECHA_SHELL_OUT || path.resolve('chromium/shell/dist');
 const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-agent-'));
 const inputTool = path.join(profile, 'x11-input');
-execFileSync('c++', ['chromium/tests/x11-input.cc', '-o', inputTool, '-lX11', '-lXtst'], { stdio: 'inherit' });
-const display = spawn('Xvfb', ['-displayfd', '3', '-screen', '0', '1280x800x24'], { stdio: ['ignore', 'ignore', 'inherit', 'pipe'] });
-const displayNumber = String((await once(display.stdio[3], 'data'))[0]).trim();
+let display;
+let displayNumber;
+try {
+  execFileSync('c++', ['chromium/tests/x11-input.cc', '-o', inputTool, '-lX11', '-lXtst'], { stdio: 'inherit' });
+  display = spawn('Xvfb', ['-displayfd', '3', '-screen', '0', '1280x800x24'], { stdio: ['ignore', 'ignore', 'inherit', 'pipe'] });
+  // Xvfb writes its display number once it is ready; if it fails to start or exits first, say so.
+  const exited = once(display, 'exit').then(([code, signal]) => {
+    throw new Error(`Xvfb exited before it was ready (${signal ?? `code ${code}`})`);
+  });
+  // Once it is ready, its exit at the end of the run is cleanUp's to wait for.
+  exited.catch(() => undefined);
+  displayNumber = await Promise.race([once(display.stdio[3], 'data').then(([data]) => String(data).trim()), exited]);
+} catch (error) {
+  await fs.rm(profile, { recursive: true, force: true });
+  throw error;
+}
 const env = { ...process.env, DISPLAY: `:${displayNumber}` };
 for (const name of ['__PYVENV_LAUNCHER__', 'DBUS_SESSION_BUS_ADDRESS', 'WAYLAND_DISPLAY']) delete env[name];
 env.HOME = path.join(profile, 'home');
