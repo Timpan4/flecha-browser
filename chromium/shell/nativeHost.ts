@@ -457,14 +457,22 @@ export function registerNativeHost(ctx: NativeHostContext) {
       await chrome.debugger.attach({ tabId: chromeId }, '1.3');
       keepAttached(chromeId);
       consoleLogs.set(chromeId, []);
-      // A frozen tab answers nothing; tab sleep wakes it now that it's in use, before any command.
-      await ctx.agentTabsChanged();
-      // focus(), :focus and key events work as on screen, without taking the window's focus.
-      await chrome.debugger.sendCommand({ tabId: chromeId }, 'Emulation.setFocusEmulationEnabled', { enabled: true });
-      await chrome.debugger.sendCommand({ tabId: chromeId }, 'Runtime.enable');
-      await chrome.debugger.sendCommand({ tabId: chromeId }, 'Log.enable');
-      // The replayed messages arrive right after enabling.
-      await wait(100);
+      try {
+        // A frozen tab answers nothing; tab sleep wakes it now that it's in use, before any command.
+        await ctx.agentTabsChanged();
+        // focus(), :focus and key events work as on screen, without taking the window's focus.
+        await chrome.debugger.sendCommand({ tabId: chromeId }, 'Emulation.setFocusEmulationEnabled', { enabled: true });
+        await chrome.debugger.sendCommand({ tabId: chromeId }, 'Runtime.enable');
+        await chrome.debugger.sendCommand({ tabId: chromeId }, 'Log.enable');
+        // The replayed messages arrive right after enabling.
+        await wait(100);
+      } catch (error) {
+        // A tab left half set up would skip the setup on later calls; let go so the next call
+        // starts over. onDetach doesn't fire for our own detach, so forget it here.
+        await chrome.debugger.detach({ tabId: chromeId }).catch(() => undefined);
+        forget(chromeId);
+        throw error;
+      }
     })().finally(() => attaching.delete(chromeId));
     attaching.set(chromeId, pending);
     return pending;

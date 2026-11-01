@@ -50,15 +50,15 @@ let waitingFor;
 /** What the deadline's failure prints about your page and the X focus, once there is a page. */
 let diagnose;
 const deadline = Number(process.env.FLECHA_HARNESS_TIMEOUT_MS) || 5 * 60 * 1000;
+/** Stops a child that is still running; one that exited, or died from a signal, has nothing to wait for. */
+async function stop(child) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  child.kill('SIGTERM');
+  await once(child, 'exit');
+}
 async function cleanUp() {
-  if (browser && browser.exitCode === null) {
-    browser.kill('SIGTERM');
-    await once(browser, 'exit');
-  }
-  if (display.exitCode === null) {
-    display.kill('SIGTERM');
-    await once(display, 'exit');
-  }
+  if (browser) await stop(browser);
+  await stop(display);
   server.close();
   await fs.rm(profile, { recursive: true, force: true });
 }
