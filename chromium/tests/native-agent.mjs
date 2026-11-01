@@ -244,6 +244,10 @@ try {
   await domWhere(`() => !document.querySelector('#agent-folder').hidden && document.querySelector('#agent-folder').textContent.includes('Agent page')`);
   assert.equal(await evaluate(session, "[...document.querySelectorAll('#today .title')].some(t => t.textContent === 'Agent page')"), false);
   console.log("PASS the agent's tab opens in the background, in the agent's folder and not among Today's tabs");
+  // The folder reads busy for 3.5 s after a call, so check right after a fresh one.
+  await call('list_tabs');
+  await domWhere(`() => document.querySelector('#agent-folder .folder-name')?.textContent === 'Agent is working…'`);
+  console.log('PASS the folder says the agent is working while it works');
   if (artifacts) {
     await fs.mkdir(artifacts, { recursive: true });
     for (const scheme of ['light', 'dark']) {
@@ -252,9 +256,6 @@ try {
     }
     await send('Emulation.setEmulatedMedia', { features: [] }, session);
   }
-  const busyTitle = await evaluate(session, "document.querySelector('#agent-folder .folder-name').textContent");
-  assert.equal(busyTitle, 'Agent is working…');
-  console.log('PASS the folder says the agent is working while it works');
 
   const agentPage = await attach((await findTarget((t) => t.type === 'page' && t.url === base + '/agent')).targetId);
   await loaded(agentPage, base + '/agent');
