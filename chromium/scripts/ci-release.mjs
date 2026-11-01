@@ -14,6 +14,8 @@ const cpu = mac ? 'arm64' : 'x64';
 const platform = `${mac ? 'macos' : windows ? 'windows' : 'linux'}-${cpu}`;
 const python = windows ? path.join(process.env.pythonLocation || '', 'python.exe') : 'python3';
 const depotRevision = 'a20039648c0de69d8156906b18052bd47e9bf230';
+// Node sets the native working directory; GNU tar receives slash-separated archive paths.
+const checkpointTar = windows ? path.join(process.env.ProgramFiles, 'Git/usr/bin/tar.exe') : 'tar';
 
 export function releaseArgs(template, { platform, version, buildNumber }) {
   let args = template.replace(/^target_cpu = .*$/m, `target_cpu = "${platform === 'macos-arm64' ? 'arm64' : 'x64'}"`);
@@ -36,9 +38,14 @@ export function checkIdentity(actual, expected) {
 
 export function saveCheckpoint(work, archive, complete) {
   // Windows' system tar crashes on the Chromium tree. Git ships GNU tar.
-  const tar = windows ? path.join(process.env.ProgramFiles, 'Git/usr/bin/tar.exe') : 'tar';
-  execFileSync(tar, [...(windows ? ['--force-local'] : []), '-czf', archive, '-C', work,
-    ...(complete ? ['state.json'] : ['.'])], { stdio: 'inherit' });
+  execFileSync(checkpointTar, [...(windows ? ['--force-local'] : []), '-czf', archive.replaceAll(path.sep, '/'),
+    ...(complete ? ['state.json'] : ['.'])], { cwd: work, stdio: 'inherit' });
+}
+
+export async function restoreCheckpoint(work, archive) {
+  await fs.mkdir(work);
+  execFileSync(checkpointTar, [...(windows ? ['--force-local'] : []), '-xzf', archive.replaceAll(path.sep, '/')], { cwd: work, stdio: 'inherit' });
+  await fs.rm(archive);
 }
 
 export async function compile(command, args, { cwd, env, milliseconds, signal }) {
@@ -73,8 +80,12 @@ async function main() {
     throw new Error('This script writes only to disposable GitHub-hosted build trees.');
   }
   const mode = process.argv[2];
-  if (!['prepare', 'build', 'checkpoint'].includes(mode)) throw new Error('Expected prepare, build or checkpoint.');
+  if (!['prepare', 'restore', 'build', 'checkpoint'].includes(mode)) throw new Error('Expected prepare, restore, build or checkpoint.');
   const work = path.resolve(process.env.RUNNER_WORKSPACE, 'flecha-chromium');
+  if (mode === 'restore') {
+    await restoreCheckpoint(work, path.join(root, 'checkpoint/checkpoint.tar.gz'));
+    return;
+  }
   const src = path.join(work, 'src');
   const depot = path.join(work, 'depot_tools');
   const out = path.join(src, 'out/Release');

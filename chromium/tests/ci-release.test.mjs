@@ -4,8 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { createHash } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
-import { checkIdentity, compile, releaseArgs, saveCheckpoint } from '../scripts/ci-release.mjs';
+import { checkIdentity, compile, releaseArgs, saveCheckpoint, restoreCheckpoint } from '../scripts/ci-release.mjs';
 import { verifyRelease } from '../scripts/ci-publish.mjs';
 
 test('checkpoint archives restore the tree, and completed checkpoints carry only state', async t => {
@@ -17,10 +16,10 @@ test('checkpoint archives restore the tree, and completed checkpoints carry only
   await fs.writeFile(path.join(work, 'src/out/Release/chrome'), 'compiled object');
   for (const complete of [false, true]) {
     const archive = path.join(dir, `checkpoint-${complete}.tar.gz`);
-    const restored = path.join(dir, `restored-${complete}`);
+    const restored = path.join(dir, `restored tree-${complete}`);
     saveCheckpoint(work, archive, complete);
-    await fs.mkdir(restored);
-    execFileSync('tar', ['-xzf', archive, '-C', restored]);
+    await restoreCheckpoint(restored, archive);
+    await assert.rejects(fs.stat(archive), { code: 'ENOENT' });
     assert.equal(await fs.readFile(path.join(restored, 'state.json'), 'utf8'), '{"complete":false}');
     const binary = path.join(restored, 'src/out/Release/chrome');
     if (complete) await assert.rejects(fs.stat(binary), { code: 'ENOENT' });

@@ -61,11 +61,7 @@ jobs:
           path: checkpoint
       - name: Unpack previous checkpoint
         if: inputs.stage != 0
-        shell: bash
-        run: |
-          mkdir "$RUNNER_WORKSPACE/flecha-chromium"
-          tar -xzf checkpoint/checkpoint.tar.gz -C "$RUNNER_WORKSPACE/flecha-chromium"
-          rm checkpoint/checkpoint.tar.gz
+        run: node chromium/scripts/ci-release.mjs restore
       - name: Install packaging dependencies
         if: runner.os == 'macOS'
         run: npm ci
