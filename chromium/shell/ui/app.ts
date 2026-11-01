@@ -14,6 +14,7 @@ import { searchUrl } from '../lib/url';
 import type { MenuEntry } from '../settingsUi';
 import { importFromBrowser, showPageMenu } from '../windowUi';
 import { SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH } from '../../shared/sidebarWidth';
+import { inAgentFolder, todaySplit } from '../../shared/agentFolder';
 import { blocksAdsOn, isSiteHost } from '../../shared/adBlockSites';
 import { incognito } from '../incognito';
 import type { DownloadInfo, DropTarget, FlechaApi, HistoryEntry, PaletteMode, PeekState, PinnedNode, Space, TabInfo, UiState } from '../../shared/types';
@@ -389,12 +390,8 @@ function renderNode(node: PinnedNode, space: Space, folderId: string | undefined
   );
 }
 
-const todaySplit = (s: UiState, space: Space) =>
-  space.split && space.split.every((id) => space.today.includes(id) && s.tabs[id]) ? space.split : undefined;
-
-/** Tabs a coding agent opened in this Space, outside a split, which the split row keeps. */
-const agentTabs = (s: UiState, space: Space) =>
-  space.today.map((id) => s.tabs[id]).filter((tab) => tab?.agent && !todaySplit(s, space)?.includes(tab.id));
+/** The agent's folder in this Space (agentFolder.ts). */
+const agentTabs = (s: UiState, space: Space) => space.today.filter((id) => inAgentFolder(s.tabs, space, id)).map((id) => s.tabs[id]);
 
 let agentFolderOpen = true;
 
@@ -442,12 +439,12 @@ function renderAgentFolder(s: UiState, space: Space) {
 
 /** Today's tabs, with the two halves of a split drawn together as one row, as in Arc. */
 function todayRows(s: UiState, space: Space): HTMLElement[] {
-  const pair = todaySplit(s, space);
+  const pair = todaySplit(s.tabs, space);
   const rows: HTMLElement[] = [];
   let pairDrawn = false;
   for (const id of space.today) {
     const tab = s.tabs[id];
-    if (!tab || (tab.agent && !pair?.includes(id))) continue;
+    if (!tab || inAgentFolder(s.tabs, space, id)) continue;
     // The row sits where whichever half comes first in the list is; the other half is skipped.
     if (pair && pair.includes(id)) {
       if (pairDrawn) continue;

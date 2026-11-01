@@ -16,6 +16,7 @@ import type {
   WindowSpace,
 } from './types';
 import type { ImportNode, ImportOutcome, ImportSpace, ImportTab } from './importApply';
+import { inAgentFolder } from './agentFolder';
 import { withAdBlocking } from './adBlockSites';
 import { STATE_VERSION } from './savedState';
 import { clampSidebarWidth } from './sidebarWidth';
@@ -510,14 +511,6 @@ export class Store {
   }
 
   /**
-   * Whether a Today tab shows in the agent's folder rather than among Today's tabs: a tab an agent
-   * opened, unless it is half of the split, which Today draws as one row.
-   */
-  inAgentFolder(tabId: string, ws: WindowSpace): boolean {
-    return !!this.state.tabs[tabId]?.agent && !ws.split?.includes(tabId);
-  }
-
-  /**
    * Closes the today tabs after `tabId`, or all others when `others` is set, among the tabs listed
    * with it: Today's or the agent's folder. Returns their ids.
    */
@@ -525,8 +518,8 @@ export class Store {
     const loc = this.locate(tabId);
     if (loc?.zone !== 'today' || !loc.space) return [];
     const ws = this.windowSpace(loc.space.id, loc.windowId);
-    const folder = this.inAgentFolder(tabId, ws);
-    const today = ws.today.filter((id) => this.inAgentFolder(id, ws) === folder);
+    const folder = inAgentFolder(this.state.tabs, ws, tabId);
+    const today = ws.today.filter((id) => inAgentFolder(this.state.tabs, ws, id) === folder);
     const index = today.indexOf(tabId);
     const ids = today.filter((id, i) => (which === 'below' ? i > index : id !== tabId));
     if (!ids.length) return [];
@@ -696,7 +689,7 @@ export class Store {
   clearToday(windowId?: string): string[] {
     const win = this.window(windowId);
     const ws = this.windowSpace(win.activeSpaceId, win.id);
-    const ids = ws.today.filter((id) => !this.inAgentFolder(id, ws));
+    const ids = ws.today.filter((id) => !inAgentFolder(this.state.tabs, ws, id));
     if (!ids.length) return [];
     return this.undoable('Clear Today Tabs', () => {
       ws.today = ws.today.filter((id) => !ids.includes(id));

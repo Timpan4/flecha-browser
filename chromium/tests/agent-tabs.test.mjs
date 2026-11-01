@@ -30,6 +30,16 @@ test("Today's Clear, Close Tabs Below and Close Other Tabs leave the agent's fol
   }
 });
 
+test("an agent's tab split with a pinned tab stays in the agent's folder, out of Today's Clear", () => {
+  const s = withAgentTab();
+  const pinned = s.store.addTab('https://example.com/pinned', { windowId: s.windowId });
+  s.store.togglePin(pinned.id, s.windowId);
+  s.store.activate(pinned.id, { windowId: s.windowId });
+  s.store.splitWith(s.agent, 'right', s.windowId);
+  assert.ok(!s.store.clearToday(s.windowId).includes(s.agent));
+  assert.ok(s.store.state.tabs[s.agent]);
+});
+
 test("Close Other Tabs in the agent's folder leaves Today's tabs", () => {
   const s = withAgentTab();
   const second = s.store.addTab('https://example.com/agent-2', { windowId: s.windowId, activate: false, agent: true });
