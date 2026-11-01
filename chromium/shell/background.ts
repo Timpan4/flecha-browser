@@ -1319,7 +1319,7 @@ async function start() {
         void unload([id]);
       },
     },
-    agentTabsChanged: () => void tabSleep?.shownChanged(),
+    agentTabsChanged: async () => void (await tabSleep?.shownChanged()),
   });
 
   onConnect((_port, chromeWindowId) => {

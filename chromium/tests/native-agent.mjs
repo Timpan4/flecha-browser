@@ -30,7 +30,7 @@ for (const name of ['XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_S
 // Your page, with a draft you type into, and the agent's, which counts clicks and logs keys.
 const server = createServer((request, response) => {
   response.setHeader('Content-Type', 'text/html');
-  if (request.url === '/mine') return response.end('<title>My page</title><input id="draft" autofocus>');
+  if (request.url === '/mine') return response.end('<title>My page</title><textarea id="draft" style="position: fixed; inset: 0; width: 100%; height: 100%"></textarea>');
   response.end(
     '<title>Agent page</title><h1>Agent page</h1><input id="field"><button id="count" onclick="counter++">Count</button>' +
       '<script>window.counter = 0; window.keys = []; addEventListener("keydown", (e) => keys.push(e.key));</script>',
@@ -47,6 +47,8 @@ const listeners = new Set();
 let finished = false;
 /** What the run waits for now; the deadline names it. */
 let waitingFor;
+/** What the deadline's failure prints about your page and the X focus, once there is a page. */
+let diagnose;
 const deadline = Number(process.env.FLECHA_HARNESS_TIMEOUT_MS) || 5 * 60 * 1000;
 async function cleanUp() {
   if (browser && browser.exitCode === null) {
@@ -62,6 +64,7 @@ async function cleanUp() {
 }
 const watchdog = setTimeout(async () => {
   if (finished) return;
+  if (diagnose) console.error('DIAGNOSTIC', await diagnose().catch((error) => error.message));
   console.error(`FAIL the run took longer than ${deadline} ms (FLECHA_HARNESS_TIMEOUT_MS); the last step is the last PASS above, waiting for ${waitingFor}`);
   await cleanUp();
   process.exit(1);
@@ -179,11 +182,34 @@ try {
   const myPage = await attach((await findTarget((t) => t.type === 'page' && t.url === base + '/mine')).targetId);
   await loaded(myPage, base + '/mine');
   const x11 = (...args) => execFileSync(inputTool, [env.DISPLAY, String(browser.pid), ...args], { env });
-  // The draft has focus; the first key also focuses the window, as your click would.
+  diagnose = async () => ({
+    page: await evaluate(myPage, "({ draft: document.querySelector('#draft').value, active: document.activeElement?.id, hasFocus: document.hasFocus(), visibility: document.visibilityState })"),
+    xFocus: String(x11('focus')).trim(),
+    windows: String(x11('windows')).trim(),
+  });
+  /** Waits until your draft holds `text`, as each key you type reaches it. */
+  const draftIs = (text) => {
+    waitingFor = `your draft to read ${JSON.stringify(text)}`;
+    return evaluate(myPage, `new Promise(resolve => { const draft = document.querySelector('#draft'); const check = () => draft.value === ${JSON.stringify(text)} && resolve(); draft.addEventListener('input', check); check(); })`);
+  };
+  // The draft has focus in your page. A Shift press gives the window the X focus, as your click
+  // would. Chromium can still drop the first key after it takes the focus, so a key is pressed until
+  // one lands, checked every 50 ms as native-workflows.mjs waits, and the draft is emptied again.
   await evaluate(myPage, "document.querySelector('#draft').focus()");
-  x11('a');
-  x11('type', 'b');
-  await evaluate(myPage, `new Promise(resolve => { const check = () => document.querySelector('#draft').value === 'ab' ? resolve() : setTimeout(check, 20); check(); })`);
+  x11('Shift_L');
+  waitingFor = 'Chromium to take the window focus';
+  await evaluate(
+    session,
+    "chrome.windows.getAll().then((all) => all.some((w) => w.focused) || new Promise((resolve) => chrome.windows.onFocusChanged.addListener(function focused(id) { if (id !== chrome.windows.WINDOW_ID_NONE) { chrome.windows.onFocusChanged.removeListener(focused); resolve(true); } })))",
+  );
+  waitingFor = 'a first key to reach your draft';
+  while (!(await evaluate(myPage, "document.querySelector('#draft').value"))) {
+    x11('type', 'x');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  await evaluate(myPage, "document.querySelector('#draft').value = ''");
+  x11('type', 'ab');
+  await draftIs('ab');
   console.log('PASS your keystrokes reach your page before the agent starts');
 
   // The agent connects over MCP with the token from Settings.
@@ -252,10 +278,29 @@ try {
   );
   console.log("PASS click, type, press_key, screenshot and read_page work in the agent's tab while it is hidden");
   x11('type', 'e');
-  await evaluate(myPage, `new Promise(resolve => { const check = () => document.querySelector('#draft').value === 'abcde' ? resolve() : setTimeout(check, 20); check(); })`);
+  await draftIs('abcde');
   assert.equal(await evaluate(myPage, "document.activeElement.id + ' ' + document.hasFocus() + ' ' + document.visibilityState"), 'draft true visible');
   console.log('PASS your keystrokes kept reaching your draft while the agent worked');
   if (artifacts) await fs.writeFile(path.join(artifacts, 'agent-screenshot.png'), Buffer.from(shot.content[0].data, 'base64'));
+
+  // Tab sleep may discard an agent tab the bridge isn't attached to: one it opened and hasn't used
+  // yet, or one it let go of after a quiet while (nativeHost.ts DEBUG_IDLE). Chromium won't discard
+  // a tab with a debugger attached or with form input. The agent's next call brings the page back, hidden.
+  const idle = JSON.parse((await call('open_tab', { url: base + '/idle' })).content[0].text).tabId;
+  const discarded = await evaluate(
+    session,
+    `chrome.tabs.query({}).then(async (tabs) => {
+      const tabId = tabs.find((t) => t.url === ${JSON.stringify(base + '/idle')}).id;
+      return (await chrome.flechaPrivate.discardTab(tabId)) && (await chrome.tabs.get(tabId)).discarded;
+    })`,
+  );
+  assert.equal(discarded, true, 'Chromium discarded the idle agent tab');
+  const heading = await call('evaluate', { tabId: idle, expression: "document.querySelector('h1')?.textContent ?? null" });
+  assert.equal(heading.content[0].text, 'Agent page');
+  await yours('a call on a discarded tab');
+  console.log("PASS a call on the agent's discarded tab brings its page back, in the background");
+  await call('close_tab', { tabId: idle });
+  await stateWhere(`s => !s.tabs[${JSON.stringify(idle)}]`);
 
   // A tab you pin is yours: it leaves the agent's folder.
   await rpc('togglePin', opened.tabId);

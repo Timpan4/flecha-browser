@@ -30,8 +30,8 @@ export interface NativeHostContext {
     activate(tabId: string): void;
     close(tabId: string): void;
   };
-  /** The agent started working in a tab (`agentTabsInUse` changed): tab sleep wakes it and lets it be. */
-  agentTabsChanged(): void;
+  /** The agent started or stopped working in a tab (`agentTabsInUse` changed): tab sleep wakes it and lets it be. Settles once woken. */
+  agentTabsChanged(): Promise<void>;
 }
 
 const NOT_INSTALLED =
@@ -299,6 +299,8 @@ export function registerNativeHost(ctx: NativeHostContext) {
     showActivity(tabId, action);
     const chromeId = await ctx.tabs.chromeTab(tabId);
     if (chromeId === undefined) throw new Error(`Tab ${tabId} couldn’t be opened`);
+    // A tab tab sleep discarded needs nothing more: attaching the debugger brings its page back
+    // (native-agent.mjs checks it).
     return { tabId, chromeId };
   }
 
@@ -439,7 +441,7 @@ export function registerNativeHost(ctx: NativeHostContext) {
     clearTimeout(attached.get(chromeId));
     const was = attached.delete(chromeId);
     consoleLogs.delete(chromeId);
-    if (was) ctx.agentTabsChanged();
+    if (was) void ctx.agentTabsChanged();
   }
 
   function attach(chromeId: number): Promise<void> {
@@ -453,8 +455,8 @@ export function registerNativeHost(ctx: NativeHostContext) {
         await chrome.debugger.attach({ tabId: chromeId }, '1.3');
         keepAttached(chromeId);
         consoleLogs.set(chromeId, []);
-        // A frozen tab answers nothing; tab sleep wakes it now that it's in use.
-        ctx.agentTabsChanged();
+        // A frozen tab answers nothing; tab sleep wakes it now that it's in use, before any command.
+        await ctx.agentTabsChanged();
         // focus(), :focus and key events work as on screen, without taking the window's focus.
         await chrome.debugger.sendCommand({ tabId: chromeId }, 'Emulation.setFocusEmulationEnabled', { enabled: true });
         await chrome.debugger.sendCommand({ tabId: chromeId }, 'Runtime.enable');
