@@ -44,7 +44,9 @@ export function saveCheckpoint(work, archive, complete) {
 
 export async function restoreCheckpoint(work, archive) {
   await fs.mkdir(work);
-  execFileSync(checkpointTar, [...(windows ? ['--force-local'] : []), '-xzf', archive.replaceAll(path.sep, '/')], { cwd: work, stdio: 'inherit' });
+  // MSYS otherwise copies link targets, which fails for dangling or later-extracted targets.
+  const env = windows ? { ...process.env, MSYS: 'winsymlinks:nativestrict' } : process.env;
+  execFileSync(checkpointTar, [...(windows ? ['--force-local'] : []), '-xzf', archive.replaceAll(path.sep, '/')], { cwd: work, env, stdio: 'inherit' });
   await fs.rm(archive);
 }
 
