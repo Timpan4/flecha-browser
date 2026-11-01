@@ -37,6 +37,7 @@ jobs:
         with:
           name: shell-and-host
           path: shell-and-host.tar.gz
+          overwrite: true
           # Keep inputs for GitHub's maximum workflow lifetime, including queue time.
           retention-days: 35
 
