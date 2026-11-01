@@ -341,13 +341,14 @@ try {
   console.log("PASS pinning the agent's tab takes it out of the agent's folder");
 
   await client.close();
+  // The deadline stays armed through the cleanup, so a browser that hangs on its way out is killed.
+  await cleanUp();
   finished = true;
   clearTimeout(watchdog);
-  await cleanUp();
 } catch (error) {
   console.error('FAIL', error);
+  await cleanUp();
   finished = true;
   clearTimeout(watchdog);
-  await cleanUp();
   process.exit(1);
 }
