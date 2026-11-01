@@ -56,8 +56,15 @@ jobs:
         with:
           node-version: 26
           cache: npm
+      - name: Verify cleanup on the hosted macOS image
+        if: runner.os == 'macOS'
+        run: node chromium/scripts/ci-cleanup.mjs
+      - name: Verify patches on Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: chromium/scripts/check-patches.sh
       - run: npm ci
-      - run: node --test chromium/tests/ci-release.test.mjs
+      - run: node --test chromium/tests/ci-release.test.mjs chromium/tests/ci-setup.test.mjs
       - run: npm run shell:build
       - run: npm run host:build
 
