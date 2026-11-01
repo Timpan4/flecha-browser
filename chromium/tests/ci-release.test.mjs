@@ -4,8 +4,29 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { createHash } from 'node:crypto';
-import { checkIdentity, compile, releaseArgs } from '../scripts/ci-release.mjs';
+import { execFileSync } from 'node:child_process';
+import { checkIdentity, compile, releaseArgs, saveCheckpoint } from '../scripts/ci-release.mjs';
 import { verifyRelease } from '../scripts/ci-publish.mjs';
+
+test('checkpoint archives restore the tree, and completed checkpoints carry only state', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-checkpoint-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const work = path.join(dir, 'work tree');
+  await fs.mkdir(path.join(work, 'src/out/Release'), { recursive: true });
+  await fs.writeFile(path.join(work, 'state.json'), '{"complete":false}');
+  await fs.writeFile(path.join(work, 'src/out/Release/chrome'), 'compiled object');
+  for (const complete of [false, true]) {
+    const archive = path.join(dir, `checkpoint-${complete}.tar.gz`);
+    const restored = path.join(dir, `restored-${complete}`);
+    saveCheckpoint(work, archive, complete);
+    await fs.mkdir(restored);
+    execFileSync('tar', ['-xzf', archive, '-C', restored]);
+    assert.equal(await fs.readFile(path.join(restored, 'state.json'), 'utf8'), '{"complete":false}');
+    const binary = path.join(restored, 'src/out/Release/chrome');
+    if (complete) await assert.rejects(fs.stat(binary), { code: 'ENOENT' });
+    else assert.equal(await fs.readFile(binary, 'utf8'), 'compiled object');
+  }
+});
 
 test('release checkpoints reject another source, toolchain or platform', () => {
   const expected = { sha: 'source', chromium: '158', platform: 'linux-x64', depot: 'tools' };
