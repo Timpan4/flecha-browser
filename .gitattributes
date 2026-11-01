@@ -1,0 +1,2 @@
+# Chromium keeps its source in LF. Preserve patch bytes on Windows checkouts too.
+chromium/patches/*.patch -text
