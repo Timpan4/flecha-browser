@@ -314,18 +314,43 @@ async function start() {
   /** The focused Flecha window's Chromium window: where tabs from no window in particular go. */
   const focusedChromeWindow = () => chromeWindowFor(store.focusedWindowId);
 
+  /** The agent's tabs as of the last change: see unmarkAgentTabs(). */
+  let agentTabIds = new Set(Object.keys(store.state.tabs).filter((id) => store.state.tabs[id].agent));
+  /**
+   * A tab you moved out of the agent's folder is yours: other extensions run in it again, from
+   * its next page on.
+   */
+  function unmarkAgentTabs() {
+    const now = new Set(Object.keys(store.state.tabs).filter((id) => store.state.tabs[id].agent));
+    for (const id of agentTabIds) {
+      const chromeId = live.get(id);
+      if (now.has(id) || chromeId === undefined || typeof chrome.flechaPrivate?.setAgentTab !== 'function') continue;
+      void chrome.flechaPrivate.setAgentTab(chromeId, false).catch(() => undefined);
+    }
+    agentTabIds = now;
+  }
+
   async function openChromeTab(id: string, active: boolean, windowId: string) {
     const tab = store.state.tabs[id];
     const partition = partitionFor(id);
+    const url = tab.url === 'about:blank' ? undefined : tab.url;
+    // A coding agent's tab keeps other extensions' scripts out (patch 0080): a password
+    // manager's frames there stop the agent from driving the page. The mark has to be on the
+    // tab before its page loads, so it opens blank and loads the page once marked.
+    const agent = !!tab.agent && typeof chrome.flechaPrivate?.setAgentTab === 'function';
     creating++;
     try {
-      const options = { windowId: await chromeWindowFor(windowId), url: tab.url === 'about:blank' ? undefined : tab.url, active };
+      const options = { windowId: await chromeWindowFor(windowId), url: agent ? 'about:blank' : url, active };
       // A Space with separate cookies and logins: its own storage partition (patch 0034).
       const chromeId = partition
         ? await chrome.flechaPrivate.createTab({ ...options, partition })
         : (await chrome.tabs.create(options)).id!;
       live.set(id, chromeId);
       livePartition.set(id, partition);
+      if (agent) {
+        await chrome.flechaPrivate.setAgentTab(chromeId, true).catch((err) => console.error('Flecha shell: marking an agent tab failed', err));
+        if (url) void chrome.tabs.update(chromeId, { url });
+      }
       if (tab.muted) void chrome.tabs.update(chromeId, { muted: true });
       rememberLive();
       return chromeId;
@@ -644,7 +669,10 @@ async function start() {
   const wantFavicons = () => void favicons.want(Object.values(store.state.tabs).filter((t) => !t.favicon).map((t) => t.url));
   store.onChange((change) => {
     // A page's own title, icon or loading state leaves the open tabs as they are.
-    if (change === 'structure') sync();
+    if (change === 'structure') {
+      unmarkAgentTabs();
+      sync();
+    }
     sendStateSoon();
     wantFavicons();
   });

@@ -444,6 +444,49 @@ export function registerNativeHost(ctx: NativeHostContext) {
     if (was) void ctx.agentTabsChanged();
   }
 
+  /**
+   * Chromium keeps one extension's debugger out of a tab that shows another extension's page,
+   * such as the frames a password manager adds to sign-in forms. Agent tabs keep other
+   * extensions out (patch 0080), but your own tabs don't: this names the extension in the way.
+   */
+  async function attachRefused(chromeId: number, error: unknown): Promise<unknown> {
+    // webNavigation leaves other extensions' frames out, so they are read from the page: the
+    // frame elements, in closed shadow roots too, where password managers put theirs.
+    const results = await chrome.scripting
+      .executeScript({
+        target: { tabId: chromeId, allFrames: true },
+        func: () => {
+          const sources: string[] = [];
+          const walk = (root: ParentNode) => {
+            for (const element of root.querySelectorAll('*')) {
+              if (element instanceof HTMLIFrameElement || element instanceof HTMLFrameElement) sources.push(element.src);
+              const shadow = chrome.dom.openOrClosedShadowRoot(element as HTMLElement);
+              if (shadow) walk(shadow);
+            }
+          };
+          walk(document);
+          return sources;
+        },
+      })
+      .catch(() => []);
+    const others = new Set<string>();
+    for (const url of results.flatMap((frame) => (frame.result as string[] | undefined) ?? [])) {
+      const id = /^chrome-extension:\/\/([a-p]{32})\//.exec(url)?.[1];
+      if (id && id !== chrome.runtime.id) others.add(id);
+    }
+    if (!others.size) return error;
+    const tab = await chrome.tabs.get(chromeId).catch(() => undefined);
+    const actions =
+      tab && typeof chrome.flechaPrivate?.getExtensionActions === 'function'
+        ? await chrome.flechaPrivate.getExtensionActions(tab.windowId).catch(() => [])
+        : [];
+    const names = [...others].map((id) => actions.find((action) => action.id === id)?.name ?? id);
+    return new Error(
+      `This tab shows a page of another extension (${names.join(', ')}), and Chromium doesn't let Flecha drive a tab with another extension's page in it. ` +
+        'Open the page with open_tab instead: other extensions stay out of the tabs Flecha opens for you.',
+    );
+  }
+
   function attach(chromeId: number): Promise<void> {
     // Attached counts from the debugger's attach, but commands wait until the tab is awake and set
     // up: a call during that time waits for it too.
@@ -473,14 +516,21 @@ export function registerNativeHost(ctx: NativeHostContext) {
         forget(chromeId);
         throw error;
       }
-    })().finally(() => attaching.delete(chromeId));
+    })()
+      .catch(async (error: unknown) => {
+        throw await attachRefused(chromeId, error);
+      })
+      .finally(() => attaching.delete(chromeId));
     attaching.set(chromeId, pending);
     return pending;
   }
 
   async function debug(chromeId: number, method: string, params?: object) {
     await attach(chromeId);
-    return chrome.debugger.sendCommand({ tabId: chromeId }, method, params);
+    // Chromium also lets go of a tab when another extension's frame loads in it mid-command.
+    return chrome.debugger.sendCommand({ tabId: chromeId }, method, params).catch(async (error: unknown) => {
+      throw await attachRefused(chromeId, error);
+    });
   }
 
   async function evaluate(chromeId: number, expression: string): Promise<unknown> {

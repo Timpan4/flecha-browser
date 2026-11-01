@@ -349,10 +349,10 @@ try {
   await call('close_tab', { tabId: idle });
   await stateWhere(`s => !s.tabs[${JSON.stringify(idle)}]`);
 
-  // A password manager such as Proton Pass puts its own extension's frames into web pages: one as
-  // the page loads, a dropdown when a field takes focus. Chromium keeps an extension's debugger off
-  // pages holding another extension's frame; Flecha lets its shell drive them (patch 0080), and the
-  // shell still can't drive an extension's own page.
+  // A password manager such as Proton Pass runs a content script on every page and adds its own
+  // extension's frames: one as the page loads, a dropdown when a field takes focus. Chromium keeps
+  // the shell's debugger out of a page holding another extension's frame. The tabs the agent
+  // opens keep other extensions' scripts out (patch 0080); yours run them as before.
   const frameExtension = path.join(profile, 'frame-extension');
   await fs.mkdir(frameExtension);
   await fs.writeFile(
@@ -361,14 +361,18 @@ try {
       manifest_version: 3,
       name: 'Frames like a password manager',
       version: '1',
-      content_scripts: [{ matches: ['http://127.0.0.1/*'], js: ['content.js'] }],
+      // With an action, the extensions menu (and the bridge's error) knows its name.
+      action: {},
+      content_scripts: [{ matches: ['http://127.0.0.1/*'], js: ['content.js'], run_at: 'document_start' }],
       web_accessible_resources: [{ resources: ['frame.html'], matches: ['http://127.0.0.1/*'] }],
     }),
   );
-  await fs.writeFile(path.join(frameExtension, 'frame.html'), '<title>Extension frame</title><p>private-frame-marker</p>');
+  await fs.writeFile(path.join(frameExtension, 'frame.html'), '<title>Extension frame</title><p>Extension frame</p>');
+  // From document_start, before the page's own parsing: a page loaded without the mark never ran it.
   await fs.writeFile(
     path.join(frameExtension, 'content.js'),
     `if (location.pathname === '/login') {
+      document.documentElement.dataset.otherExtension = 'ran';
       const add = (name) => {
         const frame = document.createElement('iframe');
         frame.className = name;
@@ -376,131 +380,57 @@ try {
         frame.src = chrome.runtime.getURL('frame.html');
         document.documentElement.append(frame);
       };
-      add('notification');
+      addEventListener('DOMContentLoaded', () => add('notification'));
       addEventListener('focusin', () => document.querySelector('.dropdown') || add('dropdown'));
     }`,
   );
-  const frameExtensionId = (await send('Extensions.loadUnpacked', { path: frameExtension })).id;
-  const login = JSON.parse((await call('open_tab', { url: base + '/login' })).content[0].text).tabId;
-  const loginPage = await attach((await findTarget((t) => t.type === 'page' && t.url === base + '/login')).targetId);
-  const frameLoaded = (name) => {
+  await send('Extensions.loadUnpacked', { path: frameExtension });
+  const frameLoaded = (page, name) => {
     waitingFor = `the extension's ${name} frame to load`;
     return evaluate(
-      loginPage,
+      page,
       `new Promise(resolve => { const check = () => { if (document.querySelector('.${name}')?.dataset.loaded) { observer.disconnect(); resolve(true); } }; const observer = new MutationObserver(check); observer.observe(document, {subtree:true,childList:true,attributes:true}); check(); })`,
     );
   };
-  await frameLoaded('notification');
-  const readLogin = await client.callTool({ name: 'read_page', arguments: { tabId: login } });
-  assert.ok(!readLogin.isError, `read_page failed: ${readLogin.content?.[0]?.text}`);
-  assert.doesNotMatch(readLogin.content[0].text, /private-frame-marker/);
-  console.log("PASS the agent reads a page holding another extension's frame");
-  // The shell's sidebar hears when its debugger lets go of a tab.
-  await evaluate(session, 'window.detachedTabs = []; chrome.debugger.onDetach.addListener((source) => detachedTabs.push(source.tabId)); undefined');
-  const loginChromeId = await evaluate(session, `chrome.tabs.query({}).then((tabs) => tabs.find((t) => t.url === ${JSON.stringify(base + '/login')}).id)`);
-  // The extension's frame stays closed to the shell's own debugger connection, which the bridge
-  // holds on this tab: no attaching to the frame, directly or as an auto-attached child, and
-  // nothing of it through the page's session. A cross-site web frame (another site, so its own
-  // process) shows auto-attach works.
-  const webChild = `http://localhost:${server.address().port}/child`;
-  waitingFor = 'the web child frame to load';
-  await evaluate(
-    loginPage,
-    `new Promise((resolve) => { const frame = document.createElement('iframe'); frame.onload = () => resolve(true); frame.src = ${JSON.stringify(webChild)}; document.body.append(frame); })`,
-  );
-  const frameProbe = await evaluate(
-    session,
-    `(async () => {
-      const tabId = ${loginChromeId};
-      const events = [];
-      const listener = (source, method, params) => source.tabId === tabId && events.push({ method, params });
-      chrome.debugger.onEvent.addListener(listener);
-      const autoAttach = (on) => chrome.debugger.sendCommand({ tabId }, 'Target.setAutoAttach', { autoAttach: on, waitForDebuggerOnStart: false, flatten: true });
-      const attachedUrls = () => events.filter((e) => e.method === 'Target.attachedToTarget').map((e) => e.params.targetInfo.url);
-      await autoAttach(true);
-      // Chromium auto-attaches the page's existing children in one pass; the web child shows it ran.
-      await new Promise((resolve) => { const check = () => (attachedUrls().includes(${JSON.stringify(webChild)}) ? resolve() : setTimeout(check, 50)); check(); });
-      const childUrls = attachedUrls();
-      await autoAttach(false);
-      events.length = 0;
-      await chrome.debugger.sendCommand({ tabId }, 'Runtime.disable');
-      await chrome.debugger.sendCommand({ tabId }, 'Runtime.enable');
-      // A document's own context, not the content-script worlds Chromium shows any page debugger.
-      const contextOrigins = events
-        .filter((e) => e.method === 'Runtime.executionContextCreated' && e.params.context.auxData?.isDefault)
-        .map((e) => e.params.context.origin);
-      chrome.debugger.onEvent.removeListener(listener);
-      const target = (await chrome.debugger.getTargets()).find((t) => t.url === ${JSON.stringify(`chrome-extension://${frameExtensionId}/frame.html`)});
-      let attach = 'no frame target';
-      if (target) {
-        try {
-          await chrome.debugger.attach({ targetId: target.id }, '1.3');
-          attach = 'attached';
-          await chrome.debugger.detach({ targetId: target.id });
-        } catch (error) {
-          attach = error.message;
-        }
-      }
-      const script = await chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', {
-        expression: "String(document.querySelector('.notification').contentDocument?.body?.textContent ?? null)",
-        returnByValue: true,
-      });
-      const dom = await chrome.debugger.sendCommand({ tabId }, 'DOM.getDocument', { depth: -1, pierce: true });
-      return {
-        attach,
-        script: script.result.value,
-        dom: JSON.stringify(dom).includes('private-frame-marker'),
-        children: childUrls.filter((url) => url.startsWith('chrome-extension://')),
-        contexts: contextOrigins.filter((origin) => origin.startsWith('chrome-extension://')),
-        pageContext: contextOrigins.includes(${JSON.stringify(base)}),
-      };
-    })()`,
-  );
-  // Chromium refuses with one of its restriction errors; 'attached' or 'no frame target' fail here.
-  assert.match(frameProbe.attach, /^(Cannot attach to this target\.|Cannot access a chrome-extension:\/\/ URL of different extension)$/);
-  assert.deepEqual(
-    { script: frameProbe.script, dom: frameProbe.dom, children: frameProbe.children, contexts: frameProbe.contexts, pageContext: frameProbe.pageContext },
-    { script: 'null', dom: false, children: [], contexts: [], pageContext: true },
-  );
-  console.log("PASS the shell can't attach to or read the extension's frame inside the page");
-  await call('click', { tabId: login, selector: '#field' });
-  await frameLoaded('dropdown');
-  await call('type', { tabId: login, selector: '#field', text: 'agent' });
-  assert.equal(await evaluate(loginPage, "document.querySelector('#field').value"), 'agent');
-  assert.equal(await evaluate(session, `detachedTabs.includes(${loginChromeId})`), false, "the shell's debugger let go when the dropdown loaded");
-  await yours("typing in a page with another extension's frames");
-  console.log("PASS the agent stays attached and keeps typing after another extension adds a frame to its page");
-  const extensionPage = `chrome-extension://${frameExtensionId}/frame.html`;
-  await call('evaluate', { tabId: login, expression: `setTimeout(() => (location.href = ${JSON.stringify(extensionPage)})), 'leaving'` });
-  await stateWhere(`s => s.tabs[${JSON.stringify(login)}]?.url === ${JSON.stringify(extensionPage)}`);
-  // The session that was attached ends when the tab shows the extension's page, before any new call.
-  waitingFor = "the shell's debugger to let go of the tab showing another extension's page";
-  await evaluate(session, `new Promise((resolve) => { const check = () => (detachedTabs.includes(${loginChromeId}) ? resolve(true) : setTimeout(check, 50)); check(); })`);
-  const readExtension = await client.callTool({ name: 'read_page', arguments: { tabId: login } });
-  assert.equal(readExtension.isError, true, `read_page read another extension's page: ${readExtension.content?.[0]?.text}`);
-  assert.match(readExtension.content[0].text, /Cannot access a chrome-extension:\/\/ URL of different extension/);
-  console.log("PASS the agent can't read another extension's own page");
-  // Nor reach the extension's data through a page the shell does drive.
-  const clearStorage = await evaluate(
-    session,
-    `(async () => {
-      const tab = await chrome.tabs.create({ url: ${JSON.stringify(base + '/storage')}, active: false });
-      try {
-        await chrome.debugger.attach({ tabId: tab.id }, '1.3');
-        await chrome.debugger.sendCommand({ tabId: tab.id }, 'Storage.clearDataForOrigin', { origin: ${JSON.stringify(`chrome-extension://${frameExtensionId}`)}, storageTypes: 'all' });
-        return 'cleared';
-      } catch (error) {
-        return error.message;
-      } finally {
-        await chrome.debugger.detach({ tabId: tab.id }).catch(() => undefined);
-        await chrome.tabs.remove(tab.id);
-      }
-    })()`,
-  );
-  assert.match(clearStorage, /Permission denied/);
-  console.log("PASS the shell can't clear another extension's storage");
-  await call('close_tab', { tabId: login });
-  await stateWhere(`s => !s.tabs[${JSON.stringify(login)}]`);
+  /** What other extensions and the shell's own scripts did to a loaded page. */
+  const scriptsIn = (page) =>
+    evaluate(
+      page,
+      "({ other: document.documentElement.dataset.otherExtension ?? null, frames: document.querySelectorAll('iframe').length, shell: !String(console.error).includes('[native code]') })",
+    );
+
+  // Your own sign-in page: the extension runs there, and the agent can't drive it.
+  await rpc('newTab', base + '/login?yours');
+  state = await stateWhere(`s => Object.values(s.tabs).some(t => t.url === ${JSON.stringify(base + '/login?yours')})`);
+  const yourLogin = Object.values(state.tabs).find((t) => t.url === base + '/login?yours').id;
+  const yourLoginPage = await attach((await findTarget((t) => t.type === 'page' && t.url === base + '/login?yours')).targetId);
+  await frameLoaded(yourLoginPage, 'notification');
+  assert.deepEqual(await scriptsIn(yourLoginPage), { other: 'ran', frames: 1, shell: true });
+  const readYours = await client.callTool({ name: 'read_page', arguments: { tabId: yourLogin } });
+  assert.equal(readYours.isError, true, `read_page drove a tab holding another extension's frame: ${readYours.content?.[0]?.text}`);
+  assert.match(readYours.content[0].text, /another extension \(Frames like a password manager\)/);
+  console.log("PASS other extensions run in your tabs, and the agent names the one that keeps it out");
+
+  // The agent's sign-in page: only the shell's scripts ran, and the agent clicks and types there.
+  const agentLogin = JSON.parse((await call('open_tab', { url: base + '/login?agent' })).content[0].text).tabId;
+  const agentLoginPage = await attach((await findTarget((t) => t.type === 'page' && t.url === base + '/login?agent')).targetId);
+  await loaded(agentLoginPage, base + '/login?agent');
+  assert.deepEqual(await scriptsIn(agentLoginPage), { other: null, frames: 0, shell: true });
+  await call('read_page', { tabId: agentLogin });
+  await call('click', { tabId: agentLogin, selector: '#field' });
+  await call('type', { tabId: agentLogin, selector: '#field', text: 'agent' });
+  assert.equal(await evaluate(agentLoginPage, "document.querySelector('#field').value"), 'agent');
+  assert.deepEqual(await scriptsIn(agentLoginPage), { other: null, frames: 0, shell: true });
+  console.log("PASS other extensions stay out of the agent's tab, and the agent reads, clicks and types there");
+
+  // Taken from the agent, the tab is yours: its next page runs your extensions again.
+  await rpc('togglePin', agentLogin);
+  await stateWhere(`s => !s.tabs[${JSON.stringify(agentLogin)}].agent`);
+  await send('Page.navigate', { url: base + '/login?taken' }, agentLoginPage);
+  await loaded(agentLoginPage, base + '/login?taken');
+  await frameLoaded(agentLoginPage, 'notification');
+  assert.equal((await scriptsIn(agentLoginPage)).other, 'ran');
+  console.log('PASS a tab taken from the agent runs other extensions again');
 
   // A tab you pin is yours: it leaves the agent's folder.
   await rpc('togglePin', opened.tabId);
