@@ -14,7 +14,7 @@ const cpu = mac ? 'arm64' : 'x64';
 const platform = `${mac ? 'macos' : windows ? 'windows' : 'linux'}-${cpu}`;
 const python = windows ? path.join(process.env.pythonLocation || '', 'python.exe') : 'python3';
 const depotRevision = 'a20039648c0de69d8156906b18052bd47e9bf230';
-// Use the same tar and native paths for both sides of a checkpoint handoff.
+// Node sets the native working directory; GNU tar receives slash-separated archive paths.
 const checkpointTar = windows ? path.join(process.env.ProgramFiles, 'Git/usr/bin/tar.exe') : 'tar';
 
 export function releaseArgs(template, { platform, version, buildNumber }) {
@@ -38,13 +38,13 @@ export function checkIdentity(actual, expected) {
 
 export function saveCheckpoint(work, archive, complete) {
   // Windows' system tar crashes on the Chromium tree. Git ships GNU tar.
-  execFileSync(checkpointTar, [...(windows ? ['--force-local'] : []), '-czf', archive, '-C', work,
-    ...(complete ? ['state.json'] : ['.'])], { stdio: 'inherit' });
+  execFileSync(checkpointTar, [...(windows ? ['--force-local'] : []), '-czf', archive.replaceAll(path.sep, '/'),
+    ...(complete ? ['state.json'] : ['.'])], { cwd: work, stdio: 'inherit' });
 }
 
 export async function restoreCheckpoint(work, archive) {
   await fs.mkdir(work);
-  execFileSync(checkpointTar, [...(windows ? ['--force-local'] : []), '-xzf', archive, '-C', work], { stdio: 'inherit' });
+  execFileSync(checkpointTar, [...(windows ? ['--force-local'] : []), '-xzf', archive.replaceAll(path.sep, '/')], { cwd: work, stdio: 'inherit' });
   await fs.rm(archive);
 }
 
