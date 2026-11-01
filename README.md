@@ -110,6 +110,24 @@ npm run typecheck
 
 ### Release
 
+#### Nightly builds on GitHub Actions
+
+The `Nightly release` workflow starts daily at 02:00 UTC and also supports **Run workflow** on the default branch. GitHub can delay scheduled starts. Scheduled and manual runs share one concurrency group, so an active release finishes before another starts. GitHub keeps its default single pending run and replaces that pending run when a newer request arrives.
+
+The workflow uses free standard runners for Linux x64, Windows x64 and Apple Silicon macOS. It builds the pinned `chromium/CHROMIUM_VERSION` with Flecha's patches and optimized, non-component release settings. Source preparation runs separately, then compilation resumes from checkpoints between jobs. The five-hour stage allowance follows the successful portablelinux workflow; ten compilation stages cover the observed Apple Silicon build in the [feasibility notes](docs/github-actions-chromium-feasibility-20261101.md). If that is insufficient for a changed Chromium build, publication fails and the final checkpoint remains available. A full run can span days.
+
+Only when all platform packages and their source checksums verify does the workflow publish a `nightly-<run-id>` GitHub prerelease. Linux gets `Flecha-linux-x64.tar.gz`, Windows gets `Flecha-windows-x64.zip`, and macOS gets `Flecha-macos-arm64.tar.gz` containing the ad hoc signed app. Nightlies are not notarized and do not use the stable Sparkle update feed. Each package has a checksum manifest and source provenance. Build inputs, packages and checkpoints remain available for 35 days, matching [GitHub's maximum workflow lifetime](https://docs.github.com/en/actions/reference/limits). Superseded checkpoints are deleted after a successful handoff. Published release assets remain available. Release tooling uses Node 26 LTS to avoid the Node 24 HTTP-parser crash during ad-block list downloads.
+
+For Linux and Windows, extract the package into a writable directory, then run `flecha` or `Flecha.cmd`. The launcher keeps its profile beside the browser and registers the bundled native host. On Windows this writes the current user's Chromium native-host registry entry. Linux needs compatible system libraries and an OS configuration that permits Chromium's sandbox. On macOS, extract `Flecha.app`, copy it into Applications, and register its bundled host with `chromium/scripts/install-native-host.sh --app /Applications/Flecha.app` from the matching source checkout.
+
+To start a build manually after the workflow is merged:
+
+```bash
+gh workflow run nightly-release.yml --repo Timpan4/flecha-browser --ref main
+```
+
+#### Signed macOS releases
+
 ```bash
 export FLECHA_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)"
 export FLECHA_NOTARY_PROFILE=flecha-notary   # made once with: xcrun notarytool store-credentials

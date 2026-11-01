@@ -1,0 +1,63 @@
+// Only a complete set of checksummed packages from this source commit can be released.
+import fs from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
+import { pipeline } from 'node:stream/promises';
+import { execFileSync } from 'node:child_process';
+
+export async function verifyRelease(dir, platforms, { sha, chromium }) {
+  const files = new Set(await fs.readdir(dir));
+  for (const { platform } of platforms) {
+    const archive = `Flecha-${platform}.${platform.startsWith('windows-') ? 'zip' : 'tar.gz'}`;
+    const provenanceName = `${platform}.json`;
+    const checksumsName = `${platform}-SHA256SUMS`;
+    for (const file of [archive, provenanceName, checksumsName]) {
+      if (!files.has(file)) throw new Error(`Missing release asset: ${file}`);
+      files.delete(file);
+    }
+    const provenance = JSON.parse(await fs.readFile(path.join(dir, provenanceName), 'utf8'));
+    if (provenance.sha !== sha || provenance.chromium !== chromium || provenance.platform !== platform) {
+      throw new Error(`Release provenance mismatch: ${platform}`);
+    }
+    const checksums = new Map();
+    for (const line of (await fs.readFile(path.join(dir, checksumsName), 'utf8')).trim().split('\n')) {
+      const match = /^([a-f0-9]{64})  ([^/\\]+)$/.exec(line);
+      if (!match || checksums.has(match[2])) throw new Error(`Invalid checksum manifest: ${platform}`);
+      checksums.set(match[2], match[1]);
+    }
+    if (checksums.size !== 2 || !checksums.has(archive) || !checksums.has(provenanceName)) {
+      throw new Error(`Checksum manifest does not cover the package and provenance: ${platform}`);
+    }
+    for (const [file, expected] of checksums) {
+      const hash = createHash('sha256');
+      await pipeline(createReadStream(path.join(dir, file)), hash);
+      if (hash.digest('hex') !== expected) throw new Error(`Checksum mismatch: ${file}`);
+    }
+  }
+  if (files.size) throw new Error(`Unexpected release assets: ${[...files].join(', ')}`);
+}
+
+async function main() {
+  const root = fileURLToPath(new URL('../..', import.meta.url));
+  const platforms = JSON.parse(await fs.readFile(path.join(root, 'chromium/build/ci-platforms.json'), 'utf8'));
+  const chromium = (await fs.readFile(path.join(root, 'chromium/CHROMIUM_VERSION'), 'utf8')).trim();
+  const { GITHUB_SHA: sha, GITHUB_RUN_ID: run, GITHUB_REPOSITORY: repository, GITHUB_SERVER_URL: server } = process.env;
+  if (!sha || !/^\d+$/.test(run || '') || !repository || !server) throw new Error('Missing GitHub release context.');
+  const dir = path.join(root, 'release');
+  await verifyRelease(dir, platforms, { sha, chromium });
+  const tag = `nightly-${run}`;
+  const notes = path.join(root, 'release-notes.md');
+  await fs.writeFile(notes, `Nightly build of Flecha from ${sha}, based on Chromium ${chromium}.\n\n` +
+    `Build: ${server}/${repository}/actions/runs/${run}\n\n` +
+    'Linux and Windows are portable packages. Extract them to a writable directory and run flecha or Flecha.cmd. Their profiles stay beside the browser. Windows registers the bundled native host for your user.\n\n' +
+    'The macOS app is ad hoc signed and is not notarized. Its native host can be registered with chromium/scripts/install-native-host.sh --app /path/to/Flecha.app from the matching source checkout.\n\n' +
+    'These prereleases do not use the stable Sparkle update feed. SHA256SUMS files cover each package and its source provenance.\n');
+  const assets = (await fs.readdir(dir)).map(file => path.join(dir, file));
+  execFileSync('gh', ['release', 'create', tag, ...assets, '--repo', repository, '--target', sha,
+    '--title', `Nightly ${new Date().toISOString().slice(0, 10)} (${run})`, '--prerelease', '--latest=false', '--notes-file', notes], { stdio: 'inherit' });
+  await fs.appendFile(process.env.GITHUB_STEP_SUMMARY, `Published [${tag}](${server}/${repository}/releases/tag/${tag}) from ${sha}.\n`);
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();
