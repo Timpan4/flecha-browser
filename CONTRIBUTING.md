@@ -43,6 +43,13 @@ Use `FLECHA_CHROMIUM_OUT` or `--out` to select another compiled output, and `--p
 npm run browser:linux -- --out /absolute/path/to/out/Dev --profile /absolute/path/to/user-data
 ```
 
+To check that a coding agent works in the background (its tab opens in the agent's folder, and its clicks, typing and screenshots leave your tab and keystrokes alone), run the agent check against a compiled Linux browser. It uses its own Xvfb display, temporary profile and helper, and needs Xvfb, a C++ compiler and the X11/XTest development libraries:
+
+```bash
+npm run shell:build && npm run host:build
+node chromium/tests/native-agent.mjs /absolute/path/to/out/Release/chrome [/absolute/path/to/screenshots]
+```
+
 Worktrees with native C++ patch changes need a matching native build. Keep using the preserved, already-patched source tree for those incremental builds; the shared snapshot is a runtime and backup, not a replacement source checkout. Do not run the upstream macOS reset/apply scripts against that extracted Linux tree. Windows and macOS need native binaries for their own OS; this snapshot and launcher are Linux-only.
 
 ## Two kinds of change

@@ -14,6 +14,7 @@ import { searchUrl } from '../lib/url';
 import type { MenuEntry } from '../settingsUi';
 import { importFromBrowser, showPageMenu } from '../windowUi';
 import { SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH } from '../../shared/sidebarWidth';
+import { inAgentFolder, todaySplit } from '../../shared/agentFolder';
 import { blocksAdsOn, isSiteHost } from '../../shared/adBlockSites';
 import { incognito } from '../incognito';
 import type { DownloadInfo, DropTarget, FlechaApi, HistoryEntry, PaletteMode, PeekState, PinnedNode, Space, TabInfo, UiState } from '../../shared/types';
@@ -160,6 +161,7 @@ function render(s: UiState) {
   if (!document.querySelector('#scroll [contenteditable="true"]')) {
     $('pinned').replaceChildren(...space.pinned.map((node) => renderNode(node, space, undefined)));
     $('today').replaceChildren(...todayRows(s, space));
+    renderAgentFolder(s, space);
   }
 
   $('spaces').replaceChildren(
@@ -388,14 +390,55 @@ function renderNode(node: PinnedNode, space: Space, folderId: string | undefined
   );
 }
 
+/** The agent's folder in this Space (agentFolder.ts). */
+const agentTabs = (s: UiState, space: Space) => space.today.filter((id) => inAgentFolder(s.tabs, space, id)).map((id) => s.tabs[id]);
+
+let agentFolderOpen = true;
+
+/**
+ * The tabs a coding agent opened, in a folder of their own above Today. The agent works in them
+ * in the background; dragging one out makes it an ordinary tab.
+ */
+function renderAgentFolder(s: UiState, space: Space) {
+  const folder = $('agent-folder');
+  const tabs = agentTabs(s, space);
+  folder.hidden = !tabs.length;
+  if (!tabs.length) return folder.replaceChildren();
+  const busy = !!s.agent?.busy;
+  folder.classList.toggle('open', agentFolderOpen);
+  folder.classList.toggle('busy', busy);
+  // The toggle and Clear are buttons side by side, as Today's header has them, so each is a
+  // keyboard stop of its own.
+  const toggle = h(
+    'button',
+    {
+      class: 'row agent-folder-toggle',
+      'aria-expanded': String(agentFolderOpen),
+      onclick: () => {
+        agentFolderOpen = !agentFolderOpen;
+        renderAgentFolder(state!, space);
+      },
+    },
+    h('span', { class: 'row-icon folder-icon' }, busy ? h('span', { class: 'agent-dot' }) : icon('sparkle')),
+    h('span', { class: 'title folder-name' }, busy ? 'Agent is working…' : 'Agent’s tabs'),
+    h('span', { class: 'chevron' }, icon('chevron')),
+  );
+  const clear = h('button', { class: 'text-button', title: 'Close the agent’s tabs', onclick: () => tabs.forEach((tab) => api.close(tab.id)) }, 'Clear');
+  // Its rows take no drops: a tab dropped among them would land in Today and leave the folder.
+  folder.replaceChildren(
+    h('div', { class: 'agent-folder-header' }, toggle, clear),
+    h('div', { class: 'folder-children' }, ...tabs.map((tab) => tabRow(tab, space, undefined))),
+  );
+}
+
 /** Today's tabs, with the two halves of a split drawn together as one row, as in Arc. */
 function todayRows(s: UiState, space: Space): HTMLElement[] {
-  const pair = space.split && space.split.every((id) => space.today.includes(id) && s.tabs[id]) ? space.split : undefined;
+  const pair = todaySplit(s.tabs, space);
   const rows: HTMLElement[] = [];
   let pairDrawn = false;
   for (const id of space.today) {
     const tab = s.tabs[id];
-    if (!tab) continue;
+    if (!tab || inAgentFolder(s.tabs, space, id)) continue;
     // The row sits where whichever half comes first in the list is; the other half is skipped.
     if (pair && pair.includes(id)) {
       if (pairDrawn) continue;
@@ -417,12 +460,13 @@ function todayRows(s: UiState, space: Space): HTMLElement[] {
   return rows;
 }
 
-function tabRow(tab: TabInfo, space: Space, target: DropTarget) {
+/** A tab's row; `target` is where a tab dropped on it goes, and a row without one takes no drops. */
+function tabRow(tab: TabInfo, space: Space, target: DropTarget | undefined) {
   const close = h(
     'span',
     {
       class: 'close',
-      title: target.zone === 'today' ? 'Close tab' : 'Unload tab',
+      title: !target || target.zone === 'today' ? 'Close tab' : 'Unload tab',
       onclick: (e: Event) => {
         e.stopPropagation();
         api.close(tab.id);
@@ -568,7 +612,7 @@ function spaceDrag(s: UiState, spaceId: string): Props {
   };
 }
 
-function wireTab(el: HTMLElement, tab: TabInfo, target: DropTarget) {
+function wireTab(el: HTMLElement, tab: TabInfo, target: DropTarget | undefined) {
   el.dataset.tabId = tab.id;
   el.draggable = true;
   el.addEventListener('click', () => api.activate(tab.id));
@@ -587,7 +631,7 @@ function wireTab(el: HTMLElement, tab: TabInfo, target: DropTarget) {
     $('favorites').classList.remove('show-empty');
     hideSplitDrop();
   });
-  acceptDrops(el, target, 'drop-before');
+  if (target) acceptDrops(el, target, 'drop-before');
 }
 
 function acceptDrops(el: HTMLElement, target: DropTarget, hoverClass = 'drag-over') {

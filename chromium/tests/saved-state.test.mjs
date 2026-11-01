@@ -82,6 +82,13 @@ test('failing backup writes are logged and never keep a readable state from load
   assert.ok(errors.length >= 3);
 });
 
+test("a coding agent's tab is still in the agent's folder after a restart", () => {
+  const saved = JSON.parse(savedStore('Work'));
+  const tabId = inWindow(saved).today[0];
+  saved.tabs[tabId].agent = true;
+  assert.equal(decodeState(JSON.stringify(saved)).tabs[tabId].agent, true);
+});
+
 test('settings of the wrong type are dropped instead of breaking startup', () => {
   const saved = JSON.parse(savedStore('Work'));
   Object.assign(saved, { keybindings: { newTab: 42, closeTab: null, reload: 'CmdOrCtrl+R' }, theme: 'neon', archiveAfterHours: -1, searchEngine: 'kagi', window: { x: 1, y: 2, width: 'wide', height: 4 } });

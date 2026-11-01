@@ -780,6 +780,58 @@ body {
   display: none;
 }
 
+/* The tabs a coding agent opened: a folder in the agent's colour, above Today. */
+.agent-folder[hidden] {
+  display: none;
+}
+
+/* The header holds the folder's toggle row and its Clear button side by side. */
+.agent-folder-header {
+  display: flex;
+  align-items: center;
+}
+
+.agent-folder-toggle {
+  flex: 1;
+  min-width: 0;
+}
+
+.agent-folder-toggle .folder-icon,
+.agent-folder-toggle .folder-name {
+  color: var(--agent);
+}
+
+.agent-folder-toggle .folder-icon .agent-dot {
+  animation: agent-pulse 0.9s ease-in-out infinite alternate;
+}
+
+.agent-folder-toggle .chevron {
+  display: grid;
+  margin-left: auto;
+  color: var(--text-3);
+  opacity: 0;
+  transition: transform var(--fast) var(--ease), opacity var(--fast) var(--ease);
+}
+
+.agent-folder.open .agent-folder-toggle .chevron {
+  transform: rotate(90deg);
+}
+
+.agent-folder-header .text-button {
+  opacity: 0;
+  transition: opacity var(--fast) var(--ease);
+}
+
+.agent-folder-header:hover .chevron,
+.agent-folder-header:hover .text-button,
+.agent-folder-header .text-button:focus-visible {
+  opacity: 1;
+}
+
+.agent-folder > .folder-children::before {
+  background: color-mix(in srgb, var(--agent) 40%, transparent);
+}
+
 /* ---- drag and drop ------------------------------------------------------ */
 
 .drop-before::before {

@@ -52,7 +52,7 @@ It is a Chromium 158 fork rather than an Electron app because Google blocks sign
 - Running locally: dev servers listening on this Mac show up in the sidebar, named after their project folder
 - Environments: group a project's origins (local, staging, production) in Settings; ⌥⌘E moves the page to the next one with the same path, and the address bar shows a LOCAL, STAGING or PROD badge
 - Chromium's DevTools (⌥⌘I), View source (⌥⌘U), zoom and Find in page
-- Coding agents (MCP): Settings, Coding agents turns on a local MCP server (127.0.0.1, token required) so Claude Code, Cursor and others can list tabs, read pages and console logs, take screenshots, click, type and run JavaScript. It needs the native host (see Install)
+- Coding agents (MCP): Settings, Coding agents turns on a local MCP server (127.0.0.1, token required) so Claude Code, Cursor and others can list tabs, read pages and console logs, take screenshots, click, type and run JavaScript. Agents work in the background: their tabs open in an "Agent is working…" folder above Today, and nothing they do switches your tab or takes your keyboard. It needs the native host (see Install)
 
 **Privacy and the rest of the browser**
 
