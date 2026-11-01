@@ -64,9 +64,17 @@ async function cleanUp() {
 }
 const watchdog = setTimeout(async () => {
   if (finished) return;
-  if (diagnose) console.error('DIAGNOSTIC', await diagnose().catch((error) => error.message));
+  // The X focus is read now. The page may not answer; stopping the browser ends its call, so
+  // the diagnostic never holds up the cleanup.
+  let diagnostic;
+  try {
+    diagnostic = diagnose?.();
+  } catch (error) {
+    diagnostic = { error: error.message };
+  }
   console.error(`FAIL the run took longer than ${deadline} ms (FLECHA_HARNESS_TIMEOUT_MS); the last step is the last PASS above, waiting for ${waitingFor}`);
   await cleanUp();
+  if (diagnostic) console.error('DIAGNOSTIC', { ...diagnostic, page: await diagnostic.page });
   process.exit(1);
 }, deadline);
 for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, async () => { await cleanUp(); process.exit(1); });
@@ -182,10 +190,10 @@ try {
   const myPage = await attach((await findTarget((t) => t.type === 'page' && t.url === base + '/mine')).targetId);
   await loaded(myPage, base + '/mine');
   const x11 = (...args) => execFileSync(inputTool, [env.DISPLAY, String(browser.pid), ...args], { env });
-  diagnose = async () => ({
-    page: await evaluate(myPage, "({ draft: document.querySelector('#draft').value, active: document.activeElement?.id, hasFocus: document.hasFocus(), visibility: document.visibilityState })"),
+  diagnose = () => ({
     xFocus: String(x11('focus')).trim(),
     windows: String(x11('windows')).trim(),
+    page: evaluate(myPage, "({ draft: document.querySelector('#draft').value, active: document.activeElement?.id, hasFocus: document.hasFocus(), visibility: document.visibilityState })").catch((error) => error.message),
   });
   /** Waits until your draft holds `text`, as each key you type reaches it. */
   const draftIs = (text) => {

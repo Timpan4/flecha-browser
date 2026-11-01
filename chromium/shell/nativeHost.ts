@@ -445,27 +445,28 @@ export function registerNativeHost(ctx: NativeHostContext) {
   }
 
   function attach(chromeId: number): Promise<void> {
+    // Attached counts from the debugger's attach, but commands wait until the tab is awake and set
+    // up: a call during that time waits for it too.
+    let pending = attaching.get(chromeId);
+    if (pending) return pending;
     if (attached.has(chromeId)) {
       keepAttached(chromeId);
       return Promise.resolve();
     }
-    let pending = attaching.get(chromeId);
-    if (!pending) {
-      pending = (async () => {
-        await chrome.debugger.attach({ tabId: chromeId }, '1.3');
-        keepAttached(chromeId);
-        consoleLogs.set(chromeId, []);
-        // A frozen tab answers nothing; tab sleep wakes it now that it's in use, before any command.
-        await ctx.agentTabsChanged();
-        // focus(), :focus and key events work as on screen, without taking the window's focus.
-        await chrome.debugger.sendCommand({ tabId: chromeId }, 'Emulation.setFocusEmulationEnabled', { enabled: true });
-        await chrome.debugger.sendCommand({ tabId: chromeId }, 'Runtime.enable');
-        await chrome.debugger.sendCommand({ tabId: chromeId }, 'Log.enable');
-        // The replayed messages arrive right after enabling.
-        await wait(100);
-      })().finally(() => attaching.delete(chromeId));
-      attaching.set(chromeId, pending);
-    }
+    pending = (async () => {
+      await chrome.debugger.attach({ tabId: chromeId }, '1.3');
+      keepAttached(chromeId);
+      consoleLogs.set(chromeId, []);
+      // A frozen tab answers nothing; tab sleep wakes it now that it's in use, before any command.
+      await ctx.agentTabsChanged();
+      // focus(), :focus and key events work as on screen, without taking the window's focus.
+      await chrome.debugger.sendCommand({ tabId: chromeId }, 'Emulation.setFocusEmulationEnabled', { enabled: true });
+      await chrome.debugger.sendCommand({ tabId: chromeId }, 'Runtime.enable');
+      await chrome.debugger.sendCommand({ tabId: chromeId }, 'Log.enable');
+      // The replayed messages arrive right after enabling.
+      await wait(100);
+    })().finally(() => attaching.delete(chromeId));
+    attaching.set(chromeId, pending);
     return pending;
   }
 
