@@ -181,4 +181,3 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: node chromium/scripts/ci-publish.mjs
-
