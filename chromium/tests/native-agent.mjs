@@ -151,7 +151,18 @@ try {
   execFileSync(process.execPath, ['chromium/scripts/install-native-host.mjs', '--profile', profile], { env, stdio: 'inherit' });
   browser = spawn(
     binary,
-    [`--user-data-dir=${profile}`, `--flecha-shell-dir=${shellDir}`, '--no-first-run', '--no-default-browser-check', '--disable-gpu', '--ozone-platform=x11', '--password-store=basic', '--remote-debugging-pipe'],
+    [
+      `--user-data-dir=${profile}`,
+      `--flecha-shell-dir=${shellDir}`,
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--disable-gpu',
+      '--ozone-platform=x11',
+      '--password-store=basic',
+      '--remote-debugging-pipe',
+      // Lets the run load the extension that puts its frames into pages (Extensions.loadUnpacked).
+      '--enable-unsafe-extension-debugging',
+    ],
     { env, stdio: ['ignore', 'ignore', 'inherit', 'pipe', 'pipe'] },
   );
   // A browser that exits, or that never starts (a wrong path emits 'error' and no 'exit'), fails
@@ -337,6 +348,67 @@ try {
   console.log("PASS a call on the agent's discarded tab brings its page back, in the background");
   await call('close_tab', { tabId: idle });
   await stateWhere(`s => !s.tabs[${JSON.stringify(idle)}]`);
+
+  // A password manager such as Proton Pass puts its own extension's frames into web pages: one as
+  // the page loads, a dropdown when a field takes focus. Chromium keeps an extension's debugger off
+  // pages holding another extension's frame; Flecha lets its shell drive them (patch 0080), and the
+  // shell still can't drive an extension's own page.
+  const frameExtension = path.join(profile, 'frame-extension');
+  await fs.mkdir(frameExtension);
+  await fs.writeFile(
+    path.join(frameExtension, 'manifest.json'),
+    JSON.stringify({
+      manifest_version: 3,
+      name: 'Frames like a password manager',
+      version: '1',
+      content_scripts: [{ matches: ['http://127.0.0.1/*'], js: ['content.js'] }],
+      web_accessible_resources: [{ resources: ['frame.html'], matches: ['http://127.0.0.1/*'] }],
+    }),
+  );
+  await fs.writeFile(path.join(frameExtension, 'frame.html'), '<title>Extension frame</title><p>Extension frame</p>');
+  await fs.writeFile(
+    path.join(frameExtension, 'content.js'),
+    `if (location.pathname === '/login') {
+      const add = (name) => {
+        const frame = document.createElement('iframe');
+        frame.className = name;
+        frame.onload = () => (frame.dataset.loaded = 'yes');
+        frame.src = chrome.runtime.getURL('frame.html');
+        document.documentElement.append(frame);
+      };
+      add('notification');
+      addEventListener('focusin', () => document.querySelector('.dropdown') || add('dropdown'));
+    }`,
+  );
+  const frameExtensionId = (await send('Extensions.loadUnpacked', { path: frameExtension })).id;
+  const login = JSON.parse((await call('open_tab', { url: base + '/login' })).content[0].text).tabId;
+  const loginPage = await attach((await findTarget((t) => t.type === 'page' && t.url === base + '/login')).targetId);
+  const frameLoaded = (name) => {
+    waitingFor = `the extension's ${name} frame to load`;
+    return evaluate(
+      loginPage,
+      `new Promise(resolve => { const check = () => { if (document.querySelector('.${name}')?.dataset.loaded) { observer.disconnect(); resolve(true); } }; const observer = new MutationObserver(check); observer.observe(document, {subtree:true,childList:true,attributes:true}); check(); })`,
+    );
+  };
+  await frameLoaded('notification');
+  const readLogin = await client.callTool({ name: 'read_page', arguments: { tabId: login } });
+  assert.ok(!readLogin.isError, `read_page failed: ${readLogin.content?.[0]?.text}`);
+  console.log("PASS the agent reads a page holding another extension's frame");
+  await call('click', { tabId: login, selector: '#field' });
+  await frameLoaded('dropdown');
+  await call('type', { tabId: login, selector: '#field', text: 'agent' });
+  assert.equal(await evaluate(loginPage, "document.querySelector('#field').value"), 'agent');
+  await yours("typing in a page with another extension's frames");
+  console.log("PASS the agent keeps typing after another extension adds a frame to its page");
+  const extensionPage = `chrome-extension://${frameExtensionId}/frame.html`;
+  await call('evaluate', { tabId: login, expression: `setTimeout(() => (location.href = ${JSON.stringify(extensionPage)})), 'leaving'` });
+  await stateWhere(`s => s.tabs[${JSON.stringify(login)}]?.url === ${JSON.stringify(extensionPage)}`);
+  const readExtension = await client.callTool({ name: 'read_page', arguments: { tabId: login } });
+  assert.equal(readExtension.isError, true, `read_page read another extension's page: ${readExtension.content?.[0]?.text}`);
+  assert.match(readExtension.content[0].text, /Cannot access a chrome-extension:\/\/ URL of different extension/);
+  console.log("PASS the agent can't read another extension's own page");
+  await call('close_tab', { tabId: login });
+  await stateWhere(`s => !s.tabs[${JSON.stringify(login)}]`);
 
   // A tab you pin is yours: it leaves the agent's folder.
   await rpc('togglePin', opened.tabId);

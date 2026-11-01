@@ -1,0 +1,58 @@
+# Flecha: the shell's debugger drives a web page that holds another extension's frame, such as the autofill dropdown a password manager adds, instead of Chromium refusing it ("Cannot access a chrome-extension:// URL of different extension") or detaching it when the frame appears. The shell still can't attach to that frame or to a tab showing an extension's own page.
+--- a/chrome/browser/extensions/api/debugger/debugger_api.cc
++++ b/chrome/browser/extensions/api/debugger/debugger_api.cc
+@@ -281,6 +281,21 @@
+   return true;
+ }
+ 
++// Flecha: whether `rfh` holds another extension's page, such as the autofill
++// dropdown a password manager puts inside web pages. Like the checks below, it
++// looks at both the committed URL and the SiteURL, for frames mid-navigation.
++bool IsOtherExtensionFrame(const Extension& extension,
++                           content::RenderFrameHost* rfh) {
++  auto other_extension = [&](const GURL& url) {
++    return url.SchemeIs(extensions::kExtensionScheme) &&
++           url.host() != extension.id();
++  };
++  return other_extension(rfh->GetLastCommittedURL()) ||
++         other_extension(rfh->GetSiteInstance()
++                             ->GetSecurityPrincipal()
++                             .GetDeprecatedSiteURL());
++}
++
+ constexpr char kBrowserTargetId[] = "browser";
+ 
+ bool ExtensionIsTrusted(const Extension& extension) {
+@@ -336,6 +351,15 @@
+   bool result = true;
+   render_frame_host->ForEachRenderFrameHostWithAction(
+       [&](content::RenderFrameHost* rfh) {
++        // Flecha: another extension's frame inside the page doesn't stop
++        // Flecha's shell, which drives pages for coding agents, from attaching
++        // to the page. The frame runs in its extension's process, out of the
++        // page session's reach, and the shell still can't attach to that frame
++        // itself or to a tab showing an extension's own page.
++        if (IsFlechaShell(extension.id()) && rfh != render_frame_host &&
++            IsOtherExtensionFrame(extension, rfh)) {
++          return content::RenderFrameHost::FrameIterationAction::kSkipChildren;
++        }
+ #if BUILDFLAG(ENABLE_EXTENSIONS)
+         // If `rfh` is attached to an inner MimeHandlerViewGuest, skip it when
+         // checking an ancestor frame. This is done to fix crbug.com/40213673
+@@ -1116,6 +1140,16 @@
+   if (is_webui) {
+     return false;
+   }
++  // Flecha: when a subframe of the page navigates to another extension's page
++  // (a password manager adding its autofill dropdown), the shell stays
++  // attached. This check can't tell a subframe from the page itself; when the
++  // page itself commits another extension's page, Chromium checks the new
++  // frame with MayAttachToRenderFrameHost(), which refuses it, and detaches
++  // the shell.
++  if (IsFlechaShell(extension_->id()) &&
++      url.SchemeIs(extensions::kExtensionScheme)) {
++    return true;
++  }
+   std::string error;
+   return ExtensionMayAttachToURLOrInnerURL(*extension_, profile_, url, nullptr,
+                                            &error);
