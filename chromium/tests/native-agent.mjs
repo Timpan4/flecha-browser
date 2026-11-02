@@ -444,8 +444,11 @@ try {
     })`,
   );
   assert.equal(discardedLoginGone, true, 'Chromium discarded the agent sign-in tab');
-  const otherAfterDiscard = await call('evaluate', { tabId: discardedLogin, expression: 'document.documentElement.dataset.otherExtension ?? null' });
-  assert.equal(otherAfterDiscard.content[0].text, 'null');
+  const otherAfterDiscard = await call('evaluate', {
+    tabId: discardedLogin,
+    expression: "location.pathname + location.search + ' ' + document.querySelector('h1')?.textContent + ' ' + (document.documentElement.dataset.otherExtension ?? null)",
+  });
+  assert.equal(otherAfterDiscard.content[0].text, '/login?discard Agent page null');
   console.log('PASS a discarded agent tab comes back without other extensions');
   await call('close_tab', { tabId: discardedLogin });
   await stateWhere(`s => !s.tabs[${JSON.stringify(discardedLogin)}]`);
