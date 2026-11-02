@@ -33,8 +33,16 @@ jobs:
           persist-credentials: false
       - name: Record stage start
         run: node -e "require('node:fs').appendFileSync(process.env.GITHUB_ENV, 'FLECHA_STAGE_STARTED=' + Date.now() + '\n')"
+      - name: Select Xcode before removing unused SDKs
+        if: runner.os == 'macOS'
+        run: sudo xcode-select --switch /Applications/Xcode_26.3.app/Contents/Developer
       - name: Reclaim unused hosted tooling
         run: node chromium/scripts/ci-cleanup.mjs
+      - name: Verify selected macOS toolchain survived cleanup
+        if: runner.os == 'macOS'
+        run: |
+          xcodebuild -version
+          xcrun --sdk macosx --show-sdk-version
       - uses: actions/setup-node@v7
         with:
           node-version: 26
