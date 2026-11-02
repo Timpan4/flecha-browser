@@ -7,19 +7,42 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { checkIdentity, compile, configureReleaseTree, depotRevision, prepareNativeTree, preserveNativeOutputs, releaseConfiguration, saveCheckpoint, restoreCheckpoint, validateReusableTree } from '../scripts/ci-release.mjs';
-import { downloadReusableTree, findReusableArtifacts, nativeKey, reusableArtifact, reuseDeadline, runNativeCommand, withoutGitHubTokens } from '../scripts/ci-reuse.mjs';
+import { createReuseBudget, downloadReusableTree, findReusableArtifacts, nativeKey, removeNativeTree, reusableArtifact, runNativeCommand, withoutGitHubTokens } from '../scripts/ci-reuse.mjs';
 import { verifyRelease } from '../scripts/ci-publish.mjs';
 
 test('the owner-selected reuse budget leaves clean preparation time and never exceeds the stage deadline', () => {
   const started = Date.now();
   const stageDeadline = started + 5 * 60 * 60 * 1000;
-  const deadline = reuseDeadline({ started, stageDeadline, budgetMinutes: '60' });
+  const deadline = createReuseBudget({ started, stageDeadline, budgetMinutes: '60' }).deadline;
   assert.equal(deadline, started + 60 * 60 * 1000);
-  assert.equal(reuseDeadline({ started: deadline, stageDeadline, budgetMinutes: '0' }), deadline);
-  assert.equal(reuseDeadline({ started: stageDeadline, stageDeadline, budgetMinutes: '60' }), stageDeadline);
+  assert.equal(createReuseBudget({ started: deadline, stageDeadline, budgetMinutes: '0' }).deadline, deadline);
+  assert.equal(createReuseBudget({ started: stageDeadline, stageDeadline, budgetMinutes: '60' }).deadline, stageDeadline);
   for (const budgetMinutes of [undefined, '', 'invalid', '-1', Infinity]) {
-    assert.throws(() => reuseDeadline({ started, stageDeadline, budgetMinutes }), /whole minutes/);
+    assert.throws(() => createReuseBudget({ started, stageDeadline, budgetMinutes }), /whole minutes/);
   }
+});
+
+test('required preparation time preserves optional reuse time across candidate pages and stays within the stage', async t => {
+  const hour = 60 * 60 * 1000;
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  const stageDeadline = now + 5 * hour;
+  const budget = createReuseBudget({ started: now, stageDeadline, budgetMinutes: '60' });
+  const options = { repository: 'owner/repo', branch: 'main', currentRun: '2', platform: 'linux-x64', key: 'key',
+    get deadline() { return budget.deadline; } };
+  const candidates = findReusableArtifacts(options, endpoint => {
+    if (endpoint.endsWith('page=1')) return { artifacts: [{ name: 'native-linux-x64-key', workflow_run: { id: 1 } }], total_count: 3 };
+    if (endpoint.endsWith('page=2')) return { artifacts: ['reuse-linux-x64-key-1', 'checkpoint-linux-x64-1']
+      .map(name => ({ name, workflow_run: { id: 1 } })), total_count: 3 };
+    return { id: 1, head_sha: 'source', head_repository: { full_name: 'owner/repo' },
+      path: '.github/workflows/nightly-release.yml', head_branch: 'main', event: 'workflow_dispatch' };
+  });
+  assert.equal((await candidates.next()).value.name, 'native-linux-x64-key');
+  await budget.required(async () => { now += hour; });
+  assert.equal(budget.deadline - now, hour);
+  assert.equal((await candidates.next()).value.name, 'checkpoint-linux-x64-1');
+  await budget.required(async () => { now += 5 * hour; });
+  assert.equal(budget.deadline, stageDeadline);
 });
 
 test('reuse stops signal-resistant descendants before deadline fallback or cancellation returns', async t => {
@@ -188,7 +211,11 @@ test('optional reuse rejects unavailable or invalid trees and preserves unowned 
   const cancelled = Object.assign(new Error('cancelled'), { signal: 'SIGINT' });
   await assert.rejects(downloadReusableTree(root, options, () => {}, () => { throw cancelled; }), error => error === cancelled);
   await assert.rejects(downloadReusableTree(root, options, () => { throw cancelled; }, gh()), error => error === cancelled);
-  await assert.rejects(fs.stat(work), { code: 'ENOENT' });
+  assert.equal((await fs.stat(work)).isDirectory(), true);
+  await fs.rm(work, { recursive: true });
+  for (const name of (await fs.readdir(root)).filter(name => name.startsWith('native-download-'))) {
+    await fs.rm(path.join(root, name), { recursive: true });
+  }
   const unsafe = Object.assign(new Error('Cannot stop previous attempt'), { code: 'REUSE_TERMINATION_FAILED' });
   await assert.rejects(downloadReusableTree(root, options, async () => {
     await fs.writeFile(path.join(work, 'partial'), 'Previous process may still own this tree');
@@ -252,6 +279,35 @@ test('restored GN failure falls back to a compatible indexed checkpoint before c
   assert.equal(await fs.readFile(path.join(work, 'src/flecha/shell/current.js'), 'utf8'), 'current shell');
   assert.equal((await fs.readdir(root)).some(name => name.startsWith('native-download-')), false);
   assert.equal(requests.length, new Set(requests).size, 'Each artifact page and run metadata is fetched once across retries');
+});
+
+test('failed-tree cleanup stops on cancellation or stage expiry before another attempt can start', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-reuse-cleanup-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const work = path.join(root, 'work');
+  for (const outcome of ['deadline', 'cancellation']) {
+    const controller = new AbortController();
+    const reason = new Error('Cancel cleanup');
+    const options = { repository: 'owner/repo', branch: 'main', currentRun: '2', platform: 'linux-x64', key: 'key', work,
+      signal: controller.signal, cleanup: directory => {
+        assert.equal(directory, work);
+        if (outcome === 'cancellation') controller.abort(reason);
+        return removeNativeTree(directory, { signal: controller.signal, deadline: outcome === 'deadline' ? 0 : undefined });
+      } };
+    const gh = args => args[0] !== 'api' ? undefined : JSON.stringify(args[1].includes('/artifacts?') ? {
+      artifacts: [{ name: 'native-linux-x64-key', workflow_run: { id: 1 } }], total_count: 1,
+    } : { id: 1, head_sha: 'source', head_repository: { full_name: 'owner/repo' },
+      path: '.github/workflows/nightly-release.yml', head_branch: 'main', event: 'workflow_dispatch' });
+    await assert.rejects(downloadReusableTree(root, options, async () => {
+      await fs.writeFile(path.join(work, 'partial'), 'owned extraction');
+      throw new Error('Extraction failed');
+    }, gh), error => outcome === 'deadline' ? error.code === 'ETIMEDOUT' : error === reason);
+    assert.equal(await fs.readFile(path.join(work, 'partial'), 'utf8'), 'owned extraction');
+    await fs.rm(work, { recursive: true });
+    for (const name of (await fs.readdir(root)).filter(name => name.startsWith('native-download-'))) {
+      await fs.rm(path.join(root, name), { recursive: true });
+    }
+  }
 });
 
 test('optional native snapshot failures retain compiler outputs and preserve existing files', async t => {

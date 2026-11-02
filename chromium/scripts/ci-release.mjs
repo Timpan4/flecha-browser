@@ -6,7 +6,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { pipeline } from 'node:stream/promises';
 import { createReadStream } from 'node:fs';
-import { nativeKey, downloadReusableTree, reuseDeadline, runNativeCommand, withoutGitHubTokens } from './ci-reuse.mjs';
+import { nativeKey, downloadReusableTree, createReuseBudget, removeNativeTree, runNativeCommand, withoutGitHubTokens } from './ci-reuse.mjs';
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
 const windows = process.platform === 'win32';
@@ -236,19 +236,21 @@ async function main() {
       xcode: mac ? capture('xcodebuild', ['-version'], root) : null,
       visualStudio: windows ? capture(path.join(process.env['ProgramFiles(x86)'], 'Microsoft Visual Studio/Installer/vswhere.exe'),
         ['-latest', '-products', '*', '-requires', 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64', '-property', 'installationVersion'], root) : null });
-    const deadline = reuseDeadline({ started: Date.now(), stageDeadline: Date.now() + remainingStageTime(),
+    const budget = createReuseBudget({ started: Date.now(), stageDeadline: Date.now() + remainingStageTime(),
       budgetMinutes: process.env.FLECHA_REUSE_BUDGET_MINUTES });
     const configure = candidate => configureReleaseTree({ root, work, identity, key, reused: candidate, args: configuration.args,
       generate: async () => {
         // Both paths need system dependencies. Do not interrupt dpkg to try a clean tree.
-        if (candidate && process.platform === 'linux') await prepareRun('sudo', ['-n', 'bash', 'build/install-build-deps.sh', '--no-prompt']);
-        await prepareRun(gn, ['gen', 'out/Release', '--fail-on-unused-args'], src, candidate ? deadline : undefined);
+        if (candidate && process.platform === 'linux') await budget.required(() =>
+          prepareRun('sudo', ['-n', 'bash', 'build/install-build-deps.sh', '--no-prompt']));
+        await prepareRun(gn, ['gen', 'out/Release', '--fail-on-unused-args'], src, candidate ? budget.deadline : undefined);
       } });
     const reused = await downloadReusableTree(root, { repository: process.env.GITHUB_REPOSITORY,
       branch: process.env.FLECHA_DEFAULT_BRANCH, currentRun: process.env.GITHUB_RUN_ID, platform, key, work,
-      deadline, signal },
+      get deadline() { return budget.deadline; }, signal,
+      cleanup: directory => budget.required(() => removeNativeTree(directory, { deadline: budget.stageDeadline, signal })) },
     async (archive, candidate) => {
-      await restoreCheckpoint(work, archive, { create: false, deadline, signal });
+      await restoreCheckpoint(work, archive, { create: false, deadline: budget.deadline, signal });
       await validateReusableTree(work, { ...identity, sha: candidate.sha, nativeKey: key });
       await configure(candidate);
     });

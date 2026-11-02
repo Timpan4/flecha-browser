@@ -1,6 +1,6 @@
 # Nightly native build reuse
 
-Nightlies search earlier default-branch runs of `nightly-release.yml` for a compatible Chromium tree. Missing trees, failed lookups or transfers, failed extractions and invalid restored state fall back to clean preparation. Failed restoration or validation removes only the work directory created for that attempt; unexpected pre-existing trees are preserved and rejected. Failed and cancelled runs can supply checkpoints; pull requests, forks and other branches cannot.
+Nightlies search earlier default-branch runs of `nightly-release.yml` for a compatible Chromium tree. Missing trees, failed lookups or transfers, failed extractions and invalid restored state fall back to clean preparation. Failed restoration or validation removes only the work directory created for that attempt; unexpected pre-existing trees are preserved and rejected. Cancellation preserves disposable directories for runner cleanup. Failed and cancelled runs can supply checkpoints; pull requests, forks and other branches cannot.
 
 Only `gh` subprocesses inherit the GitHub token. Source preparation, native build, Git fingerprinting and archive subprocesses receive an environment without GitHub tokens.
 
@@ -8,7 +8,9 @@ Discovery requests GitHub's documented maximum of 100 artifacts per page. One ca
 
 Native preparation subprocesses run asynchronously with pipes and isolated Unix process groups. At the reuse deadline or cancellation, the runner force-stops the group, using noninteractive sudo for privileged Linux descendants, or uses Windows `taskkill /T /F`. It waits for inherited pipes to close before returning. There is no added termination grace period. If termination fails, preparation stops and preserves the owned tree and download directory instead of starting a competing fallback. Clean preparation awaits the same cancellable runner without the optional reuse deadline, and checks cancellation before starting further work.
 
-Linux system dependency installation is required for either build path. It remains cancellable but runs outside the optional reuse deadline, so expiry cannot interrupt dpkg and leave clean preparation with a broken package database. GN configuration checks the reuse deadline after that required setup finishes.
+Linux system dependency installation is required for either build path. It remains cancellable but runs outside the optional reuse deadline, so expiry cannot interrupt dpkg and leave clean preparation with a broken package database. The budget excludes elapsed mandatory setup and cleanup time from optional work; its deadline remains clamped to the original five-hour stage deadline. Candidate discovery, transfers and GN configuration read that same adjusted deadline.
+
+Failed-tree deletion runs in a cancellable child process with the original stage deadline. Cancellation skips further deletion. If cleanup fails, times out or cannot stop safely, preparation preserves remaining owned files and stops before another attempt or clean build can compete with them. Required cleanup therefore uses the stage allowance, rather than an already-expired optional lookup window.
 
 The SHA-256 compatibility key includes tracked Chromium revision, patches, branding, build configuration and Windows SDK setup; effective GN arguments with a normalized run number; depot_tools revision; source preparation code; platform and absolute workspace path; hosted runner image OS and version; and the selected Xcode or Visual Studio version. Changing a native input or runner image starts a clean build. Shell and packaging changes can reuse compiler outputs.
 

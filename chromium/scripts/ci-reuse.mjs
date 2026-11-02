@@ -4,10 +4,13 @@ import { promisify } from 'node:util';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
+function preservesOwnedTree(error, signal) {
+  return signal?.aborted || error?.code === 'REUSE_TERMINATION_FAILED' || error?.code === 'ABORT_ERR' ||
+    (error?.code !== 'ETIMEDOUT' && ['SIGINT', 'SIGTERM'].includes(error?.signal));
+}
+
 function preserveCancellation(error) {
-  if (error?.code === 'REUSE_TERMINATION_FAILED') throw error;
-  if (error?.code === 'ETIMEDOUT') return;
-  if (error?.code === 'ABORT_ERR' || ['SIGINT', 'SIGTERM'].includes(error?.signal)) throw error;
+  if (preservesOwnedTree(error)) throw error;
 }
 
 const execFileAsync = promisify(execFile);
@@ -83,12 +86,27 @@ export function withoutGitHubTokens(environment) {
   return result;
 }
 
-export function reuseDeadline({ started, stageDeadline, budgetMinutes }) {
+export function createReuseBudget({ started, stageDeadline, budgetMinutes }) {
   const milliseconds = Number(budgetMinutes) * 60 * 1000;
   if (!/^\d+$/.test(String(budgetMinutes)) || !Number.isSafeInteger(milliseconds)) {
     throw new Error('Expected a cache-reuse budget in whole minutes.');
   }
-  return Math.min(started + milliseconds, stageDeadline);
+  let optionalDeadline = started + milliseconds;
+  return {
+    stageDeadline,
+    get deadline() { return Math.min(optionalDeadline, stageDeadline); },
+    async required(operation) {
+      const started = Date.now();
+      try { return await operation(); }
+      finally { optionalDeadline += Math.max(0, Date.now() - started); }
+    },
+  };
+}
+
+export async function removeNativeTree(directory, { deadline, signal } = {}) {
+  await runNativeCommand(process.execPath, ['--input-type=commonjs', '-e',
+    'require("node:fs/promises").rm(process.argv[1], { recursive: true, force: true }).catch(error => { console.error(error); process.exitCode = 1; })',
+    directory], { cwd: path.dirname(directory), env: withoutGitHubTokens(process.env), deadline, signal });
 }
 
 // Packaging and shell inputs are refreshed after restoration. Native inputs must match.
@@ -122,13 +140,14 @@ export function trustedRun(run, { repository, branch, currentRun }) {
 }
 
 // Search only this repository's default-branch nightly workflow, including failed runs.
-export async function* findReusableArtifacts({ repository, branch, currentRun, platform, key, deadline }, api) {
+export async function* findReusableArtifacts(options, api) {
+  const { repository, branch, currentRun, platform, key } = options;
   const byRun = new Map();
   const runs = new Map();
   const excluded = new Set();
   let visited = 0;
   for (let page = 1; ; page++) {
-    if (deadline !== undefined && Date.now() >= deadline) throw new Error('Native reuse reached the stage deadline.');
+    if (options.deadline !== undefined && Date.now() >= options.deadline) throw new Error('Native reuse reached the stage deadline.');
     // GitHub documents 100 as the maximum artifacts page size.
     const response = await api(`repos/${repository}/actions/artifacts?per_page=100&page=${page}`);
     visited += response.artifacts.length;
@@ -159,6 +178,8 @@ export async function downloadReusableTree(root, options, restore,
     throw new Error('Missing GitHub context for native checkpoint reuse.');
   }
   const candidates = findReusableArtifacts(options, async endpoint => JSON.parse(await gh(['api', endpoint])));
+  const cleanup = directory => options.cleanup ? options.cleanup(directory) : removeNativeTree(directory,
+    { deadline: options.cleanupDeadline, signal: options.signal });
   for (;;) {
     options.signal?.throwIfAborted();
     if (options.deadline !== undefined && Date.now() >= options.deadline) return undefined;
@@ -178,7 +199,7 @@ export async function downloadReusableTree(root, options, restore,
       try {
         await gh(['run', 'download', candidate.run, '--repo', options.repository, '--name', candidate.name, '--dir', directory]);
       } catch (error) {
-        preserveDirectory = error?.code === 'REUSE_TERMINATION_FAILED';
+        preserveDirectory = preservesOwnedTree(error, options.signal);
         options.signal?.throwIfAborted();
         preserveCancellation(error);
         console.warn('Native checkpoint download unavailable; checking other compatible trees.');
@@ -189,18 +210,16 @@ export async function downloadReusableTree(root, options, restore,
       try {
         await restore(path.join(directory, candidate.archive), candidate);
       } catch (error) {
-        if (error?.code === 'REUSE_TERMINATION_FAILED') {
-          preserveDirectory = true;
-          throw error;
-        }
-        await fs.rm(options.work, { recursive: true });
+        preserveDirectory = preservesOwnedTree(error, options.signal);
         options.signal?.throwIfAborted();
         preserveCancellation(error);
+        try { await cleanup(options.work); }
+        catch (error) { preserveDirectory = true; throw error; }
         console.warn('Native checkpoint restoration failed; checking other compatible trees.');
         continue;
       }
     } finally {
-      if (!preserveDirectory) await fs.rm(directory, { recursive: true, force: true });
+      if (!preserveDirectory && !options.signal?.aborted) await cleanup(directory);
     }
     console.log(`Restored native inputs from run ${candidate.run}, source ${candidate.sha}.`);
     return candidate;
