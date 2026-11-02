@@ -90,7 +90,7 @@ export async function downloadReusableTree(root, options, restore,
     // Refuse pre-existing trees. Only this successfully created directory may be removed.
     await fs.mkdir(options.work);
     try {
-      await restore(path.join(directory, candidate.archive));
+      await restore(path.join(directory, candidate.archive), candidate);
     } catch (error) {
       await fs.rm(options.work, { recursive: true });
       preserveCancellation(error);

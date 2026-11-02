@@ -80,7 +80,8 @@ jobs:
           export FLECHA_DISK="$RUNNER_WORKSPACE/flecha-chromium"
           node chromium/scripts/ci-release.mjs build
       - name: Preserve native outputs for later nightlies and packaging recovery
-        if: always() && steps.build.outputs.native-key != ''
+        if: ${{ !cancelled() && steps.build.outputs.native-key != '' }}
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
           name: native-${{ matrix.platform }}-${{ steps.build.outputs.native-key }}
@@ -113,6 +114,7 @@ jobs:
           retention-days: 35
       - name: Index resumable native checkpoint after successful upload
         if: steps.checkpoint.outputs.reuse-key != ''
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
           name: reuse-${{ matrix.platform }}-${{ steps.checkpoint.outputs.reuse-key }}-${{ inputs.stage }}

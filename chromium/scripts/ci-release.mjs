@@ -67,17 +67,17 @@ export async function prepareNativeTree({ work, depot, src, configuration, run, 
   }
 }
 
+export async function validateReusableTree(work, expected) {
+  checkIdentity(JSON.parse(await fs.readFile(path.join(work, 'state.json'), 'utf8')), expected);
+  if (!(await fs.stat(path.join(work, 'src'))).isDirectory() || !(await fs.stat(path.join(work, 'depot_tools'))).isDirectory()) {
+    throw new Error('Reusable checkpoint has no source tree.');
+  }
+}
+
 export async function configureReleaseTree({ root, work, identity, key, reused, args, generate }) {
   const src = path.join(work, 'src');
   const out = path.join(src, 'out/Release');
   const stateFile = path.join(work, 'state.json');
-  if (reused) {
-    const previous = JSON.parse(await fs.readFile(stateFile, 'utf8'));
-    checkIdentity(previous, { ...identity, sha: reused.sha, nativeKey: key });
-    if (!(await fs.stat(src)).isDirectory() || !(await fs.stat(path.join(work, 'depot_tools'))).isDirectory()) {
-      throw new Error('Reusable checkpoint has no source tree.');
-    }
-  }
   // The restored extension can contain files removed from the current shell build.
   await fs.rm(path.join(src, 'flecha/shell'), { recursive: true, force: true });
   await fs.mkdir(path.join(src, 'flecha'), { recursive: true });
@@ -94,6 +94,21 @@ export function saveCheckpoint(work, archive, complete) {
   // Windows' system tar crashes on the Chromium tree. Git ships GNU tar.
   execFileSync(checkpointTar, [...(windows ? ['--force-local'] : []), '-czf', archive.replaceAll(path.sep, '/'),
     ...(complete ? ['state.json'] : ['.'])], { cwd: work, stdio: 'inherit' });
+}
+
+export async function preserveNativeOutputs(work, archive, save = saveCheckpoint) {
+  let owned = false;
+  try {
+    await fs.writeFile(archive, '', { flag: 'wx' });
+    owned = true;
+    save(work, archive, false);
+    return true;
+  } catch (error) {
+    if (owned) await fs.rm(archive, { force: true });
+    if (error?.code === 'ABORT_ERR' || ['SIGINT', 'SIGTERM'].includes(error?.signal)) throw error;
+    console.warn('Native snapshot unavailable; continuing with release packaging.');
+    return false;
+  }
 }
 
 export async function restoreCheckpoint(work, archive, { create = true } = {}) {
@@ -179,7 +194,10 @@ async function main() {
         ['-latest', '-products', '*', '-requires', 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64', '-property', 'installationVersion'], root) : null });
     const reused = await downloadReusableTree(root, { repository: process.env.GITHUB_REPOSITORY,
       branch: process.env.FLECHA_DEFAULT_BRANCH, currentRun: process.env.GITHUB_RUN_ID, platform, key, work },
-    archive => restoreCheckpoint(work, archive, { create: false }));
+    async (archive, candidate) => {
+      await restoreCheckpoint(work, archive, { create: false });
+      await validateReusableTree(work, { ...identity, sha: candidate.sha, nativeKey: key });
+    });
     if (!reused) {
       await prepareNativeTree({ work, depot, src, configuration, run, chromium });
     }
@@ -231,8 +249,7 @@ async function main() {
   }
 
   // Save compiled outputs before packaging, so packaging failures remain recoverable.
-  if (state.nativeKey) {
-    saveCheckpoint(work, path.join(root, 'native.tar.gz'), false);
+  if (state.nativeKey && await preserveNativeOutputs(work, path.join(root, 'native.tar.gz'))) {
     await output('native-key', state.nativeKey);
   }
 
