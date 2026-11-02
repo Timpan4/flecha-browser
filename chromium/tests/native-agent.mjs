@@ -45,7 +45,7 @@ const server = createServer((request, response) => {
   response.setHeader('Content-Type', 'text/html');
   if (request.url === '/mine') return response.end('<title>My page</title><textarea id="draft" style="position: fixed; inset: 0; width: 100%; height: 100%"></textarea>');
   response.end(
-    '<title>Agent page</title><h1>Agent page</h1><input id="field"><button id="count" onclick="counter++">Count</button>' +
+    '<title>Agent page</title><svg><title>Site icon</title></svg><math><mi>x</mi></math><h1>Agent page</h1><input id="field"><button id="count" onclick="counter++">Count</button>' +
       '<script>window.counter = 0; window.keys = []; addEventListener("keydown", (e) => keys.push(e.key));</script>',
   );
 });
@@ -151,7 +151,18 @@ try {
   execFileSync(process.execPath, ['chromium/scripts/install-native-host.mjs', '--profile', profile], { env, stdio: 'inherit' });
   browser = spawn(
     binary,
-    [`--user-data-dir=${profile}`, `--flecha-shell-dir=${shellDir}`, '--no-first-run', '--no-default-browser-check', '--disable-gpu', '--ozone-platform=x11', '--password-store=basic', '--remote-debugging-pipe'],
+    [
+      `--user-data-dir=${profile}`,
+      `--flecha-shell-dir=${shellDir}`,
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--disable-gpu',
+      '--ozone-platform=x11',
+      '--password-store=basic',
+      '--remote-debugging-pipe',
+      // Lets the run load the extension that puts its frames into pages (Extensions.loadUnpacked).
+      '--enable-unsafe-extension-debugging',
+    ],
     { env, stdio: ['ignore', 'ignore', 'inherit', 'pipe', 'pipe'] },
   );
   // A browser that exits, or that never starts (a wrong path emits 'error' and no 'exit'), fails
@@ -259,6 +270,103 @@ try {
   const yours = (label) =>
     stateWhere(`s => s.spaces.find(sp => sp.id === s.activeSpaceId).activeTabId === ${JSON.stringify(mine)}`).then(() => console.log(`PASS your tab stays on screen after ${label}`));
 
+  // Fail the browser APIs at their boundary: MCP must report failure and leave no blank native tab.
+  const worker = await attach((await findTarget((t) => t.type === 'service_worker' && t.url.startsWith(extension))).targetId);
+  await evaluate(worker, `
+    globalThis.originalMark = chrome.flechaPrivate.setAgentTab;
+    globalThis.originalUpdate = chrome.tabs.update;
+    globalThis.setupUpdates = [];
+    globalThis.markStarted = new Promise(resolve => { globalThis.notifyMark = resolve; });
+    globalThis.markGate = new Promise(resolve => { globalThis.releaseMark = resolve; });
+    chrome.flechaPrivate.setAgentTab = async (...args) => { notifyMark(); await markGate; return originalMark(...args); };
+    chrome.tabs.update = (...args) => { if (args[1]?.url) setupUpdates.push(args[1].url); return originalUpdate(...args); };
+    void 0;
+  `);
+  const opening = client.callTool({ name: 'open_tab', arguments: { url: base + '/setup' } });
+  let navigating;
+  try {
+    await evaluate(worker, 'markStarted');
+    state = await stateWhere(`s => Object.values(s.tabs).some(t => t.url === ${JSON.stringify(base + '/setup')})`);
+    const setupTab = Object.values(state.tabs).find(t => t.url === base + '/setup').id;
+    navigating = client.callTool({ name: 'navigate', arguments: { tabId: setupTab, url: base + '/after-setup' } });
+    await stateWhere(`s => s.agent?.action === ${JSON.stringify('opening ' + base + '/after-setup')}`);
+    assert.deepEqual(await evaluate(worker, 'setupUpdates'), [], 'navigation waits for marking');
+    await evaluate(worker, 'releaseMark()');
+    assert.ok(!(await opening).isError);
+    assert.ok(!(await navigating).isError);
+    assert.deepEqual(await evaluate(worker, 'setupUpdates'), [base + '/setup', base + '/after-setup']);
+    await call('close_tab', { tabId: setupTab });
+    await stateWhere(`s => !s.tabs[${JSON.stringify(setupTab)}]`);
+    console.log('PASS concurrent navigation waits for tab setup and keeps its newer URL');
+  } finally {
+    await evaluate(worker, 'releaseMark(); chrome.flechaPrivate.setAgentTab = originalMark; chrome.tabs.update = originalUpdate;');
+    await Promise.allSettled([opening, navigating]);
+  }
+  for (const takeover of ['release', 'pin']) {
+    const address = base + '/takeover-' + takeover;
+    await evaluate(worker, `
+      globalThis.originalMark = chrome.flechaPrivate.setAgentTab;
+      globalThis.markStarted = new Promise(resolve => { globalThis.notifyMark = resolve; });
+      globalThis.markGate = new Promise(resolve => { globalThis.releaseMark = resolve; });
+      chrome.flechaPrivate.setAgentTab = async (id, agent) => {
+        if (agent) { notifyMark(id); await markGate; }
+        return originalMark(id, agent);
+      };
+      void 0;
+    `);
+    const takingOver = client.callTool({ name: 'open_tab', arguments: { url: address } });
+    let transferredWindow;
+    try {
+      const physical = await evaluate(worker, 'markStarted');
+      state = await stateWhere(`s => Object.values(s.tabs).some(t => t.url === ${JSON.stringify(address)})`);
+      const logical = Object.values(state.tabs).find(t => t.url === address).id;
+      if (takeover === 'release') transferredWindow = await rpc('openFlechinha', undefined, logical);
+      else await rpc('togglePin', logical);
+      await evaluate(worker, 'releaseMark()');
+      const result = await takingOver;
+      const tab = await evaluate(worker, `chrome.tabs.get(${physical})`);
+      if (takeover === 'release') {
+        assert.equal(result.isError, true, 'the agent no longer owns the transferred tab');
+        assert.equal(tab.windowId, transferredWindow, 'the transferred page survives setup cleanup');
+      } else {
+        assert.ok(!result.isError);
+        assert.equal(tab.url, address, 'pinning during setup still loads the requested page');
+        await rpc('togglePin', logical);
+        await call('close_tab', { tabId: logical });
+        await stateWhere(`s => !s.tabs[${JSON.stringify(logical)}]`);
+      }
+      console.log(`PASS ${takeover} during setup preserves the user's tab`);
+    } finally {
+      await evaluate(worker, 'releaseMark(); chrome.flechaPrivate.setAgentTab = originalMark;');
+      await Promise.allSettled([takingOver]);
+      if (transferredWindow !== undefined) await evaluate(worker, `chrome.windows.remove(${transferredWindow}).catch(() => undefined)`);
+    }
+  }
+  for (const failure of ['mark', 'navigate']) {
+    const address = base + '/refused-' + failure;
+    const before = await evaluate(worker, 'chrome.tabs.query({}).then(tabs => tabs.map(t => t.id).sort())');
+    await evaluate(worker, `
+      globalThis.originalMark = chrome.flechaPrivate.setAgentTab;
+      globalThis.originalUpdate = chrome.tabs.update;
+      if (${JSON.stringify(failure)} === 'mark') chrome.flechaPrivate.setAgentTab = async () => { throw new Error('Test marking refused'); };
+      else chrome.tabs.update = (...args) => args[1]?.url === ${JSON.stringify(address)}
+        ? Promise.reject(new Error('Test navigation refused')) : originalUpdate(...args);
+    `);
+    try {
+      const refused = await client.callTool({ name: 'open_tab', arguments: { url: address } });
+      assert.equal(refused.isError, true, `${failure} failure must reach MCP`);
+      assert.match(refused.content[0].text, failure === 'mark' ? /Test marking refused/ : /Test navigation refused/);
+      assert.deepEqual(await evaluate(worker, 'chrome.tabs.query({}).then(tabs => tabs.map(t => t.id).sort())'), before);
+    } finally {
+      await evaluate(worker, 'chrome.flechaPrivate.setAgentTab = originalMark; chrome.tabs.update = originalUpdate;');
+    }
+    state = await stateWhere(`s => Object.values(s.tabs).some(t => t.url === ${JSON.stringify(address)})`);
+    const failed = Object.values(state.tabs).find(t => t.url === address).id;
+    await call('close_tab', { tabId: failed });
+    await stateWhere(`s => !s.tabs[${JSON.stringify(failed)}]`);
+    console.log(`PASS ${failure} failure reaches MCP and removes the blank native tab`);
+  }
+
   const opened = JSON.parse((await call('open_tab', { url: base + '/agent' })).content[0].text);
   state = await stateWhere(`s => s.tabs[${JSON.stringify(opened.tabId)}]?.agent`);
   await yours('open_tab');
@@ -338,11 +446,167 @@ try {
   await call('close_tab', { tabId: idle });
   await stateWhere(`s => !s.tabs[${JSON.stringify(idle)}]`);
 
+  // A password manager such as Proton Pass runs a content script on every page and adds its own
+  // extension's frames: one as the page loads, a dropdown when a field takes focus. Chromium keeps
+  // the shell's debugger out of a page holding another extension's frame. The tabs the agent
+  // opens keep other extensions' scripts out (patch 0080); yours run them as before.
+  const frameExtension = path.join(profile, 'frame-extension');
+  await fs.mkdir(frameExtension);
+  await fs.writeFile(
+    path.join(frameExtension, 'manifest.json'),
+    JSON.stringify({
+      manifest_version: 3,
+      name: 'Frames like a password manager',
+      version: '1',
+      // With an action, the extensions menu (and the bridge's error) knows its name.
+      action: {},
+      content_scripts: [{ matches: ['http://127.0.0.1/*'], js: ['content.js'], run_at: 'document_start', all_frames: true, match_about_blank: true }],
+      web_accessible_resources: [{ resources: ['frame.html'], matches: ['http://127.0.0.1/*'] }],
+    }),
+  );
+  await fs.writeFile(path.join(frameExtension, 'frame.html'), '<title>Extension frame</title><p>Extension frame</p>');
+  // From document_start, before the page's own parsing: a page loaded without the mark never ran it.
+  // It also runs in a blank frame the page adds, as soon as the frame exists.
+  await fs.writeFile(
+    path.join(frameExtension, 'content.js'),
+    `document.documentElement.dataset.otherExtension = 'ran';
+    if (window === top && location.pathname === '/login') {
+      const add = (name) => {
+        const frame = document.createElement('iframe');
+        frame.className = name;
+        frame.onload = () => (frame.dataset.loaded = 'yes');
+        frame.src = chrome.runtime.getURL('frame.html');
+        document.documentElement.append(frame);
+      };
+      addEventListener('DOMContentLoaded', () => add('notification'));
+      addEventListener('focusin', () => document.querySelector('.dropdown') || add('dropdown'));
+    }`,
+  );
+  await send('Extensions.loadUnpacked', { path: frameExtension });
+  const frameLoaded = (page, name) => {
+    waitingFor = `the extension's ${name} frame to load`;
+    return evaluate(
+      page,
+      `new Promise(resolve => { const check = () => { if (document.querySelector('.${name}')?.dataset.loaded) { observer.disconnect(); resolve(true); } }; const observer = new MutationObserver(check); observer.observe(document, {subtree:true,childList:true,attributes:true}); check(); })`,
+    );
+  };
+  /** What other extensions and the shell's own scripts did to a loaded page. */
+  const scriptsIn = (page) =>
+    evaluate(
+      page,
+      "({ other: document.documentElement.dataset.otherExtension ?? null, frames: document.querySelectorAll('iframe').length, shell: !String(console.error).includes('[native code]') })",
+    );
+  /** Whether other extensions ran in a blank frame the page adds, in its own process. */
+  const scriptsInBlankChild = (page) =>
+    evaluate(
+      page,
+      "(() => { const frame = document.createElement('iframe'); document.body.append(frame); const other = frame.contentDocument.documentElement.dataset.otherExtension ?? null; frame.remove(); return other; })()",
+    );
+
+  // Your own sign-in page: the extension runs there, and the agent can't drive it.
+  await rpc('newTab', base + '/login?yours');
+  state = await stateWhere(`s => Object.values(s.tabs).some(t => t.url === ${JSON.stringify(base + '/login?yours')})`);
+  const yourLogin = Object.values(state.tabs).find((t) => t.url === base + '/login?yours').id;
+  const yourLoginPage = await attach((await findTarget((t) => t.type === 'page' && t.url === base + '/login?yours')).targetId);
+  await frameLoaded(yourLoginPage, 'notification');
+  assert.deepEqual(await scriptsIn(yourLoginPage), { other: 'ran', frames: 1, shell: true });
+  assert.equal(await scriptsInBlankChild(yourLoginPage), 'ran');
+  const readYours = await client.callTool({ name: 'read_page', arguments: { tabId: yourLogin } });
+  assert.equal(readYours.isError, true, `read_page drove a tab holding another extension's frame: ${readYours.content?.[0]?.text}`);
+  assert.match(readYours.content[0].text, /another extension \(Frames like a password manager\)/);
+  console.log("PASS other extensions run in your tabs, and the agent names the one that keeps it out");
+
+  // The agent's sign-in page: only the shell's scripts ran, and the agent clicks and types there.
+  const agentLogin = JSON.parse((await call('open_tab', { url: base + '/login?agent' })).content[0].text).tabId;
+  const agentLoginPage = await attach((await findTarget((t) => t.type === 'page' && t.url === base + '/login?agent')).targetId);
+  await loaded(agentLoginPage, base + '/login?agent');
+  assert.deepEqual(await scriptsIn(agentLoginPage), { other: null, frames: 0, shell: true });
+  assert.equal(await scriptsInBlankChild(agentLoginPage), null);
+  await call('read_page', { tabId: agentLogin });
+  await call('click', { tabId: agentLogin, selector: '#field' });
+  await call('type', { tabId: agentLogin, selector: '#field', text: 'agent' });
+  assert.equal(await evaluate(agentLoginPage, "document.querySelector('#field').value"), 'agent');
+  assert.deepEqual(await scriptsIn(agentLoginPage), { other: null, frames: 0, shell: true });
+  console.log("PASS other extensions stay out of the agent's tab, and the agent reads, clicks and types there");
+
+  // A discarded agent tab comes back, on the agent's next call, still closed to other extensions.
+  const discardedLogin = JSON.parse((await call('open_tab', { url: base + '/login?discard' })).content[0].text).tabId;
+  // Loaded, seen from the shell: a DevTools session on the tab would keep Chromium from discarding it.
+  await stateWhere(`s => s.tabs[${JSON.stringify(discardedLogin)}]?.url === ${JSON.stringify(base + '/login?discard')} && s.tabs[${JSON.stringify(discardedLogin)}].loading === false`);
+  const discardedLoginGone = await evaluate(
+    session,
+    `chrome.tabs.query({}).then(async (tabs) => {
+      const tabId = tabs.find((t) => t.url === ${JSON.stringify(base + '/login?discard')}).id;
+      return (await chrome.flechaPrivate.discardTab(tabId)) && (await chrome.tabs.get(tabId)).discarded;
+    })`,
+  );
+  assert.equal(discardedLoginGone, true, 'Chromium discarded the agent sign-in tab');
+  const otherAfterDiscard = await call('evaluate', {
+    tabId: discardedLogin,
+    expression: "location.pathname + location.search + ' ' + document.querySelector('h1')?.textContent + ' ' + (document.documentElement.dataset.otherExtension ?? null)",
+  });
+  assert.equal(otherAfterDiscard.content[0].text, '/login?discard Agent page null');
+  console.log('PASS a discarded agent tab comes back without other extensions');
+  await call('close_tab', { tabId: discardedLogin });
+  await stateWhere(`s => !s.tabs[${JSON.stringify(discardedLogin)}]`);
+
+  // Taken from the agent, the tab is yours: its next page runs your extensions again.
+  await rpc('togglePin', agentLogin);
+  await stateWhere(`s => !s.tabs[${JSON.stringify(agentLogin)}].agent`);
+  await send('Page.navigate', { url: base + '/login?taken' }, agentLoginPage);
+  await loaded(agentLoginPage, base + '/login?taken');
+  await frameLoaded(agentLoginPage, 'notification');
+  assert.equal((await scriptsIn(agentLoginPage)).other, 'ran');
+  console.log('PASS a tab taken from the agent runs other extensions again');
+
   // A tab you pin is yours: it leaves the agent's folder.
   await rpc('togglePin', opened.tabId);
   await stateWhere(`s => !s.tabs[${JSON.stringify(opened.tabId)}].agent`);
   await domWhere("() => document.querySelector('#agent-folder').hidden");
   console.log("PASS pinning the agent's tab takes it out of the agent's folder");
+
+  // Reopening an agent's window adopts its initial tab. A failed mark must remove that tab
+  // while preserving the window, which may also contain shared pinned tabs.
+  await rpc('newWindow');
+  const reopening = JSON.parse((await call('open_tab', { url: base + '/login?reopening' })).content[0].text).tabId;
+  await call('activate_tab', { tabId: reopening });
+  const reopeningWindow = await evaluate(session, `chrome.tabs.query({}).then(tabs => tabs.find(t => t.url === ${JSON.stringify(base + '/login?reopening')}).windowId)`);
+  const mainWindow = await evaluate(session, `chrome.tabs.query({}).then(tabs => tabs.find(t => t.url === ${JSON.stringify(base + '/mine')}).windowId)`);
+  assert.notEqual(reopeningWindow, mainWindow, 'the agent window must be separate from the harness window');
+  await evaluate(session, `chrome.windows.remove(${reopeningWindow})`);
+  await stateWhere(`s => !s.tabs[${JSON.stringify(reopening)}]`);
+  const reopeningWorker = worker;
+  await evaluate(reopeningWorker, `
+    globalThis.originalMark = chrome.flechaPrivate.setAgentTab;
+    globalThis.failedAdoption = new Promise(resolve => {
+      chrome.flechaPrivate.setAgentTab = async (id, agent) => {
+        if (!agent) return originalMark(id, agent);
+        chrome.flechaPrivate.setAgentTab = originalMark;
+        const tab = await chrome.tabs.get(id);
+        chrome.tabs.onRemoved.addListener(function removed(closed) {
+          if (closed !== id) return;
+          chrome.tabs.onRemoved.removeListener(removed);
+          resolve({ windowId: tab.windowId, tabId: id });
+        });
+        throw new Error('Test adopted marking refused');
+      };
+    });
+    void 0;
+  `);
+  let failedWindow;
+  try {
+    await rpc('run', 'reopenTab');
+    waitingFor = 'the failed adopted tab to be removed';
+    const failed = await evaluate(reopeningWorker, 'failedAdoption');
+    failedWindow = failed.windowId;
+    assert.equal(await evaluate(reopeningWorker, `chrome.windows.get(${failedWindow}).then(win => win.id)`), failedWindow);
+    assert.equal(await evaluate(reopeningWorker, `chrome.tabs.query({windowId:${failedWindow}}).then(tabs => tabs.some(tab => tab.id === ${failed.tabId}))`), false);
+  } finally {
+    await evaluate(reopeningWorker, 'chrome.flechaPrivate.setAgentTab = originalMark;');
+    if (failedWindow !== undefined) await evaluate(session, `chrome.windows.remove(${failedWindow})`);
+  }
+  await send('Target.detachFromTarget', { sessionId: reopeningWorker });
+  console.log('PASS a failed adopted tab is removed without closing its window');
 
   await client.close();
   // The deadline stays armed through the cleanup, so a browser that hangs on its way out is killed.

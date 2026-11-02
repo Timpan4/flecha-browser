@@ -43,7 +43,7 @@ Use `FLECHA_CHROMIUM_OUT` or `--out` to select another compiled output, and `--p
 npm run browser:linux -- --out /absolute/path/to/out/Dev --profile /absolute/path/to/user-data
 ```
 
-To check that a coding agent works in the background (its tab opens in the agent's folder, and its clicks, typing and screenshots leave your tab and keystrokes alone), run the agent check against a compiled Linux browser. It uses its own Xvfb display, temporary profile and helper, and needs Xvfb, a C++ compiler and the X11/XTest development libraries:
+To check that a coding agent works in the background (its tab opens in the agent's folder, its clicks, typing and screenshots leave your tab and keystrokes alone, and other extensions, such as a password manager that adds its own frames to pages, stay out of its tabs but still run in yours), run the agent check against a compiled Linux browser. The browser must include patch 0080 for the extension steps. It uses its own Xvfb display, temporary profile and helper, and needs Xvfb, a C++ compiler and the X11/XTest development libraries:
 
 ```bash
 npm run shell:build && npm run host:build
