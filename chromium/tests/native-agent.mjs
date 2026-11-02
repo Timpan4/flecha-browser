@@ -45,7 +45,7 @@ const server = createServer((request, response) => {
   response.setHeader('Content-Type', 'text/html');
   if (request.url === '/mine') return response.end('<title>My page</title><textarea id="draft" style="position: fixed; inset: 0; width: 100%; height: 100%"></textarea>');
   response.end(
-    '<title>Agent page</title><h1>Agent page</h1><input id="field"><button id="count" onclick="counter++">Count</button>' +
+    '<title>Agent page</title><svg><title>Site icon</title></svg><math><mi>x</mi></math><h1>Agent page</h1><input id="field"><button id="count" onclick="counter++">Count</button>' +
       '<script>window.counter = 0; window.keys = []; addEventListener("keydown", (e) => keys.push(e.key));</script>',
   );
 });

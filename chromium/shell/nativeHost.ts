@@ -465,7 +465,7 @@ export function registerNativeHost(ctx: NativeHostContext) {
           const walk = (root: ParentNode) => {
             for (const element of root.querySelectorAll('*')) {
               if (element instanceof HTMLIFrameElement || element instanceof HTMLFrameElement) sources.push(element.src);
-              const shadow = chrome.dom.openOrClosedShadowRoot(element as HTMLElement);
+              const shadow = element instanceof HTMLElement ? chrome.dom.openOrClosedShadowRoot(element) : null;
               if (shadow) walk(shadow);
             }
           };
