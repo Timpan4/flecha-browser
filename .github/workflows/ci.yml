@@ -1,6 +1,6 @@
 # What can be checked without a Chromium build: the shell and the native host compile, bundle
 # and pass their tests, the scripts pass shellcheck, and the patches apply to the pinned
-# Chromium. Building Chromium itself stays on the build machines (chromium/scripts).
+# Chromium. The separate Nightly release workflow builds Chromium itself.
 #
 # Branch protection requires "CI passed" alone, so jobs can be added or renamed here
 # without changing the repository settings.
@@ -30,18 +30,48 @@ jobs:
           fetch-depth: 2
       - uses: actions/setup-node@v7
         with:
+          # Node 26 aborts on the deep-state recovery test. Keep validation on 24.
           node-version: 24
           cache: npm
       - run: npm ci
       - run: npm run typecheck
       - run: npm run typecheck:tsrs
       - run: npm test
+      # Node 24's HTTP client can abort while downloading the adblock lists.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
       - run: npm run shell:build
       - run: npm run host:build
       # Patches are left out: their context lines keep Chromium's own trailing spaces.
       - name: No whitespace errors in the change
         if: github.event_name == 'pull_request'
         run: git diff --check HEAD^1 HEAD -- . ':!*.patch'
+
+  release-scripts:
+    name: Release tooling (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025-vs2026, macos-26]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: npm
+      - name: Verify cleanup on the hosted macOS image
+        if: runner.os == 'macOS'
+        run: node chromium/scripts/ci-cleanup.mjs
+      - name: Verify patches on Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: chromium/scripts/check-patches.sh
+      - run: npm ci
+      - run: node --test chromium/tests/ci-release.test.mjs chromium/tests/ci-setup.test.mjs
+      - run: npm run shell:build
+      - run: npm run host:build
 
   scripts:
     name: Shellcheck
@@ -61,7 +91,7 @@ jobs:
   ci-passed:
     name: CI passed
     if: always()
-    needs: [shell-and-host, scripts, patches]
+    needs: [shell-and-host, release-scripts, scripts, patches]
     runs-on: ubuntu-latest
     steps:
       - name: Every check passed

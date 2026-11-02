@@ -17,6 +17,8 @@ export interface TabInfo {
   lastActive: number;
   /** Opened without being shown (in the background, unopened or imported) and not shown since. */
   unseen?: boolean;
+  /** Opened by a coding agent: the sidebar keeps it in the agent's folder until you move it. */
+  agent?: boolean;
   /** Back/forward entries (with scroll position) so a tab comes back as it was after a restart. */
   history?: { entries: Array<{ url: string; title: string; pageState?: string }>; index: number };
 }

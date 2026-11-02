@@ -23,13 +23,15 @@ export interface NativeHostContext {
   /** Sends every page the new state (the sidebar shows what an agent is doing). */
   broadcastState(): void;
   tabs: {
-    /** Opens an address in a new Flecha tab, as the command bar does; returns its id. */
-    open(url: string, background: boolean): string;
+    /** Opens an address in a new background Today tab, in the agent's folder; returns its id. */
+    open(url: string): string;
     /** The Chromium tab showing a Flecha tab, opened (in the background) if it has none yet. */
     chromeTab(tabId: string): Promise<number | undefined>;
     activate(tabId: string): void;
     close(tabId: string): void;
   };
+  /** The agent started or stopped working in a tab (`agentTabsInUse` changed): tab sleep wakes it and lets it be. Settles once woken. */
+  agentTabsChanged(): Promise<void>;
 }
 
 const NOT_INSTALLED =
@@ -269,7 +271,7 @@ export function registerNativeHost(ctx: NativeHostContext) {
     const tabs: AgentTab[] = [];
     const add = (id: string, space: string, zone: AgentTab['zone']) => {
       const tab = store.state.tabs[id];
-      if (tab) tabs.push({ id, title: tab.customTitle || tab.title, url: tab.url, space, zone, active: visible.has(id) });
+      if (tab) tabs.push({ id, title: tab.customTitle || tab.title, url: tab.url, space, zone, active: visible.has(id), agent: !!tab.agent });
     };
     for (const id of store.state.favorites) add(id, '', 'favorites');
     for (const space of store.state.spaces) {
@@ -288,21 +290,18 @@ export function registerNativeHost(ctx: NativeHostContext) {
     }
   }
 
-  /** The tool's tab (the active one by default) with its Chromium tab, after telling the sidebar. */
-  async function target(id: string | undefined, action: string) {
-    const tabId = id ?? store.activeTab?.id;
-    if (!tabId || !store.state.tabs[tabId]) throw new Error(id ? `No tab with id ${id}` : 'There is no active tab');
+  /**
+   * The tool's tab with its Chromium tab, after telling the sidebar. It stays where it is: tools
+   * drive tabs through chrome.debugger, which needs no tab on screen and no window focus.
+   */
+  async function target(tabId: string, action: string) {
+    if (!store.state.tabs[tabId]) throw new Error(`No tab with id ${tabId}`);
     showActivity(tabId, action);
     const chromeId = await ctx.tabs.chromeTab(tabId);
     if (chromeId === undefined) throw new Error(`Tab ${tabId} couldn’t be opened`);
+    // A tab tab sleep discarded needs nothing more: attaching the debugger brings its page back
+    // (native-agent.mjs checks it).
     return { tabId, chromeId };
-  }
-
-  /** Brings a tab on screen and waits for Chromium to show it. */
-  async function bringForward(tabId: string, chromeId: number) {
-    ctx.tabs.activate(tabId);
-    const deadline = Date.now() + 3000;
-    while (Date.now() < deadline && !(await chrome.tabs.get(chromeId)).active) await wait(50);
   }
 
   const tools: Record<AgentToolName, (args: Record<string, any>) => Promise<AgentResult>> = {
@@ -310,8 +309,8 @@ export function registerNativeHost(ctx: NativeHostContext) {
       showActivity(undefined, 'listing tabs');
       return text(listTabs());
     },
-    open_tab: async ({ url, background }) => {
-      const tabId = ctx.tabs.open(String(url), !!background);
+    open_tab: async ({ url }) => {
+      const tabId = ctx.tabs.open(String(url));
       showActivity(tabId, 'opening a tab');
       const chromeId = await ctx.tabs.chromeTab(tabId);
       if (chromeId !== undefined) await settle(chromeId);
@@ -354,8 +353,7 @@ export function registerNativeHost(ctx: NativeHostContext) {
     },
     screenshot: async ({ tabId }) => {
       const t = await target(tabId, 'taking a screenshot');
-      await bringForward(t.tabId, t.chromeId);
-      await wait(300);
+      // Chromium has a tab that isn't on screen draw a frame for this (page_handler.cc).
       const shot = (await debug(t.chromeId, 'Page.captureScreenshot', { format: 'png' })) as { data: string };
       return { content: [{ type: 'image', data: await shrink(shot.data, 1280), mimeType: 'image/png' }] };
     },
@@ -367,7 +365,6 @@ export function registerNativeHost(ctx: NativeHostContext) {
     },
     click: async ({ tabId, selector }) => {
       const t = await target(tabId, `clicking ${selector}`);
-      await bringForward(t.tabId, t.chromeId);
       const point = (await evaluate(t.chromeId, centerOf(String(selector)))) as { x: number; y: number } | undefined;
       if (!point) return fail(`No visible element matches ${selector}`);
       for (const type of ['mousePressed', 'mouseReleased']) {
@@ -378,7 +375,6 @@ export function registerNativeHost(ctx: NativeHostContext) {
     },
     type: async ({ tabId, selector, text: value, clear, submit }) => {
       const t = await target(tabId, `typing into ${selector ?? 'the page'}`);
-      await bringForward(t.tabId, t.chromeId);
       if (selector) {
         const found = await evaluate(
           t.chromeId,
@@ -400,7 +396,6 @@ export function registerNativeHost(ctx: NativeHostContext) {
     },
     press_key: async ({ tabId, key }) => {
       const t = await target(tabId, `pressing ${key}`);
-      await bringForward(t.tabId, t.chromeId);
       await pressKey(t.chromeId, String(key));
       await settle(t.chromeId);
       return text('ok');
@@ -426,7 +421,8 @@ export function registerNativeHost(ctx: NativeHostContext) {
 
   // ---- chrome.debugger --------------------------------------------------------
   // Attached on first use and kept while the agent works, so console messages keep coming
-  // (Runtime.enable replays the ones logged before); let go after two quiet minutes.
+  // (Runtime.enable replays the ones logged before); let go after two quiet minutes. While
+  // attached, the page acts focused although its tab isn't on screen, and tab sleep leaves it be.
 
   const DEBUG_IDLE = 120_000;
   const attached = new Map<number, ReturnType<typeof setTimeout>>();
@@ -443,34 +439,103 @@ export function registerNativeHost(ctx: NativeHostContext) {
 
   function forget(chromeId: number) {
     clearTimeout(attached.get(chromeId));
-    attached.delete(chromeId);
+    const was = attached.delete(chromeId);
     consoleLogs.delete(chromeId);
+    if (was) void ctx.agentTabsChanged();
+  }
+
+  /**
+   * Chromium keeps one extension's debugger out of a tab that shows another extension's page,
+   * such as the frames a password manager adds to sign-in forms. Agent tabs keep other
+   * extensions out (patch 0080), but your own tabs don't: this names the extension in the way.
+   */
+  async function attachRefused(chromeId: number, error: unknown): Promise<unknown> {
+    // Only Chromium's refusals and detaches: other errors say what went wrong themselves.
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/Cannot access a chrome-extension:\/\/ URL of different extension|Cannot attach to this target|Detached while handling command/.test(message)) {
+      return error;
+    }
+    // webNavigation leaves other extensions' frames out, so they are read from the page: the
+    // frame elements, in closed shadow roots too, where password managers put theirs.
+    const results = await chrome.scripting
+      .executeScript({
+        target: { tabId: chromeId, allFrames: true },
+        func: () => {
+          const sources: string[] = [];
+          const walk = (root: ParentNode) => {
+            for (const element of root.querySelectorAll('*')) {
+              if (element instanceof HTMLIFrameElement || element instanceof HTMLFrameElement) sources.push(element.src);
+              const shadow = element instanceof HTMLElement ? chrome.dom.openOrClosedShadowRoot(element) : null;
+              if (shadow) walk(shadow);
+            }
+          };
+          walk(document);
+          return sources;
+        },
+      })
+      .catch(() => []);
+    const others = new Set<string>();
+    for (const url of results.flatMap((frame) => (frame.result as string[] | undefined) ?? [])) {
+      const id = /^chrome-extension:\/\/([a-p]{32})\//.exec(url)?.[1];
+      if (id && id !== chrome.runtime.id) others.add(id);
+    }
+    if (!others.size) return error;
+    const tab = await chrome.tabs.get(chromeId).catch(() => undefined);
+    const actions =
+      tab && typeof chrome.flechaPrivate?.getExtensionActions === 'function'
+        ? await chrome.flechaPrivate.getExtensionActions(tab.windowId).catch(() => [])
+        : [];
+    const names = [...others].map((id) => actions.find((action) => action.id === id)?.name ?? id);
+    return new Error(
+      `This tab shows a page of another extension (${names.join(', ')}), and Chromium doesn't let Flecha drive a tab with another extension's page in it. ` +
+        'Open the page with open_tab instead: other extensions stay out of the tabs Flecha opens for you.',
+    );
   }
 
   function attach(chromeId: number): Promise<void> {
+    // Attached counts from the debugger's attach, but commands wait until the tab is awake and set
+    // up: a call during that time waits for it too.
+    let pending = attaching.get(chromeId);
+    if (pending) return pending;
     if (attached.has(chromeId)) {
       keepAttached(chromeId);
       return Promise.resolve();
     }
-    let pending = attaching.get(chromeId);
-    if (!pending) {
-      pending = (async () => {
-        await chrome.debugger.attach({ tabId: chromeId }, '1.3');
-        keepAttached(chromeId);
-        consoleLogs.set(chromeId, []);
+    pending = (async () => {
+      await chrome.debugger.attach({ tabId: chromeId }, '1.3');
+      keepAttached(chromeId);
+      consoleLogs.set(chromeId, []);
+      try {
+        // A frozen tab answers nothing; tab sleep wakes it now that it's in use, before any command.
+        await ctx.agentTabsChanged();
+        // focus(), :focus and key events work as on screen, without taking the window's focus.
+        await chrome.debugger.sendCommand({ tabId: chromeId }, 'Emulation.setFocusEmulationEnabled', { enabled: true });
         await chrome.debugger.sendCommand({ tabId: chromeId }, 'Runtime.enable');
         await chrome.debugger.sendCommand({ tabId: chromeId }, 'Log.enable');
         // The replayed messages arrive right after enabling.
         await wait(100);
-      })().finally(() => attaching.delete(chromeId));
-      attaching.set(chromeId, pending);
-    }
+      } catch (error) {
+        // A tab left half set up would skip the setup on later calls; let go so the next call
+        // starts over. onDetach doesn't fire for our own detach, so forget it here.
+        await chrome.debugger.detach({ tabId: chromeId }).catch(() => undefined);
+        forget(chromeId);
+        throw error;
+      }
+    })()
+      .catch(async (error: unknown) => {
+        throw await attachRefused(chromeId, error);
+      })
+      .finally(() => attaching.delete(chromeId));
+    attaching.set(chromeId, pending);
     return pending;
   }
 
   async function debug(chromeId: number, method: string, params?: object) {
     await attach(chromeId);
-    return chrome.debugger.sendCommand({ tabId: chromeId }, method, params);
+    // Chromium also lets go of a tab when another extension's frame loads in it mid-command.
+    return chrome.debugger.sendCommand({ tabId: chromeId }, method, params).catch(async (error: unknown) => {
+      throw await attachRefused(chromeId, error);
+    });
   }
 
   async function evaluate(chromeId: number, expression: string): Promise<unknown> {
@@ -545,6 +610,8 @@ export function registerNativeHost(ctx: NativeHostContext) {
         }
       );
     },
+    /** The Chromium tabs the agent is working in (debugger attached), which tab sleep treats as in use. */
+    agentTabsInUse: (): Set<number> => new Set(attached.keys()),
     /** The bridge's address while it runs, for Settings. */
     agentEndpoint: () => endpoint,
     /** Why the host or its bridge last failed, for Settings; undefined once they work. */

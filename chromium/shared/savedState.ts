@@ -173,6 +173,7 @@ const TAB_FIELDS: Record<string, Check> = {
   device: oneOf('mobile'),
   homeUrl: isString,
   unseen: isBoolean,
+  agent: isBoolean,
   history: fields({ index: isNumber, entries: (e) => Array.isArray(e) && e.every(fields({ url: isString, title: isString, pageState: isString }, ['pageState'])) }),
 };
 

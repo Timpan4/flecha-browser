@@ -16,6 +16,7 @@ import type {
   WindowSpace,
 } from './types';
 import type { ImportNode, ImportOutcome, ImportSpace, ImportTab } from './importApply';
+import { inAgentFolder } from './agentFolder';
 import { withAdBlocking } from './adBlockSites';
 import { STATE_VERSION } from './savedState';
 import { clampSidebarWidth } from './sidebarWidth';
@@ -275,9 +276,10 @@ export class Store {
 
   // ---- tabs -----------------------------------------------------------------
 
-  addTab(url: string, opts: { activate?: boolean; afterTabId?: string; windowId?: string } = {}): TabInfo {
+  addTab(url: string, opts: { activate?: boolean; afterTabId?: string; windowId?: string; agent?: boolean } = {}): TabInfo {
     const tab: TabInfo = { id: randomUUID(), url, title: url, lastActive: Date.now() };
     if (opts.activate === false) tab.unseen = true;
+    if (opts.agent) tab.agent = true;
     this.state.tabs[tab.id] = tab;
     const win = this.window(opts.windowId);
     const ws = this.windowSpace(win.activeSpaceId, win.id);
@@ -386,6 +388,8 @@ export class Store {
 
     if (target.zone === 'today') delete tab.homeUrl;
     else tab.homeUrl ??= tab.url;
+    // A tab you moved yourself is yours now, out of the agent's folder.
+    delete tab.agent;
     this.forgetMissingActive();
     this.changed();
   }
@@ -401,6 +405,7 @@ export class Store {
     this.insert(tabId, to, windowId);
     if (to.zone === 'today') delete tab.homeUrl;
     else tab.homeUrl ??= tab.url;
+    delete tab.agent;
     this.forgetMissingActive();
     this.changed();
     return true;
@@ -499,16 +504,22 @@ export class Store {
     this.detachEverywhere(tabId);
     if (from.zone === 'pinned') to.pinned.push({ kind: 'tab', tabId });
     else this.windowSpace(to.id, win.id).today.unshift(tabId);
+    delete this.state.tabs[tabId].agent;
     if (fromWs.activeTabId === tabId) fromWs.activeTabId = fromWs.today[0];
     this.forgetMissingActive();
     this.changed();
   }
 
-  /** Closes the today tabs after `tabId`, or all others when `others` is set. Returns their ids. */
+  /**
+   * Closes the today tabs after `tabId`, or all others when `others` is set, among the tabs listed
+   * with it: Today's or the agent's folder. Returns their ids.
+   */
   closeTodayTabs(tabId: string, which: 'below' | 'others'): string[] {
     const loc = this.locate(tabId);
     if (loc?.zone !== 'today' || !loc.space) return [];
-    const today = this.windowSpace(loc.space.id, loc.windowId).today;
+    const ws = this.windowSpace(loc.space.id, loc.windowId);
+    const folder = inAgentFolder(this.state.tabs, ws, tabId);
+    const today = ws.today.filter((id) => inAgentFolder(this.state.tabs, ws, id) === folder);
     const index = today.indexOf(tabId);
     const ids = today.filter((id, i) => (which === 'below' ? i > index : id !== tabId));
     if (!ids.length) return [];
@@ -671,13 +682,17 @@ export class Store {
     this.changed();
   }
 
-  /** Archives every Today tab in the window's active Space. Returns the removed ids. */
+  /**
+   * Archives every Today tab in the window's active Space, leaving the agent's folder, which has a
+   * Clear of its own. Returns the removed ids.
+   */
   clearToday(windowId?: string): string[] {
     const win = this.window(windowId);
     const ws = this.windowSpace(win.activeSpaceId, win.id);
-    if (!ws.today.length) return [];
+    const ids = ws.today.filter((id) => !inAgentFolder(this.state.tabs, ws, id));
+    if (!ids.length) return [];
     return this.undoable('Clear Today Tabs', () => {
-      const ids = ws.today.splice(0);
+      ws.today = ws.today.filter((id) => !ids.includes(id));
       for (const id of ids) {
         this.archive(this.state.tabs[id]);
         delete this.state.tabs[id];
