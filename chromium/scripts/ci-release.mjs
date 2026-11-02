@@ -6,7 +6,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { pipeline } from 'node:stream/promises';
 import { createReadStream } from 'node:fs';
-import { nativeKey, downloadReusableTree, reuseDeadline, runReuseCommand, withoutGitHubTokens } from './ci-reuse.mjs';
+import { nativeKey, downloadReusableTree, reuseDeadline, runNativeCommand, withoutGitHubTokens } from './ci-reuse.mjs';
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
 const windows = process.platform === 'win32';
@@ -46,23 +46,29 @@ export function checkIdentity(actual, expected) {
   if (typeof actual.complete !== 'boolean') throw new Error('Checkpoint has no completion state.');
 }
 
-export async function prepareNativeTree({ work, depot, src, configuration, run, chromium }) {
+export async function prepareNativeTree({ work, depot, src, configuration, run, chromium, signal }) {
+  signal?.throwIfAborted();
   await fs.mkdir(work);
+  signal?.throwIfAborted();
   await fs.mkdir(depot);
-  run('git', ['init', depot], work);
-  run('git', ['-C', depot, 'fetch', '--depth=1', 'https://chromium.googlesource.com/chromium/tools/depot_tools.git', depotRevision], work);
-  run('git', ['-C', depot, 'checkout', '--detach', 'FETCH_HEAD'], work);
+  await run('git', ['init', depot], work);
+  await run('git', ['-C', depot, 'fetch', '--depth=1', 'https://chromium.googlesource.com/chromium/tools/depot_tools.git', depotRevision], work);
+  await run('git', ['-C', depot, 'checkout', '--detach', 'FETCH_HEAD'], work);
+  signal?.throwIfAborted();
   await fs.writeFile(path.join(work, '.gclient'), configuration.gclient);
-  run(python, [path.join(depot, 'gclient.py'), 'sync', '--no-history', '--nohooks', '--revision', `src@${chromium}`], work);
-  if (process.platform === 'linux') run('sudo', ['bash', 'build/install-build-deps.sh', '--no-prompt']);
-  run(python, [path.join(depot, 'gclient.py'), 'runhooks'], work);
+  await run(python, [path.join(depot, 'gclient.py'), 'sync', '--no-history', '--nohooks', '--revision', `src@${chromium}`], work);
+  if (process.platform === 'linux') await run('sudo', ['-n', 'bash', 'build/install-build-deps.sh', '--no-prompt']);
+  await run(python, [path.join(depot, 'gclient.py'), 'runhooks'], work);
   for (const patch of (await fs.readdir(path.join(root, 'chromium/patches'))).filter(p => p.endsWith('.patch')).sort()) {
-    run('git', ['apply', path.join(root, 'chromium/patches', patch)]);
+    await run('git', ['apply', path.join(root, 'chromium/patches', patch)]);
   }
+  signal?.throwIfAborted();
   const theme = path.join(src, 'chrome/app/theme/chromium');
   await fs.copyFile(path.join(root, 'chromium/branding/BRANDING'), path.join(theme, 'BRANDING'));
+  signal?.throwIfAborted();
   await fs.cp(path.join(root, 'chromium/branding/mac'), path.join(theme, 'mac'), { recursive: true });
   for (const png of (await fs.readdir(path.join(root, 'chromium/branding/logo'))).filter(p => p.endsWith('.png'))) {
+    signal?.throwIfAborted();
     await fs.copyFile(path.join(root, 'chromium/branding/logo', png), path.join(theme, png));
   }
 }
@@ -145,7 +151,7 @@ export async function restoreCheckpoint(work, archive, { create = true, deadline
   const env = { ...withoutGitHubTokens(process.env), ...(windows ? { MSYS: 'winsymlinks:nativestrict' } : {}) };
   const args = [...(windows ? ['--force-local'] : []), '-xzf', archive.replaceAll(path.sep, '/')];
   if (deadline === undefined) execFileSync(checkpointTar, args, { cwd: work, env, stdio: 'inherit' });
-  else await runReuseCommand(checkpointTar, args, { cwd: work, env, deadline, signal });
+  else await runNativeCommand(checkpointTar, args, { cwd: work, env, deadline, signal });
   await fs.rm(archive);
 }
 
@@ -210,6 +216,8 @@ async function main() {
   };
 
   if (mode === 'prepare') return withStageCancellation(async signal => {
+    const prepareRun = (command, args, cwd = src, commandDeadline) => runNativeCommand(command, args,
+      { cwd, env, deadline: commandDeadline, signal });
     const { version } = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
     const configuration = await releaseConfiguration({ platform, version, buildNumber: process.env.GITHUB_RUN_NUMBER });
     const normalized = await releaseConfiguration({ platform, version, buildNumber: '0' });
@@ -226,9 +234,9 @@ async function main() {
       budgetMinutes: process.env.FLECHA_REUSE_BUDGET_MINUTES });
     const configure = candidate => configureReleaseTree({ root, work, identity, key, reused: candidate, args: configuration.args,
       generate: async () => {
-        const execute = (command, args) => candidate ? runReuseCommand(command, args, { cwd: src, env, deadline, signal }) : run(command, args);
-        if (candidate && process.platform === 'linux') await execute('sudo', ['-n', 'bash', 'build/install-build-deps.sh', '--no-prompt']);
-        await execute(gn, ['gen', 'out/Release', '--fail-on-unused-args']);
+        // Both paths need system dependencies. Do not interrupt dpkg to try a clean tree.
+        if (candidate && process.platform === 'linux') await prepareRun('sudo', ['-n', 'bash', 'build/install-build-deps.sh', '--no-prompt']);
+        await prepareRun(gn, ['gen', 'out/Release', '--fail-on-unused-args'], src, candidate ? deadline : undefined);
       } });
     const reused = await downloadReusableTree(root, { repository: process.env.GITHUB_REPOSITORY,
       branch: process.env.FLECHA_DEFAULT_BRANCH, currentRun: process.env.GITHUB_RUN_ID, platform, key, work,
@@ -239,7 +247,7 @@ async function main() {
       await configure(candidate);
     });
     if (!reused) {
-      await prepareNativeTree({ work, depot, src, configuration, run, chromium });
+      await prepareNativeTree({ work, depot, src, configuration, run: prepareRun, chromium, signal });
       await configure();
     }
     showDisk();

@@ -6,8 +6,8 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { checkIdentity, compile, configureReleaseTree, depotRevision, preserveNativeOutputs, releaseConfiguration, saveCheckpoint, restoreCheckpoint, validateReusableTree } from '../scripts/ci-release.mjs';
-import { downloadReusableTree, findReusableArtifacts, nativeKey, reusableArtifact, reuseDeadline, runReuseCommand, withoutGitHubTokens } from '../scripts/ci-reuse.mjs';
+import { checkIdentity, compile, configureReleaseTree, depotRevision, prepareNativeTree, preserveNativeOutputs, releaseConfiguration, saveCheckpoint, restoreCheckpoint, validateReusableTree } from '../scripts/ci-release.mjs';
+import { downloadReusableTree, findReusableArtifacts, nativeKey, reusableArtifact, reuseDeadline, runNativeCommand, withoutGitHubTokens } from '../scripts/ci-reuse.mjs';
 import { verifyRelease } from '../scripts/ci-publish.mjs';
 
 test('the owner-selected reuse budget leaves clean preparation time and never exceeds the stage deadline', () => {
@@ -23,7 +23,7 @@ test('the owner-selected reuse budget leaves clean preparation time and never ex
 });
 
 test('reuse stops signal-resistant descendants before deadline fallback or cancellation returns', async t => {
-  assert.equal(await runReuseCommand(process.execPath, ['-e', 'process.stdout.write("captured output")'], { capture: true }), 'captured output');
+  assert.equal(await runNativeCommand(process.execPath, ['-e', 'process.stdout.write("captured output")'], { capture: true }), 'captured output');
   for (const outcome of ['deadline', 'cancellation']) {
     await t.test(outcome, async t => {
       const root = await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-reuse-process-'));
@@ -56,14 +56,19 @@ test('reuse stops signal-resistant descendants before deadline fallback or cance
       `;
       // The inherited stdout pipe stays open until the descendant is stopped too.
       const privileged = process.platform === 'linux' && process.env.GITHUB_ACTIONS === 'true';
-      const result = runReuseCommand(privileged ? 'sudo' : process.execPath,
+      let settled = false;
+      const result = runNativeCommand(privileged ? 'sudo' : process.execPath,
         [...(privileged ? ['-n', process.execPath] : []), '-e', fixture, readyFile], {
-        capture: true, signal: controller.signal, deadline: Date.now() + 60 * 60 * 1000,
-      }).then(() => assert.fail('Reuse must stop'), error => error);
+        capture: true, signal: controller.signal, deadline: outcome === 'deadline' ? Date.now() + 60 * 60 * 1000 : undefined,
+      }).then(() => assert.fail('Reuse must stop'), error => error).finally(() => { settled = true; });
       await Promise.race([ready, result.then(error => { throw error; })]);
       const reason = new Error('User cancelled reuse');
       if (outcome === 'deadline') t.mock.timers.tick(60 * 60 * 1000);
-      else controller.abort(reason);
+      else {
+        t.mock.timers.tick(60 * 60 * 1000);
+        assert.equal(settled, false, 'Required preparation has no optional reuse timer');
+        controller.abort(reason);
+      }
       const error = await result;
       if (outcome === 'deadline') assert.equal(error.code, 'ETIMEDOUT');
       else assert.equal(error, reason);
@@ -79,6 +84,34 @@ test('build subprocesses cannot inherit GitHub tokens while the gh environment r
   assert.equal(Object.hasOwn(sanitized, 'GITHUB_TOKEN'), false);
   assert.equal(original.GH_TOKEN, 'fixture-gh-token');
   assert.equal(original.GITHUB_TOKEN, 'fixture-github-token');
+});
+
+test('clean preparation awaits each command and starts no further work after cancellation', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-clean-cancel-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const controller = new AbortController();
+  const reason = new Error('User cancelled clean preparation');
+  const work = path.join(root, 'work');
+  const calls = [];
+  let started;
+  let rejectCommand;
+  const commandStarted = new Promise(resolve => { started = resolve; });
+  const command = new Promise((resolve, reject) => { rejectCommand = reject; });
+  t.after(() => rejectCommand(reason));
+  const options = { work, depot: path.join(work, 'depot_tools'), src: path.join(work, 'src'),
+    configuration: { gclient: 'fixture' }, chromium: 'fixture', signal: controller.signal,
+    run: (...args) => { calls.push(args); started(); return command; } };
+  const preparation = prepareNativeTree(options).then(() => assert.fail('Preparation must reject cancellation'), error => error);
+  await commandStarted;
+  assert.equal(calls.length, 1, 'Do not fetch while initialization is still running');
+  controller.abort(reason);
+  rejectCommand(reason);
+  assert.equal(await preparation, reason);
+  assert.equal(calls.length, 1);
+  await assert.rejects(fs.stat(path.join(work, '.gclient')), { code: 'ENOENT' });
+  const untouched = path.join(root, 'cancelled-before-start');
+  await assert.rejects(prepareNativeTree({ ...options, work: untouched }), error => error === reason);
+  await assert.rejects(fs.stat(untouched), { code: 'ENOENT' });
 });
 
 test('native reuse ignores shell-only commits and invalidates native inputs and toolchains', async t => {

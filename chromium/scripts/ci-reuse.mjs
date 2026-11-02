@@ -12,9 +12,9 @@ function preserveCancellation(error) {
 
 const execFileAsync = promisify(execFile);
 
-// Optional trees are disposable. Force-stop their process group at the owner deadline,
+// Hosted native trees are disposable. Force-stop their process group at the owner deadline,
 // then wait for inherited pipes to close before allowing cleanup or another attempt.
-export async function runReuseCommand(command, args, { cwd, env, deadline, signal, capture = false } = {}) {
+export async function runNativeCommand(command, args, { cwd, env, deadline, signal, capture = false } = {}) {
   signal?.throwIfAborted();
   const timeoutError = () => Object.assign(new Error('Native reuse reached its deadline.'), { code: 'ETIMEDOUT' });
   if (deadline !== undefined && deadline <= Date.now()) throw timeoutError();
@@ -56,7 +56,7 @@ export async function runReuseCommand(command, args, { cwd, env, deadline, signa
       child.unref();
       child.stdout.destroy();
       child.stderr.destroy();
-      terminationFailure = Object.assign(new Error('Cannot stop native reuse processes.', { cause }), { code: 'REUSE_TERMINATION_FAILED' });
+      terminationFailure = Object.assign(new Error('Cannot stop native preparation processes.', { cause }), { code: 'REUSE_TERMINATION_FAILED' });
       rejectCompletion(terminationFailure);
     });
   };
@@ -68,7 +68,7 @@ export async function runReuseCommand(command, args, { cwd, env, deadline, signa
     if (terminationFailure) throw terminationFailure;
     signal?.throwIfAborted();
     if (expired) throw timeoutError();
-    if (result.code !== 0) throw Object.assign(new Error(`Native reuse command failed: ${result.code ?? result.signal}`), { signal: result.signal });
+    if (result.code !== 0) throw Object.assign(new Error(`Native command failed: ${result.code ?? result.signal}`), { signal: result.signal });
     return stdout;
   } finally {
     clearTimeout(timer);
@@ -154,7 +154,7 @@ export async function* findReusableArtifacts({ repository, branch, currentRun, p
 }
 
 export async function downloadReusableTree(root, options, restore,
-  gh = args => runReuseCommand('gh', args, { cwd: root, deadline: options.deadline, signal: options.signal, capture: true })) {
+  gh = args => runNativeCommand('gh', args, { cwd: root, deadline: options.deadline, signal: options.signal, capture: true })) {
   if (!/^[\w.-]+\/[\w.-]+$/.test(options.repository || '') || !options.branch || !/^\d+$/.test(options.currentRun || '')) {
     throw new Error('Missing GitHub context for native checkpoint reuse.');
   }
