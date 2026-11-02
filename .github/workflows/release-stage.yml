@@ -72,24 +72,12 @@ jobs:
           FLECHA_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: node chromium/scripts/ci-release.mjs prepare
       - name: Compile and package
-        id: build
         if: inputs.stage != 0
         shell: bash
         run: |
           export CHROMIUM_SRC="$RUNNER_WORKSPACE/flecha-chromium/src"
           export FLECHA_DISK="$RUNNER_WORKSPACE/flecha-chromium"
           node chromium/scripts/ci-release.mjs build
-      - name: Preserve native outputs for later nightlies and packaging recovery
-        if: ${{ !cancelled() && steps.build.outputs.native-key != '' }}
-        continue-on-error: true
-        uses: actions/upload-artifact@v7
-        with:
-          name: native-${{ matrix.platform }}-${{ steps.build.outputs.native-key }}
-          path: native.tar.gz
-          compression-level: 0
-          if-no-files-found: error
-          overwrite: true
-          retention-days: 35
       - name: Upload completed platform package
         uses: actions/upload-artifact@v7
         with:
@@ -123,7 +111,7 @@ jobs:
           overwrite: true
           retention-days: 35
       - name: Delete superseded checkpoint after successful handoff
-        if: inputs.stage != 0
+        if: inputs.stage != 0 && steps.checkpoint.outputs.complete != 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -133,3 +121,19 @@ jobs:
           if [ -n "$artifact_id" ]; then
             gh api --method DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id"
           fi
+      - name: Create optional native snapshot after required release uploads
+        id: native
+        if: ${{ !cancelled() && inputs.stage != 0 }}
+        continue-on-error: true
+        run: node chromium/scripts/ci-release.mjs native-checkpoint
+      - name: Preserve native outputs for later nightlies and packaging recovery
+        if: ${{ !cancelled() && steps.native.outputs.native-key != '' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-${{ matrix.platform }}-${{ steps.native.outputs.native-key }}
+          path: native.tar.gz
+          compression-level: 0
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 35

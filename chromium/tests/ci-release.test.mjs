@@ -111,19 +111,66 @@ test('optional native snapshot failures retain compiler outputs and preserve exi
   await fs.mkdir(work);
   await fs.writeFile(path.join(work, 'compiled'), 'native output');
   const archive = path.join(dir, 'native.tar.gz');
-  assert.equal(await preserveNativeOutputs(work, archive, () => { throw new Error('No snapshot space'); }), false);
+  assert.equal(await preserveNativeOutputs(work, archive, { save: () => { throw new Error('No snapshot space'); } }), false);
   await assert.rejects(fs.stat(archive), { code: 'ENOENT' });
   assert.equal(await fs.readFile(path.join(work, 'compiled'), 'utf8'), 'native output');
+  assert.equal(await preserveNativeOutputs(work, archive, { milliseconds: 0 }), false);
+  assert.equal(await preserveNativeOutputs(work, archive, { save: () => false }), false);
+  await assert.rejects(fs.stat(archive), { code: 'ENOENT' });
   const cancelled = Object.assign(new Error('cancelled'), { signal: 'SIGTERM' });
-  await assert.rejects(preserveNativeOutputs(work, archive, () => { throw cancelled; }), error => error === cancelled);
+  await assert.rejects(preserveNativeOutputs(work, archive, { save: () => { throw cancelled; } }), error => error === cancelled);
+  await assert.rejects(fs.stat(archive), { code: 'ENOENT' });
+  const controller = new AbortController();
+  const reason = new Error('User cancelled snapshot');
+  await assert.rejects(preserveNativeOutputs(work, archive, { signal: controller.signal, save: () => {
+    controller.abort(reason);
+    throw reason;
+  } }), error => error === reason);
   await assert.rejects(fs.stat(archive), { code: 'ENOENT' });
   assert.equal(await preserveNativeOutputs(work, archive), true);
   const restored = path.join(dir, 'restored');
   await restoreCheckpoint(restored, archive);
   assert.equal(await fs.readFile(path.join(restored, 'compiled'), 'utf8'), 'native output');
   await fs.writeFile(archive, 'pre-existing file');
-  assert.equal(await preserveNativeOutputs(work, archive, () => assert.fail('Must not overwrite existing archive')), false);
+  assert.equal(await preserveNativeOutputs(work, archive, { save: () => assert.fail('Must not overwrite existing archive') }), false);
   assert.equal(await fs.readFile(archive, 'utf8'), 'pre-existing file');
+});
+
+test('native checkpoint CLI recovers completed compilation after packaging failure and skips expired allowance', async t => {
+  const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-native-cli-')));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const root = path.join(dir, 'release tooling');
+  const scripts = path.join(root, 'chromium/scripts');
+  await fs.mkdir(scripts, { recursive: true });
+  for (const file of ['ci-release.mjs', 'ci-reuse.mjs']) {
+    await fs.copyFile(fileURLToPath(new URL(`../scripts/${file}`, import.meta.url)), path.join(scripts, file));
+  }
+  await fs.writeFile(path.join(root, 'chromium/CHROMIUM_VERSION'), 'fixture');
+  execFileSync('git', ['init', '--quiet', root]);
+  execFileSync('git', ['-c', 'user.name=Release test', '-c', 'user.email=release@example.invalid',
+    'commit', '--allow-empty', '-m', 'Release fixture'], { cwd: root });
+  const sha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+  const platform = process.platform === 'darwin' ? 'macos-arm64' : process.platform === 'win32' ? 'windows-x64' : 'linux-x64';
+  const workspace = path.join(dir, 'workspace');
+  const work = path.join(workspace, 'flecha-chromium');
+  await fs.mkdir(path.join(work, 'src'), { recursive: true });
+  const state = { sha, chromium: 'fixture', platform, depot: depotRevision, nativeKey: 'key', nativeComplete: true, complete: false };
+  await fs.writeFile(path.join(work, 'state.json'), JSON.stringify(state));
+  await fs.writeFile(path.join(work, 'src/compiled'), 'completed compilation, packaging failed');
+  const output = path.join(dir, 'outputs');
+  const env = { ...process.env, GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted', RUNNER_WORKSPACE: workspace,
+    FLECHA_STAGE_STARTED: String(Date.now()), GITHUB_OUTPUT: output };
+  const script = path.join(scripts, 'ci-release.mjs');
+  execFileSync(process.execPath, [script, 'native-checkpoint'], { env });
+  assert.match(await fs.readFile(output, 'utf8'), /native-key=key/);
+  const restored = path.join(dir, 'restored');
+  await restoreCheckpoint(restored, path.join(root, 'native.tar.gz'));
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(restored, 'state.json'), 'utf8')), state);
+  assert.equal(await fs.readFile(path.join(restored, 'src/compiled'), 'utf8'), 'completed compilation, packaging failed');
+  await fs.rm(output);
+  execFileSync(process.execPath, [script, 'native-checkpoint'], { env: { ...env, FLECHA_STAGE_STARTED: '1' } });
+  await assert.rejects(fs.stat(path.join(root, 'native.tar.gz')), { code: 'ENOENT' });
+  await assert.rejects(fs.stat(output), { code: 'ENOENT' });
 });
 
 test('recovery searches trusted nightly runs and skips expired or superseded checkpoints', () => {

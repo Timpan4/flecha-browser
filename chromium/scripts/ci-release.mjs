@@ -96,18 +96,46 @@ export function saveCheckpoint(work, archive, complete) {
     ...(complete ? ['state.json'] : ['.'])], { cwd: work, env: withoutGitHubTokens(process.env), stdio: 'inherit' });
 }
 
-export async function preserveNativeOutputs(work, archive, save = saveCheckpoint) {
+export async function preserveNativeOutputs(work, archive, { milliseconds, signal,
+  save = () => compile(checkpointTar, [...(windows ? ['--force-local'] : []), '-czf', archive.replaceAll(path.sep, '/'), '.'],
+    { cwd: work, env: withoutGitHubTokens(process.env), milliseconds, signal }) } = {}) {
+  signal?.throwIfAborted();
+  if (milliseconds !== undefined && milliseconds <= 0) return false;
   let owned = false;
   try {
     await fs.writeFile(archive, '', { flag: 'wx' });
     owned = true;
-    save(work, archive, false);
+    if (await save() === false) {
+      await fs.rm(archive);
+      console.warn('Native snapshot reached the stage deadline; retaining the previous checkpoint.');
+      return false;
+    }
     return true;
   } catch (error) {
     if (owned) await fs.rm(archive, { force: true });
+    signal?.throwIfAborted();
     if (error?.code === 'ABORT_ERR' || ['SIGINT', 'SIGTERM'].includes(error?.signal)) throw error;
     console.warn('Native snapshot unavailable; continuing with release packaging.');
     return false;
+  }
+}
+
+function remainingStageTime() {
+  const started = Number(process.env.FLECHA_STAGE_STARTED);
+  if (!Number.isFinite(started) || started <= 0) throw new Error('Missing stage start time.');
+  return 5 * 60 * 60 * 1000 - (Date.now() - started);
+}
+
+async function withStageCancellation(operation) {
+  const controller = new AbortController();
+  const cancel = () => controller.abort(new Error('Build cancelled.'));
+  process.once('SIGINT', cancel);
+  process.once('SIGTERM', cancel);
+  try {
+    return await operation(controller.signal);
+  } finally {
+    process.removeListener('SIGINT', cancel);
+    process.removeListener('SIGTERM', cancel);
   }
 }
 
@@ -151,7 +179,7 @@ async function main() {
     throw new Error('This script writes only to disposable GitHub-hosted build trees.');
   }
   const mode = process.argv[2];
-  if (!['prepare', 'restore', 'build', 'checkpoint'].includes(mode)) throw new Error('Expected prepare, restore, build or checkpoint.');
+  if (!['prepare', 'restore', 'build', 'checkpoint', 'native-checkpoint'].includes(mode)) throw new Error('Expected prepare, restore, build, checkpoint or native-checkpoint.');
   const work = path.resolve(process.env.RUNNER_WORKSPACE, 'flecha-chromium');
   if (mode === 'restore') {
     await restoreCheckpoint(work, path.join(root, 'checkpoint/checkpoint.tar.gz'));
@@ -215,6 +243,7 @@ async function main() {
   if (mode === 'checkpoint') {
     // Completed stages carry only a marker; browser packages have a separate artifact.
     saveCheckpoint(work, archive, state.complete);
+    await output('complete', String(state.complete));
     if (!state.complete && state.nativeKey) {
       await fs.writeFile(path.join(root, 'reuse.json'), JSON.stringify(state));
       await output('reuse-key', state.nativeKey);
@@ -222,36 +251,37 @@ async function main() {
     showDisk();
     return;
   }
+  if (mode === 'native-checkpoint') {
+    if (!state.nativeComplete) return;
+    // Later completed-marker jobs have no source tree to preserve.
+    try {
+      await fs.access(src);
+    } catch (error) {
+      if (error.code === 'ENOENT') return;
+      throw error;
+    }
+    const saved = await withStageCancellation(signal => preserveNativeOutputs(work, path.join(root, 'native.tar.gz'),
+      { milliseconds: remainingStageTime(), signal }));
+    if (saved) await output('native-key', state.nativeKey);
+    return;
+  }
   if (state.complete) return;
   if (process.platform === 'linux') run('sudo', ['bash', 'build/install-build-deps.sh', '--no-prompt']);
   showDisk();
   // The successful portablelinux workflow uses five-hour compilation stages.
   // Include restoration/setup in that allowance, preserving its observed handoff margin.
-  const started = Number(process.env.FLECHA_STAGE_STARTED);
-  if (!Number.isFinite(started) || started <= 0) throw new Error('Missing stage start time.');
-  const remaining = 5 * 60 * 60 * 1000 - (Date.now() - started);
+  const remaining = remainingStageTime();
   if (remaining <= 0) throw new Error('Restoration used the compilation allowance; checkpoint remains available.');
-  const controller = new AbortController();
-  const cancel = () => controller.abort(new Error('Build cancelled.'));
-  process.once('SIGINT', cancel);
-  process.once('SIGTERM', cancel);
-  let complete;
-  try {
-    complete = await compile(python, [path.join(depot, 'ninja.py'), '-C', 'out/Release', 'chrome'],
-      { cwd: src, env, milliseconds: remaining, signal: controller.signal });
-  } finally {
-    process.removeListener('SIGINT', cancel);
-    process.removeListener('SIGTERM', cancel);
-  }
+  const complete = await withStageCancellation(signal => compile(python, [path.join(depot, 'ninja.py'), '-C', 'out/Release', 'chrome'],
+    { cwd: src, env, milliseconds: remaining, signal }));
   if (!complete) {
     console.log('Compilation checkpoint requested; next stage will resume.');
     return;
   }
 
-  // Save compiled outputs before packaging, so packaging failures remain recoverable.
-  if (state.nativeKey && await preserveNativeOutputs(work, path.join(root, 'native.tar.gz'))) {
-    await output('native-key', state.nativeKey);
-  }
+  // A later optional step can preserve native outputs even if packaging fails.
+  state.nativeComplete = true;
+  await fs.writeFile(stateFile, JSON.stringify(state));
 
   const dist = path.join(root, 'release');
   await fs.mkdir(dist, { recursive: true });
