@@ -1,0 +1,171 @@
+diff --git a/gpu/config/flecha_vsr_bridge_state.h b/gpu/config/flecha_vsr_bridge_state.h
+new file mode 100644
+--- /dev/null
++++ b/gpu/config/flecha_vsr_bridge_state.h
+@@ -0,0 +1,14 @@
++// Flecha: process-local availability published by the pre-sandbox bridge setup.
++#ifndef GPU_CONFIG_FLECHA_VSR_BRIDGE_STATE_H_
++#define GPU_CONFIG_FLECHA_VSR_BRIDGE_STATE_H_
++
++#include "gpu/config/gpu_config_export.h"
++
++namespace gpu {
++
++GPU_CONFIG_EXPORT void SetFlechaVsrBridgeAvailableForProcess(bool available);
++GPU_CONFIG_EXPORT bool IsFlechaVsrBridgeAvailableForProcess();
++
++}  // namespace gpu
++
++#endif  // GPU_CONFIG_FLECHA_VSR_BRIDGE_STATE_H_
+diff --git a/gpu/config/flecha_vsr_bridge_state.cc b/gpu/config/flecha_vsr_bridge_state.cc
+new file mode 100644
+--- /dev/null
++++ b/gpu/config/flecha_vsr_bridge_state.cc
+@@ -0,0 +1,20 @@
++#include "gpu/config/flecha_vsr_bridge_state.h"
++
++#include <atomic>
++
++namespace gpu {
++namespace {
++
++std::atomic<bool> g_flecha_vsr_bridge_available{false};
++
++}  // namespace
++
++void SetFlechaVsrBridgeAvailableForProcess(bool available) {
++  g_flecha_vsr_bridge_available.store(available, std::memory_order_release);
++}
++
++bool IsFlechaVsrBridgeAvailableForProcess() {
++  return g_flecha_vsr_bridge_available.load(std::memory_order_acquire);
++}
++
++}  // namespace gpu
+diff --git a/gpu/config/flecha_vsr_bridge_state_test.cc b/gpu/config/flecha_vsr_bridge_state_test.cc
+new file mode 100644
+--- /dev/null
++++ b/gpu/config/flecha_vsr_bridge_state_test.cc
+@@ -0,0 +1,19 @@
++#include "gpu/config/flecha_vsr_bridge_state.h"
++
++#include <iostream>
++
++int main() {
++  if (gpu::IsFlechaVsrBridgeAvailableForProcess()) {
++    return 1;
++  }
++  gpu::SetFlechaVsrBridgeAvailableForProcess(true);
++  if (!gpu::IsFlechaVsrBridgeAvailableForProcess()) {
++    return 1;
++  }
++  gpu::SetFlechaVsrBridgeAvailableForProcess(false);
++  if (gpu::IsFlechaVsrBridgeAvailableForProcess()) {
++    return 1;
++  }
++  std::cout << "PASS: process-local VSR bridge availability transitions\n";
++  return 0;
++}
+diff --git a/gpu/config/BUILD.gn b/gpu/config/BUILD.gn
+--- a/gpu/config/BUILD.gn
++++ b/gpu/config/BUILD.gn
+@@ -147,6 +147,10 @@ component("config") {
+   }
+   if (is_linux || is_chromeos) {
+-    sources += [ "gpu_info_collector_linux.cc" ]
++    sources += [
++      "flecha_vsr_bridge_state.cc",
++      "flecha_vsr_bridge_state.h",
++      "gpu_info_collector_linux.cc",
++    ]
+   }
+   if (is_linux || is_chromeos || is_apple || is_fuchsia || is_android) {
+     deps += [ "//third_party/angle:angle_gpu_info_util" ]
+@@ -158,6 +162,17 @@ component("config") {
+   }
+ }
+ 
++if (is_linux) {
++  executable("flecha_vsr_bridge_state_test") {
++    testonly = true
++    sources = [
++      "flecha_vsr_bridge_state.cc",
++      "flecha_vsr_bridge_state.h",
++      "flecha_vsr_bridge_state_test.cc",
++    ]
++  }
++}
++
+ if (is_android) {
+   java_cpp_strings("java_switches_srcjar") {
+     # External code should depend on ":config_java" instead.
+diff --git a/content/common/gpu_pre_sandbox_hook_linux.cc b/content/common/gpu_pre_sandbox_hook_linux.cc
+--- a/content/common/gpu_pre_sandbox_hook_linux.cc
++++ b/content/common/gpu_pre_sandbox_hook_linux.cc
+@@ -25,4 +25,5 @@
+ #include "content/public/common/content_switches.h"
++#include "gpu/config/flecha_vsr_bridge_state.h"
+ #include "gpu/config/gpu_finch_features.h"
+ #include "media/gpu/buildflags.h"
+ #include "sandbox/linux/bpf_dsl/policy.h"
+@@ -675,7 +676,9 @@ bool GpuPreSandboxHook(sandbox::policy::SandboxLinux::Options options) {
+   // Flecha: connect the preloaded client to its GPU worker before sandboxing.
+   // NVIDIA model loading stays in the worker, outside the browser GPU process.
+   if (base::FeatureList::IsEnabled(features::kFlechaVsr)) {
+-    if (!PrepareFlechaVsrBridge()) {
++    const bool available = PrepareFlechaVsrBridge();
++    gpu::SetFlechaVsrBridgeAvailableForProcess(available);
++    if (!available) {
+       LOG(ERROR) << "Flecha VSR: native bridge initialization failed";
+     }
+   }
+diff --git a/components/viz/service/display_embedder/flecha_video_processor.cc b/components/viz/service/display_embedder/flecha_video_processor.cc
+--- a/components/viz/service/display_embedder/flecha_video_processor.cc
++++ b/components/viz/service/display_embedder/flecha_video_processor.cc
+@@ -17,2 +17,3 @@
+ #include "gpu/command_buffer/service/vulkan_context_provider.h"
++#include "gpu/config/flecha_vsr_bridge_state.h"
+ #include "gpu/config/gpu_finch_features.h"
+@@ -51,5 +52,6 @@ struct Api {
+   }
+   bool available() const {
+-    return !disabled.load(std::memory_order_relaxed) && create && destroy &&
+-           bind && release && process && error;
++    return gpu::IsFlechaVsrBridgeAvailableForProcess() &&
++           !disabled.load(std::memory_order_relaxed) && create && destroy &&
++           bind && release && process && error;
+   }
+@@ -117,2 +119,3 @@ void DisableFlechaVideo() {
+   Bridge().disabled.store(true, std::memory_order_relaxed);
++  gpu::SetFlechaVsrBridgeAvailableForProcess(false);
+ }
+@@ -267,4 +270,4 @@ FlechaVideoProcessor::~FlechaVideoProcessor() {
+   resources_->context_lost |= resources_->context->context_lost();
+   if (resources_->context_lost) {
+-    Bridge().disabled.store(true, std::memory_order_relaxed);
++    DisableFlechaVideo();
+   } else {
+@@ -283,4 +286,4 @@ FlechaVideoProcessor::~FlechaVideoProcessor() {
+         resources->context_lost |= lost;
+         if (resources->context_lost) {
+-          Bridge().disabled.store(true, std::memory_order_relaxed);
++          DisableFlechaVideo();
+         } else if (pool && resources->recyclable) {
+@@ -382,4 +385,4 @@ bool FlechaVideoProcessor::Process(
+     LOG(ERROR) << "Flecha VSR CUDA context failed: " << Bridge().Error();
+     r.context_lost = true;
+-    Bridge().disabled.store(true, std::memory_order_relaxed);
++    DisableFlechaVideo();
+     r.context->MarkContextLost();
+@@ -397,4 +400,4 @@ bool FlechaVideoProcessor::Process(
+     // behind a Vulkan fence that does not cover the failed completion wait.
+     r.context_lost = true;
+-    Bridge().disabled.store(true, std::memory_order_relaxed);
++    DisableFlechaVideo();
+     r.context->MarkContextLost();
+@@ -430,4 +433,4 @@ void FlechaVideoProcessor::OnContextLost() {
+   resources_->context_lost = true;
+-  Bridge().disabled.store(true, std::memory_order_relaxed);
++  DisableFlechaVideo();
+ }
+ }  // namespace viz

@@ -1,0 +1,90 @@
+# Read coherent VSR settings without copying frame telemetry or error strings.
+diff --git a/components/viz/service/display_embedder/flecha_video_settings.h b/components/viz/service/display_embedder/flecha_video_settings.h
+index 81bf223..b4bbe4b 100644
+--- a/components/viz/service/display_embedder/flecha_video_settings.h
++++ b/components/viz/service/display_embedder/flecha_video_settings.h
+@@ -20,6 +20,7 @@ struct FlechaVideoStatus {
+   uint32_t output_height = 0;
+   std::string error;
+ };
++FlechaVideoSettings GetFlechaVideoSettings();
+ FlechaVideoStatus GetFlechaVideoStatus();
+ bool SetFlechaVideoSettings(FlechaVideoSettings settings);
+ void RecordFlechaVideoFrame(uint32_t input_width,
+diff --git a/components/viz/service/display_embedder/flecha_video_settings.cc b/components/viz/service/display_embedder/flecha_video_settings.cc
+index 8e34fcd..2a9681b 100644
+--- a/components/viz/service/display_embedder/flecha_video_settings.cc
++++ b/components/viz/service/display_embedder/flecha_video_settings.cc
+@@ -45,6 +45,12 @@ Runtime& State() {
+ }
+ }  // namespace
+ 
++FlechaVideoSettings GetFlechaVideoSettings() {
++  auto& state = State();
++  base::AutoLock lock(state.lock);
++  return state.status.settings;
++}
++
+ FlechaVideoStatus GetFlechaVideoStatus() {
+   auto& state = State();
+   base::AutoLock lock(state.lock);
+diff --git a/components/viz/service/display_embedder/flecha_video_processor.cc b/components/viz/service/display_embedder/flecha_video_processor.cc
+index 2e457dd..a4652d7 100644
+--- a/components/viz/service/display_embedder/flecha_video_processor.cc
++++ b/components/viz/service/display_embedder/flecha_video_processor.cc
+@@ -145,7 +145,7 @@ std::optional<gfx::Size> GetFlechaVideoOutputSize(
+     return std::nullopt;
+   }
+   const auto size = resource.GetSize();
+-  const auto settings = GetFlechaVideoStatus().settings;
++  const auto settings = GetFlechaVideoSettings();
+   // Preserve the existing project's 1.5x default, 1440p output policy, and
+   // 16-pixel alignment. These are not new SDK or hardware restrictions.
+   if (!settings.enabled || size.IsEmpty() ||
+diff --git a/components/viz/service/display_embedder/image_context_impl.cc b/components/viz/service/display_embedder/image_context_impl.cc
+old mode 100644
+new mode 100755
+index 5bb66d8..2fd2660
+--- a/components/viz/service/display_embedder/image_context_impl.cc
++++ b/components/viz/service/display_embedder/image_context_impl.cc
+@@ -433,7 +433,7 @@ bool ImageContextImpl::BeginAccessIfNecessaryInternal(
+   if (process_video_) {
+     if (!video_processor_ && video_pool) {
+       video_processor_ = video_pool->Acquire(
+-          source_size_, size(), GetFlechaVideoStatus().settings.quality);
++          source_size_, size(), GetFlechaVideoSettings().quality);
+     }
+     auto source =
+         video_processed_
+diff --git a/components/viz/service/display_embedder/flecha_video_settings_test.cc b/components/viz/service/display_embedder/flecha_video_settings_test.cc
+index a65e9a1..2f25959 100644
+--- a/components/viz/service/display_embedder/flecha_video_settings_test.cc
++++ b/components/viz/service/display_embedder/flecha_video_settings_test.cc
+@@ -16,6 +16,10 @@ int main(int argc, char** argv) {
+   CHECK(!GetFlechaVideoStatus().settings.enabled);
+   CHECK_EQ(GetFlechaVideoStatus().settings.quality, 4u);
+   CHECK_EQ(GetFlechaVideoStatus().settings.max_output_height, 2160u);
++  const auto settings = GetFlechaVideoSettings();
++  CHECK(!settings.enabled);
++  CHECK_EQ(settings.quality, 4u);
++  CHECK_EQ(settings.max_output_height, 2160u);
+   // Invalid boundary input must leave the previous settings intact.
+   CHECK(!SetFlechaVideoSettings({true, 0, 1440}));
+   CHECK(!SetFlechaVideoSettings({true, 5, 1440}));
+@@ -24,10 +28,16 @@ int main(int argc, char** argv) {
+       {true, 2, static_cast<uint32_t>(std::numeric_limits<int>::max()) + 1u}));
+   CHECK(!GetFlechaVideoStatus().settings.enabled);
+   CHECK_EQ(GetFlechaVideoStatus().settings.quality, 4u);
++  CHECK_EQ(GetFlechaVideoSettings().quality, settings.quality);
++  CHECK_EQ(GetFlechaVideoSettings().max_output_height,
++           settings.max_output_height);
+   CHECK(SetFlechaVideoSettings({true, 2, 1440}));
+   RecordFlechaVideoError("inference unavailable");
+   CHECK_EQ(GetFlechaVideoStatus().processed_frames, 0u);
+   CHECK_EQ(GetFlechaVideoStatus().error, "inference unavailable");
++  CHECK(GetFlechaVideoSettings().enabled);
++  CHECK_EQ(GetFlechaVideoSettings().quality, 2u);
++  CHECK_EQ(GetFlechaVideoStatus().error, "inference unavailable");
+   RecordFlechaVideoFrame(1280, 720, 1920, 1088);
+   const auto status = GetFlechaVideoStatus();
+   CHECK_EQ(status.processed_frames, 1u);
