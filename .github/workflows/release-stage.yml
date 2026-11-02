@@ -67,14 +67,28 @@ jobs:
         run: npm ci
       - name: Prepare Chromium source and toolchains
         if: inputs.stage == 0
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FLECHA_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: node chromium/scripts/ci-release.mjs prepare
       - name: Compile and package
+        id: build
         if: inputs.stage != 0
         shell: bash
         run: |
           export CHROMIUM_SRC="$RUNNER_WORKSPACE/flecha-chromium/src"
           export FLECHA_DISK="$RUNNER_WORKSPACE/flecha-chromium"
           node chromium/scripts/ci-release.mjs build
+      - name: Preserve native outputs for later nightlies and packaging recovery
+        if: always() && steps.build.outputs.native-key != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-${{ matrix.platform }}-${{ steps.build.outputs.native-key }}
+          path: native.tar.gz
+          compression-level: 0
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 35
       - name: Upload completed platform package
         uses: actions/upload-artifact@v7
         with:
@@ -87,12 +101,22 @@ jobs:
           # 35 days is GitHub's maximum lifetime for the entire workflow.
           retention-days: 35
       - name: Save checkpoint
+        id: checkpoint
         run: node chromium/scripts/ci-release.mjs checkpoint
       - uses: actions/upload-artifact@v7
         with:
           name: checkpoint-${{ matrix.platform }}-${{ inputs.stage }}
           path: checkpoint.tar.gz
           compression-level: 0
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 35
+      - name: Index resumable native checkpoint after successful upload
+        if: steps.checkpoint.outputs.reuse-key != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: reuse-${{ matrix.platform }}-${{ steps.checkpoint.outputs.reuse-key }}-${{ inputs.stage }}
+          path: reuse.json
           if-no-files-found: error
           overwrite: true
           retention-days: 35

@@ -6,6 +6,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { pipeline } from 'node:stream/promises';
 import { createReadStream } from 'node:fs';
+import { nativeKey, downloadReusableTree } from './ci-reuse.mjs';
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
 const windows = process.platform === 'win32';
@@ -43,6 +44,50 @@ export function checkIdentity(actual, expected) {
     if (actual[key] !== expected[key]) throw new Error(`Checkpoint ${key} does not match this build.`);
   }
   if (typeof actual.complete !== 'boolean') throw new Error('Checkpoint has no completion state.');
+}
+
+export async function prepareNativeTree({ work, depot, src, configuration, run, chromium }) {
+  await fs.mkdir(work);
+  await fs.mkdir(depot);
+  run('git', ['init', depot], work);
+  run('git', ['-C', depot, 'fetch', '--depth=1', 'https://chromium.googlesource.com/chromium/tools/depot_tools.git', depotRevision], work);
+  run('git', ['-C', depot, 'checkout', '--detach', 'FETCH_HEAD'], work);
+  await fs.writeFile(path.join(work, '.gclient'), configuration.gclient);
+  run(python, [path.join(depot, 'gclient.py'), 'sync', '--no-history', '--nohooks', '--revision', `src@${chromium}`], work);
+  if (process.platform === 'linux') run('sudo', ['bash', 'build/install-build-deps.sh', '--no-prompt']);
+  run(python, [path.join(depot, 'gclient.py'), 'runhooks'], work);
+  for (const patch of (await fs.readdir(path.join(root, 'chromium/patches'))).filter(p => p.endsWith('.patch')).sort()) {
+    run('git', ['apply', path.join(root, 'chromium/patches', patch)]);
+  }
+  const theme = path.join(src, 'chrome/app/theme/chromium');
+  await fs.copyFile(path.join(root, 'chromium/branding/BRANDING'), path.join(theme, 'BRANDING'));
+  await fs.cp(path.join(root, 'chromium/branding/mac'), path.join(theme, 'mac'), { recursive: true });
+  for (const png of (await fs.readdir(path.join(root, 'chromium/branding/logo'))).filter(p => p.endsWith('.png'))) {
+    await fs.copyFile(path.join(root, 'chromium/branding/logo', png), path.join(theme, png));
+  }
+}
+
+export async function configureReleaseTree({ root, work, identity, key, reused, args, generate }) {
+  const src = path.join(work, 'src');
+  const out = path.join(src, 'out/Release');
+  const stateFile = path.join(work, 'state.json');
+  if (reused) {
+    const previous = JSON.parse(await fs.readFile(stateFile, 'utf8'));
+    checkIdentity(previous, { ...identity, sha: reused.sha, nativeKey: key });
+    if (!(await fs.stat(src)).isDirectory() || !(await fs.stat(path.join(work, 'depot_tools'))).isDirectory()) {
+      throw new Error('Reusable checkpoint has no source tree.');
+    }
+  }
+  // The restored extension can contain files removed from the current shell build.
+  await fs.rm(path.join(src, 'flecha/shell'), { recursive: true, force: true });
+  await fs.mkdir(path.join(src, 'flecha'), { recursive: true });
+  await fs.cp(path.join(root, 'chromium/shell/dist'), path.join(src, 'flecha/shell'), { recursive: true });
+  await fs.mkdir(out, { recursive: true });
+  await fs.writeFile(path.join(out, 'args.gn'), args);
+  generate();
+  // A compatible native tree still needs current shell packaging and provenance.
+  await fs.writeFile(stateFile, JSON.stringify({ ...identity, nativeKey: key, complete: false,
+    ...(reused ? { reusedFrom: reused } : {}) }));
 }
 
 export function saveCheckpoint(work, archive, complete) {
@@ -115,35 +160,30 @@ async function main() {
     const disk = capture(windows ? 'fsutil' : 'df', windows ? ['volume', 'diskfree', path.parse(work).root] : ['-h', work], work);
     console.log(disk);
   };
+  const output = async (key, value) => {
+    if (process.env.GITHUB_OUTPUT) await fs.appendFile(process.env.GITHUB_OUTPUT, `${key}=${value}\n`);
+  };
 
   if (mode === 'prepare') {
     const { version } = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
     const configuration = await releaseConfiguration({ platform, version, buildNumber: process.env.GITHUB_RUN_NUMBER });
-    // The directory belongs to this job. Refuse an unexpected pre-existing tree.
-    await fs.mkdir(work);
-    await fs.mkdir(depot);
-    run('git', ['init', depot], work);
-    run('git', ['-C', depot, 'fetch', '--depth=1', 'https://chromium.googlesource.com/chromium/tools/depot_tools.git', depotRevision], work);
-    run('git', ['-C', depot, 'checkout', '--detach', 'FETCH_HEAD'], work);
-    await fs.writeFile(path.join(work, '.gclient'), configuration.gclient);
-    run(python, [path.join(depot, 'gclient.py'), 'sync', '--no-history', '--nohooks', '--revision', `src@${chromium}`], work);
-    if (process.platform === 'linux') run('sudo', ['bash', 'build/install-build-deps.sh', '--no-prompt']);
-    run(python, [path.join(depot, 'gclient.py'), 'runhooks'], work);
-    for (const patch of (await fs.readdir(path.join(root, 'chromium/patches'))).filter(p => p.endsWith('.patch')).sort()) {
-      run('git', ['apply', path.join(root, 'chromium/patches', patch)]);
+    const normalized = await releaseConfiguration({ platform, version, buildNumber: '0' });
+    const key = nativeKey(root, { ...normalized, platform, depot: depotRevision, work,
+      preparation: prepareNativeTree.toString(),
+      xcode: mac ? capture('xcodebuild', ['-version'], root) : null,
+      visualStudio: windows ? capture(path.join(process.env['ProgramFiles(x86)'], 'Microsoft Visual Studio/Installer/vswhere.exe'),
+        ['-latest', '-products', '*', '-requires', 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64', '-property', 'installationVersion'], root) : null });
+    const reused = await downloadReusableTree(root, { repository: process.env.GITHUB_REPOSITORY,
+      branch: process.env.FLECHA_DEFAULT_BRANCH, currentRun: process.env.GITHUB_RUN_ID, platform, key },
+    archive => restoreCheckpoint(work, archive));
+    if (!reused) {
+      await prepareNativeTree({ work, depot, src, configuration, run, chromium });
     }
-    const theme = path.join(src, 'chrome/app/theme/chromium');
-    await fs.copyFile(path.join(root, 'chromium/branding/BRANDING'), path.join(theme, 'BRANDING'));
-    await fs.cp(path.join(root, 'chromium/branding/mac'), path.join(theme, 'mac'), { recursive: true });
-    for (const png of (await fs.readdir(path.join(root, 'chromium/branding/logo'))).filter(p => p.endsWith('.png'))) {
-      await fs.copyFile(path.join(root, 'chromium/branding/logo', png), path.join(theme, png));
-    }
-    await fs.mkdir(path.join(src, 'flecha'), { recursive: true });
-    await fs.cp(path.join(root, 'chromium/shell/dist'), path.join(src, 'flecha/shell'), { recursive: true });
-    await fs.mkdir(out, { recursive: true });
-    await fs.writeFile(path.join(out, 'args.gn'), configuration.args);
-    run(gn, ['gen', 'out/Release', '--fail-on-unused-args']);
-    await fs.writeFile(stateFile, JSON.stringify({ ...identity, complete: false }));
+    await configureReleaseTree({ root, work, identity, key, reused, args: configuration.args,
+      generate: () => {
+        if (reused && process.platform === 'linux') run('sudo', ['bash', 'build/install-build-deps.sh', '--no-prompt']);
+        run(gn, ['gen', 'out/Release', '--fail-on-unused-args']);
+      } });
     showDisk();
     return;
   }
@@ -153,6 +193,10 @@ async function main() {
   if (mode === 'checkpoint') {
     // Completed stages carry only a marker; browser packages have a separate artifact.
     saveCheckpoint(work, archive, state.complete);
+    if (!state.complete && state.nativeKey) {
+      await fs.writeFile(path.join(root, 'reuse.json'), JSON.stringify(state));
+      await output('reuse-key', state.nativeKey);
+    }
     showDisk();
     return;
   }
@@ -182,9 +226,16 @@ async function main() {
     return;
   }
 
+  // Save compiled outputs before packaging, so packaging failures remain recoverable.
+  if (state.nativeKey) {
+    saveCheckpoint(work, path.join(root, 'native.tar.gz'), false);
+    await output('native-key', state.nativeKey);
+  }
+
   const dist = path.join(root, 'release');
   await fs.mkdir(dist, { recursive: true });
-  const provenance = { ...identity, args: await fs.readFile(path.join(out, 'args.gn'), 'utf8') };
+  const provenance = { ...identity, nativeKey: state.nativeKey, reusedFrom: state.reusedFrom,
+    args: await fs.readFile(path.join(out, 'args.gn'), 'utf8') };
   await fs.writeFile(path.join(dist, `${platform}.json`), JSON.stringify(provenance, null, 2) + '\n');
   if (mac) {
     // Existing signing code seals the app ad hoc. No stable updater or notarization credentials.
@@ -227,7 +278,7 @@ async function main() {
     await fs.appendFile(path.join(dist, `${platform}-SHA256SUMS`), `${hash.digest('hex')}  ${file}\n`);
   }
   // Publish completion only after every packaging and checksum operation succeeds.
-  await fs.writeFile(stateFile, JSON.stringify({ ...identity, complete: true }));
+  await fs.writeFile(stateFile, JSON.stringify({ ...state, complete: true }));
   showDisk();
 }
 

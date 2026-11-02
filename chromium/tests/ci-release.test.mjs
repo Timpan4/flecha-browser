@@ -6,8 +6,102 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { checkIdentity, compile, depotRevision, releaseConfiguration, saveCheckpoint, restoreCheckpoint } from '../scripts/ci-release.mjs';
+import { checkIdentity, compile, configureReleaseTree, depotRevision, releaseConfiguration, saveCheckpoint, restoreCheckpoint } from '../scripts/ci-release.mjs';
+import { findReusableArtifact, nativeKey, reusableArtifact } from '../scripts/ci-reuse.mjs';
 import { verifyRelease } from '../scripts/ci-publish.mjs';
+
+test('native reuse ignores shell-only commits and invalidates native inputs and toolchains', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-native-key-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.mkdir(path.join(root, 'chromium/patches'), { recursive: true });
+  await fs.mkdir(path.join(root, 'chromium/shell'));
+  await fs.writeFile(path.join(root, 'chromium/patches/native.patch'), 'native input');
+  await fs.writeFile(path.join(root, 'chromium/shell/app.ts'), 'old shell');
+  execFileSync('git', ['init', '--quiet', root]);
+  const commit = () => {
+    execFileSync('git', ['add', '.'], { cwd: root });
+    execFileSync('git', ['-c', 'user.name=Release test', '-c', 'user.email=release@example.invalid',
+      'commit', '--quiet', '-m', 'fixture'], { cwd: root });
+  };
+  commit();
+  const configuration = { platform: 'linux-x64', depot: 'toolchain', args: 'release flags', work: '/stable/work' };
+  const original = nativeKey(root, configuration);
+  await fs.writeFile(path.join(root, 'chromium/shell/app.ts'), 'new shell');
+  commit();
+  assert.equal(nativeKey(root, configuration), original);
+  for (const field of Object.keys(configuration)) {
+    assert.notEqual(nativeKey(root, { ...configuration, [field]: 'changed' }), original, field);
+  }
+  await fs.writeFile(path.join(root, 'chromium/patches/native.patch'), 'changed native input');
+  commit();
+  assert.notEqual(nativeKey(root, configuration), original);
+});
+
+test('recovery searches trusted nightly runs and skips expired or superseded checkpoints', () => {
+  const options = { repository: 'owner/repo', branch: 'main', currentRun: '10', platform: 'linux-x64', key: 'native-key' };
+  const run = (id, overrides = {}) => ({ id, head_sha: `sha-${id}`, head_repository: { full_name: options.repository },
+    path: '.github/workflows/nightly-release.yml', head_branch: 'main', event: 'workflow_dispatch', ...overrides });
+  const requests = [];
+  const rejected = new Map([
+    ['9', { head_branch: 'feature' }], ['8', { head_repository: { full_name: 'fork/repo' } }],
+    ['7', { event: 'pull_request' }], ['6', { path: '.github/workflows/untrusted.yml' }],
+  ]);
+  const candidate = findReusableArtifact(options, endpoint => {
+    requests.push(endpoint);
+    if (endpoint.endsWith('page=1')) return { artifacts: ['10', ...rejected.keys()].map(id =>
+      ({ name: 'native-linux-x64-native-key', workflow_run: { id } })), total_count: 9 };
+    if (endpoint.endsWith('page=2')) return { artifacts: [
+      { name: 'reuse-linux-x64-native-key-2' }, { name: 'reuse-linux-x64-native-key-1' },
+    ].map(artifact => ({ ...artifact, workflow_run: { id: 5 } })), total_count: 9 };
+    if (endpoint.endsWith('page=3')) return { artifacts: [
+      { name: 'checkpoint-linux-x64-2', expired: true }, { name: 'checkpoint-linux-x64-1' },
+    ].map(artifact => ({ ...artifact, workflow_run: { id: 5 } })), total_count: 9 };
+    const id = endpoint.split('/').at(-1);
+    return run(Number(id), rejected.get(id));
+  });
+  assert.deepEqual(candidate, { run: '5', sha: 'sha-5', name: 'checkpoint-linux-x64-1', archive: 'checkpoint.tar.gz' });
+  assert.equal(requests.length, 8);
+  assert.equal(reusableArtifact([{ name: 'reuse-linux-x64-other-key-1' }, { name: 'checkpoint-linux-x64-1' }], options.platform, options.key), undefined);
+  assert.deepEqual(reusableArtifact([{ name: 'native-linux-x64-native-key' }], options.platform, options.key),
+    { name: 'native-linux-x64-native-key', archive: 'native.tar.gz' });
+  assert.equal(findReusableArtifact(options, () => ({ artifacts: [], total_count: 0 })), undefined);
+});
+
+test('a restored native tree retains compiler outputs and adopts current shell, build metadata and source provenance', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-reconfigure-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const original = path.join(root, 'original');
+  const work = path.join(root, 'restored work');
+  const src = path.join(work, 'src');
+  const out = path.join(src, 'out/Release');
+  await fs.mkdir(path.join(original, 'src/out/Release'), { recursive: true });
+  await fs.mkdir(path.join(original, 'depot_tools'));
+  await fs.mkdir(path.join(original, 'src/flecha/shell'), { recursive: true });
+  await fs.mkdir(path.join(root, 'chromium/shell/dist'), { recursive: true });
+  const identity = { sha: 'current-source', chromium: '158', platform: 'linux-x64', depot: 'tools' };
+  await fs.writeFile(path.join(original, 'state.json'), JSON.stringify({ ...identity, sha: 'previous-source', nativeKey: 'key', complete: true }));
+  await fs.writeFile(path.join(original, 'src/out/Release/chrome.o'), 'retained compiler output');
+  await fs.writeFile(path.join(original, 'src/flecha/shell/removed.js'), 'stale shell');
+  await fs.writeFile(path.join(root, 'chromium/shell/dist/current.js'), 'current shell');
+  const archive = path.join(root, 'native.tar.gz');
+  saveCheckpoint(original, archive, false);
+  await restoreCheckpoint(work, archive);
+  let generated = false;
+  const reused = { sha: 'previous-source', run: '123' };
+  const configure = { root, work, identity, key: 'key', reused, args: 'current version and build number', generate: () => { generated = true; } };
+  await assert.rejects(configureReleaseTree({ ...configure, key: 'wrong' }), /nativeKey does not match/);
+  assert.equal(generated, false);
+  await configureReleaseTree(configure);
+  assert.equal(generated, true);
+  assert.equal(await fs.readFile(path.join(out, 'chrome.o'), 'utf8'), 'retained compiler output');
+  assert.equal(await fs.readFile(path.join(out, 'args.gn'), 'utf8'), 'current version and build number');
+  assert.equal(await fs.readFile(path.join(src, 'flecha/shell/current.js'), 'utf8'), 'current shell');
+  await assert.rejects(fs.stat(path.join(src, 'flecha/shell/removed.js')), { code: 'ENOENT' });
+  const state = JSON.parse(await fs.readFile(path.join(work, 'state.json'), 'utf8'));
+  checkIdentity(state, identity);
+  assert.equal(state.complete, false);
+  assert.deepEqual(state.reusedFrom, reused);
+});
 
 test('completed platforms pass through later build and checkpoint CLI stages without source', async t => {
   // Node resolves module filenames through macOS's /var -> /private/var alias.
@@ -18,6 +112,7 @@ test('completed platforms pass through later build and checkpoint CLI stages wit
   await fs.mkdir(scripts, { recursive: true });
   const script = path.join(scripts, 'ci-release.mjs');
   await fs.copyFile(fileURLToPath(new URL('../scripts/ci-release.mjs', import.meta.url)), script);
+  await fs.copyFile(fileURLToPath(new URL('../scripts/ci-reuse.mjs', import.meta.url)), path.join(scripts, 'ci-reuse.mjs'));
   await fs.writeFile(path.join(root, 'chromium/CHROMIUM_VERSION'), 'fixture');
   execFileSync('git', ['init', '--quiet', root]);
   execFileSync('git', ['-c', 'user.name=Release test', '-c', 'user.email=release@example.invalid',
