@@ -849,13 +849,13 @@ index 543e347..fef23f2 100755
  
 -  // SandboxLinux::InitializeSandbox() must always be called
 -  // with only one thread.
-+  // Default sandbox startup requires a single thread.
    sandbox::policy::SandboxLinux::Options sandbox_options;
-+  // Flecha: Vulkan can start driver workers before sandbox initialization.
-+  // Use the existing TSYNC path to apply the GPU policy to every thread.
 +  const bool native_vsr =
 +      BUILDFLAG(IS_LINUX) && base::FeatureList::IsEnabled(features::kFlechaVsr);
-+  sandbox_options.allow_threads_during_sandbox_init = native_vsr;
++  // Flecha: GPU drivers can start workers before sandbox initialization,
++  // independently of VSR. Use Chromium's existing TSYNC path so the same GPU
++  // syscall policy is installed on every thread instead of skipping Seccomp.
++  sandbox_options.allow_threads_during_sandbox_init = true;
    if (gpu_info) {
      // We have to enable sandbox settings for all GPUs in the system
      // for Chrome to be able to access/use them.
