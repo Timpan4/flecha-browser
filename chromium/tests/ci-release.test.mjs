@@ -3,10 +3,44 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { checkIdentity, compile, releaseArgs, saveCheckpoint, restoreCheckpoint } from '../scripts/ci-release.mjs';
+import { checkIdentity, compile, depotRevision, releaseArgs, saveCheckpoint, restoreCheckpoint } from '../scripts/ci-release.mjs';
 import { verifyRelease } from '../scripts/ci-publish.mjs';
+
+test('completed platforms pass through later build and checkpoint CLI stages without source', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-completed-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const root = path.join(dir, 'release tooling');
+  const scripts = path.join(root, 'chromium/scripts');
+  await fs.mkdir(scripts, { recursive: true });
+  const script = path.join(scripts, 'ci-release.mjs');
+  await fs.copyFile(fileURLToPath(new URL('../scripts/ci-release.mjs', import.meta.url)), script);
+  await fs.writeFile(path.join(root, 'chromium/CHROMIUM_VERSION'), 'fixture');
+  execFileSync('git', ['init', '--quiet', root]);
+  execFileSync('git', ['-c', 'user.name=Release test', '-c', 'user.email=release@example.invalid',
+    'commit', '--allow-empty', '-m', 'Release fixture'], { cwd: root });
+  const sha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+  const platform = process.platform === 'darwin' ? 'macos-arm64' : process.platform === 'win32' ? 'windows-x64' : 'linux-x64';
+  const state = { sha, chromium: 'fixture', platform, depot: depotRevision, complete: true };
+  let workspace = path.join(dir, 'first workspace');
+  const work = path.join(workspace, 'flecha-chromium');
+  await fs.mkdir(work, { recursive: true });
+  await fs.writeFile(path.join(work, 'state.json'), JSON.stringify(state));
+  for (const stage of ['first', 'second']) {
+    const env = { ...process.env, GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted', RUNNER_WORKSPACE: workspace };
+    execFileSync(process.execPath, [script, 'build'], { env });
+    execFileSync(process.execPath, [script, 'checkpoint'], { env });
+    const next = path.join(dir, `${stage} restored workspace`);
+    await fs.mkdir(next);
+    const restored = path.join(next, 'flecha-chromium');
+    await restoreCheckpoint(restored, path.join(root, 'checkpoint.tar.gz'));
+    assert.deepEqual(JSON.parse(await fs.readFile(path.join(restored, 'state.json'), 'utf8')), state);
+    await assert.rejects(fs.stat(path.join(restored, 'src')), { code: 'ENOENT' });
+    workspace = next;
+  }
+});
 
 test('checkpoint archives restore the tree, and completed checkpoints carry only state', async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-checkpoint-'));
