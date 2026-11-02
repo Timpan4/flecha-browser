@@ -15,6 +15,14 @@ export function withoutGitHubTokens(environment) {
   return result;
 }
 
+export function reuseDeadline({ started, stageDeadline, budgetMinutes }) {
+  const milliseconds = Number(budgetMinutes) * 60 * 1000;
+  if (!/^\d+$/.test(String(budgetMinutes)) || !Number.isSafeInteger(milliseconds)) {
+    throw new Error('Expected a cache-reuse budget in whole minutes.');
+  }
+  return Math.min(started + milliseconds, stageDeadline);
+}
+
 // Packaging and shell inputs are refreshed after restoration. Native inputs must match.
 export function nativeKey(root, configuration) {
   const tree = execFileSync('git', ['ls-tree', '-r', '-z', 'HEAD', '--',

@@ -7,8 +7,20 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { checkIdentity, compile, configureReleaseTree, depotRevision, preserveNativeOutputs, releaseConfiguration, saveCheckpoint, restoreCheckpoint, validateReusableTree } from '../scripts/ci-release.mjs';
-import { downloadReusableTree, findReusableArtifact, nativeKey, reusableArtifact, withoutGitHubTokens } from '../scripts/ci-reuse.mjs';
+import { downloadReusableTree, findReusableArtifact, nativeKey, reusableArtifact, reuseDeadline, withoutGitHubTokens } from '../scripts/ci-reuse.mjs';
 import { verifyRelease } from '../scripts/ci-publish.mjs';
+
+test('the owner-selected reuse budget leaves clean preparation time and never exceeds the stage deadline', () => {
+  const started = Date.now();
+  const stageDeadline = started + 5 * 60 * 60 * 1000;
+  const deadline = reuseDeadline({ started, stageDeadline, budgetMinutes: '60' });
+  assert.equal(deadline, started + 60 * 60 * 1000);
+  assert.equal(reuseDeadline({ started: deadline, stageDeadline, budgetMinutes: '0' }), deadline);
+  assert.equal(reuseDeadline({ started: stageDeadline, stageDeadline, budgetMinutes: '60' }), stageDeadline);
+  for (const budgetMinutes of [undefined, '', 'invalid', '-1', Infinity]) {
+    assert.throws(() => reuseDeadline({ started, stageDeadline, budgetMinutes }), /whole minutes/);
+  }
+});
 
 test('build subprocesses cannot inherit GitHub tokens while the gh environment remains intact', () => {
   const original = { ...process.env, GH_TOKEN: 'fixture-gh-token', GITHUB_TOKEN: 'fixture-github-token' };

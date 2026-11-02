@@ -6,7 +6,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { pipeline } from 'node:stream/promises';
 import { createReadStream } from 'node:fs';
-import { nativeKey, downloadReusableTree, withoutGitHubTokens } from './ci-reuse.mjs';
+import { nativeKey, downloadReusableTree, reuseDeadline, withoutGitHubTokens } from './ci-reuse.mjs';
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
 const windows = process.platform === 'win32';
@@ -221,11 +221,13 @@ async function main() {
       xcode: mac ? capture('xcodebuild', ['-version'], root) : null,
       visualStudio: windows ? capture(path.join(process.env['ProgramFiles(x86)'], 'Microsoft Visual Studio/Installer/vswhere.exe'),
         ['-latest', '-products', '*', '-requires', 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64', '-property', 'installationVersion'], root) : null });
+    const deadline = reuseDeadline({ started: Date.now(), stageDeadline: Date.now() + remainingStageTime(),
+      budgetMinutes: process.env.FLECHA_REUSE_BUDGET_MINUTES });
     const reused = await downloadReusableTree(root, { repository: process.env.GITHUB_REPOSITORY,
       branch: process.env.FLECHA_DEFAULT_BRANCH, currentRun: process.env.GITHUB_RUN_ID, platform, key, work,
-      deadline: Date.now() + remainingStageTime() },
+      deadline },
     async (archive, candidate) => {
-      await restoreCheckpoint(work, archive, { create: false, timeout: remainingStageTime() });
+      await restoreCheckpoint(work, archive, { create: false, timeout: deadline - Date.now() });
       await validateReusableTree(work, { ...identity, sha: candidate.sha, nativeKey: key });
     });
     if (!reused) {

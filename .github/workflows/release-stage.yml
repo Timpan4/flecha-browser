@@ -70,6 +70,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           FLECHA_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          # Owner-selected total budget for optional reuse before a clean preparation.
+          FLECHA_REUSE_BUDGET_MINUTES: '60'
         run: node chromium/scripts/ci-release.mjs prepare
       - name: Compile and package
         if: inputs.stage != 0
