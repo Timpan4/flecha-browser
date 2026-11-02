@@ -296,7 +296,6 @@ try {
     await stateWhere(`s => !s.tabs[${JSON.stringify(failed)}]`);
     console.log(`PASS ${failure} failure reaches MCP and removes the blank native tab`);
   }
-  await send('Target.detachFromTarget', { sessionId: worker });
 
   const opened = JSON.parse((await call('open_tab', { url: base + '/agent' })).content[0].text);
   state = await stateWhere(`s => s.tabs[${JSON.stringify(opened.tabId)}]?.agent`);
@@ -495,6 +494,49 @@ try {
   await stateWhere(`s => !s.tabs[${JSON.stringify(opened.tabId)}].agent`);
   await domWhere("() => document.querySelector('#agent-folder').hidden");
   console.log("PASS pinning the agent's tab takes it out of the agent's folder");
+
+  // Reopening an agent's window adopts its initial tab. A failed mark must remove that tab
+  // while preserving the window, which may also contain shared pinned tabs.
+  await rpc('newWindow');
+  const reopening = JSON.parse((await call('open_tab', { url: base + '/login?reopening' })).content[0].text).tabId;
+  await call('activate_tab', { tabId: reopening });
+  const reopeningWindow = await evaluate(session, `chrome.tabs.query({}).then(tabs => tabs.find(t => t.url === ${JSON.stringify(base + '/login?reopening')}).windowId)`);
+  const mainWindow = await evaluate(session, `chrome.tabs.query({}).then(tabs => tabs.find(t => t.url === ${JSON.stringify(base + '/mine')}).windowId)`);
+  assert.notEqual(reopeningWindow, mainWindow, 'the agent window must be separate from the harness window');
+  await evaluate(session, `chrome.windows.remove(${reopeningWindow})`);
+  await stateWhere(`s => !s.tabs[${JSON.stringify(reopening)}]`);
+  const reopeningWorker = worker;
+  await evaluate(reopeningWorker, `
+    globalThis.originalMark = chrome.flechaPrivate.setAgentTab;
+    globalThis.failedAdoption = new Promise(resolve => {
+      chrome.flechaPrivate.setAgentTab = async (id, agent) => {
+        if (!agent) return originalMark(id, agent);
+        chrome.flechaPrivate.setAgentTab = originalMark;
+        const tab = await chrome.tabs.get(id);
+        chrome.tabs.onRemoved.addListener(function removed(closed) {
+          if (closed !== id) return;
+          chrome.tabs.onRemoved.removeListener(removed);
+          resolve({ windowId: tab.windowId, tabId: id });
+        });
+        throw new Error('Test adopted marking refused');
+      };
+    });
+    void 0;
+  `);
+  let failedWindow;
+  try {
+    await rpc('run', 'reopenTab');
+    waitingFor = 'the failed adopted tab to be removed';
+    const failed = await evaluate(reopeningWorker, 'failedAdoption');
+    failedWindow = failed.windowId;
+    assert.equal(await evaluate(reopeningWorker, `chrome.windows.get(${failedWindow}).then(win => win.id)`), failedWindow);
+    assert.equal(await evaluate(reopeningWorker, `chrome.tabs.query({windowId:${failedWindow}}).then(tabs => tabs.some(tab => tab.id === ${failed.tabId}))`), false);
+  } finally {
+    await evaluate(reopeningWorker, 'chrome.flechaPrivate.setAgentTab = originalMark;');
+    if (failedWindow !== undefined) await evaluate(session, `chrome.windows.remove(${failedWindow})`);
+  }
+  await send('Target.detachFromTarget', { sessionId: reopeningWorker });
+  console.log('PASS a failed adopted tab is removed without closing its window');
 
   await client.close();
   // The deadline stays armed through the cleanup, so a browser that hangs on its way out is killed.

@@ -167,9 +167,8 @@ async function start() {
       // A blank tab reloads the new tab page: Chromium drew its own before the shell was loaded.
       void markAgentTab(active.id, tab.id!)
         .then(() => chrome.tabs.update(tab.id!, { url: active.url === 'about:blank' ? 'chrome://newtab/' : active.url, active: true }))
-        .catch((err) => {
-          live.delete(active.id);
-          rememberLive();
+        .catch(async (err) => {
+          await removeFailedTab(active.id, tab.id!);
           console.error('Flecha shell: restoring a tab failed', err);
         });
     } else if (isStartPage(tab) && !active && !placeholders.has(tab.windowId)) {
@@ -370,14 +369,7 @@ async function start() {
       rememberLive();
       return chromeId;
     } catch (error) {
-      if (chromeId !== undefined) {
-        const failedId = chromeId;
-        live.delete(id);
-        livePartition.delete(id);
-        rememberLive();
-        ours.add(failedId);
-        await chrome.tabs.remove(failedId).catch(() => ours.delete(failedId));
-      }
+      if (chromeId !== undefined) await removeFailedTab(id, chromeId);
       throw error;
     } finally {
       creating--;
@@ -471,6 +463,30 @@ async function start() {
       placeholders.set(chromeWindowId, (await chrome.tabs.create({ windowId: chromeWindowId, active: true })).id!);
     } finally {
       creating--;
+    }
+  }
+
+  /** Removes a failed setup's physical tab without closing its window or forgetting a newer tab. */
+  async function removeFailedTab(id: string, chromeId: number) {
+    if (live.get(id) === chromeId) {
+      live.delete(id);
+      livePartition.delete(id);
+      rememberLive();
+    }
+    // Another owner may have claimed the physical tab while setup was pending.
+    if (flechaIdFor(chromeId)) return;
+    try {
+      const tab = await chrome.tabs.get(chromeId).catch(() => undefined);
+      if (!tab) return;
+      const tabs = await chrome.tabs.query({ windowId: tab.windowId });
+      if (tabs.length === 1 && !placeholders.has(tab.windowId)) await makePlaceholder(tab.windowId);
+      ours.add(chromeId);
+      await chrome.tabs.remove(chromeId).catch((error) => {
+        ours.delete(chromeId);
+        throw error;
+      });
+    } catch (error) {
+      console.error('Flecha shell: removing a failed tab failed', error);
     }
   }
 
@@ -723,9 +739,8 @@ async function start() {
           .then(async () => {
             if (active.url !== 'about:blank') await chrome.tabs.update(tab.id!, { url: active.url });
           })
-          .catch((err) => {
-            live.delete(active.id);
-            rememberLive();
+          .catch(async (err) => {
+            await removeFailedTab(active.id, tab.id!);
             console.error('Flecha shell: reopening a tab failed', err);
           });
         return;
