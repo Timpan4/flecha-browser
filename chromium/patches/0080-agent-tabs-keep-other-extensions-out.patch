@@ -192,7 +192,7 @@
        return InjectionResult::kFinished;  // We're done.
 --- /dev/null
 +++ b/chrome/browser/extensions/api/flecha_private/flecha_agent_tab.cc
-@@ -0,0 +1,66 @@
+@@ -0,0 +1,71 @@
 +// Copyright 2026 The Flecha Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -252,6 +252,11 @@
 +}
 +
 +void FlechaAgentTab::AboutToBeDiscarded(content::WebContents* new_contents) {
++  // In-place discard keeps this object. Replacing it during notification would
++  // add another observer to the same notification and repeat indefinitely.
++  if (new_contents == web_contents()) {
++    return;
++  }
 +  // The replacement has no frames yet; it sends the mark as they are created.
 +  Set(new_contents, only_extension_id_);
 +}
