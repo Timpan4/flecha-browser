@@ -28,6 +28,7 @@
       <button class="nav-item" data-pane="environments"><span class="nav-icon amber"><i data-icon="code"></i></span>Environments</button>
       <button class="nav-item" data-pane="boosts"><span class="nav-icon orange"><i data-icon="zap"></i></span>Boosts</button>
       <button class="nav-item" data-pane="agents"><span class="nav-icon purple"><i data-icon="sparkle"></i></span>Coding Agents</button>
+      <button class="nav-item" data-pane="debug"><span class="nav-icon gray"><i data-icon="wrench"></i></span>Debug</button>
       <div class="nav-label">Help</div>
       <button class="nav-item" data-pane="shortcuts"><span class="nav-icon gray"><i data-icon="keyboard"></i></span>Keyboard Shortcuts</button>
     </nav>
@@ -89,6 +90,21 @@
           <small id="vsr-frames"></small><small id="vsr-output"></small>
         </div></div></div>
         <p class="footnote">Changes apply to new video frames without restarting Flecha. These settings apply across all browser profiles.</p>
+      </section>
+
+      <section class="pane" data-pane="debug">
+        <p class="lead">Workarounds for diagnosing browser problems.</p>
+        <div class="card">
+          <label class="row">
+            <div class="row-text">
+              <strong>Green video flicker workaround</strong>
+              <small id="debug-video-buffer-description">Disable GPU memory buffers for video frames. May help with intermittent green video. Can increase video-copy overhead.</small>
+            </div>
+            <input id="debug-video-buffer" type="checkbox" class="switch" disabled aria-describedby="debug-video-buffer-description debug-video-buffer-status" />
+          </label>
+        </div>
+        <p id="debug-video-buffer-status" class="footnote" role="status">Checking availability...</p>
+        <p class="footnote">Off by default. Applies across all browser profiles after you restart Flecha. Changing this setting does not restart the browser.</p>
       </section>
 
       <section class="pane" data-pane="appearance">

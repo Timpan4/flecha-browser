@@ -1,0 +1,180 @@
+# Flecha: save the video-buffer debug workaround without restarting the browser.
+diff --git a/chrome/browser/chrome_browser_main.cc b/chrome/browser/chrome_browser_main.cc
+index 9aa6f33..997af51 100644
+--- a/chrome/browser/chrome_browser_main.cc
++++ b/chrome/browser/chrome_browser_main.cc
+@@ -3,6 +3,7 @@
+ // found in the LICENSE file.
+ 
+ #include "chrome/browser/chrome_browser_main.h"
++#include "chrome/browser/flecha/flecha_video_preferences.h"
+ 
+ #include <memory>
+ #include <string>
+@@ -1294,6 +1295,10 @@ int ChromeBrowserMainParts::PreCreateThreadsImpl() {
+ 
+   PrefService* local_state = browser_process_->local_state();
+ 
++  // Flecha: apply saved video diagnostics before any renderers are launched.
++  flecha::ApplyVideoDebugPreference(
++      local_state, base::CommandLine::ForCurrentProcess());
++
+ #if BUILDFLAG(IS_CHROMEOS)
+   browser_process_->platform_part()->InitializeCrosSettings();
+   ash::StatsReportingController::Initialize(local_state);
+diff --git a/chrome/browser/extensions/api/flecha_private/flecha_private_api.cc b/chrome/browser/extensions/api/flecha_private/flecha_private_api.cc
+index ae939aa..27c521f 100644
+--- a/chrome/browser/extensions/api/flecha_private/flecha_private_api.cc
++++ b/chrome/browser/extensions/api/flecha_private/flecha_private_api.cc
+@@ -79,6 +79,21 @@ constexpr char kBadColorError[] = "background must be #rrggbb.";
+ constexpr char kNoTabError[] = "No tab with id *.";
+ constexpr char kNotSplitError[] = "The tab is not in a split view.";
+ 
++// Flecha: distinguish the saved preference from the startup mode and an
++// explicit launcher override. Saving never changes the running browser.
++flecha_private::DebugSettings DebugSettingsOf() {
++  flecha_private::DebugSettings state;
++  state.disable_gpu_memory_buffer_video_frames =
++      g_browser_process->local_state()->GetBoolean(
++          flecha::kDisableVideoGpuMemoryBuffers);
++  state.video_buffer_workaround_active =
++      base::CommandLine::ForCurrentProcess()->HasSwitch(
++          switches::kDisableGpuMemoryBufferVideoFrames);
++  state.video_buffer_workaround_forced =
++      flecha::g_video_buffer_workaround_forced;
++  return state;
++}
++
+ // Flecha: prefs are browser-wide; status comes from real processing in Viz.
+ flecha_private::VsrState VideoState(const content::FlechaVsrStatus& runtime) {
+   const auto settings = flecha::ReadVideoPreferences();
+@@ -1112,6 +1127,30 @@ FlechaPrivateSetSidebarInPageFullscreenFunction::Run() {
+   return RespondNow(NoArguments());
+ }
+ 
++// Flecha: startup-only diagnostics share Local State across browser profiles.
++ExtensionFunction::ResponseAction FlechaPrivateGetDebugSettingsFunction::Run() {
++  return RespondNow(ArgumentList(
++      flecha_private::GetDebugSettings::Results::Create(DebugSettingsOf())));
++}
++
++ExtensionFunction::ResponseAction
++FlechaPrivateSetVideoBufferWorkaroundFunction::Run() {
++  auto params =
++      flecha_private::SetVideoBufferWorkaround::Params::Create(args());
++  EXTENSION_FUNCTION_VALIDATE(params);
++  if (flecha::g_video_buffer_workaround_forced) {
++    return RespondNow(
++        Error("The video-buffer workaround is enabled by a "
++              "command-line flag."));
++  }
++  auto* prefs = g_browser_process->local_state();
++  prefs->SetBoolean(flecha::kDisableVideoGpuMemoryBuffers, params->enabled);
++  prefs->CommitPendingWrite();
++  return RespondNow(
++      ArgumentList(flecha_private::SetVideoBufferWorkaround::Results::Create(
++          DebugSettingsOf())));
++}
++
+ // Flecha: the shell reads and changes the browser-wide native video path.
+ ExtensionFunction::ResponseAction FlechaPrivateGetVsrStateFunction::Run() {
+   content::UpdateFlechaVsr(
+diff --git a/chrome/browser/extensions/api/flecha_private/flecha_private_api.h b/chrome/browser/extensions/api/flecha_private/flecha_private_api.h
+index 0b09113..d6c6ee6 100644
+--- a/chrome/browser/extensions/api/flecha_private/flecha_private_api.h
++++ b/chrome/browser/extensions/api/flecha_private/flecha_private_api.h
+@@ -12,6 +12,25 @@ class Profile;
+ 
+ namespace extensions {
+ 
++// Flecha: saved video diagnostics do not restart the browser automatically.
++class FlechaPrivateGetDebugSettingsFunction : public ExtensionFunction {
++ public:
++  DECLARE_EXTENSION_FUNCTION("flechaPrivate.getDebugSettings", UNKNOWN)
++
++ protected:
++  ~FlechaPrivateGetDebugSettingsFunction() override = default;
++  ResponseAction Run() override;
++};
++
++class FlechaPrivateSetVideoBufferWorkaroundFunction : public ExtensionFunction {
++ public:
++  DECLARE_EXTENSION_FUNCTION("flechaPrivate.setVideoBufferWorkaround", UNKNOWN)
++
++ protected:
++  ~FlechaPrivateSetVideoBufferWorkaroundFunction() override = default;
++  ResponseAction Run() override;
++};
++
+ // Flecha: native video configuration is separate from the legacy extension.
+ class FlechaPrivateGetVsrStateFunction : public ExtensionFunction {
+  public:
+diff --git a/chrome/browser/flecha/flecha_video_preferences.h b/chrome/browser/flecha/flecha_video_preferences.h
+index 41be0cd..1588e33 100644
+--- a/chrome/browser/flecha/flecha_video_preferences.h
++++ b/chrome/browser/flecha/flecha_video_preferences.h
+@@ -8,17 +8,35 @@
+ #include "components/prefs/pref_registry_simple.h"
+ #include "components/prefs/pref_service.h"
+ #include "content/public/browser/gpu_utils.h"
++#include "content/public/common/content_switches.h"
+ 
+ namespace flecha {
+ inline constexpr char kVsrEnabled[] = "flecha.vsr.enabled";
+ inline constexpr char kVsrQuality[] = "flecha.vsr.quality";
+ inline constexpr char kVsrMaxHeight[] = "flecha.vsr.max_output_height";
++// Flecha: the debug workaround is opt-in and takes effect at browser startup.
++inline constexpr char kDisableVideoGpuMemoryBuffers[] =
++    "flecha.debug.disable_gpu_memory_buffer_video_frames";
++inline bool g_video_buffer_workaround_forced = false;
+ 
+ inline void RegisterVideoPreferences(PrefRegistrySimple* registry) {
+   registry->RegisterBooleanPref(kVsrEnabled, true);
+   registry->RegisterIntegerPref(kVsrQuality, 2);
+   registry->RegisterIntegerPref(kVsrMaxHeight, 1440);
++  registry->RegisterBooleanPref(kDisableVideoGpuMemoryBuffers, false);
+ }
++
++// Call before child processes start. Preserve explicit launcher flags and keep
++// preference edits from changing the mode halfway through a browser session.
++inline void ApplyVideoDebugPreference(PrefService* prefs,
++                                      base::CommandLine* command) {
++  g_video_buffer_workaround_forced =
++      command->HasSwitch(switches::kDisableGpuMemoryBufferVideoFrames);
++  if (prefs->GetBoolean(kDisableVideoGpuMemoryBuffers)) {
++    command->AppendSwitch(switches::kDisableGpuMemoryBufferVideoFrames);
++  }
++}
++
+ inline content::FlechaVsrSettings ReadVideoPreferences() {
+   auto* prefs = g_browser_process->local_state();
+   const int quality = prefs->GetInteger(kVsrQuality);
+diff --git a/chrome/common/extensions/api/flecha_private.idl b/chrome/common/extensions/api/flecha_private.idl
+index b4caa1e..56cd54d 100644
+--- a/chrome/common/extensions/api/flecha_private.idl
++++ b/chrome/common/extensions/api/flecha_private.idl
+@@ -8,6 +8,13 @@
+ // macOS traffic lights) around it. Only Flecha's shell may use it; the
+ // contract is chromium/shell/flechaPrivate.d.ts in the Flecha repo.
+ namespace flechaPrivate {
++  // Flecha: the saved video-buffer preference can differ until the next start.
++  dictionary DebugSettings {
++    boolean disableGpuMemoryBufferVideoFrames;
++    boolean videoBufferWorkaroundActive;
++    boolean videoBufferWorkaroundForced;
++  };
++  callback DebugSettingsCallback = void(DebugSettings settings);
+   // Flecha: status is based on processed frames, not model availability.
+   dictionary VsrState {
+     boolean enabled;
+@@ -154,6 +161,10 @@ namespace flechaPrivate {
+   };
+ 
+   interface Functions {
++    // Flecha: browser-wide startup diagnostics, without an automatic restart.
++    static void getDebugSettings(DebugSettingsCallback callback);
++    static void setVideoBufferWorkaround(boolean enabled,
++                                        DebugSettingsCallback callback);
+     // Flecha: global GPU video settings; changes apply to new video frames.
+     static void getVsrState(VsrStateCallback callback);
+     static void setVsrSettings(boolean enabled, long quality,

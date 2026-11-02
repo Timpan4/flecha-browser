@@ -2,6 +2,7 @@ import type { RecordedKey, SettingsApi, SettingsView } from '../../shared/types'
 import { ICONS, type IconName } from './icons.js';
 import { setupTabsPane } from './tabsPane.js';
 import { setupVsrPane } from './vsrPane.js';
+import { setupDebugPane } from './debugPane.js';
 import { isEnter } from '../lib/keys';
 
 declare global {
@@ -12,6 +13,7 @@ declare global {
 
 const api = window.settings;
 setupVsrPane(api);
+setupDebugPane(api);
 
 function icon(name: IconName) {
   const el = document.createElementNS('http://www.w3.org/2000/svg', 'svg');

@@ -91,6 +91,15 @@ export function registerSettings(ctx: SettingsContext) {
     });
 
   handle({
+    'settings:debug-get': () => {
+      if (typeof chrome.flechaPrivate?.getDebugSettings !== 'function') throw new Error('Debug settings are unavailable in this browser build.');
+      return chrome.flechaPrivate.getDebugSettings();
+    },
+    'settings:debug-video-buffer': (enabled: unknown) => {
+      if (typeof enabled !== 'boolean') throw new Error('The video-buffer workaround must be on or off.');
+      if (typeof chrome.flechaPrivate?.setVideoBufferWorkaround !== 'function') throw new Error('Debug settings are unavailable in this browser build.');
+      return chrome.flechaPrivate.setVideoBufferWorkaround(enabled);
+    },
     'settings:vsr-state': (): Promise<VsrState> =>
       typeof chrome.flechaPrivate?.getVsrState === 'function'
         ? chrome.flechaPrivate.getVsrState()

@@ -455,7 +455,16 @@ export interface VsrState extends VsrSettings {
   error: string;
 }
 
+/** Saved startup preference and the video-buffer mode running in this browser. */
+export interface DebugSettings {
+  disableGpuMemoryBufferVideoFrames: boolean;
+  videoBufferWorkaroundActive: boolean;
+  videoBufferWorkaroundForced: boolean;
+}
+
 export interface SettingsApi {
+  getDebugSettings?(): Promise<DebugSettings>;
+  setVideoBufferWorkaround?(enabled: boolean): Promise<DebugSettings>;
   getVsrState?(): Promise<VsrState>;
   setVsrSettings?(settings: VsrSettings): Promise<VsrState>;
   get(): Promise<SettingsView>;

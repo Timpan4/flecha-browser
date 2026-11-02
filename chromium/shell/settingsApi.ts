@@ -64,6 +64,8 @@ on('settings:ask', async (id: number, options: AskOptions) => {
 });
 
 const api: SettingsApi = {
+  getDebugSettings: () => invoke('settings:debug-get'),
+  setVideoBufferWorkaround: (enabled) => invoke('settings:debug-video-buffer', enabled),
   getVsrState: () => invoke('settings:vsr-state'),
   setVsrSettings: (settings) => invoke('settings:vsr-set', settings),
   get: () => invoke<SettingsView>('settings:get'),
