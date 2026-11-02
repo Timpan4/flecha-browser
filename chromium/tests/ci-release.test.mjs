@@ -10,7 +10,8 @@ import { checkIdentity, compile, depotRevision, releaseArgs, saveCheckpoint, res
 import { verifyRelease } from '../scripts/ci-publish.mjs';
 
 test('completed platforms pass through later build and checkpoint CLI stages without source', async t => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-completed-'));
+  // Node resolves module filenames through macOS's /var -> /private/var alias.
+  const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-completed-')));
   t.after(() => fs.rm(dir, { recursive: true, force: true }));
   const root = path.join(dir, 'release tooling');
   const scripts = path.join(root, 'chromium/scripts');
@@ -32,6 +33,7 @@ test('completed platforms pass through later build and checkpoint CLI stages wit
     const env = { ...process.env, GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted', RUNNER_WORKSPACE: workspace };
     execFileSync(process.execPath, [script, 'build'], { env });
     execFileSync(process.execPath, [script, 'checkpoint'], { env });
+    assert.equal((await fs.stat(path.join(root, 'checkpoint.tar.gz'))).isFile(), true);
     const next = path.join(dir, `${stage} restored workspace`);
     await fs.mkdir(next);
     const restored = path.join(next, 'flecha-chromium');
