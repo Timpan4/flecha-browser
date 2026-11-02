@@ -7,11 +7,18 @@ function preserveCancellation(error) {
   if (error?.code === 'ABORT_ERR' || ['SIGINT', 'SIGTERM'].includes(error?.signal)) throw error;
 }
 
+export function withoutGitHubTokens(environment) {
+  const result = { ...environment };
+  delete result.GH_TOKEN;
+  delete result.GITHUB_TOKEN;
+  return result;
+}
+
 // Packaging and shell inputs are refreshed after restoration. Native inputs must match.
 export function nativeKey(root, configuration) {
   const tree = execFileSync('git', ['ls-tree', '-r', '-z', 'HEAD', '--',
     'chromium/CHROMIUM_VERSION', 'chromium/patches', 'chromium/branding',
-    'chromium/build', 'chromium/scripts/ci-windows-sdk.ps1'], { cwd: root });
+    'chromium/build', 'chromium/scripts/ci-windows-sdk.ps1'], { cwd: root, env: withoutGitHubTokens(process.env) });
   return createHash('sha256').update(tree).update(JSON.stringify(configuration)).digest('hex');
 }
 

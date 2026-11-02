@@ -7,8 +7,18 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { checkIdentity, compile, configureReleaseTree, depotRevision, preserveNativeOutputs, releaseConfiguration, saveCheckpoint, restoreCheckpoint, validateReusableTree } from '../scripts/ci-release.mjs';
-import { downloadReusableTree, findReusableArtifact, nativeKey, reusableArtifact } from '../scripts/ci-reuse.mjs';
+import { downloadReusableTree, findReusableArtifact, nativeKey, reusableArtifact, withoutGitHubTokens } from '../scripts/ci-reuse.mjs';
 import { verifyRelease } from '../scripts/ci-publish.mjs';
+
+test('build subprocesses cannot inherit GitHub tokens while the gh environment remains intact', () => {
+  const original = { ...process.env, GH_TOKEN: 'fixture-gh-token', GITHUB_TOKEN: 'fixture-github-token' };
+  const sanitized = withoutGitHubTokens(original);
+  execFileSync(process.execPath, ['-e', 'if (process.env.GH_TOKEN || process.env.GITHUB_TOKEN) process.exit(1)'], { env: sanitized });
+  assert.equal(Object.hasOwn(sanitized, 'GH_TOKEN'), false);
+  assert.equal(Object.hasOwn(sanitized, 'GITHUB_TOKEN'), false);
+  assert.equal(original.GH_TOKEN, 'fixture-gh-token');
+  assert.equal(original.GITHUB_TOKEN, 'fixture-github-token');
+});
 
 test('native reuse ignores shell-only commits and invalidates native inputs and toolchains', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-native-key-'));

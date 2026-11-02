@@ -6,7 +6,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { pipeline } from 'node:stream/promises';
 import { createReadStream } from 'node:fs';
-import { nativeKey, downloadReusableTree } from './ci-reuse.mjs';
+import { nativeKey, downloadReusableTree, withoutGitHubTokens } from './ci-reuse.mjs';
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
 const windows = process.platform === 'win32';
@@ -93,7 +93,7 @@ export async function configureReleaseTree({ root, work, identity, key, reused, 
 export function saveCheckpoint(work, archive, complete) {
   // Windows' system tar crashes on the Chromium tree. Git ships GNU tar.
   execFileSync(checkpointTar, [...(windows ? ['--force-local'] : []), '-czf', archive.replaceAll(path.sep, '/'),
-    ...(complete ? ['state.json'] : ['.'])], { cwd: work, stdio: 'inherit' });
+    ...(complete ? ['state.json'] : ['.'])], { cwd: work, env: withoutGitHubTokens(process.env), stdio: 'inherit' });
 }
 
 export async function preserveNativeOutputs(work, archive, save = saveCheckpoint) {
@@ -114,7 +114,7 @@ export async function preserveNativeOutputs(work, archive, save = saveCheckpoint
 export async function restoreCheckpoint(work, archive, { create = true } = {}) {
   if (create) await fs.mkdir(work);
   // MSYS otherwise copies link targets, which fails for dangling or later-extracted targets.
-  const env = windows ? { ...process.env, MSYS: 'winsymlinks:nativestrict' } : process.env;
+  const env = { ...withoutGitHubTokens(process.env), ...(windows ? { MSYS: 'winsymlinks:nativestrict' } : {}) };
   execFileSync(checkpointTar, [...(windows ? ['--force-local'] : []), '-xzf', archive.replaceAll(path.sep, '/')], { cwd: work, env, stdio: 'inherit' });
   await fs.rm(archive);
 }
@@ -160,7 +160,7 @@ async function main() {
   const src = path.join(work, 'src');
   const depot = path.join(work, 'depot_tools');
   const out = path.join(src, 'out/Release');
-  const env = { ...process.env, DEPOT_TOOLS_UPDATE: '0', DEPOT_TOOLS_WIN_TOOLCHAIN: '0',
+  const env = { ...withoutGitHubTokens(process.env), DEPOT_TOOLS_UPDATE: '0', DEPOT_TOOLS_WIN_TOOLCHAIN: '0',
     ...(windows ? { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.longpaths', GIT_CONFIG_VALUE_0: 'true' } : {}),
     PATH: `${depot}${path.delimiter}${process.env.PATH}` };
   const run = (command, args, cwd = src) => execFileSync(command, args, { cwd, env, stdio: 'inherit' });

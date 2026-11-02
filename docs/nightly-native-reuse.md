@@ -2,6 +2,8 @@
 
 Nightlies search earlier default-branch runs of `nightly-release.yml` for a compatible Chromium tree. Missing trees, failed lookups or transfers, failed extractions and invalid restored state fall back to clean preparation. Failed restoration or validation removes only the work directory created for that attempt; unexpected pre-existing trees are preserved and rejected. Failed and cancelled runs can supply checkpoints; pull requests, forks and other branches cannot.
 
+Only `gh` subprocesses inherit the GitHub token. Source preparation, native build, Git fingerprinting and archive subprocesses receive an environment without GitHub tokens.
+
 The SHA-256 compatibility key includes tracked Chromium revision, patches, branding, build configuration and Windows SDK setup; effective GN arguments with a normalized run number; depot_tools revision; source preparation code; platform and absolute workspace path; hosted runner image OS and version; and the selected Xcode or Visual Studio version. Changing a native input or runner image starts a clean build. Shell and packaging changes can reuse compiler outputs.
 
 If hosted image metadata is unavailable, the key includes the current run ID to prevent cross-run reuse.
