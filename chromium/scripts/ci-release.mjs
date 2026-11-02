@@ -139,11 +139,12 @@ async function withStageCancellation(operation) {
   }
 }
 
-export async function restoreCheckpoint(work, archive, { create = true } = {}) {
+export async function restoreCheckpoint(work, archive, { create = true, timeout } = {}) {
+  if (timeout !== undefined && timeout <= 0) throw new Error('Native reuse reached the stage deadline.');
   if (create) await fs.mkdir(work);
   // MSYS otherwise copies link targets, which fails for dangling or later-extracted targets.
   const env = { ...withoutGitHubTokens(process.env), ...(windows ? { MSYS: 'winsymlinks:nativestrict' } : {}) };
-  execFileSync(checkpointTar, [...(windows ? ['--force-local'] : []), '-xzf', archive.replaceAll(path.sep, '/')], { cwd: work, env, stdio: 'inherit' });
+  execFileSync(checkpointTar, [...(windows ? ['--force-local'] : []), '-xzf', archive.replaceAll(path.sep, '/')], { cwd: work, env, timeout, stdio: 'inherit' });
   await fs.rm(archive);
 }
 
@@ -221,9 +222,10 @@ async function main() {
       visualStudio: windows ? capture(path.join(process.env['ProgramFiles(x86)'], 'Microsoft Visual Studio/Installer/vswhere.exe'),
         ['-latest', '-products', '*', '-requires', 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64', '-property', 'installationVersion'], root) : null });
     const reused = await downloadReusableTree(root, { repository: process.env.GITHUB_REPOSITORY,
-      branch: process.env.FLECHA_DEFAULT_BRANCH, currentRun: process.env.GITHUB_RUN_ID, platform, key, work },
+      branch: process.env.FLECHA_DEFAULT_BRANCH, currentRun: process.env.GITHUB_RUN_ID, platform, key, work,
+      deadline: Date.now() + remainingStageTime() },
     async (archive, candidate) => {
-      await restoreCheckpoint(work, archive, { create: false });
+      await restoreCheckpoint(work, archive, { create: false, timeout: remainingStageTime() });
       await validateReusableTree(work, { ...identity, sha: candidate.sha, nativeKey: key });
     });
     if (!reused) {

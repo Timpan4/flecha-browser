@@ -4,6 +4,8 @@ Nightlies search earlier default-branch runs of `nightly-release.yml` for a comp
 
 Only `gh` subprocesses inherit the GitHub token. Source preparation, native build, Git fingerprinting and archive subprocesses receive an environment without GitHub tokens.
 
+Discovery requests GitHub's documented maximum of 100 artifacts per page. API calls, downloads and extraction share the existing five-hour stage deadline. A failed artifact is excluded from subsequent selection; discovery tries remaining compatible native snapshots and indexed checkpoints before preparing cleanly. Expired allowance stops discovery, and API timeouts fall back without being mistaken for user cancellation.
+
 The SHA-256 compatibility key includes tracked Chromium revision, patches, branding, build configuration and Windows SDK setup; effective GN arguments with a normalized run number; depot_tools revision; source preparation code; platform and absolute workspace path; hosted runner image OS and version; and the selected Xcode or Visual Studio version. Changing a native input or runner image starts a clean build. Shell and packaging changes can reuse compiler outputs.
 
 If hosted image metadata is unavailable, the key includes the current run ID to prevent cross-run reuse.

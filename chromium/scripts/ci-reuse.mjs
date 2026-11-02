@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 function preserveCancellation(error) {
+  if (error?.code === 'ETIMEDOUT') return;
   if (error?.code === 'ABORT_ERR' || ['SIGINT', 'SIGTERM'].includes(error?.signal)) throw error;
 }
 
@@ -45,12 +46,14 @@ export function trustedRun(run, { repository, branch, currentRun }) {
 }
 
 // Search only this repository's default-branch nightly workflow, including failed runs.
-export function findReusableArtifact({ repository, branch, currentRun, platform, key }, api) {
+export function findReusableArtifact({ repository, branch, currentRun, platform, key, deadline }, api, excluded = new Set()) {
   const byRun = new Map();
   const rejectedRuns = new Set();
   let visited = 0;
   for (let page = 1; ; page++) {
-    const response = api(`repos/${repository}/actions/artifacts?page=${page}`);
+    if (deadline !== undefined && Date.now() >= deadline) throw new Error('Native reuse reached the stage deadline.');
+    // GitHub documents 100 as the maximum artifacts page size.
+    const response = api(`repos/${repository}/actions/artifacts?per_page=100&page=${page}`);
     visited += response.artifacts.length;
     for (const artifact of response.artifacts) {
       if (artifact.name !== `native-${platform}-${key}` &&
@@ -61,7 +64,7 @@ export function findReusableArtifact({ repository, branch, currentRun, platform,
       const artifacts = byRun.get(runId) || [];
       artifacts.push(artifact);
       byRun.set(runId, artifacts);
-      const candidate = reusableArtifact(artifacts, platform, key);
+      const candidate = reusableArtifact(artifacts.filter(item => !excluded.has(`${runId}/${item.name}`)), platform, key);
       if (!candidate) continue;
       const run = api(`repos/${repository}/actions/runs/${runId}`);
       if (trustedRun(run, { repository, branch, currentRun })) return { ...candidate, run: runId, sha: run.head_sha };
@@ -72,41 +75,49 @@ export function findReusableArtifact({ repository, branch, currentRun, platform,
 }
 
 export async function downloadReusableTree(root, options, restore,
-  gh = args => execFileSync('gh', args, { cwd: root, encoding: 'utf8' })) {
+  gh = args => {
+    const timeout = options.deadline === undefined ? undefined : options.deadline - Date.now();
+    if (timeout !== undefined && timeout <= 0) throw new Error('Native reuse reached the stage deadline.');
+    return execFileSync('gh', args, { cwd: root, encoding: 'utf8', timeout });
+  }) {
   if (!/^[\w.-]+\/[\w.-]+$/.test(options.repository || '') || !options.branch || !/^\d+$/.test(options.currentRun || '')) {
     throw new Error('Missing GitHub context for native checkpoint reuse.');
   }
-  let candidate;
-  try {
-    candidate = findReusableArtifact(options, endpoint => JSON.parse(gh(['api', endpoint])));
-  } catch (error) {
-    preserveCancellation(error);
-    console.warn('Native checkpoint lookup unavailable; preparing a clean tree.');
-    return undefined;
-  }
-  if (!candidate) return undefined;
-  const directory = await fs.mkdtemp(path.join(root, 'native-download-'));
-  try {
+  const excluded = new Set();
+  for (;;) {
+    let candidate;
     try {
-      await gh(['run', 'download', candidate.run, '--repo', options.repository, '--name', candidate.name, '--dir', directory]);
+      candidate = findReusableArtifact(options, endpoint => JSON.parse(gh(['api', endpoint])), excluded);
     } catch (error) {
       preserveCancellation(error);
-      console.warn('Native checkpoint download unavailable; preparing a clean tree.');
+      console.warn('Native checkpoint lookup unavailable; preparing a clean tree.');
       return undefined;
     }
-    // Refuse pre-existing trees. Only this successfully created directory may be removed.
-    await fs.mkdir(options.work);
+    if (!candidate) return undefined;
+    excluded.add(`${candidate.run}/${candidate.name}`);
+    const directory = await fs.mkdtemp(path.join(root, 'native-download-'));
     try {
-      await restore(path.join(directory, candidate.archive), candidate);
-    } catch (error) {
-      await fs.rm(options.work, { recursive: true });
-      preserveCancellation(error);
-      console.warn('Native checkpoint restoration failed; preparing a clean tree.');
-      return undefined;
+      try {
+        await gh(['run', 'download', candidate.run, '--repo', options.repository, '--name', candidate.name, '--dir', directory]);
+      } catch (error) {
+        preserveCancellation(error);
+        console.warn('Native checkpoint download unavailable; checking other compatible trees.');
+        continue;
+      }
+      // Refuse pre-existing trees. Only this successfully created directory may be removed.
+      await fs.mkdir(options.work);
+      try {
+        await restore(path.join(directory, candidate.archive), candidate);
+      } catch (error) {
+        await fs.rm(options.work, { recursive: true });
+        preserveCancellation(error);
+        console.warn('Native checkpoint restoration failed; checking other compatible trees.');
+        continue;
+      }
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true });
     }
-  } finally {
-    await fs.rm(directory, { recursive: true, force: true });
+    console.log(`Restored native inputs from run ${candidate.run}, source ${candidate.sha}.`);
+    return candidate;
   }
-  console.log(`Restored native inputs from run ${candidate.run}, source ${candidate.sha}.`);
-  return candidate;
 }

@@ -65,6 +65,7 @@ test('optional reuse rejects unavailable or invalid trees and preserves unowned 
   saveCheckpoint(source, archive, false);
   const gh = (failure) => args => {
     if (failure === 'api') throw new Error('API unavailable');
+    if (failure === 'timeout') throw Object.assign(new Error('API timed out'), { code: 'ETIMEDOUT', signal: 'SIGTERM' });
     if (args[0] === 'api') return JSON.stringify(args[1].includes('/artifacts?') ? {
       artifacts: [{ name: 'native-linux-x64-key', workflow_run: { id: 1 } }], total_count: 1,
     } : { id: 1, head_sha: 'source', head_repository: { full_name: 'owner/repo' },
@@ -72,7 +73,7 @@ test('optional reuse rejects unavailable or invalid trees and preserves unowned 
     if (failure === 'download') throw new Error('Artifact disappeared');
     return fs.copyFile(archive, path.join(args.at(-1), 'native.tar.gz'));
   };
-  for (const failure of ['api', 'download', 'restore', 'malformed-state', 'missing-state', 'identity', 'missing-source', 'missing-depot']) {
+  for (const failure of ['api', 'timeout', 'download', 'restore', 'malformed-state', 'missing-state', 'identity', 'missing-source', 'missing-depot']) {
     const reused = await downloadReusableTree(root, options, async archive => {
       if (failure === 'restore') {
         await fs.writeFile(path.join(work, 'partial'), 'partial extraction');
@@ -102,6 +103,39 @@ test('optional reuse rejects unavailable or invalid trees and preserves unowned 
   assert.equal(await fs.readFile(path.join(work, 'state.json'), 'utf8'), state);
   await assert.rejects(downloadReusableTree(root, options, () => assert.fail('Must not restore into a pre-existing tree'), gh()), { code: 'EEXIST' });
   assert.equal(await fs.readFile(path.join(work, 'state.json'), 'utf8'), state);
+});
+
+test('a corrupt native snapshot falls back to a compatible indexed checkpoint before clean preparation', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-alternate-native-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const work = path.join(root, 'work');
+  const source = path.join(root, 'source');
+  await fs.mkdir(source);
+  await fs.writeFile(path.join(source, 'compiled'), 'usable previous compilation');
+  const archive = path.join(root, 'checkpoint.tar.gz');
+  saveCheckpoint(source, archive, false);
+  const options = { repository: 'owner/repo', branch: 'main', currentRun: '2', platform: 'linux-x64', key: 'key', work };
+  assert.equal(await downloadReusableTree(root, { ...options, deadline: 0 }, () => assert.fail('No expired restoration'),
+    () => assert.fail('No API call after deadline')), undefined);
+  const gh = args => {
+    if (args[0] === 'api') return JSON.stringify(args[1].includes('/artifacts?') ? {
+      artifacts: ['native-linux-x64-key', 'reuse-linux-x64-key-1', 'checkpoint-linux-x64-1']
+        .map(name => ({ name, workflow_run: { id: 1 } })), total_count: 3,
+    } : { id: 1, head_sha: 'source', head_repository: { full_name: 'owner/repo' },
+      path: '.github/workflows/nightly-release.yml', head_branch: 'main', event: 'workflow_dispatch' });
+    const name = args[args.indexOf('--name') + 1];
+    return fs.copyFile(archive, path.join(args.at(-1), name.startsWith('native-') ? 'native.tar.gz' : 'checkpoint.tar.gz'));
+  };
+  const attempts = [];
+  const candidate = await downloadReusableTree(root, options, async (archive, candidate) => {
+    attempts.push(candidate.name);
+    await restoreCheckpoint(work, archive, { create: false });
+    if (candidate.name.startsWith('native-')) throw new Error('Corrupt snapshot state');
+  }, gh);
+  assert.deepEqual(attempts, ['native-linux-x64-key', 'checkpoint-linux-x64-1']);
+  assert.equal(candidate.name, 'checkpoint-linux-x64-1');
+  assert.equal(await fs.readFile(path.join(work, 'compiled'), 'utf8'), 'usable previous compilation');
+  assert.equal((await fs.readdir(root)).some(name => name.startsWith('native-download-')), false);
 });
 
 test('optional native snapshot failures retain compiler outputs and preserve existing files', async t => {
