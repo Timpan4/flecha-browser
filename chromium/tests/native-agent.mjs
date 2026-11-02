@@ -272,6 +272,36 @@ try {
 
   // Fail the browser APIs at their boundary: MCP must report failure and leave no blank native tab.
   const worker = await attach((await findTarget((t) => t.type === 'service_worker' && t.url.startsWith(extension))).targetId);
+  await evaluate(worker, `
+    globalThis.originalMark = chrome.flechaPrivate.setAgentTab;
+    globalThis.originalUpdate = chrome.tabs.update;
+    globalThis.setupUpdates = [];
+    globalThis.markStarted = new Promise(resolve => { globalThis.notifyMark = resolve; });
+    globalThis.markGate = new Promise(resolve => { globalThis.releaseMark = resolve; });
+    chrome.flechaPrivate.setAgentTab = async (...args) => { notifyMark(); await markGate; return originalMark(...args); };
+    chrome.tabs.update = (...args) => { if (args[1]?.url) setupUpdates.push(args[1].url); return originalUpdate(...args); };
+    void 0;
+  `);
+  const opening = client.callTool({ name: 'open_tab', arguments: { url: base + '/setup' } });
+  let navigating;
+  try {
+    await evaluate(worker, 'markStarted');
+    state = await stateWhere(`s => Object.values(s.tabs).some(t => t.url === ${JSON.stringify(base + '/setup')})`);
+    const setupTab = Object.values(state.tabs).find(t => t.url === base + '/setup').id;
+    navigating = client.callTool({ name: 'navigate', arguments: { tabId: setupTab, url: base + '/after-setup' } });
+    await stateWhere(`s => s.agent?.action === ${JSON.stringify('opening ' + base + '/after-setup')}`);
+    assert.deepEqual(await evaluate(worker, 'setupUpdates'), [], 'navigation waits for marking');
+    await evaluate(worker, 'releaseMark()');
+    assert.ok(!(await opening).isError);
+    assert.ok(!(await navigating).isError);
+    assert.deepEqual(await evaluate(worker, 'setupUpdates'), [base + '/setup', base + '/after-setup']);
+    await call('close_tab', { tabId: setupTab });
+    await stateWhere(`s => !s.tabs[${JSON.stringify(setupTab)}]`);
+    console.log('PASS concurrent navigation waits for tab setup and keeps its newer URL');
+  } finally {
+    await evaluate(worker, 'releaseMark(); chrome.flechaPrivate.setAgentTab = originalMark; chrome.tabs.update = originalUpdate;');
+    await Promise.allSettled([opening, navigating]);
+  }
   for (const failure of ['mark', 'navigate']) {
     const address = base + '/refused-' + failure;
     const before = await evaluate(worker, 'chrome.tabs.query({}).then(tabs => tabs.map(t => t.id).sort())');
