@@ -6,6 +6,7 @@ import { watch } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 
 const binary = process.argv[2];
 const artifacts = process.argv[3];
@@ -35,6 +36,8 @@ async function processExited(pid) {
       if (error.code === 'ENOENT') return;
       throw error;
     }
+    // Reuse native-agent.mjs's polling cadence. The run watchdog bounds shutdown.
+    await delay(50);
   }
 }
 
