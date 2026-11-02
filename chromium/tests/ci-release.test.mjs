@@ -264,7 +264,7 @@ test('optional native snapshot failures retain compiler outputs and preserve exi
   assert.equal(await preserveNativeOutputs(work, archive, { save: () => { throw new Error('No snapshot space'); } }), false);
   await assert.rejects(fs.stat(archive), { code: 'ENOENT' });
   assert.equal(await fs.readFile(path.join(work, 'compiled'), 'utf8'), 'native output');
-  assert.equal(await preserveNativeOutputs(work, archive, { milliseconds: 0 }), false);
+  assert.equal(await preserveNativeOutputs(work, archive, { stageDeadline: Date.now() }), false);
   assert.equal(await preserveNativeOutputs(work, archive, { save: () => false }), false);
   await assert.rejects(fs.stat(archive), { code: 'ENOENT' });
   const cancelled = Object.assign(new Error('cancelled'), { signal: 'SIGTERM' });
@@ -277,6 +277,10 @@ test('optional native snapshot failures retain compiler outputs and preserve exi
     throw reason;
   } }), error => error === reason);
   await assert.rejects(fs.stat(archive), { code: 'ENOENT' });
+  const unsafe = Object.assign(new Error('Snapshot process may still be running'), { code: 'REUSE_TERMINATION_FAILED' });
+  await assert.rejects(preserveNativeOutputs(work, archive, { save: () => { throw unsafe; } }), error => error === unsafe);
+  assert.equal((await fs.stat(archive)).isFile(), true);
+  await fs.rm(archive);
   assert.equal(await preserveNativeOutputs(work, archive), true);
   const restored = path.join(dir, 'restored');
   await restoreCheckpoint(restored, archive);
@@ -284,6 +288,25 @@ test('optional native snapshot failures retain compiler outputs and preserve exi
   await fs.writeFile(archive, 'pre-existing file');
   assert.equal(await preserveNativeOutputs(work, archive, { save: () => assert.fail('Must not overwrite existing archive') }), false);
   assert.equal(await fs.readFile(archive, 'utf8'), 'pre-existing file');
+});
+
+test('native compression preserves the owner-selected upload hour at the deadline boundary', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-upload-reserve-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const archive = path.join(root, 'native.tar.gz');
+  const reserve = 60 * 60 * 1000;
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  assert.equal(await preserveNativeOutputs(root, archive, { stageDeadline: now + reserve,
+    save: () => assert.fail('No compression time remains after reserving the upload hour') }), false);
+  await assert.rejects(fs.stat(archive), { code: 'ENOENT' });
+  const stageDeadline = now + reserve + reserve;
+  assert.equal(await preserveNativeOutputs(root, archive, { stageDeadline, save: () => { now = stageDeadline - reserve; } }), true);
+  assert.equal(stageDeadline - now, reserve);
+  await fs.rm(archive);
+  assert.equal(await preserveNativeOutputs(root, archive, { stageDeadline: now + reserve + reserve,
+    save: () => { now += reserve + reserve; } }), false);
+  await assert.rejects(fs.stat(archive), { code: 'ENOENT' });
 });
 
 test('native checkpoint CLI recovers completed compilation after packaging failure and skips expired allowance', async t => {
@@ -321,6 +344,10 @@ test('native checkpoint CLI recovers completed compilation after packaging failu
   assert.equal(await fs.readFile(path.join(restored, 'src/compiled'), 'utf8'), 'completed compilation, packaging failed');
   await fs.rm(output);
   execFileSync(process.execPath, [script, 'native-checkpoint'], { env: { ...env, FLECHA_STAGE_STARTED: '1' } });
+  await assert.rejects(fs.stat(path.join(root, 'native.tar.gz')), { code: 'ENOENT' });
+  await assert.rejects(fs.stat(output), { code: 'ENOENT' });
+  execFileSync(process.execPath, [script, 'native-checkpoint'], { env: { ...env,
+    FLECHA_STAGE_STARTED: String(Date.now() - (5 - 1) * 60 * 60 * 1000) } });
   await assert.rejects(fs.stat(path.join(root, 'native.tar.gz')), { code: 'ENOENT' });
   await assert.rejects(fs.stat(output), { code: 'ENOENT' });
 });

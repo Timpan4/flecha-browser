@@ -102,26 +102,32 @@ export function saveCheckpoint(work, archive, complete) {
     ...(complete ? ['state.json'] : ['.'])], { cwd: work, env: withoutGitHubTokens(process.env), stdio: 'inherit' });
 }
 
-export async function preserveNativeOutputs(work, archive, { milliseconds, signal,
-  save = () => compile(checkpointTar, [...(windows ? ['--force-local'] : []), '-czf', archive.replaceAll(path.sep, '/'), '.'],
-    { cwd: work, env: withoutGitHubTokens(process.env), milliseconds, signal }) } = {}) {
+// Owner-selected upload reserve, separate from the one-hour reuse lookup budget.
+const nativeUploadReserveMilliseconds = 60 * 60 * 1000;
+
+export async function preserveNativeOutputs(work, archive, { stageDeadline, signal, save } = {}) {
   signal?.throwIfAborted();
-  if (milliseconds !== undefined && milliseconds <= 0) return false;
+  const deadline = stageDeadline === undefined ? undefined : stageDeadline - nativeUploadReserveMilliseconds;
+  if (deadline !== undefined && deadline <= Date.now()) return false;
   let owned = false;
   try {
     await fs.writeFile(archive, '', { flag: 'wx' });
     owned = true;
-    if (await save() === false) {
+    const saved = await (save ? save() : runNativeCommand(checkpointTar,
+      [...(windows ? ['--force-local'] : []), '-czf', archive.replaceAll(path.sep, '/'), '.'],
+      { cwd: work, env: withoutGitHubTokens(process.env), deadline, signal }));
+    if (saved === false || (deadline !== undefined && Date.now() > deadline)) {
       await fs.rm(archive);
-      console.warn('Native snapshot reached the stage deadline; retaining the previous checkpoint.');
+      console.warn('Native snapshot reached its compression deadline; retaining the previous checkpoint.');
       return false;
     }
     return true;
   } catch (error) {
+    if (error?.code === 'REUSE_TERMINATION_FAILED') throw error;
     if (owned) await fs.rm(archive, { force: true });
     signal?.throwIfAborted();
     if (error?.code === 'ABORT_ERR' || ['SIGINT', 'SIGTERM'].includes(error?.signal)) throw error;
-    console.warn('Native snapshot unavailable; continuing with release packaging.');
+    console.warn('Native snapshot unavailable; retaining the previous checkpoint.');
     return false;
   }
 }
@@ -277,7 +283,7 @@ async function main() {
       throw error;
     }
     const saved = await withStageCancellation(signal => preserveNativeOutputs(work, path.join(root, 'native.tar.gz'),
-      { milliseconds: remainingStageTime(), signal }));
+      { stageDeadline: Date.now() + remainingStageTime(), signal }));
     if (saved) {
       // GitHub step timeouts use whole minutes; retain the existing handoff margin.
       const uploadMinutes = Math.floor(remainingStageTime() / (60 * 1000));
