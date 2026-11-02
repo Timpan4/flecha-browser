@@ -17,12 +17,21 @@ export const depotRevision = 'a20039648c0de69d8156906b18052bd47e9bf230';
 // Node sets the native working directory; GNU tar receives slash-separated archive paths.
 const checkpointTar = windows ? path.join(process.env.ProgramFiles, 'Git/usr/bin/tar.exe') : 'tar';
 
-export function releaseArgs(template, { platform, version, buildNumber }) {
+function releaseArgs(template, { platform, version, buildNumber }) {
   let args = template.replace(/^target_cpu = .*$/m, `target_cpu = "${platform === 'macos-arm64' ? 'arm64' : 'x64'}"`);
   // Nightlies must never consult the stable upstream Sparkle feed.
   args = args.replace(/^flecha_sparkle_.*$/gm, '');
   if (!platform.startsWith('macos-')) args = args.replace(/^flecha_shell_dir = .*$/m, '');
   return `${args}\nuse_siso = false\nflecha_version = "${version}"\nflecha_build_number = "${buildNumber}"\n`;
+}
+
+// Keep profile checkout aligned with the GN arguments written for this platform.
+export async function releaseConfiguration(options) {
+  const template = options.platform === 'linux-x64' ? 'linux-release.gn' : 'release.gn';
+  const args = releaseArgs(await fs.readFile(path.join(root, 'chromium/build', template), 'utf8'), options);
+  const checkoutPgoProfiles = /^\s*chrome_pgo_phase\s*=\s*2\b/m.test(args);
+  const gclient = `solutions = [{"name": "src", "url": "https://chromium.googlesource.com/chromium/src.git", "managed": False, "custom_deps": {}, "custom_vars": {"checkout_configuration": "small", "checkout_pgo_profiles": ${checkoutPgoProfiles ? 'True' : 'False'}}}]\n`;
+  return { args, gclient };
 }
 
 export function checkpointIdentity({ sha, chromium, platform, depot }) {
@@ -108,13 +117,15 @@ async function main() {
   };
 
   if (mode === 'prepare') {
+    const { version } = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
+    const configuration = await releaseConfiguration({ platform, version, buildNumber: process.env.GITHUB_RUN_NUMBER });
     // The directory belongs to this job. Refuse an unexpected pre-existing tree.
     await fs.mkdir(work);
     await fs.mkdir(depot);
     run('git', ['init', depot], work);
     run('git', ['-C', depot, 'fetch', '--depth=1', 'https://chromium.googlesource.com/chromium/tools/depot_tools.git', depotRevision], work);
     run('git', ['-C', depot, 'checkout', '--detach', 'FETCH_HEAD'], work);
-    await fs.writeFile(path.join(work, '.gclient'), `solutions = [{"name": "src", "url": "https://chromium.googlesource.com/chromium/src.git", "managed": False, "custom_deps": {}, "custom_vars": {"checkout_configuration": "small", "checkout_pgo_profiles": False}}]\n`);
+    await fs.writeFile(path.join(work, '.gclient'), configuration.gclient);
     run(python, [path.join(depot, 'gclient.py'), 'sync', '--no-history', '--nohooks', '--revision', `src@${chromium}`], work);
     if (process.platform === 'linux') run('sudo', ['bash', 'build/install-build-deps.sh', '--no-prompt']);
     run(python, [path.join(depot, 'gclient.py'), 'runhooks'], work);
@@ -130,10 +141,7 @@ async function main() {
     await fs.mkdir(path.join(src, 'flecha'), { recursive: true });
     await fs.cp(path.join(root, 'chromium/shell/dist'), path.join(src, 'flecha/shell'), { recursive: true });
     await fs.mkdir(out, { recursive: true });
-    const { version } = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
-    await fs.writeFile(path.join(out, 'args.gn'), releaseArgs(
-      await fs.readFile(path.join(root, 'chromium/build/release.gn'), 'utf8'),
-      { platform, version, buildNumber: process.env.GITHUB_RUN_NUMBER }));
+    await fs.writeFile(path.join(out, 'args.gn'), configuration.args);
     run(gn, ['gen', 'out/Release', '--fail-on-unused-args']);
     await fs.writeFile(stateFile, JSON.stringify({ ...identity, complete: false }));
     showDisk();

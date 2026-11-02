@@ -6,7 +6,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { checkIdentity, compile, depotRevision, releaseArgs, saveCheckpoint, restoreCheckpoint } from '../scripts/ci-release.mjs';
+import { checkIdentity, compile, depotRevision, releaseConfiguration, saveCheckpoint, restoreCheckpoint } from '../scripts/ci-release.mjs';
 import { verifyRelease } from '../scripts/ci-publish.mjs';
 
 test('completed platforms pass through later build and checkpoint CLI stages without source', async t => {
@@ -103,14 +103,25 @@ test('release checkpoints reject another source, toolchain or platform', () => {
   assert.throws(() => checkIdentity(expected, expected), /completion state/);
 });
 
-test('nightly GN configuration disables the stable updater and selects the target CPU', () => {
-  const template = 'target_cpu = "arm64"\nflecha_shell_dir = "//flecha/shell"\nflecha_sparkle_feed_url = "https://flecha.dev/appcast.xml"\n';
+test('nightly preparation selects platform GN settings and the required PGO checkout', async () => {
   for (const platform of ['linux-x64', 'windows-x64', 'macos-arm64']) {
-    const args = releaseArgs(template, { platform, version: '0.1.0', buildNumber: '1' });
+    const { args, gclient } = await releaseConfiguration({ platform, version: '0.1.0', buildNumber: '1' });
     assert.doesNotMatch(args, /flecha_sparkle_/);
     assert.match(args, /use_siso = false/);
+    assert.match(args, /proprietary_codecs = false/);
     assert.equal(args.includes('flecha_shell_dir'), platform.startsWith('macos-'));
     assert.ok(args.includes(`target_cpu = "${platform.startsWith('macos-') ? 'arm64' : 'x64'}"`));
+    assert.match(args, /flecha_version = "0\.1\.0"/);
+    assert.match(args, /flecha_build_number = "1"/);
+    if (platform === 'linux-x64') {
+      assert.match(args, /is_official_build = true/);
+      assert.match(args, /chrome_pgo_phase = 2/);
+      assert.match(gclient, /"checkout_pgo_profiles": True/);
+      assert.doesNotMatch(args, /ffmpeg_branding = "Chrome"/);
+    } else {
+      assert.match(args, /chrome_pgo_phase = 0/);
+      assert.match(gclient, /"checkout_pgo_profiles": False/);
+    }
   }
 });
 
