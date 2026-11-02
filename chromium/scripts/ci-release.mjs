@@ -6,7 +6,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { pipeline } from 'node:stream/promises';
 import { createReadStream } from 'node:fs';
-import { nativeKey, downloadReusableTree, reuseDeadline, withoutGitHubTokens } from './ci-reuse.mjs';
+import { nativeKey, downloadReusableTree, reuseDeadline, runReuseCommand, withoutGitHubTokens } from './ci-reuse.mjs';
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
 const windows = process.platform === 'win32';
@@ -84,7 +84,7 @@ export async function configureReleaseTree({ root, work, identity, key, reused, 
   await fs.cp(path.join(root, 'chromium/shell/dist'), path.join(src, 'flecha/shell'), { recursive: true });
   await fs.mkdir(out, { recursive: true });
   await fs.writeFile(path.join(out, 'args.gn'), args);
-  generate();
+  await generate();
   // A compatible native tree still needs current shell packaging and provenance.
   await fs.writeFile(stateFile, JSON.stringify({ ...identity, nativeKey: key, complete: false,
     ...(reused ? { reusedFrom: reused } : {}) }));
@@ -139,12 +139,13 @@ async function withStageCancellation(operation) {
   }
 }
 
-export async function restoreCheckpoint(work, archive, { create = true, timeout } = {}) {
-  if (timeout !== undefined && timeout <= 0) throw new Error('Native reuse reached the stage deadline.');
+export async function restoreCheckpoint(work, archive, { create = true, deadline, signal } = {}) {
   if (create) await fs.mkdir(work);
   // MSYS otherwise copies link targets, which fails for dangling or later-extracted targets.
   const env = { ...withoutGitHubTokens(process.env), ...(windows ? { MSYS: 'winsymlinks:nativestrict' } : {}) };
-  execFileSync(checkpointTar, [...(windows ? ['--force-local'] : []), '-xzf', archive.replaceAll(path.sep, '/')], { cwd: work, env, timeout, stdio: 'inherit' });
+  const args = [...(windows ? ['--force-local'] : []), '-xzf', archive.replaceAll(path.sep, '/')];
+  if (deadline === undefined) execFileSync(checkpointTar, args, { cwd: work, env, stdio: 'inherit' });
+  else await runReuseCommand(checkpointTar, args, { cwd: work, env, deadline, signal });
   await fs.rm(archive);
 }
 
@@ -192,10 +193,7 @@ async function main() {
   const env = { ...withoutGitHubTokens(process.env), DEPOT_TOOLS_UPDATE: '0', DEPOT_TOOLS_WIN_TOOLCHAIN: '0',
     ...(windows ? { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.longpaths', GIT_CONFIG_VALUE_0: 'true' } : {}),
     PATH: `${depot}${path.delimiter}${process.env.PATH}` };
-  const run = (command, args, cwd = src, timeout) => {
-    if (timeout !== undefined && timeout <= 0) throw new Error('Native reuse reached its deadline.');
-    return execFileSync(command, args, { cwd, env, timeout, stdio: 'inherit' });
-  };
+  const run = (command, args, cwd = src) => execFileSync(command, args, { cwd, env, stdio: 'inherit' });
   const capture = (command, args, cwd = src) => execFileSync(command, args, { cwd, env, encoding: 'utf8' }).trim();
   const chromium = (await fs.readFile(path.join(root, 'chromium/CHROMIUM_VERSION'), 'utf8')).trim();
   const sha = capture('git', ['rev-parse', 'HEAD'], root);
@@ -211,7 +209,7 @@ async function main() {
     if (process.env.GITHUB_OUTPUT) await fs.appendFile(process.env.GITHUB_OUTPUT, `${key}=${value}\n`);
   };
 
-  if (mode === 'prepare') {
+  if (mode === 'prepare') return withStageCancellation(async signal => {
     const { version } = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
     const configuration = await releaseConfiguration({ platform, version, buildNumber: process.env.GITHUB_RUN_NUMBER });
     const normalized = await releaseConfiguration({ platform, version, buildNumber: '0' });
@@ -227,15 +225,16 @@ async function main() {
     const deadline = reuseDeadline({ started: Date.now(), stageDeadline: Date.now() + remainingStageTime(),
       budgetMinutes: process.env.FLECHA_REUSE_BUDGET_MINUTES });
     const configure = candidate => configureReleaseTree({ root, work, identity, key, reused: candidate, args: configuration.args,
-      generate: () => {
-        if (candidate && process.platform === 'linux') run('sudo', ['bash', 'build/install-build-deps.sh', '--no-prompt'], src, deadline - Date.now());
-        run(gn, ['gen', 'out/Release', '--fail-on-unused-args'], src, candidate ? deadline - Date.now() : undefined);
+      generate: async () => {
+        const execute = (command, args) => candidate ? runReuseCommand(command, args, { cwd: src, env, deadline, signal }) : run(command, args);
+        if (candidate && process.platform === 'linux') await execute('sudo', ['-n', 'bash', 'build/install-build-deps.sh', '--no-prompt']);
+        await execute(gn, ['gen', 'out/Release', '--fail-on-unused-args']);
       } });
     const reused = await downloadReusableTree(root, { repository: process.env.GITHUB_REPOSITORY,
       branch: process.env.FLECHA_DEFAULT_BRANCH, currentRun: process.env.GITHUB_RUN_ID, platform, key, work,
-      deadline },
+      deadline, signal },
     async (archive, candidate) => {
-      await restoreCheckpoint(work, archive, { create: false, timeout: deadline - Date.now() });
+      await restoreCheckpoint(work, archive, { create: false, deadline, signal });
       await validateReusableTree(work, { ...identity, sha: candidate.sha, nativeKey: key });
       await configure(candidate);
     });
@@ -245,7 +244,7 @@ async function main() {
     }
     showDisk();
     return;
-  }
+  });
 
   const state = JSON.parse(await fs.readFile(stateFile, 'utf8'));
   checkIdentity(state, identity);

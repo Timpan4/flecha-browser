@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { checkIdentity, compile, configureReleaseTree, depotRevision, preserveNativeOutputs, releaseConfiguration, saveCheckpoint, restoreCheckpoint, validateReusableTree } from '../scripts/ci-release.mjs';
-import { downloadReusableTree, findReusableArtifact, nativeKey, reusableArtifact, reuseDeadline, withoutGitHubTokens } from '../scripts/ci-reuse.mjs';
+import { downloadReusableTree, findReusableArtifacts, nativeKey, reusableArtifact, reuseDeadline, runReuseCommand, withoutGitHubTokens } from '../scripts/ci-reuse.mjs';
 import { verifyRelease } from '../scripts/ci-publish.mjs';
 
 test('the owner-selected reuse budget leaves clean preparation time and never exceeds the stage deadline', () => {
@@ -19,6 +19,55 @@ test('the owner-selected reuse budget leaves clean preparation time and never ex
   assert.equal(reuseDeadline({ started: stageDeadline, stageDeadline, budgetMinutes: '60' }), stageDeadline);
   for (const budgetMinutes of [undefined, '', 'invalid', '-1', Infinity]) {
     assert.throws(() => reuseDeadline({ started, stageDeadline, budgetMinutes }), /whole minutes/);
+  }
+});
+
+test('reuse stops signal-resistant descendants before deadline fallback or cancellation returns', async t => {
+  assert.equal(await runReuseCommand(process.execPath, ['-e', 'process.stdout.write("captured output")'], { capture: true }), 'captured output');
+  for (const outcome of ['deadline', 'cancellation']) {
+    await t.test(outcome, async t => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-reuse-process-'));
+      const controller = new AbortController();
+      t.after(() => controller.abort(new Error('Fixture cleanup')));
+      t.after(() => fs.rm(root, { recursive: true, force: true }));
+      t.mock.timers.enable({ apis: ['setTimeout'] });
+      const readyFile = path.join(root, 'ready');
+      const ready = (async () => {
+        for await (const event of fs.watch(root, { signal: controller.signal })) {
+          if (event.filename === 'ready') return;
+        }
+      })();
+      const descendant = `
+        process.on('SIGTERM', () => {});
+        process.on('SIGINT', () => {});
+        process.on('message', () => {});
+        process.send('ready');
+      `;
+      const fixture = `
+        const { spawn } = require('node:child_process');
+        const fs = require('node:fs');
+        process.on('SIGTERM', () => {});
+        process.on('SIGINT', () => {});
+        const descendant = spawn(process.execPath, ['-e', ${JSON.stringify(descendant)}], { stdio: ['ignore', 1, 2, 'ipc'] });
+        descendant.on('message', () => {
+          fs.writeFileSync(process.argv[1] + '.tmp', String(descendant.pid));
+          fs.renameSync(process.argv[1] + '.tmp', process.argv[1]);
+        });
+      `;
+      // The inherited stdout pipe stays open until the descendant is stopped too.
+      const privileged = process.platform === 'linux' && process.env.GITHUB_ACTIONS === 'true';
+      const result = runReuseCommand(privileged ? 'sudo' : process.execPath,
+        [...(privileged ? ['-n', process.execPath] : []), '-e', fixture, readyFile], {
+        capture: true, signal: controller.signal, deadline: Date.now() + 60 * 60 * 1000,
+      }).then(() => assert.fail('Reuse must stop'), error => error);
+      await Promise.race([ready, result.then(error => { throw error; })]);
+      const reason = new Error('User cancelled reuse');
+      if (outcome === 'deadline') t.mock.timers.tick(60 * 60 * 1000);
+      else controller.abort(reason);
+      const error = await result;
+      if (outcome === 'deadline') assert.equal(error.code, 'ETIMEDOUT');
+      else assert.equal(error, reason);
+    });
   }
 });
 
@@ -107,6 +156,16 @@ test('optional reuse rejects unavailable or invalid trees and preserves unowned 
   await assert.rejects(downloadReusableTree(root, options, () => {}, () => { throw cancelled; }), error => error === cancelled);
   await assert.rejects(downloadReusableTree(root, options, () => { throw cancelled; }, gh()), error => error === cancelled);
   await assert.rejects(fs.stat(work), { code: 'ENOENT' });
+  const unsafe = Object.assign(new Error('Cannot stop previous attempt'), { code: 'REUSE_TERMINATION_FAILED' });
+  await assert.rejects(downloadReusableTree(root, options, async () => {
+    await fs.writeFile(path.join(work, 'partial'), 'Previous process may still own this tree');
+    throw unsafe;
+  }, gh()), error => error === unsafe);
+  assert.equal(await fs.readFile(path.join(work, 'partial'), 'utf8'), 'Previous process may still own this tree');
+  const preserved = (await fs.readdir(root)).filter(name => name.startsWith('native-download-'));
+  assert.equal(preserved.length, 1);
+  await fs.rm(work, { recursive: true });
+  await fs.rm(path.join(root, preserved[0]), { recursive: true });
   const candidate = await downloadReusableTree(root, options, async archive => {
     await restoreCheckpoint(work, archive, { create: false });
     await validateReusableTree(work, expected);
@@ -134,7 +193,9 @@ test('restored GN failure falls back to a compatible indexed checkpoint before c
   const options = { repository: 'owner/repo', branch: 'main', currentRun: '2', platform: 'linux-x64', key: 'key', work };
   assert.equal(await downloadReusableTree(root, { ...options, deadline: 0 }, () => assert.fail('No expired restoration'),
     () => assert.fail('No API call after deadline')), undefined);
+  const requests = [];
   const gh = args => {
+    if (args[0] === 'api') requests.push(args[1]);
     if (args[0] === 'api') return JSON.stringify(args[1].includes('/artifacts?') ? {
       artifacts: ['native-linux-x64-key', 'reuse-linux-x64-key-1', 'checkpoint-linux-x64-1']
         .map(name => ({ name, workflow_run: { id: 1 } })), total_count: 3,
@@ -157,6 +218,7 @@ test('restored GN failure falls back to a compatible indexed checkpoint before c
   assert.equal(JSON.parse(await fs.readFile(path.join(work, 'state.json'), 'utf8')).sha, 'current');
   assert.equal(await fs.readFile(path.join(work, 'src/flecha/shell/current.js'), 'utf8'), 'current shell');
   assert.equal((await fs.readdir(root)).some(name => name.startsWith('native-download-')), false);
+  assert.equal(requests.length, new Set(requests).size, 'Each artifact page and run metadata is fetched once across retries');
 });
 
 test('optional native snapshot failures retain compiler outputs and preserve existing files', async t => {
@@ -230,7 +292,7 @@ test('native checkpoint CLI recovers completed compilation after packaging failu
   await assert.rejects(fs.stat(output), { code: 'ENOENT' });
 });
 
-test('recovery searches trusted nightly runs and skips expired or superseded checkpoints', () => {
+test('recovery searches trusted nightly runs and skips expired or superseded checkpoints', async () => {
   const options = { repository: 'owner/repo', branch: 'main', currentRun: '10', platform: 'linux-x64', key: 'native-key' };
   const run = (id, overrides = {}) => ({ id, head_sha: `sha-${id}`, head_repository: { full_name: options.repository },
     path: '.github/workflows/nightly-release.yml', head_branch: 'main', event: 'workflow_dispatch', ...overrides });
@@ -239,7 +301,7 @@ test('recovery searches trusted nightly runs and skips expired or superseded che
     ['9', { head_branch: 'feature' }], ['8', { head_repository: { full_name: 'fork/repo' } }],
     ['7', { event: 'pull_request' }], ['6', { path: '.github/workflows/untrusted.yml' }],
   ]);
-  const candidate = findReusableArtifact(options, endpoint => {
+  const candidates = findReusableArtifacts(options, endpoint => {
     requests.push(endpoint);
     if (endpoint.endsWith('page=1')) return { artifacts: ['10', ...rejected.keys()].map(id =>
       ({ name: 'native-linux-x64-native-key', workflow_run: { id } })), total_count: 9 };
@@ -252,12 +314,12 @@ test('recovery searches trusted nightly runs and skips expired or superseded che
     const id = endpoint.split('/').at(-1);
     return run(Number(id), rejected.get(id));
   });
-  assert.deepEqual(candidate, { run: '5', sha: 'sha-5', name: 'checkpoint-linux-x64-1', archive: 'checkpoint.tar.gz' });
+  assert.deepEqual((await candidates.next()).value, { run: '5', sha: 'sha-5', name: 'checkpoint-linux-x64-1', archive: 'checkpoint.tar.gz' });
   assert.equal(requests.length, 8);
   assert.equal(reusableArtifact([{ name: 'reuse-linux-x64-other-key-1' }, { name: 'checkpoint-linux-x64-1' }], options.platform, options.key), undefined);
   assert.deepEqual(reusableArtifact([{ name: 'native-linux-x64-native-key' }], options.platform, options.key),
     { name: 'native-linux-x64-native-key', archive: 'native.tar.gz' });
-  assert.equal(findReusableArtifact(options, () => ({ artifacts: [], total_count: 0 })), undefined);
+  assert.equal((await findReusableArtifacts(options, () => ({ artifacts: [], total_count: 0 })).next()).done, true);
 });
 
 test('a restored native tree retains compiler outputs and adopts current shell, build metadata and source provenance', async t => {

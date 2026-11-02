@@ -1,11 +1,79 @@
 import { createHash } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
+import { promisify } from 'node:util';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
 function preserveCancellation(error) {
+  if (error?.code === 'REUSE_TERMINATION_FAILED') throw error;
   if (error?.code === 'ETIMEDOUT') return;
   if (error?.code === 'ABORT_ERR' || ['SIGINT', 'SIGTERM'].includes(error?.signal)) throw error;
+}
+
+const execFileAsync = promisify(execFile);
+
+// Optional trees are disposable. Force-stop their process group at the owner deadline,
+// then wait for inherited pipes to close before allowing cleanup or another attempt.
+export async function runReuseCommand(command, args, { cwd, env, deadline, signal, capture = false } = {}) {
+  signal?.throwIfAborted();
+  const timeoutError = () => Object.assign(new Error('Native reuse reached its deadline.'), { code: 'ETIMEDOUT' });
+  if (deadline !== undefined && deadline <= Date.now()) throw timeoutError();
+  const windows = process.platform === 'win32';
+  // Pipes and a new session keep sudo away from terminal/PTY process groups.
+  const child = spawn(command, args, { cwd, env, detached: !windows, stdio: ['ignore', 'pipe', 'pipe'] });
+  let stdout = '';
+  if (capture) child.stdout.setEncoding('utf8').on('data', chunk => { stdout += chunk; });
+  else child.stdout.pipe(process.stdout, { end: false });
+  child.stderr.pipe(process.stderr, { end: false });
+  let expired = false;
+  let stopping;
+  let terminationFailure;
+  let rejectCompletion;
+  const completion = new Promise((resolve, reject) => {
+    rejectCompletion = reject;
+    child.once('error', reject);
+    child.once('close', (code, signal) => resolve({ code, signal }));
+  });
+  const killTree = async () => {
+    if (!child.pid) return;
+    const killEnv = withoutGitHubTokens(env || process.env);
+    if (windows) {
+      await execFileAsync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { env: killEnv });
+    } else if (command === 'sudo') {
+      try {
+        await execFileAsync('sudo', ['-n', 'kill', '-KILL', '--', String(-child.pid)], { env: killEnv });
+      } catch (error) {
+        try { process.kill(-child.pid, 0); } catch (probe) { if (probe.code === 'ESRCH') return; }
+        throw error;
+      }
+    } else {
+      try { process.kill(-child.pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+    }
+  };
+  const stop = () => {
+    stopping ??= killTree().catch(cause => {
+      // No fallback may modify the tree if stopping its previous owner failed.
+      child.unref();
+      child.stdout.destroy();
+      child.stderr.destroy();
+      terminationFailure = Object.assign(new Error('Cannot stop native reuse processes.', { cause }), { code: 'REUSE_TERMINATION_FAILED' });
+      rejectCompletion(terminationFailure);
+    });
+  };
+  signal?.addEventListener('abort', stop, { once: true });
+  const timer = deadline === undefined ? undefined : setTimeout(() => { expired = true; stop(); }, deadline - Date.now());
+  try {
+    const result = await completion;
+    await stopping;
+    if (terminationFailure) throw terminationFailure;
+    signal?.throwIfAborted();
+    if (expired) throw timeoutError();
+    if (result.code !== 0) throw Object.assign(new Error(`Native reuse command failed: ${result.code ?? result.signal}`), { signal: result.signal });
+    return stdout;
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', stop);
+  }
 }
 
 export function withoutGitHubTokens(environment) {
@@ -54,60 +122,64 @@ export function trustedRun(run, { repository, branch, currentRun }) {
 }
 
 // Search only this repository's default-branch nightly workflow, including failed runs.
-export function findReusableArtifact({ repository, branch, currentRun, platform, key, deadline }, api, excluded = new Set()) {
+export async function* findReusableArtifacts({ repository, branch, currentRun, platform, key, deadline }, api) {
   const byRun = new Map();
-  const rejectedRuns = new Set();
+  const runs = new Map();
+  const excluded = new Set();
   let visited = 0;
   for (let page = 1; ; page++) {
     if (deadline !== undefined && Date.now() >= deadline) throw new Error('Native reuse reached the stage deadline.');
     // GitHub documents 100 as the maximum artifacts page size.
-    const response = api(`repos/${repository}/actions/artifacts?per_page=100&page=${page}`);
+    const response = await api(`repos/${repository}/actions/artifacts?per_page=100&page=${page}`);
     visited += response.artifacts.length;
     for (const artifact of response.artifacts) {
       if (artifact.name !== `native-${platform}-${key}` &&
           !artifact.name.startsWith(`reuse-${platform}-${key}-`) &&
           !artifact.name.startsWith(`checkpoint-${platform}-`)) continue;
       const runId = String(artifact.workflow_run?.id);
-      if (!artifact.workflow_run || artifact.expired || runId === currentRun || rejectedRuns.has(runId)) continue;
+      if (!artifact.workflow_run || artifact.expired || runId === currentRun) continue;
       const artifacts = byRun.get(runId) || [];
       artifacts.push(artifact);
       byRun.set(runId, artifacts);
       const candidate = reusableArtifact(artifacts.filter(item => !excluded.has(`${runId}/${item.name}`)), platform, key);
       if (!candidate) continue;
-      const run = api(`repos/${repository}/actions/runs/${runId}`);
-      if (trustedRun(run, { repository, branch, currentRun })) return { ...candidate, run: runId, sha: run.head_sha };
-      rejectedRuns.add(runId);
+      if (!runs.has(runId)) runs.set(runId, await api(`repos/${repository}/actions/runs/${runId}`));
+      const run = runs.get(runId);
+      if (!trustedRun(run, { repository, branch, currentRun })) continue;
+      excluded.add(`${runId}/${candidate.name}`);
+      yield { ...candidate, run: runId, sha: run.head_sha };
     }
     if (visited >= response.total_count || !response.artifacts.length) return undefined;
   }
 }
 
 export async function downloadReusableTree(root, options, restore,
-  gh = args => {
-    const timeout = options.deadline === undefined ? undefined : options.deadline - Date.now();
-    if (timeout !== undefined && timeout <= 0) throw new Error('Native reuse reached the stage deadline.');
-    return execFileSync('gh', args, { cwd: root, encoding: 'utf8', timeout });
-  }) {
+  gh = args => runReuseCommand('gh', args, { cwd: root, deadline: options.deadline, signal: options.signal, capture: true })) {
   if (!/^[\w.-]+\/[\w.-]+$/.test(options.repository || '') || !options.branch || !/^\d+$/.test(options.currentRun || '')) {
     throw new Error('Missing GitHub context for native checkpoint reuse.');
   }
-  const excluded = new Set();
+  const candidates = findReusableArtifacts(options, async endpoint => JSON.parse(await gh(['api', endpoint])));
   for (;;) {
+    options.signal?.throwIfAborted();
+    if (options.deadline !== undefined && Date.now() >= options.deadline) return undefined;
     let candidate;
     try {
-      candidate = findReusableArtifact(options, endpoint => JSON.parse(gh(['api', endpoint])), excluded);
+      candidate = (await candidates.next()).value;
     } catch (error) {
+      options.signal?.throwIfAborted();
       preserveCancellation(error);
       console.warn('Native checkpoint lookup unavailable; preparing a clean tree.');
       return undefined;
     }
     if (!candidate) return undefined;
-    excluded.add(`${candidate.run}/${candidate.name}`);
     const directory = await fs.mkdtemp(path.join(root, 'native-download-'));
+    let preserveDirectory = false;
     try {
       try {
         await gh(['run', 'download', candidate.run, '--repo', options.repository, '--name', candidate.name, '--dir', directory]);
       } catch (error) {
+        preserveDirectory = error?.code === 'REUSE_TERMINATION_FAILED';
+        options.signal?.throwIfAborted();
         preserveCancellation(error);
         console.warn('Native checkpoint download unavailable; checking other compatible trees.');
         continue;
@@ -117,13 +189,18 @@ export async function downloadReusableTree(root, options, restore,
       try {
         await restore(path.join(directory, candidate.archive), candidate);
       } catch (error) {
+        if (error?.code === 'REUSE_TERMINATION_FAILED') {
+          preserveDirectory = true;
+          throw error;
+        }
         await fs.rm(options.work, { recursive: true });
+        options.signal?.throwIfAborted();
         preserveCancellation(error);
         console.warn('Native checkpoint restoration failed; checking other compatible trees.');
         continue;
       }
     } finally {
-      await fs.rm(directory, { recursive: true, force: true });
+      if (!preserveDirectory) await fs.rm(directory, { recursive: true, force: true });
     }
     console.log(`Restored native inputs from run ${candidate.run}, source ${candidate.sha}.`);
     return candidate;
