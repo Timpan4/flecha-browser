@@ -1,8 +1,10 @@
 # Nightly native build reuse
 
-Nightlies search earlier default-branch runs of `nightly-release.yml` for a compatible Chromium tree. A missing tree starts a clean build. Failed and cancelled runs can supply checkpoints; pull requests, forks and other branches cannot.
+Nightlies search earlier default-branch runs of `nightly-release.yml` for a compatible Chromium tree. Missing trees, failed lookups or transfers, and failed extractions fall back to clean preparation. Failed extraction removes only the work directory created for that restoration; unexpected pre-existing trees are preserved and rejected. Failed and cancelled runs can supply checkpoints; pull requests, forks and other branches cannot.
 
-The SHA-256 compatibility key includes tracked Chromium revision, patches, branding, build configuration and Windows SDK setup; effective GN arguments with a normalized run number; depot_tools revision; source preparation code; platform and absolute workspace path; and the selected Xcode or Visual Studio version. Changing a native input starts a clean build. Shell and packaging changes can reuse compiler outputs.
+The SHA-256 compatibility key includes tracked Chromium revision, patches, branding, build configuration and Windows SDK setup; effective GN arguments with a normalized run number; depot_tools revision; source preparation code; platform and absolute workspace path; hosted runner image OS and version; and the selected Xcode or Visual Studio version. Changing a native input or runner image starts a clean build. Shell and packaging changes can reuse compiler outputs.
+
+If hosted image metadata is unavailable, the key includes the current run ID to prevent cross-run reuse.
 
 After restoration, the script checks the previous source SHA, compatibility key, Chromium revision, platform and depot_tools revision. It replaces the staged shell, regenerates GN arguments with the current version and run number, and clears package completion. Ninja then checks the retained native outputs before current-source packaging runs. Package provenance records the current commit and the reused run, artifact and source commit.
 

@@ -96,8 +96,8 @@ export function saveCheckpoint(work, archive, complete) {
     ...(complete ? ['state.json'] : ['.'])], { cwd: work, stdio: 'inherit' });
 }
 
-export async function restoreCheckpoint(work, archive) {
-  await fs.mkdir(work);
+export async function restoreCheckpoint(work, archive, { create = true } = {}) {
+  if (create) await fs.mkdir(work);
   // MSYS otherwise copies link targets, which fails for dangling or later-extracted targets.
   const env = windows ? { ...process.env, MSYS: 'winsymlinks:nativestrict' } : process.env;
   execFileSync(checkpointTar, [...(windows ? ['--force-local'] : []), '-xzf', archive.replaceAll(path.sep, '/')], { cwd: work, env, stdio: 'inherit' });
@@ -168,14 +168,18 @@ async function main() {
     const { version } = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
     const configuration = await releaseConfiguration({ platform, version, buildNumber: process.env.GITHUB_RUN_NUMBER });
     const normalized = await releaseConfiguration({ platform, version, buildNumber: '0' });
+    const image = { os: process.env.ImageOS, version: process.env.ImageVersion };
     const key = nativeKey(root, { ...normalized, platform, depot: depotRevision, work,
       preparation: prepareNativeTree.toString(),
+      image,
+      // Unknown runner images must not share native outputs across runs.
+      ...(!image.os || !image.version ? { uncachedRun: process.env.GITHUB_RUN_ID } : {}),
       xcode: mac ? capture('xcodebuild', ['-version'], root) : null,
       visualStudio: windows ? capture(path.join(process.env['ProgramFiles(x86)'], 'Microsoft Visual Studio/Installer/vswhere.exe'),
         ['-latest', '-products', '*', '-requires', 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64', '-property', 'installationVersion'], root) : null });
     const reused = await downloadReusableTree(root, { repository: process.env.GITHUB_REPOSITORY,
-      branch: process.env.FLECHA_DEFAULT_BRANCH, currentRun: process.env.GITHUB_RUN_ID, platform, key },
-    archive => restoreCheckpoint(work, archive));
+      branch: process.env.FLECHA_DEFAULT_BRANCH, currentRun: process.env.GITHUB_RUN_ID, platform, key, work },
+    archive => restoreCheckpoint(work, archive, { create: false }));
     if (!reused) {
       await prepareNativeTree({ work, depot, src, configuration, run, chromium });
     }

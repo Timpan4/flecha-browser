@@ -3,6 +3,10 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
+function preserveCancellation(error) {
+  if (error?.code === 'ABORT_ERR' || ['SIGINT', 'SIGTERM'].includes(error?.signal)) throw error;
+}
+
 // Packaging and shell inputs are refreshed after restoration. Native inputs must match.
 export function nativeKey(root, configuration) {
   const tree = execFileSync('git', ['ls-tree', '-r', '-z', 'HEAD', '--',
@@ -60,17 +64,42 @@ export function findReusableArtifact({ repository, branch, currentRun, platform,
   }
 }
 
-export async function downloadReusableTree(root, options, restore) {
+export async function downloadReusableTree(root, options, restore,
+  gh = args => execFileSync('gh', args, { cwd: root, encoding: 'utf8' })) {
   if (!/^[\w.-]+\/[\w.-]+$/.test(options.repository || '') || !options.branch || !/^\d+$/.test(options.currentRun || '')) {
     throw new Error('Missing GitHub context for native checkpoint reuse.');
   }
-  const gh = args => execFileSync('gh', args, { cwd: root, encoding: 'utf8' });
-  const candidate = findReusableArtifact(options, endpoint => JSON.parse(gh(['api', endpoint])));
+  let candidate;
+  try {
+    candidate = findReusableArtifact(options, endpoint => JSON.parse(gh(['api', endpoint])));
+  } catch (error) {
+    preserveCancellation(error);
+    console.warn('Native checkpoint lookup unavailable; preparing a clean tree.');
+    return undefined;
+  }
   if (!candidate) return undefined;
   const directory = await fs.mkdtemp(path.join(root, 'native-download-'));
-  gh(['run', 'download', candidate.run, '--repo', options.repository, '--name', candidate.name, '--dir', directory]);
-  await restore(path.join(directory, candidate.archive));
-  await fs.rmdir(directory);
+  try {
+    try {
+      await gh(['run', 'download', candidate.run, '--repo', options.repository, '--name', candidate.name, '--dir', directory]);
+    } catch (error) {
+      preserveCancellation(error);
+      console.warn('Native checkpoint download unavailable; preparing a clean tree.');
+      return undefined;
+    }
+    // Refuse pre-existing trees. Only this successfully created directory may be removed.
+    await fs.mkdir(options.work);
+    try {
+      await restore(path.join(directory, candidate.archive));
+    } catch (error) {
+      await fs.rm(options.work, { recursive: true });
+      preserveCancellation(error);
+      console.warn('Native checkpoint restoration failed; preparing a clean tree.');
+      return undefined;
+    }
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
   console.log(`Restored native inputs from run ${candidate.run}, source ${candidate.sha}.`);
   return candidate;
 }

@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { checkIdentity, compile, configureReleaseTree, depotRevision, releaseConfiguration, saveCheckpoint, restoreCheckpoint } from '../scripts/ci-release.mjs';
-import { findReusableArtifact, nativeKey, reusableArtifact } from '../scripts/ci-reuse.mjs';
+import { downloadReusableTree, findReusableArtifact, nativeKey, reusableArtifact } from '../scripts/ci-reuse.mjs';
 import { verifyRelease } from '../scripts/ci-publish.mjs';
 
 test('native reuse ignores shell-only commits and invalidates native inputs and toolchains', async t => {
@@ -24,7 +24,8 @@ test('native reuse ignores shell-only commits and invalidates native inputs and 
       'commit', '--quiet', '-m', 'fixture'], { cwd: root });
   };
   commit();
-  const configuration = { platform: 'linux-x64', depot: 'toolchain', args: 'release flags', work: '/stable/work' };
+  const configuration = { platform: 'linux-x64', depot: 'toolchain', args: 'release flags', work: '/stable/work',
+    image: { os: 'ubuntu24', version: 'runner-image-version' } };
   const original = nativeKey(root, configuration);
   await fs.writeFile(path.join(root, 'chromium/shell/app.ts'), 'new shell');
   commit();
@@ -32,9 +33,50 @@ test('native reuse ignores shell-only commits and invalidates native inputs and 
   for (const field of Object.keys(configuration)) {
     assert.notEqual(nativeKey(root, { ...configuration, [field]: 'changed' }), original, field);
   }
+  assert.notEqual(nativeKey(root, { ...configuration, image: { ...configuration.image, version: 'updated-image' } }), original);
   await fs.writeFile(path.join(root, 'chromium/patches/native.patch'), 'changed native input');
   commit();
   assert.notEqual(nativeKey(root, configuration), original);
+});
+
+test('optional reuse falls back on API, download and extraction failures while preserving unowned trees', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-optional-reuse-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const work = path.join(root, 'work');
+  const options = { repository: 'owner/repo', branch: 'main', currentRun: '2', platform: 'linux-x64', key: 'key', work };
+  const source = path.join(root, 'source');
+  await fs.mkdir(source);
+  await fs.writeFile(path.join(source, 'state.json'), 'retained native state');
+  const archive = path.join(root, 'native.tar.gz');
+  saveCheckpoint(source, archive, false);
+  const gh = (failure) => args => {
+    if (failure === 'api') throw new Error('API unavailable');
+    if (args[0] === 'api') return JSON.stringify(args[1].includes('/artifacts?') ? {
+      artifacts: [{ name: 'native-linux-x64-key', workflow_run: { id: 1 } }], total_count: 1,
+    } : { id: 1, head_sha: 'source', head_repository: { full_name: 'owner/repo' },
+      path: '.github/workflows/nightly-release.yml', head_branch: 'main', event: 'workflow_dispatch' });
+    if (failure === 'download') throw new Error('Artifact disappeared');
+    return fs.copyFile(archive, path.join(args.at(-1), 'native.tar.gz'));
+  };
+  for (const failure of ['api', 'download', 'restore']) {
+    const reused = await downloadReusableTree(root, options, async archive => {
+      if (failure === 'restore') {
+        await fs.writeFile(path.join(work, 'partial'), 'partial extraction');
+        throw new Error('Invalid archive');
+      }
+      await restoreCheckpoint(work, archive, { create: false });
+    }, gh(failure));
+    assert.equal(reused, undefined);
+    await assert.rejects(fs.stat(work), { code: 'ENOENT' });
+    assert.equal((await fs.readdir(root)).some(name => name.startsWith('native-download-')), false);
+  }
+  const candidate = await downloadReusableTree(root, options, archive => restoreCheckpoint(work, archive, { create: false }), gh());
+  assert.equal(candidate.run, '1');
+  assert.equal(await fs.readFile(path.join(work, 'state.json'), 'utf8'), 'retained native state');
+  await assert.rejects(downloadReusableTree(root, options, () => assert.fail('Must not restore into a pre-existing tree'), gh()), { code: 'EEXIST' });
+  assert.equal(await fs.readFile(path.join(work, 'state.json'), 'utf8'), 'retained native state');
+  const cancelled = Object.assign(new Error('cancelled'), { signal: 'SIGINT' });
+  await assert.rejects(downloadReusableTree(root, options, () => {}, () => { throw cancelled; }), error => error === cancelled);
 });
 
 test('recovery searches trusted nightly runs and skips expired or superseded checkpoints', () => {
