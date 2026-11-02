@@ -117,13 +117,18 @@ test('optional reuse rejects unavailable or invalid trees and preserves unowned 
   assert.equal(await fs.readFile(path.join(work, 'state.json'), 'utf8'), state);
 });
 
-test('a corrupt native snapshot falls back to a compatible indexed checkpoint before clean preparation', async t => {
+test('restored GN failure falls back to a compatible indexed checkpoint before clean preparation', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-alternate-native-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const work = path.join(root, 'work');
   const source = path.join(root, 'source');
-  await fs.mkdir(source);
-  await fs.writeFile(path.join(source, 'compiled'), 'usable previous compilation');
+  await fs.mkdir(path.join(source, 'src/out/Release'), { recursive: true });
+  await fs.mkdir(path.join(source, 'depot_tools'));
+  const identity = { sha: 'source', chromium: '158', platform: 'linux-x64', depot: 'tools' };
+  await fs.writeFile(path.join(source, 'state.json'), JSON.stringify({ ...identity, nativeKey: 'key', complete: false }));
+  await fs.writeFile(path.join(source, 'src/out/Release/compiled'), 'usable previous compilation');
+  await fs.mkdir(path.join(root, 'chromium/shell/dist'), { recursive: true });
+  await fs.writeFile(path.join(root, 'chromium/shell/dist/current.js'), 'current shell');
   const archive = path.join(root, 'checkpoint.tar.gz');
   saveCheckpoint(source, archive, false);
   const options = { repository: 'owner/repo', branch: 'main', currentRun: '2', platform: 'linux-x64', key: 'key', work };
@@ -142,11 +147,15 @@ test('a corrupt native snapshot falls back to a compatible indexed checkpoint be
   const candidate = await downloadReusableTree(root, options, async (archive, candidate) => {
     attempts.push(candidate.name);
     await restoreCheckpoint(work, archive, { create: false });
-    if (candidate.name.startsWith('native-')) throw new Error('Corrupt snapshot state');
+    await validateReusableTree(work, { ...identity, nativeKey: 'key' });
+    await configureReleaseTree({ root, work, identity: { ...identity, sha: 'current' }, key: 'key', reused: candidate, args: 'current flags',
+      generate: () => { if (candidate.name.startsWith('native-')) throw new Error('Missing GN binary'); } });
   }, gh);
   assert.deepEqual(attempts, ['native-linux-x64-key', 'checkpoint-linux-x64-1']);
   assert.equal(candidate.name, 'checkpoint-linux-x64-1');
-  assert.equal(await fs.readFile(path.join(work, 'compiled'), 'utf8'), 'usable previous compilation');
+  assert.equal(await fs.readFile(path.join(work, 'src/out/Release/compiled'), 'utf8'), 'usable previous compilation');
+  assert.equal(JSON.parse(await fs.readFile(path.join(work, 'state.json'), 'utf8')).sha, 'current');
+  assert.equal(await fs.readFile(path.join(work, 'src/flecha/shell/current.js'), 'utf8'), 'current shell');
   assert.equal((await fs.readdir(root)).some(name => name.startsWith('native-download-')), false);
 });
 
@@ -209,6 +218,8 @@ test('native checkpoint CLI recovers completed compilation after packaging failu
   const script = path.join(scripts, 'ci-release.mjs');
   execFileSync(process.execPath, [script, 'native-checkpoint'], { env });
   assert.match(await fs.readFile(output, 'utf8'), /native-key=key/);
+  const minutes = Number((await fs.readFile(output, 'utf8')).match(/upload-minutes=(\d+)/)[1]);
+  assert.ok(minutes > 0 && minutes <= 5 * 60);
   const restored = path.join(dir, 'restored');
   await restoreCheckpoint(restored, path.join(root, 'native.tar.gz'));
   assert.deepEqual(JSON.parse(await fs.readFile(path.join(restored, 'state.json'), 'utf8')), state);

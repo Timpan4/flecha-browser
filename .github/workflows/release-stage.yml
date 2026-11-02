@@ -131,6 +131,7 @@ jobs:
       - name: Preserve native outputs for later nightlies and packaging recovery
         if: ${{ !cancelled() && steps.native.outputs.native-key != '' }}
         continue-on-error: true
+        timeout-minutes: ${{ fromJSON(steps.native.outputs.upload-minutes) }}
         uses: actions/upload-artifact@v7
         with:
           name: native-${{ matrix.platform }}-${{ steps.native.outputs.native-key }}

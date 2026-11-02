@@ -192,7 +192,10 @@ async function main() {
   const env = { ...withoutGitHubTokens(process.env), DEPOT_TOOLS_UPDATE: '0', DEPOT_TOOLS_WIN_TOOLCHAIN: '0',
     ...(windows ? { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.longpaths', GIT_CONFIG_VALUE_0: 'true' } : {}),
     PATH: `${depot}${path.delimiter}${process.env.PATH}` };
-  const run = (command, args, cwd = src) => execFileSync(command, args, { cwd, env, stdio: 'inherit' });
+  const run = (command, args, cwd = src, timeout) => {
+    if (timeout !== undefined && timeout <= 0) throw new Error('Native reuse reached its deadline.');
+    return execFileSync(command, args, { cwd, env, timeout, stdio: 'inherit' });
+  };
   const capture = (command, args, cwd = src) => execFileSync(command, args, { cwd, env, encoding: 'utf8' }).trim();
   const chromium = (await fs.readFile(path.join(root, 'chromium/CHROMIUM_VERSION'), 'utf8')).trim();
   const sha = capture('git', ['rev-parse', 'HEAD'], root);
@@ -223,21 +226,23 @@ async function main() {
         ['-latest', '-products', '*', '-requires', 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64', '-property', 'installationVersion'], root) : null });
     const deadline = reuseDeadline({ started: Date.now(), stageDeadline: Date.now() + remainingStageTime(),
       budgetMinutes: process.env.FLECHA_REUSE_BUDGET_MINUTES });
+    const configure = candidate => configureReleaseTree({ root, work, identity, key, reused: candidate, args: configuration.args,
+      generate: () => {
+        if (candidate && process.platform === 'linux') run('sudo', ['bash', 'build/install-build-deps.sh', '--no-prompt'], src, deadline - Date.now());
+        run(gn, ['gen', 'out/Release', '--fail-on-unused-args'], src, candidate ? deadline - Date.now() : undefined);
+      } });
     const reused = await downloadReusableTree(root, { repository: process.env.GITHUB_REPOSITORY,
       branch: process.env.FLECHA_DEFAULT_BRANCH, currentRun: process.env.GITHUB_RUN_ID, platform, key, work,
       deadline },
     async (archive, candidate) => {
       await restoreCheckpoint(work, archive, { create: false, timeout: deadline - Date.now() });
       await validateReusableTree(work, { ...identity, sha: candidate.sha, nativeKey: key });
+      await configure(candidate);
     });
     if (!reused) {
       await prepareNativeTree({ work, depot, src, configuration, run, chromium });
+      await configure();
     }
-    await configureReleaseTree({ root, work, identity, key, reused, args: configuration.args,
-      generate: () => {
-        if (reused && process.platform === 'linux') run('sudo', ['bash', 'build/install-build-deps.sh', '--no-prompt']);
-        run(gn, ['gen', 'out/Release', '--fail-on-unused-args']);
-      } });
     showDisk();
     return;
   }
@@ -266,7 +271,17 @@ async function main() {
     }
     const saved = await withStageCancellation(signal => preserveNativeOutputs(work, path.join(root, 'native.tar.gz'),
       { milliseconds: remainingStageTime(), signal }));
-    if (saved) await output('native-key', state.nativeKey);
+    if (saved) {
+      // GitHub step timeouts use whole minutes; retain the existing handoff margin.
+      const uploadMinutes = Math.floor(remainingStageTime() / (60 * 1000));
+      if (uploadMinutes > 0) {
+        await output('upload-minutes', String(uploadMinutes));
+        await output('native-key', state.nativeKey);
+      } else {
+        await fs.rm(path.join(root, 'native.tar.gz'));
+        console.log('No upload window remains in the stage allowance; retaining the previous checkpoint.');
+      }
+    }
     return;
   }
   if (state.complete) return;
