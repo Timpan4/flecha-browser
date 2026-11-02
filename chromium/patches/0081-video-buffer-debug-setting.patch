@@ -113,7 +113,7 @@ diff --git a/chrome/browser/flecha/flecha_video_preferences.h b/chrome/browser/f
 index 41be0cd..1588e33 100644
 --- a/chrome/browser/flecha/flecha_video_preferences.h
 +++ b/chrome/browser/flecha/flecha_video_preferences.h
-@@ -8,17 +8,35 @@
+@@ -8,17 +8,39 @@
  #include "components/prefs/pref_registry_simple.h"
  #include "components/prefs/pref_service.h"
  #include "content/public/browser/gpu_utils.h"
@@ -127,6 +127,7 @@ index 41be0cd..1588e33 100644
 +inline constexpr char kDisableVideoGpuMemoryBuffers[] =
 +    "flecha.debug.disable_gpu_memory_buffer_video_frames";
 +inline bool g_video_buffer_workaround_forced = false;
++inline bool g_video_buffer_workaround_injected = false;
  
  inline void RegisterVideoPreferences(PrefRegistrySimple* registry) {
    registry->RegisterBooleanPref(kVsrEnabled, true);
@@ -141,7 +142,10 @@ index 41be0cd..1588e33 100644
 +                                      base::CommandLine* command) {
 +  g_video_buffer_workaround_forced =
 +      command->HasSwitch(switches::kDisableGpuMemoryBufferVideoFrames);
-+  if (prefs->GetBoolean(kDisableVideoGpuMemoryBuffers)) {
++  g_video_buffer_workaround_injected =
++      !g_video_buffer_workaround_forced &&
++      prefs->GetBoolean(kDisableVideoGpuMemoryBuffers);
++  if (g_video_buffer_workaround_injected) {
 +    command->AppendSwitch(switches::kDisableGpuMemoryBufferVideoFrames);
 +  }
 +}
@@ -149,6 +153,30 @@ index 41be0cd..1588e33 100644
  inline content::FlechaVsrSettings ReadVideoPreferences() {
    auto* prefs = g_browser_process->local_state();
    const int quality = prefs->GetInteger(kVsrQuality);
+diff --git a/chrome/browser/first_run/upgrade_util.cc b/chrome/browser/first_run/upgrade_util.cc
+--- a/chrome/browser/first_run/upgrade_util.cc
++++ b/chrome/browser/first_run/upgrade_util.cc
+@@ -13,6 +13,7 @@
+ #include "base/memory/ptr_util.h"
+ #include "build/build_config.h"
+ #include "chrome/browser/about_flags.h"
++#include "chrome/browser/flecha/flecha_video_preferences.h"
+ #include "chrome/browser/lifetime/browser_shutdown.h"
+ #include "chrome/browser/lifetime/switch_utils.h"
+ #include "chrome/common/chrome_switches.h"
+@@ -50,6 +51,12 @@
+   // Remove switches that shouldn't persist across any restart.
+   about_flags::RemoveFlagsSwitches(&switches);
+ 
++  // Flecha: re-read the saved preference on relaunch. Only explicit launcher
++  // switches should survive as overrides in the next browser process.
++  if (flecha::g_video_buffer_workaround_injected) {
++    switches.erase(switches::kDisableGpuMemoryBufferVideoFrames);
++  }
++
+   switch (restart_mode) {
+     case browser_shutdown::RestartMode::kNoRestart:
+       NOTREACHED();
 diff --git a/chrome/common/extensions/api/flecha_private.idl b/chrome/common/extensions/api/flecha_private.idl
 index b4caa1e..56cd54d 100644
 --- a/chrome/common/extensions/api/flecha_private.idl

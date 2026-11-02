@@ -108,6 +108,28 @@ test('a command-line override stays checked and cannot be changed in Settings', 
   assert.equal(writes, 0);
 });
 
+test('a failed refresh preserves the usable saved setting', async (t) => {
+  let reads = 0;
+  const { toggle, status } = mount(t, {
+    getDebugSettings: async () => {
+      if (++reads > 1) throw new Error('Read failed');
+      return initial;
+    },
+    setVideoBufferWorkaround: async (enabled) => ({ ...initial, disableGpuMemoryBufferVideoFrames: enabled }),
+  });
+  await setImmediate();
+  window.dispatchEvent(new Event('focus'));
+  await setImmediate();
+  assert.equal(toggle.disabled, false);
+  assert.equal(toggle.checked, false);
+  assert.match(status.textContent, /Read failed/);
+  toggle.checked = true;
+  toggle.dispatchEvent(new Event('change'));
+  await setImmediate();
+  assert.equal(toggle.checked, true);
+  assert.match(status.textContent, /Restart Flecha.*on/);
+});
+
 test('older native builds keep the control disabled and explain why', async (t) => {
   const { toggle, status } = mount(t, {});
   await setImmediate();

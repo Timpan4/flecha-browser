@@ -14,11 +14,13 @@ export function setupDebugPane(api: SettingsApi) {
     saved = state;
     toggle.checked = state.disableGpuMemoryBufferVideoFrames || state.videoBufferWorkaroundForced;
     toggle.disabled = writing || state.videoBufferWorkaroundForced || !api.setVideoBufferWorkaround;
-    status.textContent = state.videoBufferWorkaroundForced
-      ? 'Enabled by a command-line flag. Remove --disable-gpu-memory-buffer-video-frames from your launcher to turn it off.'
-      : state.disableGpuMemoryBufferVideoFrames !== state.videoBufferWorkaroundActive
-        ? `Saved. Restart Flecha to turn the workaround ${state.disableGpuMemoryBufferVideoFrames ? 'on' : 'off'}.`
-        : `Workaround is ${state.videoBufferWorkaroundActive ? 'on' : 'off'} in this browser session.`;
+    if (state.videoBufferWorkaroundForced) {
+      status.textContent = 'Enabled by a command-line flag. Remove --disable-gpu-memory-buffer-video-frames from your launcher to turn it off.';
+    } else if (state.disableGpuMemoryBufferVideoFrames !== state.videoBufferWorkaroundActive) {
+      status.textContent = `Saved. Restart Flecha to turn the workaround ${state.disableGpuMemoryBufferVideoFrames ? 'on' : 'off'}.`;
+    } else {
+      status.textContent = `Workaround is ${state.videoBufferWorkaroundActive ? 'on' : 'off'} in this browser session.`;
+    }
   }
 
   async function refresh() {
@@ -30,7 +32,10 @@ export function setupDebugPane(api: SettingsApi) {
       const state = await api.getDebugSettings();
       if (!stopped && current === revision) render(state);
     } catch (error) {
-      if (!stopped && current === revision) status.textContent = String(error);
+      if (!stopped && current === revision) {
+        if (saved) render(saved);
+        status.textContent = String(error);
+      }
     }
   }
 

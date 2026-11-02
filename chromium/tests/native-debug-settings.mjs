@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
+import { watch } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -14,6 +15,28 @@ const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-debug-settings-'
 let browser;
 let display;
 let displayNumber;
+let waitingFor = 'Xvfb startup';
+let protocolMethod;
+// Reuse native-workflows.mjs's measured whole-run deadline and override.
+const deadline = Number(process.env.FLECHA_HARNESS_TIMEOUT_MS) || 10 * 60 * 1000;
+const watchdog = setTimeout(() => {
+  console.error(`FAIL exceeded ${deadline} ms waiting for ${waitingFor}; protocol ${protocolMethod}`);
+  void cleanup().finally(() => process.exit(1));
+}, deadline);
+
+async function processExited(pid) {
+  // A relaunched browser is no longer Node's child. /proc also distinguishes
+  // an exited zombie from a live process while its new parent reaps it.
+  for (;;) {
+    try {
+      const stat = await fs.readFile(`/proc/${pid}/stat`, 'utf8');
+      if (stat.slice(stat.lastIndexOf(')') + 2).startsWith('Z')) return;
+    } catch (error) {
+      if (error.code === 'ENOENT') return;
+      throw error;
+    }
+  }
+}
 
 class Browser {
   pending = new Map();
@@ -29,42 +52,71 @@ class Browser {
     this.child = spawn(binary, [
       `--user-data-dir=${profile}`, `--flecha-shell-dir=${shell}`,
       '--ozone-platform=x11', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
-      '--disable-background-networking', '--password-store=basic', '--remote-debugging-pipe',
+      '--disable-background-networking', '--password-store=basic', '--remote-debugging-port=0',
       ...flags,
-    ], { env, stdio: ['ignore', 'ignore', 'inherit', 'pipe', 'pipe'] });
+    ], { env, detached: true, stdio: ['ignore', 'ignore', 'inherit'] });
     this.exited = once(this.child, 'exit');
-    this.child.on('exit', (code) => {
-      for (const call of this.pending.values()) call.reject(new Error(`Test browser exited ${code}`));
+    this.exited.catch(() => {});
+  }
+
+  async connect(previousEndpoint) {
+    waitingFor = 'the browser DevTools endpoint';
+    let observer;
+    try {
+      const endpoint = new Promise((resolve, reject) => {
+        const check = async () => {
+          try {
+            const [port, route] = (await fs.readFile(path.join(profile, 'DevToolsActivePort'), 'utf8')).trim().split('\n');
+            const url = `ws://127.0.0.1:${port}${route}`;
+            if (route && url !== previousEndpoint) resolve(url);
+          } catch (error) {
+            if (error.code !== 'ENOENT') reject(error);
+          }
+        };
+        observer = watch(profile, () => void check());
+        observer.on('error', reject);
+        void check();
+      });
+      this.endpoint = await (previousEndpoint ? endpoint : Promise.race([
+        endpoint,
+        this.exited.then(([code]) => { throw new Error(`Test browser exited ${code} before DevTools was ready`); }),
+      ]));
+    } finally {
+      observer?.close();
+    }
+    this.socket = new WebSocket(this.endpoint);
+    const socket = this.socket;
+    this.closed = new Promise((resolve) => socket.addEventListener('close', resolve, { once: true }));
+    socket.addEventListener('close', () => {
+      for (const call of this.pending.values()) call.reject(new Error('Test browser connection closed'));
       this.pending.clear();
     });
-    this.child.on('error', (error) => {
-      for (const call of this.pending.values()) call.reject(error);
-      this.pending.clear();
-    });
-    let buffer = '';
-    this.child.stdio[4].on('data', (data) => {
-      buffer += data.toString();
-      const messages = buffer.split('\0');
-      buffer = messages.pop();
-      for (const json of messages) {
-        const message = JSON.parse(json);
-        if (message.id) {
-          const call = this.pending.get(message.id);
-          this.pending.delete(message.id);
-          if (message.error) call?.reject(new Error(JSON.stringify(message.error)));
-          else call?.resolve(message.result);
-        } else {
-          for (const listener of this.listeners) listener(message);
-        }
+    socket.addEventListener('message', ({ data }) => {
+      const message = JSON.parse(data);
+      if (message.id) {
+        const call = this.pending.get(message.id);
+        this.pending.delete(message.id);
+        if (message.error) call?.reject(new Error(JSON.stringify(message.error)));
+        else call?.resolve(message.result);
+      } else {
+        for (const listener of this.listeners) listener(message);
       }
     });
+    await new Promise((resolve, reject) => {
+      socket.addEventListener('open', resolve, { once: true });
+      socket.addEventListener('error', () => reject(new Error('Test browser connection failed')), { once: true });
+    });
+    const { processInfo } = await this.send('SystemInfo.getProcessInfo');
+    this.pid = processInfo.find(info => info.type === 'browser').id;
   }
 
   send(method, params = {}, sessionId) {
+    protocolMethod = method;
     return new Promise((resolve, reject) => {
+      if (this.socket.readyState !== WebSocket.OPEN) return reject(new Error('Test browser is disconnected'));
       const id = ++this.nextId;
       this.pending.set(id, { resolve, reject });
-      this.child.stdio[3].write(JSON.stringify({ id, method, params, sessionId }) + '\0');
+      this.socket.send(JSON.stringify({ id, method, params, sessionId }));
     });
   }
 
@@ -75,6 +127,7 @@ class Browser {
   }
 
   async openSettings() {
+    waitingFor = 'the shell frame target';
     console.log('Test browser', (await this.send('Browser.getVersion')).product);
     await this.send('Target.setDiscoverTargets', { discover: true });
     // The frame proves the component extension is installed. Its service worker
@@ -93,6 +146,7 @@ class Browser {
       void this.send('Target.getTargets').then(({ targetInfos }) => targetInfos.forEach(accept), reject);
     });
     const settingsUrl = new URL('/settings.html#debug', frame.url).href;
+    waitingFor = 'the Settings page to load';
     const { targetId } = await this.send('Target.createTarget', { url: settingsUrl });
     this.session = (await this.send('Target.attachToTarget', { targetId, flatten: true })).sessionId;
     await this.send('Page.enable', {}, this.session);
@@ -120,6 +174,7 @@ class Browser {
   }
 
   waitStatus(text) {
+    waitingFor = `Debug status: ${text}`;
     return this.evaluate(`new Promise(resolve => {
       const status = document.getElementById('debug-video-buffer-status');
       const check = () => { if (status.textContent.includes(${JSON.stringify(text)})) { observer.disconnect(); resolve(); } };
@@ -131,26 +186,49 @@ class Browser {
 
   async screenshot(theme) {
     if (!artifacts) return;
+    waitingFor = `the ${theme} screenshot`;
     await this.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: theme }] }, this.session);
     const { data } = await this.send('Page.captureScreenshot', { format: 'png' }, this.session);
     await fs.writeFile(path.join(artifacts, `debug-settings-${theme}.png`), Buffer.from(data, 'base64'));
   }
 
   async close() {
-    if (this.child.exitCode !== null || this.child.signalCode !== null) return;
+    waitingFor = 'the test browser to close';
     await this.send('Browser.close').catch(() => {});
-    await this.exited;
+    await this.closed;
+    await processExited(this.pid);
+    this.stop();
+  }
+
+  stop() {
+    // The Linux relaunch implementation inherits the process group created by
+    // this harness. Killing that group also covers a relaunch before reconnect.
+    if (!this.child.pid) return;
+    try { process.kill(-this.child.pid, 'SIGKILL'); }
+    catch (error) { if (error.code !== 'ESRCH') throw error; }
+  }
+
+  async restart() {
+    waitingFor = 'chrome://restart to relaunch the browser';
+    const socket = this.socket;
+    await Promise.all([
+      this.closed,
+      this.send('Target.createTarget', { url: 'chrome://restart' }).catch(error => {
+        if (socket.readyState === WebSocket.OPEN) throw error;
+      }),
+    ]);
+    this.listeners.clear();
+    await this.connect(this.endpoint);
+    await this.openSettings();
   }
 }
 
 async function cleanup() {
-  if (browser && browser.child.exitCode === null && browser.child.signalCode === null) {
-    browser.child.kill('SIGTERM');
-    await browser.exited;
-  }
+  browser?.stop();
   if (display && display.exitCode === null && display.signalCode === null) {
-    display.kill('SIGTERM');
-    await once(display, 'exit');
+    const exited = once(display, 'exit');
+    display.kill('SIGKILL');
+    await exited;
   }
   await fs.rm(profile, { recursive: true, force: true });
 }
@@ -159,11 +237,15 @@ for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => {
 });
 
 async function start(...flags) {
+  await fs.rm(path.join(profile, 'DevToolsActivePort'), { force: true });
   browser = new Browser(flags);
+  await browser.connect();
   await browser.openSettings();
 }
 const state = () => browser.evaluate('window.settings.getDebugSettings()');
-const click = () => browser.evaluate(`new Promise(resolve => {
+const click = () => {
+  waitingFor = 'the Debug toggle to become usable';
+  return browser.evaluate(`new Promise(resolve => {
   const toggle = document.getElementById('debug-video-buffer');
   const check = () => {
     if (!toggle.disabled) { observer.disconnect(); toggle.click(); resolve(); }
@@ -172,10 +254,14 @@ const click = () => browser.evaluate(`new Promise(resolve => {
   observer.observe(toggle, { attributes: true, attributeFilter: ['disabled'] });
   check();
 })`);
+};
 
 try {
   display = spawn('Xvfb', ['-displayfd', '3', '-screen', '0', '1280x800x24'], { stdio: ['ignore', 'ignore', 'inherit', 'pipe'] });
-  displayNumber = String((await once(display.stdio[3], 'data'))[0]).trim();
+  displayNumber = await Promise.race([
+    once(display.stdio[3], 'data').then(([data]) => String(data).trim()),
+    once(display, 'exit').then(([code]) => { throw new Error(`Xvfb exited ${code} before it was ready`); }),
+  ]);
   if (artifacts) await fs.mkdir(artifacts, { recursive: true });
   await start();
   assert.deepEqual(await state(), { disableGpuMemoryBufferVideoFrames: false, videoBufferWorkaroundActive: false, videoBufferWorkaroundForced: false });
@@ -191,8 +277,15 @@ try {
   await start();
   assert.deepEqual(await state(), { disableGpuMemoryBufferVideoFrames: true, videoBufferWorkaroundActive: true, videoBufferWorkaroundForced: false });
   await browser.waitStatus('on in this browser session');
+  await browser.restart();
+  assert.deepEqual(await state(), { disableGpuMemoryBufferVideoFrames: true, videoBufferWorkaroundActive: true, videoBufferWorkaroundForced: false });
+  await browser.waitStatus('on in this browser session');
+  console.log('PASS browser relaunch preserves the preference without turning it into a launcher override');
   await click();
   await browser.waitStatus('Restart Flecha to turn the workaround off');
+  await browser.restart();
+  assert.deepEqual(await state(), { disableGpuMemoryBufferVideoFrames: false, videoBufferWorkaroundActive: false, videoBufferWorkaroundForced: false });
+  await browser.waitStatus('off in this browser session');
   await browser.close();
   console.log('PASS saved preference takes effect on restart and can be turned off');
 
@@ -206,8 +299,12 @@ try {
   assert.equal(await browser.evaluate('document.getElementById("debug-video-buffer").disabled'), true);
   assert.equal((await state()).videoBufferWorkaroundForced, true);
   assert.equal(await browser.evaluate('window.settings.setVideoBufferWorkaround(false).then(() => false, () => true)'), true);
+  await browser.restart();
+  await browser.waitStatus('Enabled by a command-line flag');
+  assert.equal((await state()).videoBufferWorkaroundForced, true);
   await browser.close();
   console.log('PASS explicit command-line overrides are shown and protected');
 } finally {
   await cleanup();
+  clearTimeout(watchdog);
 }
