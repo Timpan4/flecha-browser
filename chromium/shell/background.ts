@@ -201,9 +201,7 @@ async function start() {
   const rememberLive = () => void chrome.storage.session.set({ [sessionKey(LIVE_KEY)]: Object.fromEntries(live) });
 
   /** What the pages of a Flecha window draw. */
-  function uiState(windowId: string, chromeWindowId: number | undefined): UiState {
-    // Not closed windows' tabs: the command bar would offer them, and there is no switching to them.
-    const tabs = Object.fromEntries(Object.entries(store.openTabs()).map(([id, { history, ...tab }]) => [id, tab]));
+  function uiState(windowId: string, chromeWindowId: number | undefined, tabs: UiState['tabs']): UiState {
     const { windows: _windows, closedWindows: _closed, spaces: _spaces, ...shared } = store.state;
     const active = store.activeTabIn(windowId);
     const frame = frameOf(chromeWindowId);
@@ -233,8 +231,12 @@ async function start() {
   const navStates = new Map<string, UiState['nav']>();
   /** Every window's pages get their own window's state; pages in no Flecha window (a Flechinha's) the focused one's. */
   const sendState = () => {
-    for (const chromeWindowId of pageWindows()) {
-      broadcastTo(chromeWindowId, 'state', uiState(windowOf(chromeWindowId) ?? store.focusedWindowId, chromeWindowId));
+    const windows = pageWindows();
+    if (!windows.size) return;
+    // The same tabs are offered in every window. Build their snapshot once per broadcast.
+    const tabs = Object.fromEntries(Object.entries(store.openTabs()).map(([id, { history, ...tab }]) => [id, tab]));
+    for (const chromeWindowId of windows) {
+      broadcastTo(chromeWindowId, 'state', uiState(windowOf(chromeWindowId) ?? store.focusedWindowId, chromeWindowId, tabs));
       sendFrame(chromeWindowId);
     }
   };

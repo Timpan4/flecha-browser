@@ -118,6 +118,29 @@ test('a closed window\'s Today tabs are not among the tabs to switch to until it
   assert.equal(store.activate(gone.id), second);
 });
 
+test('open tabs include nested pins and favorites, omit unplaced tabs, and keep saved order', () => {
+  const { store, first, second } = twoWindows();
+  const favorite = store.addTab('https://example.com/favorite', { windowId: first });
+  const nested = store.addTab('https://example.com/nested', { windowId: first });
+  const today = store.addTab('https://example.com/today', { windowId: second });
+  const closed = store.addTab('https://example.com/closed', { windowId: second });
+  store.closeWindow(second);
+  const personal = store.state.spaces[0];
+  store.state.favorites = [favorite.id];
+  personal.pinned = [{ kind: 'folder', id: 'outer', name: 'Outer', children: [
+    { kind: 'folder', id: 'inner', name: 'Inner', children: [{ kind: 'tab', tabId: nested.id }] },
+  ] }];
+  // The loaded state can contain an unplaced tab. Only list membership makes it open.
+  store.state.windows.find(w => w.id === first).spaces[personal.id].today = [today.id];
+  const orphan = { ...closed, id: 'orphan', url: 'https://example.com/orphan' };
+  store.state.tabs[orphan.id] = orphan;
+  const open = store.openTabs();
+  assert.deepEqual(Object.keys(open), [favorite.id, nested.id, today.id]);
+  assert.equal(open[nested.id], store.state.tabs[nested.id]);
+  assert.equal(open[closed.id], undefined);
+  assert.equal(open[orphan.id], undefined);
+});
+
 test('a reopened window shows a Today tab of its own when the tab it showed was shared', () => {
   const { store, first, second } = twoWindows();
   const older = store.addTab('https://example.com/older', { windowId: second });
