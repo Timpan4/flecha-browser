@@ -26,6 +26,13 @@ function savedStore(name) {
   return json;
 }
 
+function recordingStore(t) {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const writes = [];
+  const store = new Store({ load: () => undefined, save: (json) => { writes.push(json); } });
+  return { store, writes };
+}
+
 test('a state that reads well loads, and becomes the last good copy once the shell has started', async () => {
   const good = savedStore('Work');
   const storage = area({ [STATE_KEY]: good });
@@ -202,4 +209,68 @@ test('the sidebar width is kept within Chromium\'s vertical tab strip limits, an
   assert.equal(decodeState(json).sidebarWidth, 300);
   const saved = JSON.parse(json);
   for (const width of [125, 401, '300']) assert.equal(decodeState(JSON.stringify({ ...saved, sidebarWidth: width })).sidebarWidth, undefined);
+});
+
+test('live tab status still notifies listeners without rewriting unchanged saved state', (t) => {
+  const { store, writes } = recordingStore(t);
+  const tab = store.addTab('https://example.com/');
+  store.saveNow();
+  const saved = writes.pop();
+  const changes = [];
+  store.onChange((change) => changes.push(change));
+
+  store.updateTab(tab.id, { title: tab.title, loading: true, audible: true });
+  t.mock.timers.runAll();
+
+  assert.equal(tab.loading, true);
+  assert.equal(tab.audible, true);
+  assert.deepEqual(changes, ['tab']);
+  assert.equal(store.serialize(), saved);
+  assert.deepEqual(writes, []);
+});
+
+test('a persisted tab change is saved even when accompanied by live status', (t) => {
+  const { store, writes } = recordingStore(t);
+  const tab = store.addTab('https://example.com/');
+  store.saveNow();
+  writes.length = 0;
+
+  store.updateTab(tab.id, { title: 'Updated', loading: true, audible: true });
+  t.mock.timers.runAll();
+
+  assert.equal(writes.length, 1);
+  const savedTab = JSON.parse(writes[0]).tabs[tab.id];
+  assert.equal(savedTab.title, 'Updated');
+  assert.equal('loading' in savedTab, false);
+  assert.equal('audible' in savedTab, false);
+});
+
+test('live tab updates do not postpone an already-pending persistent save', (t) => {
+  const { store, writes } = recordingStore(t);
+  const tab = store.addTab('https://example.com/');
+  // The existing save debounce is 500 ms. Update live status halfway through it.
+  t.mock.timers.tick(250);
+  store.updateTab(tab.id, { loading: true });
+  t.mock.timers.tick(250);
+
+  assert.equal(writes.length, 1);
+  assert.equal(JSON.parse(writes[0]).tabs[tab.id].url, 'https://example.com/');
+  t.mock.timers.runAll();
+  assert.equal(writes.length, 1);
+});
+
+test('a split repair during a live tab update is still persisted', (t) => {
+  const { store, writes } = recordingStore(t);
+  const tab = store.addTab('https://example.com/');
+  store.saveNow();
+  writes.length = 0;
+  const windowSpace = inWindow(store.state);
+  windowSpace.split = [tab.id, 'missing'];
+
+  store.updateTab(tab.id, { loading: true });
+  t.mock.timers.runAll();
+
+  assert.equal(windowSpace.split, undefined);
+  assert.equal(writes.length, 1);
+  assert.equal(inWindow(JSON.parse(writes[0])).split, undefined);
 });

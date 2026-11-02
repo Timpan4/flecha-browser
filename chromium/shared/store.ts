@@ -271,7 +271,16 @@ export class Store {
 
   /** The tabs a window can show or switch to: all but closed windows' Today tabs, which wait for their window to reopen. */
   openTabs(): Record<string, TabInfo> {
-    return Object.fromEntries(Object.entries(this.state.tabs).filter(([id]) => this.locate(id)));
+    const open = new Set(this.state.favorites);
+    for (const space of this.state.spaces) {
+      for (const id of pinnedTabIds(space.pinned)) open.add(id);
+    }
+    for (const win of this.state.windows) {
+      for (const space of Object.values(win.spaces)) {
+        for (const id of space.today) open.add(id);
+      }
+    }
+    return Object.fromEntries(Object.entries(this.state.tabs).filter(([id]) => open.has(id)));
   }
 
   // ---- tabs -----------------------------------------------------------------
@@ -330,8 +339,9 @@ export class Store {
     if (!tab) return;
     const keys = Object.keys(patch) as Array<keyof TabInfo>;
     if (keys.every((k) => tab[k] === patch[k])) return;
+    const persist = keys.some((k) => k !== 'loading' && k !== 'audible' && tab[k] !== patch[k]);
     Object.assign(tab, patch);
-    this.changed('tab');
+    this.changed('tab', persist);
   }
 
   /**
@@ -1177,7 +1187,7 @@ export class Store {
     return { id: randomUUID(), activeSpaceId: spaceId ?? '', spaces: {} };
   }
 
-  private changed(change: StoreChange = 'structure') {
+  private changed(change: StoreChange = 'structure', persist = true) {
     for (const win of this.state.windows) {
       for (const space of this.state.spaces) {
         const ws = win.spaces[space.id];
@@ -1185,10 +1195,11 @@ export class Store {
         if (ws?.split && !ws.split.every((id) => this.allTabIds(space, win.id).includes(id))) {
           delete ws.split;
           delete ws.splitMode;
+          persist = true;
         }
       }
     }
-    this.scheduleSave();
+    if (persist) this.scheduleSave();
     for (const fn of this.listeners) fn(change);
   }
 
