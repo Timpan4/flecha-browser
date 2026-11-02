@@ -10,6 +10,7 @@ blink_symbol_level = 0
 v8_symbol_level = 0
 target_cpu = "x64"
 target_os = "linux"
+
 # Keep the public release's existing codec policy.
 proprietary_codecs = false
 use_remoteexec = false
