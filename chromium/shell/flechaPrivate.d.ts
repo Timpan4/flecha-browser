@@ -272,6 +272,10 @@ declare namespace chrome.flechaPrivate {
   function getVsrState(): Promise<VsrState>;
   function setVsrSettings(enabled: boolean, quality: 1 | 2 | 3 | 4, maxOutputHeight: number): Promise<VsrState>;
 
+  /** Browser-wide debug preference, applied at startup without restarting automatically. */
+  function getDebugSettings(): Promise<import('../shared/types').DebugSettings>;
+  function setVideoBufferWorkaround(enabled: boolean): Promise<import('../shared/types').DebugSettings>;
+
   interface DownloadSettings {
     folder: string;
     askWhereToSave: boolean;
