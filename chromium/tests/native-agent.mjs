@@ -270,6 +270,34 @@ try {
   const yours = (label) =>
     stateWhere(`s => s.spaces.find(sp => sp.id === s.activeSpaceId).activeTabId === ${JSON.stringify(mine)}`).then(() => console.log(`PASS your tab stays on screen after ${label}`));
 
+  // Fail the browser APIs at their boundary: MCP must report failure and leave no blank native tab.
+  const worker = await attach((await findTarget((t) => t.type === 'service_worker' && t.url.startsWith(extension))).targetId);
+  for (const failure of ['mark', 'navigate']) {
+    const address = base + '/refused-' + failure;
+    const before = await evaluate(worker, 'chrome.tabs.query({}).then(tabs => tabs.map(t => t.id).sort())');
+    await evaluate(worker, `
+      globalThis.originalMark = chrome.flechaPrivate.setAgentTab;
+      globalThis.originalUpdate = chrome.tabs.update;
+      if (${JSON.stringify(failure)} === 'mark') chrome.flechaPrivate.setAgentTab = async () => { throw new Error('Test marking refused'); };
+      else chrome.tabs.update = (...args) => args[1]?.url === ${JSON.stringify(address)}
+        ? Promise.reject(new Error('Test navigation refused')) : originalUpdate(...args);
+    `);
+    try {
+      const refused = await client.callTool({ name: 'open_tab', arguments: { url: address } });
+      assert.equal(refused.isError, true, `${failure} failure must reach MCP`);
+      assert.match(refused.content[0].text, failure === 'mark' ? /Test marking refused/ : /Test navigation refused/);
+      assert.deepEqual(await evaluate(worker, 'chrome.tabs.query({}).then(tabs => tabs.map(t => t.id).sort())'), before);
+    } finally {
+      await evaluate(worker, 'chrome.flechaPrivate.setAgentTab = originalMark; chrome.tabs.update = originalUpdate;');
+    }
+    state = await stateWhere(`s => Object.values(s.tabs).some(t => t.url === ${JSON.stringify(address)})`);
+    const failed = Object.values(state.tabs).find(t => t.url === address).id;
+    await call('close_tab', { tabId: failed });
+    await stateWhere(`s => !s.tabs[${JSON.stringify(failed)}]`);
+    console.log(`PASS ${failure} failure reaches MCP and removes the blank native tab`);
+  }
+  await send('Target.detachFromTarget', { sessionId: worker });
+
   const opened = JSON.parse((await call('open_tab', { url: base + '/agent' })).content[0].text);
   state = await stateWhere(`s => s.tabs[${JSON.stringify(opened.tabId)}]?.agent`);
   await yours('open_tab');

@@ -165,9 +165,13 @@ async function start() {
     if (isStartPage(tab) && active && !live.has(active.id)) {
       live.set(active.id, tab.id!);
       // A blank tab reloads the new tab page: Chromium drew its own before the shell was loaded.
-      void markAgentTab(active.id, tab.id!).then(() =>
-        chrome.tabs.update(tab.id!, { url: active.url === 'about:blank' ? 'chrome://newtab/' : active.url, active: true }),
-      );
+      void markAgentTab(active.id, tab.id!)
+        .then(() => chrome.tabs.update(tab.id!, { url: active.url === 'about:blank' ? 'chrome://newtab/' : active.url, active: true }))
+        .catch((err) => {
+          live.delete(active.id);
+          rememberLive();
+          console.error('Flecha shell: restoring a tab failed', err);
+        });
     } else if (isStartPage(tab) && !active && !placeholders.has(tab.windowId)) {
       placeholders.set(tab.windowId, tab.id!);
       void chrome.tabs.update(tab.id!, { url: 'chrome://newtab/' });
@@ -323,7 +327,7 @@ async function start() {
    */
   async function markAgentTab(id: string, chromeId: number) {
     if (!store.state.tabs[id]?.agent || typeof chrome.flechaPrivate?.setAgentTab !== 'function') return;
-    await chrome.flechaPrivate.setAgentTab(chromeId, true).catch((err) => console.error('Flecha shell: marking an agent tab failed', err));
+    await chrome.flechaPrivate.setAgentTab(chromeId, true);
   }
   /** The agent's tabs as of the last change: see unmarkAgentTabs(). */
   let agentTabIds = new Set(Object.keys(store.state.tabs).filter((id) => store.state.tabs[id].agent));
@@ -349,21 +353,32 @@ async function start() {
     // An agent's tab opens blank and loads its page once marked.
     const agent = !!tab.agent && typeof chrome.flechaPrivate?.setAgentTab === 'function';
     creating++;
+    let chromeId: number | undefined;
     try {
       const options = { windowId: await chromeWindowFor(windowId), url: agent ? 'about:blank' : url, active };
       // A Space with separate cookies and logins: its own storage partition (patch 0034).
-      const chromeId = partition
+      chromeId = partition
         ? await chrome.flechaPrivate.createTab({ ...options, partition })
         : (await chrome.tabs.create(options)).id!;
       live.set(id, chromeId);
       livePartition.set(id, partition);
       if (agent) {
         await markAgentTab(id, chromeId);
-        if (url) void chrome.tabs.update(chromeId, { url });
+        if (url) await chrome.tabs.update(chromeId, { url });
       }
       if (tab.muted) void chrome.tabs.update(chromeId, { muted: true });
       rememberLive();
       return chromeId;
+    } catch (error) {
+      if (chromeId !== undefined) {
+        const failedId = chromeId;
+        live.delete(id);
+        livePartition.delete(id);
+        rememberLive();
+        ours.add(failedId);
+        await chrome.tabs.remove(failedId).catch(() => ours.delete(failedId));
+      }
+      throw error;
     } finally {
       creating--;
     }
@@ -704,9 +719,15 @@ async function start() {
         live.set(active.id, tab.id!);
         rememberLive();
         // Marked even when blank: the agent's next page loads in this tab.
-        void markAgentTab(active.id, tab.id!).then(() => {
-          if (active.url !== 'about:blank') void chrome.tabs.update(tab.id!, { url: active.url });
-        });
+        void markAgentTab(active.id, tab.id!)
+          .then(async () => {
+            if (active.url !== 'about:blank') await chrome.tabs.update(tab.id!, { url: active.url });
+          })
+          .catch((err) => {
+            live.delete(active.id);
+            rememberLive();
+            console.error('Flecha shell: reopening a tab failed', err);
+          });
         return;
       }
       if (!active && !placeholders.has(tab.windowId)) return void placeholders.set(tab.windowId, tab.id!);
