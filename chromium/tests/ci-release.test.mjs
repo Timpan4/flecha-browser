@@ -6,8 +6,474 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { checkIdentity, compile, depotRevision, releaseConfiguration, saveCheckpoint, restoreCheckpoint } from '../scripts/ci-release.mjs';
+import { checkIdentity, compile, configureReleaseTree, depotRevision, prepareNativeTree, preserveNativeOutputs, releaseConfiguration, saveCheckpoint, restoreCheckpoint, validateReusableTree } from '../scripts/ci-release.mjs';
+import { createReuseBudget, downloadReusableTree, findReusableArtifacts, nativeKey, removeNativeTree, reusableArtifact, runNativeCommand, withoutGitHubTokens } from '../scripts/ci-reuse.mjs';
 import { verifyRelease } from '../scripts/ci-publish.mjs';
+
+test('the owner-selected reuse budget leaves clean preparation time and never exceeds the stage deadline', () => {
+  const started = Date.now();
+  const stageDeadline = started + 5 * 60 * 60 * 1000;
+  const deadline = createReuseBudget({ started, stageDeadline, budgetMinutes: '60' }).deadline;
+  assert.equal(deadline, started + 60 * 60 * 1000);
+  assert.equal(createReuseBudget({ started: deadline, stageDeadline, budgetMinutes: '0' }).deadline, deadline);
+  assert.equal(createReuseBudget({ started: stageDeadline, stageDeadline, budgetMinutes: '60' }).deadline, stageDeadline);
+  for (const budgetMinutes of [undefined, '', 'invalid', '-1', Infinity]) {
+    assert.throws(() => createReuseBudget({ started, stageDeadline, budgetMinutes }), /whole minutes/);
+  }
+});
+
+test('required preparation time preserves optional reuse time across candidate pages and stays within the stage', async t => {
+  const hour = 60 * 60 * 1000;
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  const stageDeadline = now + 5 * hour;
+  const budget = createReuseBudget({ started: now, stageDeadline, budgetMinutes: '60' });
+  const options = { repository: 'owner/repo', branch: 'main', currentRun: '2', platform: 'linux-x64', key: 'key',
+    get deadline() { return budget.deadline; } };
+  const candidates = findReusableArtifacts(options, endpoint => {
+    if (endpoint.endsWith('page=1')) return { artifacts: [{ name: 'native-linux-x64-key', workflow_run: { id: 1 } }], total_count: 3 };
+    if (endpoint.endsWith('page=2')) return { artifacts: ['reuse-linux-x64-key-1', 'checkpoint-linux-x64-1']
+      .map(name => ({ name, workflow_run: { id: 1 } })), total_count: 3 };
+    return { id: 1, head_sha: 'source', head_repository: { full_name: 'owner/repo' },
+      path: '.github/workflows/nightly-release.yml', head_branch: 'main', event: 'workflow_dispatch' };
+  });
+  assert.equal((await candidates.next()).value.name, 'native-linux-x64-key');
+  await budget.required(async () => { now += hour; });
+  assert.equal(budget.deadline - now, hour);
+  assert.equal((await candidates.next()).value.name, 'checkpoint-linux-x64-1');
+  await budget.required(async () => { now += 5 * hour; });
+  assert.equal(budget.deadline, stageDeadline);
+});
+
+test('reuse stops signal-resistant descendants before deadline fallback or cancellation returns', async t => {
+  assert.equal(await runNativeCommand(process.execPath, ['-e', 'process.stdout.write("captured output")'], { capture: true }), 'captured output');
+  for (const outcome of ['deadline', 'cancellation']) {
+    await t.test(outcome, async t => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-reuse-process-'));
+      const controller = new AbortController();
+      t.after(() => controller.abort(new Error('Fixture cleanup')));
+      t.after(() => fs.rm(root, { recursive: true, force: true }));
+      t.mock.timers.enable({ apis: ['setTimeout'] });
+      const readyFile = path.join(root, 'ready');
+      const ready = (async () => {
+        for await (const event of fs.watch(root, { signal: controller.signal })) {
+          if (event.filename === 'ready') return;
+        }
+      })();
+      const descendant = `
+        process.on('SIGTERM', () => {});
+        process.on('SIGINT', () => {});
+        process.on('message', () => {});
+        process.send('ready');
+      `;
+      const fixture = `
+        const { spawn } = require('node:child_process');
+        const fs = require('node:fs');
+        process.on('SIGTERM', () => {});
+        process.on('SIGINT', () => {});
+        const descendant = spawn(process.execPath, ['-e', ${JSON.stringify(descendant)}], { stdio: ['ignore', 1, 2, 'ipc'] });
+        descendant.on('message', () => {
+          fs.writeFileSync(process.argv[1] + '.tmp', String(descendant.pid));
+          fs.renameSync(process.argv[1] + '.tmp', process.argv[1]);
+        });
+      `;
+      // The inherited stdout pipe stays open until the descendant is stopped too.
+      const privileged = process.platform === 'linux' && process.env.GITHUB_ACTIONS === 'true';
+      let settled = false;
+      const result = runNativeCommand(privileged ? 'sudo' : process.execPath,
+        [...(privileged ? ['-n', process.execPath] : []), '-e', fixture, readyFile], {
+        capture: true, signal: controller.signal, deadline: outcome === 'deadline' ? Date.now() + 60 * 60 * 1000 : undefined,
+      }).then(() => assert.fail('Reuse must stop'), error => error).finally(() => { settled = true; });
+      await Promise.race([ready, result.then(error => { throw error; })]);
+      const reason = new Error('User cancelled reuse');
+      if (outcome === 'deadline') t.mock.timers.tick(60 * 60 * 1000);
+      else {
+        t.mock.timers.tick(60 * 60 * 1000);
+        assert.equal(settled, false, 'Required preparation has no optional reuse timer');
+        controller.abort(reason);
+      }
+      const error = await result;
+      if (outcome === 'deadline') assert.equal(error.code, 'ETIMEDOUT');
+      else assert.equal(error, reason);
+    });
+  }
+});
+
+test('build subprocesses cannot inherit GitHub tokens while the gh environment remains intact', () => {
+  const original = { ...process.env, GH_TOKEN: 'fixture-gh-token', GITHUB_TOKEN: 'fixture-github-token' };
+  const sanitized = withoutGitHubTokens(original);
+  execFileSync(process.execPath, ['-e', 'if (process.env.GH_TOKEN || process.env.GITHUB_TOKEN) process.exit(1)'], { env: sanitized });
+  assert.equal(Object.hasOwn(sanitized, 'GH_TOKEN'), false);
+  assert.equal(Object.hasOwn(sanitized, 'GITHUB_TOKEN'), false);
+  assert.equal(original.GH_TOKEN, 'fixture-gh-token');
+  assert.equal(original.GITHUB_TOKEN, 'fixture-github-token');
+});
+
+test('clean preparation awaits each command and starts no further work after cancellation', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-clean-cancel-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const controller = new AbortController();
+  const reason = new Error('User cancelled clean preparation');
+  const work = path.join(root, 'work');
+  const calls = [];
+  let started;
+  let rejectCommand;
+  const commandStarted = new Promise(resolve => { started = resolve; });
+  const command = new Promise((resolve, reject) => { rejectCommand = reject; });
+  t.after(() => rejectCommand(reason));
+  const options = { work, depot: path.join(work, 'depot_tools'), src: path.join(work, 'src'),
+    configuration: { gclient: 'fixture' }, chromium: 'fixture', signal: controller.signal,
+    run: (...args) => { calls.push(args); started(); return command; } };
+  const preparation = prepareNativeTree(options).then(() => assert.fail('Preparation must reject cancellation'), error => error);
+  await commandStarted;
+  assert.equal(calls.length, 1, 'Do not fetch while initialization is still running');
+  controller.abort(reason);
+  rejectCommand(reason);
+  assert.equal(await preparation, reason);
+  assert.equal(calls.length, 1);
+  await assert.rejects(fs.stat(path.join(work, '.gclient')), { code: 'ENOENT' });
+  const untouched = path.join(root, 'cancelled-before-start');
+  await assert.rejects(prepareNativeTree({ ...options, work: untouched }), error => error === reason);
+  await assert.rejects(fs.stat(untouched), { code: 'ENOENT' });
+});
+
+test('native reuse ignores shell-only commits and invalidates native inputs and toolchains', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-native-key-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.mkdir(path.join(root, 'chromium/patches'), { recursive: true });
+  await fs.mkdir(path.join(root, 'chromium/shell'));
+  await fs.writeFile(path.join(root, 'chromium/patches/native.patch'), 'native input');
+  await fs.writeFile(path.join(root, 'chromium/shell/app.ts'), 'old shell');
+  execFileSync('git', ['init', '--quiet', root]);
+  const commit = () => {
+    execFileSync('git', ['add', '.'], { cwd: root });
+    execFileSync('git', ['-c', 'user.name=Release test', '-c', 'user.email=release@example.invalid',
+      'commit', '--quiet', '-m', 'fixture'], { cwd: root });
+  };
+  commit();
+  const configuration = { platform: 'linux-x64', depot: 'toolchain', args: 'release flags', work: '/stable/work',
+    image: { os: 'ubuntu24', version: 'runner-image-version' } };
+  const original = nativeKey(root, configuration);
+  await fs.writeFile(path.join(root, 'chromium/shell/app.ts'), 'new shell');
+  commit();
+  assert.equal(nativeKey(root, configuration), original);
+  for (const field of Object.keys(configuration)) {
+    assert.notEqual(nativeKey(root, { ...configuration, [field]: 'changed' }), original, field);
+  }
+  assert.notEqual(nativeKey(root, { ...configuration, image: { ...configuration.image, version: 'updated-image' } }), original);
+  await fs.writeFile(path.join(root, 'chromium/patches/native.patch'), 'changed native input');
+  commit();
+  assert.notEqual(nativeKey(root, configuration), original);
+});
+
+test('optional reuse rejects unavailable or invalid trees and preserves unowned trees', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-optional-reuse-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const work = path.join(root, 'work');
+  const options = { repository: 'owner/repo', branch: 'main', currentRun: '2', platform: 'linux-x64', key: 'key', work };
+  const source = path.join(root, 'source');
+  await fs.mkdir(source);
+  await fs.mkdir(path.join(source, 'src'));
+  await fs.mkdir(path.join(source, 'depot_tools'));
+  const expected = { sha: 'source', chromium: '158', platform: 'linux-x64', depot: 'tools', nativeKey: 'key' };
+  const state = JSON.stringify({ ...expected, complete: false });
+  await fs.writeFile(path.join(source, 'state.json'), state);
+  const archive = path.join(root, 'native.tar.gz');
+  saveCheckpoint(source, archive, false);
+  const gh = (failure) => args => {
+    if (failure === 'api') throw new Error('API unavailable');
+    if (failure === 'timeout') throw Object.assign(new Error('API timed out'), { code: 'ETIMEDOUT', signal: 'SIGTERM' });
+    if (args[0] === 'api') return JSON.stringify(args[1].includes('/artifacts?') ? {
+      artifacts: [{ name: 'native-linux-x64-key', workflow_run: { id: 1 } }], total_count: 1,
+    } : { id: 1, head_sha: 'source', head_repository: { full_name: 'owner/repo' },
+      path: '.github/workflows/nightly-release.yml', head_branch: 'main', event: 'workflow_dispatch' });
+    if (failure === 'download') throw new Error('Artifact disappeared');
+    return fs.copyFile(archive, path.join(args.at(-1), 'native.tar.gz'));
+  };
+  for (const failure of ['api', 'timeout', 'download', 'restore', 'malformed-state', 'missing-state', 'identity', 'missing-source', 'missing-depot']) {
+    const reused = await downloadReusableTree(root, options, async archive => {
+      if (failure === 'restore') {
+        await fs.writeFile(path.join(work, 'partial'), 'partial extraction');
+        throw new Error('Invalid archive');
+      }
+      await restoreCheckpoint(work, archive, { create: false });
+      if (failure === 'malformed-state') await fs.writeFile(path.join(work, 'state.json'), '{');
+      if (failure === 'missing-state') await fs.rm(path.join(work, 'state.json'));
+      if (failure === 'identity') await fs.writeFile(path.join(work, 'state.json'), JSON.stringify({ ...expected, nativeKey: 'wrong', complete: false }));
+      if (failure === 'missing-source') await fs.rmdir(path.join(work, 'src'));
+      if (failure === 'missing-depot') await fs.rmdir(path.join(work, 'depot_tools'));
+      await validateReusableTree(work, expected);
+    }, gh(failure));
+    assert.equal(reused, undefined);
+    await assert.rejects(fs.stat(work), { code: 'ENOENT' });
+    assert.equal((await fs.readdir(root)).some(name => name.startsWith('native-download-')), false);
+  }
+  const cancelled = Object.assign(new Error('cancelled'), { signal: 'SIGINT' });
+  await assert.rejects(downloadReusableTree(root, options, () => {}, () => { throw cancelled; }), error => error === cancelled);
+  await assert.rejects(downloadReusableTree(root, options, () => { throw cancelled; }, gh()), error => error === cancelled);
+  assert.equal((await fs.stat(work)).isDirectory(), true);
+  await fs.rm(work, { recursive: true });
+  for (const name of (await fs.readdir(root)).filter(name => name.startsWith('native-download-'))) {
+    await fs.rm(path.join(root, name), { recursive: true });
+  }
+  const unsafe = Object.assign(new Error('Cannot stop previous attempt'), { code: 'REUSE_TERMINATION_FAILED' });
+  await assert.rejects(downloadReusableTree(root, options, async () => {
+    await fs.writeFile(path.join(work, 'partial'), 'Previous process may still own this tree');
+    throw unsafe;
+  }, gh()), error => error === unsafe);
+  assert.equal(await fs.readFile(path.join(work, 'partial'), 'utf8'), 'Previous process may still own this tree');
+  const preserved = (await fs.readdir(root)).filter(name => name.startsWith('native-download-'));
+  assert.equal(preserved.length, 1);
+  await fs.rm(work, { recursive: true });
+  await fs.rm(path.join(root, preserved[0]), { recursive: true });
+  const candidate = await downloadReusableTree(root, options, async archive => {
+    await restoreCheckpoint(work, archive, { create: false });
+    await validateReusableTree(work, expected);
+  }, gh());
+  assert.equal(candidate.run, '1');
+  assert.equal(await fs.readFile(path.join(work, 'state.json'), 'utf8'), state);
+  await assert.rejects(downloadReusableTree(root, options, () => assert.fail('Must not restore into a pre-existing tree'), gh()), { code: 'EEXIST' });
+  assert.equal(await fs.readFile(path.join(work, 'state.json'), 'utf8'), state);
+});
+
+test('restored GN failure falls back to a compatible indexed checkpoint before clean preparation', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-alternate-native-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const work = path.join(root, 'work');
+  const source = path.join(root, 'source');
+  await fs.mkdir(path.join(source, 'src/out/Release'), { recursive: true });
+  await fs.mkdir(path.join(source, 'depot_tools'));
+  const identity = { sha: 'source', chromium: '158', platform: 'linux-x64', depot: 'tools' };
+  await fs.writeFile(path.join(source, 'state.json'), JSON.stringify({ ...identity, nativeKey: 'key', complete: false }));
+  await fs.writeFile(path.join(source, 'src/out/Release/compiled'), 'usable previous compilation');
+  await fs.mkdir(path.join(root, 'chromium/shell/dist'), { recursive: true });
+  await fs.writeFile(path.join(root, 'chromium/shell/dist/current.js'), 'current shell');
+  const archive = path.join(root, 'checkpoint.tar.gz');
+  saveCheckpoint(source, archive, false);
+  const options = { repository: 'owner/repo', branch: 'main', currentRun: '2', platform: 'linux-x64', key: 'key', work };
+  assert.equal(await downloadReusableTree(root, { ...options, deadline: 0 }, () => assert.fail('No expired restoration'),
+    () => assert.fail('No API call after deadline')), undefined);
+  const requests = [];
+  const gh = args => {
+    if (args[0] === 'api') requests.push(args[1]);
+    if (args[0] === 'api') return JSON.stringify(args[1].includes('/artifacts?') ? {
+      artifacts: ['native-linux-x64-key', 'reuse-linux-x64-key-1', 'checkpoint-linux-x64-1']
+        .map(name => ({ name, workflow_run: { id: 1 } })), total_count: 3,
+    } : { id: 1, head_sha: 'source', head_repository: { full_name: 'owner/repo' },
+      path: '.github/workflows/nightly-release.yml', head_branch: 'main', event: 'workflow_dispatch' });
+    const name = args[args.indexOf('--name') + 1];
+    return fs.copyFile(archive, path.join(args.at(-1), name.startsWith('native-') ? 'native.tar.gz' : 'checkpoint.tar.gz'));
+  };
+  const attempts = [];
+  const candidate = await downloadReusableTree(root, options, async (archive, candidate) => {
+    attempts.push(candidate.name);
+    await restoreCheckpoint(work, archive, { create: false });
+    await validateReusableTree(work, { ...identity, nativeKey: 'key' });
+    await configureReleaseTree({ root, work, identity: { ...identity, sha: 'current' }, key: 'key', reused: candidate, args: 'current flags',
+      generate: () => { if (candidate.name.startsWith('native-')) throw new Error('Missing GN binary'); } });
+  }, gh);
+  assert.deepEqual(attempts, ['native-linux-x64-key', 'checkpoint-linux-x64-1']);
+  assert.equal(candidate.name, 'checkpoint-linux-x64-1');
+  assert.equal(await fs.readFile(path.join(work, 'src/out/Release/compiled'), 'utf8'), 'usable previous compilation');
+  assert.equal(JSON.parse(await fs.readFile(path.join(work, 'state.json'), 'utf8')).sha, 'current');
+  assert.equal(await fs.readFile(path.join(work, 'src/flecha/shell/current.js'), 'utf8'), 'current shell');
+  assert.equal((await fs.readdir(root)).some(name => name.startsWith('native-download-')), false);
+  assert.equal(requests.length, new Set(requests).size, 'Each artifact page and run metadata is fetched once across retries');
+});
+
+test('failed-tree cleanup stops on cancellation or stage expiry before another attempt can start', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-reuse-cleanup-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const work = path.join(root, 'work');
+  for (const outcome of ['deadline', 'cancellation']) {
+    const controller = new AbortController();
+    const reason = new Error('Cancel cleanup');
+    const options = { repository: 'owner/repo', branch: 'main', currentRun: '2', platform: 'linux-x64', key: 'key', work,
+      signal: controller.signal, cleanup: directory => {
+        assert.equal(directory, work);
+        if (outcome === 'cancellation') controller.abort(reason);
+        return removeNativeTree(directory, { signal: controller.signal, deadline: outcome === 'deadline' ? 0 : undefined });
+      } };
+    const gh = args => args[0] !== 'api' ? undefined : JSON.stringify(args[1].includes('/artifacts?') ? {
+      artifacts: [{ name: 'native-linux-x64-key', workflow_run: { id: 1 } }], total_count: 1,
+    } : { id: 1, head_sha: 'source', head_repository: { full_name: 'owner/repo' },
+      path: '.github/workflows/nightly-release.yml', head_branch: 'main', event: 'workflow_dispatch' });
+    await assert.rejects(downloadReusableTree(root, options, async () => {
+      await fs.writeFile(path.join(work, 'partial'), 'owned extraction');
+      throw new Error('Extraction failed');
+    }, gh), error => outcome === 'deadline' ? error.code === 'ETIMEDOUT' : error === reason);
+    assert.equal(await fs.readFile(path.join(work, 'partial'), 'utf8'), 'owned extraction');
+    await fs.rm(work, { recursive: true });
+    for (const name of (await fs.readdir(root)).filter(name => name.startsWith('native-download-'))) {
+      await fs.rm(path.join(root, name), { recursive: true });
+    }
+  }
+});
+
+test('optional native snapshot failures retain compiler outputs and preserve existing files', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-native-snapshot-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const work = path.join(dir, 'work');
+  await fs.mkdir(work);
+  await fs.writeFile(path.join(work, 'compiled'), 'native output');
+  const archive = path.join(dir, 'native.tar.gz');
+  assert.equal(await preserveNativeOutputs(work, archive, { save: () => { throw new Error('No snapshot space'); } }), false);
+  await assert.rejects(fs.stat(archive), { code: 'ENOENT' });
+  assert.equal(await fs.readFile(path.join(work, 'compiled'), 'utf8'), 'native output');
+  assert.equal(await preserveNativeOutputs(work, archive, { stageDeadline: Date.now() }), false);
+  assert.equal(await preserveNativeOutputs(work, archive, { save: () => false }), false);
+  await assert.rejects(fs.stat(archive), { code: 'ENOENT' });
+  const cancelled = Object.assign(new Error('cancelled'), { signal: 'SIGTERM' });
+  await assert.rejects(preserveNativeOutputs(work, archive, { save: () => { throw cancelled; } }), error => error === cancelled);
+  await assert.rejects(fs.stat(archive), { code: 'ENOENT' });
+  const controller = new AbortController();
+  const reason = new Error('User cancelled snapshot');
+  await assert.rejects(preserveNativeOutputs(work, archive, { signal: controller.signal, save: () => {
+    controller.abort(reason);
+    throw reason;
+  } }), error => error === reason);
+  await assert.rejects(fs.stat(archive), { code: 'ENOENT' });
+  const unsafe = Object.assign(new Error('Snapshot process may still be running'), { code: 'REUSE_TERMINATION_FAILED' });
+  await assert.rejects(preserveNativeOutputs(work, archive, { save: () => { throw unsafe; } }), error => error === unsafe);
+  assert.equal((await fs.stat(archive)).isFile(), true);
+  await fs.rm(archive);
+  assert.equal(await preserveNativeOutputs(work, archive), true);
+  const restored = path.join(dir, 'restored');
+  await restoreCheckpoint(restored, archive);
+  assert.equal(await fs.readFile(path.join(restored, 'compiled'), 'utf8'), 'native output');
+  await fs.writeFile(archive, 'pre-existing file');
+  assert.equal(await preserveNativeOutputs(work, archive, { save: () => assert.fail('Must not overwrite existing archive') }), false);
+  assert.equal(await fs.readFile(archive, 'utf8'), 'pre-existing file');
+});
+
+test('native compression preserves the owner-selected upload hour at the deadline boundary', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-upload-reserve-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const archive = path.join(root, 'native.tar.gz');
+  const reserve = 60 * 60 * 1000;
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  assert.equal(await preserveNativeOutputs(root, archive, { stageDeadline: now + reserve,
+    save: () => assert.fail('No compression time remains after reserving the upload hour') }), false);
+  await assert.rejects(fs.stat(archive), { code: 'ENOENT' });
+  const stageDeadline = now + reserve + reserve;
+  assert.equal(await preserveNativeOutputs(root, archive, { stageDeadline, save: () => { now = stageDeadline - reserve; } }), true);
+  assert.equal(stageDeadline - now, reserve);
+  await fs.rm(archive);
+  assert.equal(await preserveNativeOutputs(root, archive, { stageDeadline: now + reserve + reserve,
+    save: () => { now += reserve + reserve; } }), false);
+  await assert.rejects(fs.stat(archive), { code: 'ENOENT' });
+});
+
+test('native checkpoint CLI recovers completed compilation after packaging failure and skips expired allowance', async t => {
+  const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-native-cli-')));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const root = path.join(dir, 'release tooling');
+  const scripts = path.join(root, 'chromium/scripts');
+  await fs.mkdir(scripts, { recursive: true });
+  for (const file of ['ci-release.mjs', 'ci-reuse.mjs']) {
+    await fs.copyFile(fileURLToPath(new URL(`../scripts/${file}`, import.meta.url)), path.join(scripts, file));
+  }
+  await fs.writeFile(path.join(root, 'chromium/CHROMIUM_VERSION'), 'fixture');
+  execFileSync('git', ['init', '--quiet', root]);
+  execFileSync('git', ['-c', 'user.name=Release test', '-c', 'user.email=release@example.invalid',
+    'commit', '--allow-empty', '-m', 'Release fixture'], { cwd: root });
+  const sha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+  const platform = process.platform === 'darwin' ? 'macos-arm64' : process.platform === 'win32' ? 'windows-x64' : 'linux-x64';
+  const workspace = path.join(dir, 'workspace');
+  const work = path.join(workspace, 'flecha-chromium');
+  await fs.mkdir(path.join(work, 'src'), { recursive: true });
+  const state = { sha, chromium: 'fixture', platform, depot: depotRevision, nativeKey: 'key', nativeComplete: true, complete: false };
+  await fs.writeFile(path.join(work, 'state.json'), JSON.stringify(state));
+  await fs.writeFile(path.join(work, 'src/compiled'), 'completed compilation, packaging failed');
+  const output = path.join(dir, 'outputs');
+  const env = { ...process.env, GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted', RUNNER_WORKSPACE: workspace,
+    FLECHA_STAGE_STARTED: String(Date.now()), GITHUB_OUTPUT: output };
+  const script = path.join(scripts, 'ci-release.mjs');
+  execFileSync(process.execPath, [script, 'native-checkpoint'], { env });
+  assert.match(await fs.readFile(output, 'utf8'), /native-key=key/);
+  const minutes = Number((await fs.readFile(output, 'utf8')).match(/upload-minutes=(\d+)/)[1]);
+  assert.ok(minutes > 0 && minutes <= 5 * 60);
+  const restored = path.join(dir, 'restored');
+  await restoreCheckpoint(restored, path.join(root, 'native.tar.gz'));
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(restored, 'state.json'), 'utf8')), state);
+  assert.equal(await fs.readFile(path.join(restored, 'src/compiled'), 'utf8'), 'completed compilation, packaging failed');
+  await fs.rm(output);
+  execFileSync(process.execPath, [script, 'native-checkpoint'], { env: { ...env, FLECHA_STAGE_STARTED: '1' } });
+  await assert.rejects(fs.stat(path.join(root, 'native.tar.gz')), { code: 'ENOENT' });
+  await assert.rejects(fs.stat(output), { code: 'ENOENT' });
+  execFileSync(process.execPath, [script, 'native-checkpoint'], { env: { ...env,
+    FLECHA_STAGE_STARTED: String(Date.now() - (5 - 1) * 60 * 60 * 1000) } });
+  await assert.rejects(fs.stat(path.join(root, 'native.tar.gz')), { code: 'ENOENT' });
+  await assert.rejects(fs.stat(output), { code: 'ENOENT' });
+});
+
+test('recovery searches trusted nightly runs and skips expired or superseded checkpoints', async () => {
+  const options = { repository: 'owner/repo', branch: 'main', currentRun: '10', platform: 'linux-x64', key: 'native-key' };
+  const run = (id, overrides = {}) => ({ id, head_sha: `sha-${id}`, head_repository: { full_name: options.repository },
+    path: '.github/workflows/nightly-release.yml', head_branch: 'main', event: 'workflow_dispatch', ...overrides });
+  const requests = [];
+  const rejected = new Map([
+    ['9', { head_branch: 'feature' }], ['8', { head_repository: { full_name: 'fork/repo' } }],
+    ['7', { event: 'pull_request' }], ['6', { path: '.github/workflows/untrusted.yml' }],
+  ]);
+  const candidates = findReusableArtifacts(options, endpoint => {
+    requests.push(endpoint);
+    if (endpoint.endsWith('page=1')) return { artifacts: ['10', ...rejected.keys()].map(id =>
+      ({ name: 'native-linux-x64-native-key', workflow_run: { id } })), total_count: 9 };
+    if (endpoint.endsWith('page=2')) return { artifacts: [
+      { name: 'reuse-linux-x64-native-key-2' }, { name: 'reuse-linux-x64-native-key-1' },
+    ].map(artifact => ({ ...artifact, workflow_run: { id: 5 } })), total_count: 9 };
+    if (endpoint.endsWith('page=3')) return { artifacts: [
+      { name: 'checkpoint-linux-x64-2', expired: true }, { name: 'checkpoint-linux-x64-1' },
+    ].map(artifact => ({ ...artifact, workflow_run: { id: 5 } })), total_count: 9 };
+    const id = endpoint.split('/').at(-1);
+    return run(Number(id), rejected.get(id));
+  });
+  assert.deepEqual((await candidates.next()).value, { run: '5', sha: 'sha-5', name: 'checkpoint-linux-x64-1', archive: 'checkpoint.tar.gz' });
+  assert.equal(requests.length, 8);
+  assert.equal(reusableArtifact([{ name: 'reuse-linux-x64-other-key-1' }, { name: 'checkpoint-linux-x64-1' }], options.platform, options.key), undefined);
+  assert.deepEqual(reusableArtifact([{ name: 'native-linux-x64-native-key' }], options.platform, options.key),
+    { name: 'native-linux-x64-native-key', archive: 'native.tar.gz' });
+  assert.equal((await findReusableArtifacts(options, () => ({ artifacts: [], total_count: 0 })).next()).done, true);
+});
+
+test('a restored native tree retains compiler outputs and adopts current shell, build metadata and source provenance', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-reconfigure-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const original = path.join(root, 'original');
+  const work = path.join(root, 'restored work');
+  const src = path.join(work, 'src');
+  const out = path.join(src, 'out/Release');
+  await fs.mkdir(path.join(original, 'src/out/Release'), { recursive: true });
+  await fs.mkdir(path.join(original, 'depot_tools'));
+  await fs.mkdir(path.join(original, 'src/flecha/shell'), { recursive: true });
+  await fs.mkdir(path.join(root, 'chromium/shell/dist'), { recursive: true });
+  const identity = { sha: 'current-source', chromium: '158', platform: 'linux-x64', depot: 'tools' };
+  await fs.writeFile(path.join(original, 'state.json'), JSON.stringify({ ...identity, sha: 'previous-source', nativeKey: 'key', complete: true }));
+  await fs.writeFile(path.join(original, 'src/out/Release/chrome.o'), 'retained compiler output');
+  await fs.writeFile(path.join(original, 'src/flecha/shell/removed.js'), 'stale shell');
+  await fs.writeFile(path.join(root, 'chromium/shell/dist/current.js'), 'current shell');
+  const archive = path.join(root, 'native.tar.gz');
+  saveCheckpoint(original, archive, false);
+  await restoreCheckpoint(work, archive);
+  let generated = false;
+  const reused = { sha: 'previous-source', run: '123' };
+  const configure = { root, work, identity, key: 'key', reused, args: 'current version and build number', generate: () => { generated = true; } };
+  await assert.rejects(validateReusableTree(work, { ...identity, sha: reused.sha, nativeKey: 'wrong' }), /nativeKey does not match/);
+  assert.equal(generated, false);
+  await validateReusableTree(work, { ...identity, sha: reused.sha, nativeKey: 'key' });
+  await configureReleaseTree(configure);
+  assert.equal(generated, true);
+  assert.equal(await fs.readFile(path.join(out, 'chrome.o'), 'utf8'), 'retained compiler output');
+  assert.equal(await fs.readFile(path.join(out, 'args.gn'), 'utf8'), 'current version and build number');
+  assert.equal(await fs.readFile(path.join(src, 'flecha/shell/current.js'), 'utf8'), 'current shell');
+  await assert.rejects(fs.stat(path.join(src, 'flecha/shell/removed.js')), { code: 'ENOENT' });
+  const state = JSON.parse(await fs.readFile(path.join(work, 'state.json'), 'utf8'));
+  checkIdentity(state, identity);
+  assert.equal(state.complete, false);
+  assert.deepEqual(state.reusedFrom, reused);
+});
 
 test('completed platforms pass through later build and checkpoint CLI stages without source', async t => {
   // Node resolves module filenames through macOS's /var -> /private/var alias.
@@ -18,6 +484,7 @@ test('completed platforms pass through later build and checkpoint CLI stages wit
   await fs.mkdir(scripts, { recursive: true });
   const script = path.join(scripts, 'ci-release.mjs');
   await fs.copyFile(fileURLToPath(new URL('../scripts/ci-release.mjs', import.meta.url)), script);
+  await fs.copyFile(fileURLToPath(new URL('../scripts/ci-reuse.mjs', import.meta.url)), path.join(scripts, 'ci-reuse.mjs'));
   await fs.writeFile(path.join(root, 'chromium/CHROMIUM_VERSION'), 'fixture');
   execFileSync('git', ['init', '--quiet', root]);
   execFileSync('git', ['-c', 'user.name=Release test', '-c', 'user.email=release@example.invalid',
