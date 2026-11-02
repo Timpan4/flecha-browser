@@ -82,7 +82,7 @@ async function start() {
       };
   const store = new Store(persistence);
   /** Physical tabs can be mapped before they are ready; consumers share their pending setup. */
-  const tabSetups = new Map<string, Promise<number>>();
+  const tabSetups = new Map<string, { promise: Promise<number>; transferred: boolean }>();
   let nativeHost: ReturnType<typeof registerNativeHost> | undefined;
   let features: Features | undefined;
   // Asked of macOS on start and whenever a window takes focus (the user may have changed it in System Settings).
@@ -328,28 +328,38 @@ async function start() {
   /** Starts setup once per logical tab, before its first asynchronous operation can yield. */
   function setupTab(id: string, setup: () => Promise<number>): Promise<number> {
     const pending = tabSetups.get(id);
-    if (pending) return pending;
-    const task = Promise.resolve().then(setup).finally(() => {
-      if (tabSetups.get(id) === task) tabSetups.delete(id);
-    });
-    tabSetups.set(id, task);
-    return task;
+    if (pending) return pending.promise;
+    const entry = {
+      transferred: false,
+      promise: Promise.resolve().then(setup).finally(() => {
+        if (tabSetups.get(id) === entry) tabSetups.delete(id);
+      }),
+    };
+    tabSetups.set(id, entry);
+    return entry.promise;
   }
   /** Marks before navigating, and leaves a tab taken by the user to its new owner. */
   async function prepareChromeTab(id: string, chromeId: number, url?: string, active?: boolean) {
     const agent = !!store.state.tabs[id]?.agent;
     await markAgentTab(id, chromeId);
+    if (tabSetups.get(id)?.transferred) {
+      // A late mark must not restrict the page after it has moved into a Flechinha.
+      await chrome.flechaPrivate.setAgentTab(chromeId, false);
+      throw new Error('Tab transferred during setup');
+    }
     if (!store.state.tabs[id] || live.get(id) !== chromeId) throw new Error('Tab ownership changed during setup');
     if (agent && !store.state.tabs[id].agent) {
       await chrome.flechaPrivate.setAgentTab(chromeId, false);
-      return;
     }
     if (url) await chrome.tabs.update(chromeId, { url, ...(active === undefined ? {} : { active }) });
   }
   /** A window's start tab follows the same readiness and failure rules as a newly created tab. */
   function adoptChromeTab(id: string, chromeId: number, url?: string, active?: boolean) {
+    const pending = tabSetups.get(id);
+    if (pending) return pending.promise;
+    // Startup can visit several blank tabs in one turn; reserve the first before yielding.
+    live.set(id, chromeId);
     return setupTab(id, async () => {
-      live.set(id, chromeId);
       try {
         await prepareChromeTab(id, chromeId, url, active);
         rememberLive();
@@ -500,6 +510,7 @@ async function start() {
 
   /** Removes a failed setup's physical tab without closing its window or forgetting a newer tab. */
   async function removeFailedTab(id: string, chromeId: number) {
+    if (tabSetups.get(id)?.transferred) return;
     if (live.get(id) === chromeId) {
       live.delete(id);
       livePartition.delete(id);
@@ -512,6 +523,7 @@ async function start() {
       if (!tab) return;
       const tabs = await chrome.tabs.query({ windowId: tab.windowId });
       if (tabs.length === 1 && !placeholders.has(tab.windowId)) await makePlaceholder(tab.windowId);
+      if (tabSetups.get(id)?.transferred) return;
       ours.add(chromeId);
       await chrome.tabs.remove(chromeId).catch((error) => {
         ours.delete(chromeId);
@@ -616,7 +628,7 @@ async function start() {
     if (!active) return showPlaceholder(chromeWindowId);
     // Both halves of a split are on screen, so both need a page, here.
     for (const id of store.visibleTabIds(windowId)) {
-      await tabSetups.get(id);
+      await tabSetups.get(id)?.promise;
       const chromeId = live.get(id);
       if (chromeId === undefined) await openChromeTab(id, id === active.id, windowId);
       else await moveChromeTab(chromeId, chromeWindowId);
@@ -1066,7 +1078,7 @@ async function start() {
     quit,
     navigate: async (input: string) => {
       const id = store.activeTabIn(here())?.id;
-      if (id) await tabSetups.get(id);
+      if (id) await tabSetups.get(id)?.promise;
       const chromeId = id ? live.get(id) : undefined;
       if (chromeId === undefined) return openTab(input);
       await chrome.tabs.update(chromeId, { url: resolveInput(input, store.state.searchEngine) });
@@ -1416,7 +1428,7 @@ async function start() {
       chromeTab: async (id) => {
         await syncing;
         const pending = tabSetups.get(id);
-        if (pending) return pending;
+        if (pending) return pending.promise;
         return live.get(id) ?? (store.state.tabs[id] ? openChromeTab(id, false, store.locate(id)?.windowId ?? store.focusedWindowId) : undefined);
       },
       activate: (id) => void store.activate(id),
@@ -1467,6 +1479,8 @@ async function start() {
     },
     // Into a Flechinha: the page leaves its Space without closing.
     releaseTab: (id) => {
+      const setup = tabSetups.get(id);
+      if (setup) setup.transferred = true;
       // The page stays open in the Flechinha, as yours: other extensions run in it again.
       if (store.state.tabs[id]?.agent) unmarkAgentTab(id);
       live.delete(id);

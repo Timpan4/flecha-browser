@@ -302,6 +302,46 @@ try {
     await evaluate(worker, 'releaseMark(); chrome.flechaPrivate.setAgentTab = originalMark; chrome.tabs.update = originalUpdate;');
     await Promise.allSettled([opening, navigating]);
   }
+  for (const takeover of ['release', 'pin']) {
+    const address = base + '/takeover-' + takeover;
+    await evaluate(worker, `
+      globalThis.originalMark = chrome.flechaPrivate.setAgentTab;
+      globalThis.markStarted = new Promise(resolve => { globalThis.notifyMark = resolve; });
+      globalThis.markGate = new Promise(resolve => { globalThis.releaseMark = resolve; });
+      chrome.flechaPrivate.setAgentTab = async (id, agent) => {
+        if (agent) { notifyMark(id); await markGate; }
+        return originalMark(id, agent);
+      };
+      void 0;
+    `);
+    const takingOver = client.callTool({ name: 'open_tab', arguments: { url: address } });
+    let transferredWindow;
+    try {
+      const physical = await evaluate(worker, 'markStarted');
+      state = await stateWhere(`s => Object.values(s.tabs).some(t => t.url === ${JSON.stringify(address)})`);
+      const logical = Object.values(state.tabs).find(t => t.url === address).id;
+      if (takeover === 'release') transferredWindow = await rpc('openFlechinha', undefined, logical);
+      else await rpc('togglePin', logical);
+      await evaluate(worker, 'releaseMark()');
+      const result = await takingOver;
+      const tab = await evaluate(worker, `chrome.tabs.get(${physical})`);
+      if (takeover === 'release') {
+        assert.equal(result.isError, true, 'the agent no longer owns the transferred tab');
+        assert.equal(tab.windowId, transferredWindow, 'the transferred page survives setup cleanup');
+      } else {
+        assert.ok(!result.isError);
+        assert.equal(tab.url, address, 'pinning during setup still loads the requested page');
+        await rpc('togglePin', logical);
+        await call('close_tab', { tabId: logical });
+        await stateWhere(`s => !s.tabs[${JSON.stringify(logical)}]`);
+      }
+      console.log(`PASS ${takeover} during setup preserves the user's tab`);
+    } finally {
+      await evaluate(worker, 'releaseMark(); chrome.flechaPrivate.setAgentTab = originalMark;');
+      await Promise.allSettled([takingOver]);
+      if (transferredWindow !== undefined) await evaluate(worker, `chrome.windows.remove(${transferredWindow}).catch(() => undefined)`);
+    }
+  }
   for (const failure of ['mark', 'navigate']) {
     const address = base + '/refused-' + failure;
     const before = await evaluate(worker, 'chrome.tabs.query({}).then(tabs => tabs.map(t => t.id).sort())');
