@@ -43,8 +43,9 @@ export async function verifyRelease(dir, platforms, { sha, chromium }) {
 // without assets, a single API call, so a concurrent platform's create fails
 // instead of leaving a second draft. Every platform then uploads its own assets.
 // The release is public during uploads, so the platform's SHA256SUMS file goes
-// last and marks it complete. An interrupted upload leaves no checksum file, and
-// a retry removes it before replacing the platform's other files.
+// last and marks it complete. A failed upload of the other files leaves no
+// checksum file, and a failed checksum upload triggers a best-effort deletion.
+// A retry removes any listed checksum asset before replacing the other files.
 export function publishAssets({ repository, tag, sha, title, notes, files, checksums }, gh) {
   let createError;
   try {
