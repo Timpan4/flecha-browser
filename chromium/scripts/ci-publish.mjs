@@ -1,4 +1,4 @@
-// Only a complete set of checksummed packages from this source commit can be released.
+// Only a platform's complete, checksummed package from this source commit can be released.
 import fs from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import path from 'node:path';
@@ -39,25 +39,46 @@ export async function verifyRelease(dir, platforms, { sha, chromium }) {
   if (files.size) throw new Error(`Unexpected release assets: ${[...files].join(', ')}`);
 }
 
+// Platforms publish separately. The first to finish creates the run's release
+// without assets, a single API call, so a concurrent platform's create fails
+// instead of leaving a second draft. Every platform then uploads its own assets.
+export function publishAssets({ repository, tag, sha, title, notes, assets }, gh) {
+  try {
+    gh(['release', 'create', tag, '--repo', repository, '--target', sha, '--title', title,
+      '--prerelease', '--latest=false', '--notes-file', notes]);
+  } catch (error) {
+    // Another platform, or an earlier attempt of this job, created it first.
+    try { gh(['release', 'view', tag, '--repo', repository, '--json', 'tagName']); } catch { throw error; }
+  }
+  const { object } = JSON.parse(gh(['api', `repos/${repository}/git/ref/tags/${tag}`]));
+  if (object?.type !== 'commit' || object.sha !== sha) throw new Error(`Release tag ${tag} does not point to ${sha}.`);
+  // Replaces only this platform's assets, left partial by a failed earlier attempt.
+  gh(['release', 'upload', tag, ...assets, '--repo', repository, '--clobber']);
+}
+
 async function main() {
   const root = fileURLToPath(new URL('../..', import.meta.url));
   const platforms = JSON.parse(await fs.readFile(path.join(root, 'chromium/build/ci-platforms.json'), 'utf8'));
+  const selected = platforms.filter(({ platform }) => platform === process.env.FLECHA_PLATFORM);
+  if (selected.length !== 1) throw new Error(`Unknown release platform: ${process.env.FLECHA_PLATFORM}`);
   const chromium = (await fs.readFile(path.join(root, 'chromium/CHROMIUM_VERSION'), 'utf8')).trim();
   const { GITHUB_SHA: sha, GITHUB_RUN_ID: run, GITHUB_REPOSITORY: repository, GITHUB_SERVER_URL: server } = process.env;
   if (!sha || !/^\d+$/.test(run || '') || !repository || !server) throw new Error('Missing GitHub release context.');
   const dir = path.join(root, 'release');
-  await verifyRelease(dir, platforms, { sha, chromium });
+  await verifyRelease(dir, selected, { sha, chromium });
   const tag = `nightly-${run}`;
   const notes = path.join(root, 'release-notes.md');
   await fs.writeFile(notes, `Nightly build of Flecha from ${sha}, based on Chromium ${chromium}.\n\n` +
     `Build: ${server}/${repository}/actions/runs/${run}\n\n` +
+    'Each platform is added when its own build finishes, so a platform can be missing while it still builds or after its build fails.\n\n' +
     'Linux and Windows are portable packages. Extract them to a writable directory and run flecha or Flecha.cmd. Their profiles stay beside the browser. Windows registers the bundled native host for your user.\n\n' +
     'The macOS app is ad hoc signed and is not notarized. Its native host can be registered with chromium/scripts/install-native-host.sh --app /path/to/Flecha.app from the matching source checkout.\n\n' +
     'These prereleases do not use the stable Sparkle update feed. SHA256SUMS files cover each package and its source provenance.\n');
   const assets = (await fs.readdir(dir)).map(file => path.join(dir, file));
-  execFileSync('gh', ['release', 'create', tag, ...assets, '--repo', repository, '--target', sha,
-    '--title', `Nightly ${new Date().toISOString().slice(0, 10)} (${run})`, '--prerelease', '--latest=false', '--notes-file', notes], { stdio: 'inherit' });
-  await fs.appendFile(process.env.GITHUB_STEP_SUMMARY, `Published [${tag}](${server}/${repository}/releases/tag/${tag}) from ${sha}.\n`);
+  publishAssets({ repository, tag, sha, notes, assets, title: `Nightly ${new Date().toISOString().slice(0, 10)} (${run})` },
+    args => execFileSync('gh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] }));
+  await fs.appendFile(process.env.GITHUB_STEP_SUMMARY,
+    `Published ${selected[0].platform} to [${tag}](${server}/${repository}/releases/tag/${tag}) from ${sha}.\n`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();

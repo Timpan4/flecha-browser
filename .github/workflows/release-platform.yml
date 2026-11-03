@@ -1,0 +1,155 @@
+name: Release platform
+
+# Builds and publishes one platform. Each platform runs its own stage chain,
+# so a finished platform publishes without waiting for slower ones.
+on:
+  workflow_call:
+    inputs:
+      platforms:
+        description: A one-entry list from chromium/build/ci-platforms.json.
+        type: string
+        required: true
+
+jobs:
+  source:
+    uses: ./.github/workflows/release-stage.yml
+    permissions:
+      contents: read
+      actions: write
+    with:
+      stage: 0
+      previous: 0
+      platforms: ${{ inputs.platforms }}
+
+  build-1:
+    needs: source
+    uses: ./.github/workflows/release-stage.yml
+    permissions:
+      contents: read
+      actions: write
+    with:
+      stage: 1
+      previous: 0
+      platforms: ${{ inputs.platforms }}
+
+  build-2:
+    needs: build-1
+    uses: ./.github/workflows/release-stage.yml
+    permissions:
+      contents: read
+      actions: write
+    with:
+      stage: 2
+      previous: 1
+      platforms: ${{ inputs.platforms }}
+
+  build-3:
+    needs: build-2
+    uses: ./.github/workflows/release-stage.yml
+    permissions:
+      contents: read
+      actions: write
+    with:
+      stage: 3
+      previous: 2
+      platforms: ${{ inputs.platforms }}
+
+  build-4:
+    needs: build-3
+    uses: ./.github/workflows/release-stage.yml
+    permissions:
+      contents: read
+      actions: write
+    with:
+      stage: 4
+      previous: 3
+      platforms: ${{ inputs.platforms }}
+
+  build-5:
+    needs: build-4
+    uses: ./.github/workflows/release-stage.yml
+    permissions:
+      contents: read
+      actions: write
+    with:
+      stage: 5
+      previous: 4
+      platforms: ${{ inputs.platforms }}
+
+  build-6:
+    needs: build-5
+    uses: ./.github/workflows/release-stage.yml
+    permissions:
+      contents: read
+      actions: write
+    with:
+      stage: 6
+      previous: 5
+      platforms: ${{ inputs.platforms }}
+
+  build-7:
+    needs: build-6
+    uses: ./.github/workflows/release-stage.yml
+    permissions:
+      contents: read
+      actions: write
+    with:
+      stage: 7
+      previous: 6
+      platforms: ${{ inputs.platforms }}
+
+  build-8:
+    needs: build-7
+    uses: ./.github/workflows/release-stage.yml
+    permissions:
+      contents: read
+      actions: write
+    with:
+      stage: 8
+      previous: 7
+      platforms: ${{ inputs.platforms }}
+
+  build-9:
+    needs: build-8
+    uses: ./.github/workflows/release-stage.yml
+    permissions:
+      contents: read
+      actions: write
+    with:
+      stage: 9
+      previous: 8
+      platforms: ${{ inputs.platforms }}
+
+  build-10:
+    needs: build-9
+    uses: ./.github/workflows/release-stage.yml
+    permissions:
+      contents: read
+      actions: write
+    with:
+      stage: 10
+      previous: 9
+      platforms: ${{ inputs.platforms }}
+
+  publish:
+    needs: build-10
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      FLECHA_PLATFORM: ${{ fromJSON(inputs.platforms)[0].platform }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-${{ env.FLECHA_PLATFORM }}
+          path: release
+      - name: Verify this platform and add it to the nightly prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node chromium/scripts/ci-publish.mjs

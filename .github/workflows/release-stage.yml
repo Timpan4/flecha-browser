@@ -96,7 +96,7 @@ jobs:
           overwrite: true
           if-no-files-found: ignore
           compression-level: 0
-          # A finished platform must remain available while the other platforms build.
+          # A finished platform must remain available until its publish job runs.
           # 35 days is GitHub's maximum lifetime for the entire workflow.
           retention-days: 35
       - name: Save checkpoint

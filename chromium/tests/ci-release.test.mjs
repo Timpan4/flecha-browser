@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { checkIdentity, compile, configureReleaseTree, depotRevision, prepareNativeTree, preserveNativeOutputs, releaseConfiguration, saveCheckpoint, restoreCheckpoint, validateReusableTree } from '../scripts/ci-release.mjs';
 import { createReuseBudget, downloadReusableTree, findReusableArtifacts, nativeKey, removeNativeTree, reusableArtifact, runNativeCommand, withoutGitHubTokens } from '../scripts/ci-reuse.mjs';
-import { verifyRelease } from '../scripts/ci-publish.mjs';
+import { publishAssets, verifyRelease } from '../scripts/ci-publish.mjs';
 
 test('the owner-selected reuse budget leaves clean preparation time and never exceeds the stage deadline', () => {
   const started = Date.now();
@@ -632,4 +632,28 @@ test('publication requires every platform, matching provenance and untampered pa
   await assert.rejects(verifyRelease(dir, platforms, expected), /Checksum mismatch/);
   await fs.rm(path.join(dir, 'Flecha-windows-x64.zip'));
   await assert.rejects(verifyRelease(dir, [platforms[1]], expected), /Missing release asset/);
+});
+
+test('a platform joins a release another platform created, but only when its tag points to the source commit', () => {
+  const options = { repository: 'owner/repo', tag: 'nightly-1', sha: 'source', title: 'Nightly', notes: 'notes.md', assets: ['a', 'b'] };
+  const fakeGh = ({ created, exists, tagSha }) => {
+    const uploads = [];
+    const gh = args => {
+      if (args[1] === 'create') { if (!created) throw new Error('already exists'); return ''; }
+      if (args[1] === 'view') { if (!exists) throw new Error('not found'); return '{}'; }
+      if (args[0] === 'api') return JSON.stringify({ object: { type: 'commit', sha: tagSha } });
+      uploads.push(args);
+      return '';
+    };
+    return { gh, uploads };
+  };
+  for (const created of [true, false]) {
+    const { gh, uploads } = fakeGh({ created, exists: true, tagSha: 'source' });
+    publishAssets(options, gh);
+    assert.deepEqual(uploads, [['release', 'upload', 'nightly-1', 'a', 'b', '--repo', 'owner/repo', '--clobber']]);
+  }
+  const moved = fakeGh({ created: false, exists: true, tagSha: 'other' });
+  assert.throws(() => publishAssets(options, moved.gh), /does not point to source/);
+  assert.deepEqual(moved.uploads, []);
+  assert.throws(() => publishAssets(options, fakeGh({ created: false, exists: false }).gh), /already exists/);
 });
