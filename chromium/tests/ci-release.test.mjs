@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { checkIdentity, compile, configureReleaseTree, depotRevision, prepareNativeTree, preserveNativeOutputs, releaseConfiguration, saveCheckpoint, restoreCheckpoint, validateReusableTree } from '../scripts/ci-release.mjs';
 import { createReuseBudget, downloadReusableTree, findReusableArtifacts, nativeKey, removeNativeTree, reusableArtifact, runNativeCommand, withoutGitHubTokens } from '../scripts/ci-reuse.mjs';
-import { verifyRelease } from '../scripts/ci-publish.mjs';
+import { publishAssets, verifyRelease } from '../scripts/ci-publish.mjs';
 
 test('the owner-selected reuse budget leaves clean preparation time and never exceeds the stage deadline', () => {
   const started = Date.now();
@@ -632,4 +632,49 @@ test('publication requires every platform, matching provenance and untampered pa
   await assert.rejects(verifyRelease(dir, platforms, expected), /Checksum mismatch/);
   await fs.rm(path.join(dir, 'Flecha-windows-x64.zip'));
   await assert.rejects(verifyRelease(dir, [platforms[1]], expected), /Missing release asset/);
+});
+
+test('a platform joins its run release at the source commit and lists its checksums only after its other files', () => {
+  const options = { repository: 'owner/repo', tag: 'nightly-1', sha: 'source', title: 'Nightly', notes: 'notes.md',
+    files: ['dir/Flecha-linux-x64.tar.gz', 'dir/linux-x64.json'], checksums: 'dir/linux-x64-SHA256SUMS' };
+  const upload = ['release', 'upload', 'nightly-1', 'dir/Flecha-linux-x64.tar.gz', 'dir/linux-x64.json', '--repo', 'owner/repo', '--clobber'];
+  const uploadChecksums = ['release', 'upload', 'nightly-1', 'dir/linux-x64-SHA256SUMS', '--repo', 'owner/repo'];
+  const fakeGh = ({ created = true, exists = true, tagSha = 'source', assets = [], failUpload = false, failChecksums = false } = {}) => {
+    const writes = [];
+    const gh = args => {
+      if (args[1] === 'create') { if (!created) throw new Error('already exists'); return ''; }
+      if (args[1] === 'view') { if (!exists) throw new Error('not found'); return JSON.stringify({ assets: assets.map(name => ({ name })) }); }
+      if (args[0] === 'api') return JSON.stringify({ object: { type: 'commit', sha: tagSha } });
+      writes.push(args);
+      if (failUpload && args.includes('--clobber')) throw new Error('upload interrupted');
+      if (failChecksums && args[1] === 'upload' && !args.includes('--clobber')) throw new Error('checksum upload interrupted');
+      return '';
+    };
+    return { gh, writes };
+  };
+
+  for (const created of [true, false]) {
+    const { gh, writes } = fakeGh({ created, assets: ['Flecha-windows-x64.zip', 'windows-x64-SHA256SUMS'] });
+    publishAssets(options, gh);
+    assert.deepEqual(writes, [upload, uploadChecksums]);
+  }
+
+  const interrupted = fakeGh({ failUpload: true });
+  assert.throws(() => publishAssets(options, interrupted.gh), /upload interrupted/);
+  assert.deepEqual(interrupted.writes, [upload]);
+
+  // A failed checksum upload can leave an unfinished asset under the marker's name.
+  const deleteChecksums = ['release', 'delete-asset', 'nightly-1', 'linux-x64-SHA256SUMS', '--repo', 'owner/repo', '--yes'];
+  const unfinished = fakeGh({ failChecksums: true });
+  assert.throws(() => publishAssets(options, unfinished.gh), /checksum upload interrupted/);
+  assert.deepEqual(unfinished.writes, [upload, uploadChecksums, deleteChecksums]);
+
+  const retry = fakeGh({ created: false, assets: ['Flecha-linux-x64.tar.gz', 'linux-x64-SHA256SUMS'] });
+  publishAssets(options, retry.gh);
+  assert.deepEqual(retry.writes, [deleteChecksums, upload, uploadChecksums]);
+
+  const moved = fakeGh({ created: false, tagSha: 'other' });
+  assert.throws(() => publishAssets(options, moved.gh), /does not point to source/);
+  assert.deepEqual(moved.writes, []);
+  assert.throws(() => publishAssets(options, fakeGh({ created: false, exists: false }).gh), /already exists/);
 });
