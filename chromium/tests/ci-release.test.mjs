@@ -639,7 +639,7 @@ test('a platform joins its run release at the source commit and lists its checks
     files: ['dir/Flecha-linux-x64.tar.gz', 'dir/linux-x64.json'], checksums: 'dir/linux-x64-SHA256SUMS' };
   const upload = ['release', 'upload', 'nightly-1', 'dir/Flecha-linux-x64.tar.gz', 'dir/linux-x64.json', '--repo', 'owner/repo', '--clobber'];
   const uploadChecksums = ['release', 'upload', 'nightly-1', 'dir/linux-x64-SHA256SUMS', '--repo', 'owner/repo'];
-  const fakeGh = ({ created = true, exists = true, tagSha = 'source', assets = [], failUpload = false } = {}) => {
+  const fakeGh = ({ created = true, exists = true, tagSha = 'source', assets = [], failUpload = false, failChecksums = false } = {}) => {
     const writes = [];
     const gh = args => {
       if (args[1] === 'create') { if (!created) throw new Error('already exists'); return ''; }
@@ -647,6 +647,7 @@ test('a platform joins its run release at the source commit and lists its checks
       if (args[0] === 'api') return JSON.stringify({ object: { type: 'commit', sha: tagSha } });
       writes.push(args);
       if (failUpload && args.includes('--clobber')) throw new Error('upload interrupted');
+      if (failChecksums && args[1] === 'upload' && !args.includes('--clobber')) throw new Error('checksum upload interrupted');
       return '';
     };
     return { gh, writes };
@@ -662,9 +663,15 @@ test('a platform joins its run release at the source commit and lists its checks
   assert.throws(() => publishAssets(options, interrupted.gh), /upload interrupted/);
   assert.deepEqual(interrupted.writes, [upload]);
 
+  // A failed checksum upload can leave an unfinished asset under the marker's name.
+  const deleteChecksums = ['release', 'delete-asset', 'nightly-1', 'linux-x64-SHA256SUMS', '--repo', 'owner/repo', '--yes'];
+  const unfinished = fakeGh({ failChecksums: true });
+  assert.throws(() => publishAssets(options, unfinished.gh), /checksum upload interrupted/);
+  assert.deepEqual(unfinished.writes, [upload, uploadChecksums, deleteChecksums]);
+
   const retry = fakeGh({ created: false, assets: ['Flecha-linux-x64.tar.gz', 'linux-x64-SHA256SUMS'] });
   publishAssets(options, retry.gh);
-  assert.deepEqual(retry.writes, [['release', 'delete-asset', 'nightly-1', 'linux-x64-SHA256SUMS', '--repo', 'owner/repo', '--yes'], upload, uploadChecksums]);
+  assert.deepEqual(retry.writes, [deleteChecksums, upload, uploadChecksums]);
 
   const moved = fakeGh({ created: false, tagSha: 'other' });
   assert.throws(() => publishAssets(options, moved.gh), /does not point to source/);

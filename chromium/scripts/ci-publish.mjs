@@ -67,7 +67,14 @@ export function publishAssets({ repository, tag, sha, title, notes, files, check
     gh(['release', 'delete-asset', tag, marker, '--repo', repository, '--yes']);
   }
   gh(['release', 'upload', tag, ...files, '--repo', repository, '--clobber']);
-  gh(['release', 'upload', tag, checksums, '--repo', repository]);
+  try {
+    gh(['release', 'upload', tag, checksums, '--repo', repository]);
+  } catch (error) {
+    // A failed upload can leave an empty asset in GitHub's 'starter' state under this name.
+    // Remove it so it cannot pass for a finished platform; the original failure is what matters.
+    try { gh(['release', 'delete-asset', tag, marker, '--repo', repository, '--yes']); } catch {}
+    throw error;
+  }
 }
 
 async function main() {
@@ -84,7 +91,7 @@ async function main() {
   const notes = path.join(root, 'release-notes.md');
   await fs.writeFile(notes, `Nightly build of Flecha from ${sha}, based on Chromium ${chromium}.\n\n` +
     `Build: ${server}/${repository}/actions/runs/${run}\n\n` +
-    'Each platform is added when its own build finishes, so a platform can be missing while it still builds or after its build fails. A platform is complete only when its SHA256SUMS file is listed, because that file is uploaded last.\n\n' +
+    'Each platform is added when its own build finishes, so a platform can be missing while it still builds or after its build fails. Each platform uploads its SHA256SUMS file last, so a platform is complete only when that file downloads and its checksums verify.\n\n' +
     'Linux and Windows are portable packages. Extract them to a writable directory and run flecha or Flecha.cmd. Their profiles stay beside the browser. Windows registers the bundled native host for your user.\n\n' +
     'The macOS app is ad hoc signed and is not notarized. Its native host can be registered with chromium/scripts/install-native-host.sh --app /path/to/Flecha.app from the matching source checkout.\n\n' +
     'These prereleases do not use the stable Sparkle update feed. SHA256SUMS files cover each package and its source provenance.\n');
