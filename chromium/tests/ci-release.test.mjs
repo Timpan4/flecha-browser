@@ -634,26 +634,40 @@ test('publication requires every platform, matching provenance and untampered pa
   await assert.rejects(verifyRelease(dir, [platforms[1]], expected), /Missing release asset/);
 });
 
-test('a platform joins a release another platform created, but only when its tag points to the source commit', () => {
-  const options = { repository: 'owner/repo', tag: 'nightly-1', sha: 'source', title: 'Nightly', notes: 'notes.md', assets: ['a', 'b'] };
-  const fakeGh = ({ created, exists, tagSha }) => {
-    const uploads = [];
+test('a platform joins its run release at the source commit and lists its checksums only after its other files', () => {
+  const options = { repository: 'owner/repo', tag: 'nightly-1', sha: 'source', title: 'Nightly', notes: 'notes.md',
+    files: ['dir/Flecha-linux-x64.tar.gz', 'dir/linux-x64.json'], checksums: 'dir/linux-x64-SHA256SUMS' };
+  const upload = ['release', 'upload', 'nightly-1', 'dir/Flecha-linux-x64.tar.gz', 'dir/linux-x64.json', '--repo', 'owner/repo', '--clobber'];
+  const uploadChecksums = ['release', 'upload', 'nightly-1', 'dir/linux-x64-SHA256SUMS', '--repo', 'owner/repo'];
+  const fakeGh = ({ created = true, exists = true, tagSha = 'source', assets = [], failUpload = false } = {}) => {
+    const writes = [];
     const gh = args => {
       if (args[1] === 'create') { if (!created) throw new Error('already exists'); return ''; }
-      if (args[1] === 'view') { if (!exists) throw new Error('not found'); return '{}'; }
+      if (args[1] === 'view') { if (!exists) throw new Error('not found'); return JSON.stringify({ assets: assets.map(name => ({ name })) }); }
       if (args[0] === 'api') return JSON.stringify({ object: { type: 'commit', sha: tagSha } });
-      uploads.push(args);
+      writes.push(args);
+      if (failUpload && args.includes('--clobber')) throw new Error('upload interrupted');
       return '';
     };
-    return { gh, uploads };
+    return { gh, writes };
   };
+
   for (const created of [true, false]) {
-    const { gh, uploads } = fakeGh({ created, exists: true, tagSha: 'source' });
+    const { gh, writes } = fakeGh({ created, assets: ['Flecha-windows-x64.zip', 'windows-x64-SHA256SUMS'] });
     publishAssets(options, gh);
-    assert.deepEqual(uploads, [['release', 'upload', 'nightly-1', 'a', 'b', '--repo', 'owner/repo', '--clobber']]);
+    assert.deepEqual(writes, [upload, uploadChecksums]);
   }
-  const moved = fakeGh({ created: false, exists: true, tagSha: 'other' });
+
+  const interrupted = fakeGh({ failUpload: true });
+  assert.throws(() => publishAssets(options, interrupted.gh), /upload interrupted/);
+  assert.deepEqual(interrupted.writes, [upload]);
+
+  const retry = fakeGh({ created: false, assets: ['Flecha-linux-x64.tar.gz', 'linux-x64-SHA256SUMS'] });
+  publishAssets(options, retry.gh);
+  assert.deepEqual(retry.writes, [['release', 'delete-asset', 'nightly-1', 'linux-x64-SHA256SUMS', '--repo', 'owner/repo', '--yes'], upload, uploadChecksums]);
+
+  const moved = fakeGh({ created: false, tagSha: 'other' });
   assert.throws(() => publishAssets(options, moved.gh), /does not point to source/);
-  assert.deepEqual(moved.uploads, []);
+  assert.deepEqual(moved.writes, []);
   assert.throws(() => publishAssets(options, fakeGh({ created: false, exists: false }).gh), /already exists/);
 });
