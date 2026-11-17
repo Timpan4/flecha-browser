@@ -441,10 +441,10 @@ try {
     assert.equal(refused.isError, true, name);
     assert.match(refused.content[0].text, /This tab is visible/, name);
   }
-  const allowed = await call('evaluate', { ...target, expression: 'document.activeElement.id', allowVisibleTab: true });
-  assert.equal(allowed.content[0].text, 'draft');
+  await call('type', { ...target, selector: '#draft', text: 'approved', clear: true, allowVisibleTab: true });
+  await draftIs('approved');
   x11('type', 'f');
-  await draftIs('abcdef');
+  await draftIs('approvedf');
   await yours('refused operations on a visible tab');
   console.log('PASS MCP leaves the visible draft alone unless explicitly allowed to act on it');
 
@@ -460,10 +460,21 @@ try {
   `);
   const pendingClick = client.callTool({ name: 'click', arguments: { tabId: race, selector: '#count' } });
   try {
-    await evaluate(worker, 'attachStarted');
+    await Promise.race([
+      evaluate(worker, 'attachStarted'),
+      pendingClick.then((result) => assert.fail(`Click finished before debugger attach: ${result.content[0]?.text}`)),
+    ]);
     await rpc('activate', race);
     await stateWhere(`s => s.spaces.find(sp => sp.id === s.activeSpaceId).activeTabId === ${JSON.stringify(race)}`);
-    assert.equal(await evaluate(racePage, 'document.visibilityState'), 'visible');
+    await evaluate(racePage, `new Promise(resolve => {
+      const visible = () => {
+        if (document.visibilityState !== 'visible') return;
+        document.removeEventListener('visibilitychange', visible);
+        resolve(true);
+      };
+      document.addEventListener('visibilitychange', visible);
+      visible();
+    })`);
     await evaluate(worker, 'releaseAttach()');
     const result = await pendingClick;
     assert.equal(result.isError, true, 'the pending click must stop when its tab becomes visible');
@@ -489,8 +500,33 @@ try {
   await rpc('exitSplit');
   await rpc('activate', mine);
   await yours('unapproved input to both split panes');
-  await call('close_tab', { tabId: race });
   console.log('PASS both panes in a split are protected from unapproved input');
+
+  await evaluate(worker, `(async () => {
+    globalThis.realUpdate = chrome.tabs.update;
+    globalThis.switchStarted = new Promise(resolve => { globalThis.notifySwitch = resolve; });
+    globalThis.switchGate = new Promise(resolve => { globalThis.releaseSwitch = resolve; });
+    const raceId = (await chrome.tabs.query({})).find(tab => tab.url === ${JSON.stringify(base + '/switch-race')}).id;
+    chrome.tabs.update = async (...args) => {
+      if (args[0] === raceId && args[1]?.active) { notifySwitch(); await switchGate; }
+      return realUpdate(...args);
+    };
+  })()`);
+  try {
+    await rpc('activate', race);
+    await evaluate(worker, 'switchStarted');
+    assert.equal(await evaluate(myPage, 'document.visibilityState'), 'visible', 'Chromium still shows the draft');
+    const refused = await client.callTool({ name: 'close_tab', arguments: { tabId: mine } });
+    assert.equal(refused.isError, true, 'the actual visible draft is protected while Chromium switches tabs');
+    assert.match(refused.content[0].text, /This tab is visible/);
+    assert.equal(await evaluate(myPage, "document.querySelector('#draft').value"), 'approvedf');
+  } finally {
+    await evaluate(worker, 'releaseSwitch(); chrome.tabs.update = realUpdate;');
+    await rpc('activate', mine);
+    await yours('the delayed Chromium switch');
+  }
+  await call('close_tab', { tabId: race });
+  console.log('PASS the visible draft remains protected while Chromium catches up with the sidebar');
   if (artifacts) await fs.writeFile(path.join(artifacts, 'agent-screenshot.png'), Buffer.from(shot.content[0].data, 'base64'));
 
   // Tab sleep may discard an agent tab the bridge isn't attached to: one it opened and hasn't used

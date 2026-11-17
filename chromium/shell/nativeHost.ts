@@ -27,6 +27,7 @@ export interface NativeHostContext {
     open(url: string): string;
     /** The Chromium tab showing a Flecha tab, opened (in the background) if it has none yet. */
     chromeTab(tabId: string): Promise<number | undefined>;
+    currentChromeTab(tabId: string): number | undefined;
     activate(tabId: string): void;
     close(tabId: string): void;
   };
@@ -290,32 +291,48 @@ export function registerNativeHost(ctx: NativeHostContext) {
     }
   }
 
-  type PageTarget = { chromeId: number; checkEditable?: () => void };
+  type PageTarget = { chromeId: number; checkEditable?: () => Promise<void> };
 
   /**
    * The tool's tab with its Chromium tab, after telling the sidebar. It stays where it is: tools
    * drive tabs through chrome.debugger, which needs no tab on screen and no window focus.
    */
-  async function target(tabId: string, action: string, checkEditable?: () => void): Promise<PageTarget> {
+  async function target(tabId: string, action: string): Promise<PageTarget> {
     if (!store.state.tabs[tabId]) throw new Error(`No tab with id ${tabId}`);
-    checkEditable?.();
     showActivity(tabId, action);
     const chromeId = await ctx.tabs.chromeTab(tabId);
     if (chromeId === undefined) throw new Error(`Tab ${tabId} couldn’t be opened`);
-    // A tab tab sleep discarded needs nothing more: attaching the debugger brings its page back
+    // A discarded tab needs nothing more: attaching the debugger brings its page back
     // (native-agent.mjs checks it).
-    return { chromeId, checkEditable };
+    return { chromeId };
   }
 
-  function requireBackgroundTab(tabId: string, allowVisibleTab: unknown) {
-    if (allowVisibleTab === true) return;
-    if (store.windowShowing(tabId) !== undefined) {
+  function requireBackgroundTab(tabId: string, allowVisibleTab: unknown, visibleInChrome = false) {
+    if (allowVisibleTab !== true && (visibleInChrome || store.windowShowing(tabId) !== undefined)) {
       throw new Error('This tab is visible. Use open_tab to work in the background, or set allowVisibleTab only if the user asked you to act on this tab.');
     }
   }
 
-  function editTarget(tabId: string, action: string, allowVisibleTab: unknown) {
-    return target(tabId, action, () => requireBackgroundTab(tabId, allowVisibleTab));
+  async function checkEditable(tabId: string, chromeId: number | undefined, allowVisibleTab: unknown) {
+    requireBackgroundTab(tabId, allowVisibleTab);
+    if (allowVisibleTab !== true && chromeId !== undefined) {
+      // The Store can switch before Chromium finishes showing the replacement tab.
+      const tab = await chrome.tabs.get(chromeId);
+      const split = tab.splitViewId;
+      const peers = !tab.active && split !== undefined && split >= 0
+        ? await chrome.tabs.query({ windowId: tab.windowId, active: true })
+        : [];
+      requireBackgroundTab(tabId, allowVisibleTab, tab.active || peers.some((peer) => peer.splitViewId === split));
+    }
+    if (!store.state.tabs[tabId] || ctx.tabs.currentChromeTab(tabId) !== chromeId) {
+      throw new Error('Tab ownership changed before the agent action could run.');
+    }
+  }
+
+  async function editTarget(tabId: string, action: string, allowVisibleTab: unknown): Promise<PageTarget> {
+    requireBackgroundTab(tabId, allowVisibleTab);
+    const page = await target(tabId, action);
+    return { chromeId: page.chromeId, checkEditable: () => checkEditable(tabId, page.chromeId, allowVisibleTab) };
   }
 
   const tools: Record<AgentToolName, (args: Record<string, any>) => Promise<AgentResult>> = {
@@ -339,14 +356,14 @@ export function registerNativeHost(ctx: NativeHostContext) {
     },
     close_tab: async ({ tabId, allowVisibleTab }) => {
       if (!store.state.tabs[tabId]) return fail(`No tab with id ${tabId}`);
-      requireBackgroundTab(tabId, allowVisibleTab);
+      await checkEditable(tabId, ctx.tabs.currentChromeTab(tabId), allowVisibleTab);
       showActivity(tabId, 'closing a tab');
       ctx.tabs.close(tabId);
       return text('ok');
     },
     navigate: async ({ tabId, url, action, allowVisibleTab }) => {
       const t = await editTarget(tabId, url ? `opening ${url}` : (action ?? 'navigating'), allowVisibleTab);
-      t.checkEditable?.();
+      await t.checkEditable?.();
       if (url) await chrome.tabs.update(t.chromeId, { url: String(url) });
       else if (action === 'back') await chrome.tabs.goBack(t.chromeId).catch(() => undefined);
       else if (action === 'forward') await chrome.tabs.goForward(t.chromeId).catch(() => undefined);
@@ -383,14 +400,16 @@ export function registerNativeHost(ctx: NativeHostContext) {
       const t = await editTarget(tabId, `clicking ${selector}`, allowVisibleTab);
       const point = (await evaluate(t, centerOf(String(selector)))) as { x: number; y: number } | undefined;
       if (!point) return fail(`No visible element matches ${selector}`);
-      for (const type of ['mousePressed', 'mouseReleased']) {
-        await debug(t, 'Input.dispatchMouseEvent', { type, x: point.x, y: point.y, button: 'left', clickCount: 1 });
-      }
+      const send = await debuggerFor(t);
+      await Promise.all(['mousePressed', 'mouseReleased'].map((type) =>
+        send('Input.dispatchMouseEvent', { type, x: point.x, y: point.y, button: 'left', clickCount: 1 }),
+      ));
       await settle(t.chromeId);
       return text({ clicked: selector, url: (await chrome.tabs.get(t.chromeId)).url });
     },
     type: async ({ tabId, selector, text: value, clear, submit, allowVisibleTab }) => {
       const t = await editTarget(tabId, `typing into ${selector ?? 'the page'}`, allowVisibleTab);
+      const emptyReplacement = !!selector && !!clear && value === '';
       if (selector) {
         const found = await evaluate(
           t,
@@ -399,13 +418,19 @@ export function registerNativeHost(ctx: NativeHostContext) {
             if (!el) return false;
             el.scrollIntoView({ block: 'center' });
             el.focus();
-            if (${!!clear} && 'value' in el) { el.value = ''; el.dispatchEvent(new Event('input', { bubbles: true })); }
+            if (${emptyReplacement} && 'value' in el) {
+              el.value = '';
+              el.dispatchEvent(new Event('input', { bubbles: true }));
+            } else if (${!!clear} && (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) {
+              el.select();
+            }
             return true;
           })()`,
         );
         if (!found) return fail(`No element matches ${selector}`);
       }
-      await debug(t, 'Input.insertText', { text: String(value) });
+      // Select for replacement first. A tab switch before insertion leaves the original text intact.
+      if (!emptyReplacement) await debug(t, 'Input.insertText', { text: String(value) });
       if (submit) await pressKey(t, 'Enter');
       await settle(t.chromeId);
       return text('ok');
@@ -508,7 +533,7 @@ export function registerNativeHost(ctx: NativeHostContext) {
     );
   }
 
-  function attach(chromeId: number): Promise<void> {
+  function attach(chromeId: number, checkTarget?: PageTarget['checkEditable']): Promise<void> {
     // Attached counts from the debugger's attach, but commands wait until the tab is awake and set
     // up: a call during that time waits for it too.
     let pending = attaching.get(chromeId);
@@ -524,12 +549,14 @@ export function registerNativeHost(ctx: NativeHostContext) {
       try {
         // A frozen tab answers nothing; tab sleep wakes it now that it's in use, before any command.
         await ctx.agentTabsChanged();
+        await checkTarget?.();
         // focus(), :focus and key events work as on screen, without taking the window's focus.
         await chrome.debugger.sendCommand({ tabId: chromeId }, 'Emulation.setFocusEmulationEnabled', { enabled: true });
         await chrome.debugger.sendCommand({ tabId: chromeId }, 'Runtime.enable');
         await chrome.debugger.sendCommand({ tabId: chromeId }, 'Log.enable');
         // The replayed messages arrive right after enabling.
         await wait(100);
+        await checkTarget?.();
       } catch (error) {
         // A tab left half set up would skip the setup on later calls; let go so the next call
         // starts over. onDetach doesn't fire for our own detach, so forget it here.
@@ -546,14 +573,18 @@ export function registerNativeHost(ctx: NativeHostContext) {
     return pending;
   }
 
-  async function debug({ chromeId, checkEditable }: PageTarget, method: string, params?: object) {
-    await attach(chromeId);
-    // A user can bring the tab forward while a tool is waiting for the debugger or the page.
-    checkEditable?.();
+  async function debuggerFor({ chromeId, checkEditable }: PageTarget) {
+    await attach(chromeId, checkEditable);
+    await checkEditable?.();
     // Chromium also lets go of a tab when another extension's frame loads in it mid-command.
-    return chrome.debugger.sendCommand({ tabId: chromeId }, method, params).catch(async (error: unknown) => {
+    return (method: string, params?: object) => chrome.debugger.sendCommand({ tabId: chromeId }, method, params).catch(async (error: unknown) => {
       throw await attachRefused(chromeId, error);
     });
+  }
+
+  async function debug(tab: PageTarget, method: string, params?: object) {
+    const send = await debuggerFor(tab);
+    return send(method, params);
   }
 
   async function evaluate(tab: PageTarget, expression: string): Promise<unknown> {
@@ -612,8 +643,12 @@ export function registerNativeHost(ctx: NativeHostContext) {
     const [code, keyCode, keyText] =
       named[key] ?? (key.length === 1 ? [`Key${key.toUpperCase()}`, key.toUpperCase().charCodeAt(0), key] : [key, 0]);
     const base = { key, code, windowsVirtualKeyCode: keyCode, nativeVirtualKeyCode: keyCode };
-    await debug(tab, 'Input.dispatchKeyEvent', { type: keyText ? 'keyDown' : 'rawKeyDown', ...base, text: keyText, unmodifiedText: keyText });
-    await debug(tab, 'Input.dispatchKeyEvent', { type: 'keyUp', ...base });
+    const send = await debuggerFor(tab);
+    // Send the gesture as a pair after one check so a tab switch cannot strand a key down.
+    await Promise.all([
+      send('Input.dispatchKeyEvent', { type: keyText ? 'keyDown' : 'rawKeyDown', ...base, text: keyText, unmodifiedText: keyText }),
+      send('Input.dispatchKeyEvent', { type: 'keyUp', ...base }),
+    ]);
   }
 
   return {

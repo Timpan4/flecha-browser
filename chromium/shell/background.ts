@@ -1433,6 +1433,7 @@ async function start() {
         if (pending) return pending.promise;
         return live.get(id) ?? (store.state.tabs[id] ? openChromeTab(id, false, store.locate(id)?.windowId ?? store.focusedWindowId) : undefined);
       },
+      currentChromeTab: (id) => live.get(id),
       activate: (id) => void store.activate(id),
       close: (id) => {
         store.closeTab(id);
