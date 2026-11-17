@@ -425,6 +425,28 @@ try {
   await draftIs('abcde');
   assert.equal(await evaluate(myPage, "document.activeElement.id + ' ' + document.hasFocus() + ' ' + document.visibilityState"), 'draft true visible');
   console.log('PASS your keystrokes kept reaching your draft while the agent worked');
+  const listed = JSON.parse((await call('list_tabs')).content[0].text);
+  const draftTab = listed.find((tab) => tab.url === base + '/mine');
+  assert.ok(draftTab?.active, 'MCP lists the visible draft');
+  const target = { tabId: draftTab.id };
+  for (const [name, input] of [
+    ['click', { selector: '#draft' }],
+    ['type', { text: 'agent text' }],
+    ['press_key', { key: 'Enter' }],
+    ['evaluate', { expression: 'document.activeElement.blur()' }],
+    ['navigate', { url: base + '/other' }],
+    ['close_tab', {}],
+  ]) {
+    const refused = await client.callTool({ name, arguments: { ...target, ...input } });
+    assert.equal(refused.isError, true, name);
+    assert.match(refused.content[0].text, /This tab is visible/, name);
+  }
+  const allowed = await call('evaluate', { ...target, expression: 'document.activeElement.id', allowVisibleTab: true });
+  assert.equal(allowed.content[0].text, 'draft');
+  x11('type', 'f');
+  await draftIs('abcdef');
+  await yours('refused operations on a visible tab');
+  console.log('PASS MCP leaves the visible draft alone unless explicitly allowed to act on it');
   if (artifacts) await fs.writeFile(path.join(artifacts, 'agent-screenshot.png'), Buffer.from(shot.content[0].data, 'base64'));
 
   // Tab sleep may discard an agent tab the bridge isn't attached to: one it opened and hasn't used

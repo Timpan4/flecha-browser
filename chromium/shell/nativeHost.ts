@@ -304,6 +304,21 @@ export function registerNativeHost(ctx: NativeHostContext) {
     return { tabId, chromeId };
   }
 
+  function requireBackgroundTab(tabId: string, allowVisibleTab: unknown) {
+    if (allowVisibleTab === true) return;
+    if (store.state.windows.some((window) => store.visibleTabIds(window.id).includes(tabId))) {
+      throw new Error('This tab is visible. Use open_tab to work in the background, or set allowVisibleTab only if the user asked you to act on this tab.');
+    }
+  }
+
+  async function editTarget(tabId: string, action: string, allowVisibleTab: unknown) {
+    requireBackgroundTab(tabId, allowVisibleTab);
+    const tab = await target(tabId, action);
+    // The user can switch tabs while the browser wakes or opens the page.
+    requireBackgroundTab(tabId, allowVisibleTab);
+    return tab;
+  }
+
   const tools: Record<AgentToolName, (args: Record<string, any>) => Promise<AgentResult>> = {
     list_tabs: async () => {
       showActivity(undefined, 'listing tabs');
@@ -323,14 +338,15 @@ export function registerNativeHost(ctx: NativeHostContext) {
       showActivity(tabId, 'switching tab');
       return text('ok');
     },
-    close_tab: async ({ tabId }) => {
+    close_tab: async ({ tabId, allowVisibleTab }) => {
       if (!store.state.tabs[tabId]) return fail(`No tab with id ${tabId}`);
+      requireBackgroundTab(tabId, allowVisibleTab);
       showActivity(tabId, 'closing a tab');
       ctx.tabs.close(tabId);
       return text('ok');
     },
-    navigate: async ({ tabId, url, action }) => {
-      const t = await target(tabId, url ? `opening ${url}` : (action ?? 'navigating'));
+    navigate: async ({ tabId, url, action, allowVisibleTab }) => {
+      const t = await editTarget(tabId, url ? `opening ${url}` : (action ?? 'navigating'), allowVisibleTab);
       if (url) await chrome.tabs.update(t.chromeId, { url: String(url) });
       else if (action === 'back') await chrome.tabs.goBack(t.chromeId).catch(() => undefined);
       else if (action === 'forward') await chrome.tabs.goForward(t.chromeId).catch(() => undefined);
@@ -363,8 +379,8 @@ export function registerNativeHost(ctx: NativeHostContext) {
       const entries = (consoleLogs.get(t.chromeId) ?? []).filter((e) => !level || e.level === level);
       return text(entries.slice(-limit).map((e) => `[${e.level}] ${e.message}${e.source ? `  (${e.source})` : ''}`).join('\n') || '(no messages)');
     },
-    click: async ({ tabId, selector }) => {
-      const t = await target(tabId, `clicking ${selector}`);
+    click: async ({ tabId, selector, allowVisibleTab }) => {
+      const t = await editTarget(tabId, `clicking ${selector}`, allowVisibleTab);
       const point = (await evaluate(t.chromeId, centerOf(String(selector)))) as { x: number; y: number } | undefined;
       if (!point) return fail(`No visible element matches ${selector}`);
       for (const type of ['mousePressed', 'mouseReleased']) {
@@ -373,8 +389,8 @@ export function registerNativeHost(ctx: NativeHostContext) {
       await settle(t.chromeId);
       return text({ clicked: selector, url: (await chrome.tabs.get(t.chromeId)).url });
     },
-    type: async ({ tabId, selector, text: value, clear, submit }) => {
-      const t = await target(tabId, `typing into ${selector ?? 'the page'}`);
+    type: async ({ tabId, selector, text: value, clear, submit, allowVisibleTab }) => {
+      const t = await editTarget(tabId, `typing into ${selector ?? 'the page'}`, allowVisibleTab);
       if (selector) {
         const found = await evaluate(
           t.chromeId,
@@ -394,14 +410,14 @@ export function registerNativeHost(ctx: NativeHostContext) {
       await settle(t.chromeId);
       return text('ok');
     },
-    press_key: async ({ tabId, key }) => {
-      const t = await target(tabId, `pressing ${key}`);
+    press_key: async ({ tabId, key, allowVisibleTab }) => {
+      const t = await editTarget(tabId, `pressing ${key}`, allowVisibleTab);
       await pressKey(t.chromeId, String(key));
       await settle(t.chromeId);
       return text('ok');
     },
-    evaluate: async ({ tabId, expression }) => {
-      const t = await target(tabId, 'running JavaScript');
+    evaluate: async ({ tabId, expression, allowVisibleTab }) => {
+      const t = await editTarget(tabId, 'running JavaScript', allowVisibleTab);
       const result = await evaluate(t.chromeId, String(expression));
       return text(result === undefined ? 'undefined' : result);
     },
