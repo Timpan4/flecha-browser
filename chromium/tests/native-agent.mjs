@@ -474,9 +474,23 @@ try {
     await Promise.allSettled([pendingClick]);
     await rpc('activate', mine);
     await yours('the pending click');
-    await call('close_tab', { tabId: race });
   }
   console.log('PASS a click waiting for its debugger stops if the user brings its tab forward');
+
+  await rpc('splitWith', race);
+  await stateWhere('s => !!s.spaces.find(sp => sp.id === s.activeSpaceId).split');
+  const panes = JSON.parse((await call('list_tabs')).content[0].text).filter((tab) => tab.active);
+  assert.deepEqual(new Set(panes.map((tab) => tab.id)), new Set([mine, race]));
+  for (const { id } of panes) {
+    const refused = await client.callTool({ name: 'press_key', arguments: { tabId: id, key: 'Enter' } });
+    assert.equal(refused.isError, true, 'the visible split pane is protected');
+    assert.match(refused.content[0].text, /This tab is visible/);
+  }
+  await rpc('exitSplit');
+  await rpc('activate', mine);
+  await yours('unapproved input to both split panes');
+  await call('close_tab', { tabId: race });
+  console.log('PASS both panes in a split are protected from unapproved input');
   if (artifacts) await fs.writeFile(path.join(artifacts, 'agent-screenshot.png'), Buffer.from(shot.content[0].data, 'base64'));
 
   // Tab sleep may discard an agent tab the bridge isn't attached to: one it opened and hasn't used

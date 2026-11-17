@@ -309,7 +309,7 @@ export function registerNativeHost(ctx: NativeHostContext) {
 
   function requireBackgroundTab(tabId: string, allowVisibleTab: unknown) {
     if (allowVisibleTab === true) return;
-    if (store.state.windows.some((window) => store.visibleTabIds(window.id).includes(tabId))) {
+    if (store.windowShowing(tabId) !== undefined) {
       throw new Error('This tab is visible. Use open_tab to work in the background, or set allowVisibleTab only if the user asked you to act on this tab.');
     }
   }
