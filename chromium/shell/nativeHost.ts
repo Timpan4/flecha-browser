@@ -290,18 +290,21 @@ export function registerNativeHost(ctx: NativeHostContext) {
     }
   }
 
+  type PageTarget = { chromeId: number; checkEditable?: () => void };
+
   /**
    * The tool's tab with its Chromium tab, after telling the sidebar. It stays where it is: tools
    * drive tabs through chrome.debugger, which needs no tab on screen and no window focus.
    */
-  async function target(tabId: string, action: string) {
+  async function target(tabId: string, action: string, checkEditable?: () => void): Promise<PageTarget> {
     if (!store.state.tabs[tabId]) throw new Error(`No tab with id ${tabId}`);
+    checkEditable?.();
     showActivity(tabId, action);
     const chromeId = await ctx.tabs.chromeTab(tabId);
     if (chromeId === undefined) throw new Error(`Tab ${tabId} couldn’t be opened`);
     // A tab tab sleep discarded needs nothing more: attaching the debugger brings its page back
     // (native-agent.mjs checks it).
-    return { tabId, chromeId };
+    return { chromeId, checkEditable };
   }
 
   function requireBackgroundTab(tabId: string, allowVisibleTab: unknown) {
@@ -311,12 +314,8 @@ export function registerNativeHost(ctx: NativeHostContext) {
     }
   }
 
-  async function editTarget(tabId: string, action: string, allowVisibleTab: unknown) {
-    requireBackgroundTab(tabId, allowVisibleTab);
-    const tab = await target(tabId, action);
-    // The user can switch tabs while the browser wakes or opens the page.
-    requireBackgroundTab(tabId, allowVisibleTab);
-    return tab;
+  function editTarget(tabId: string, action: string, allowVisibleTab: unknown) {
+    return target(tabId, action, () => requireBackgroundTab(tabId, allowVisibleTab));
   }
 
   const tools: Record<AgentToolName, (args: Record<string, any>) => Promise<AgentResult>> = {
@@ -347,6 +346,7 @@ export function registerNativeHost(ctx: NativeHostContext) {
     },
     navigate: async ({ tabId, url, action, allowVisibleTab }) => {
       const t = await editTarget(tabId, url ? `opening ${url}` : (action ?? 'navigating'), allowVisibleTab);
+      t.checkEditable?.();
       if (url) await chrome.tabs.update(t.chromeId, { url: String(url) });
       else if (action === 'back') await chrome.tabs.goBack(t.chromeId).catch(() => undefined);
       else if (action === 'forward') await chrome.tabs.goForward(t.chromeId).catch(() => undefined);
@@ -363,14 +363,14 @@ export function registerNativeHost(ctx: NativeHostContext) {
         links: '[...document.links].map((a) => `${a.innerText.trim().slice(0, 80)} -> ${a.href}`).join("\\n")',
       }[format as 'text' | 'html' | 'links'];
       if (!code) return fail(`Unknown format ${format}`);
-      const content = String(await evaluate(t.chromeId, code));
+      const content = String(await evaluate(t, code));
       const tab = await chrome.tabs.get(t.chromeId);
       return text(`# ${tab.title}\n${tab.url}\n\n${content.slice(0, maxChars)}`);
     },
     screenshot: async ({ tabId }) => {
       const t = await target(tabId, 'taking a screenshot');
       // Chromium has a tab that isn't on screen draw a frame for this (page_handler.cc).
-      const shot = (await debug(t.chromeId, 'Page.captureScreenshot', { format: 'png' })) as { data: string };
+      const shot = (await debug(t, 'Page.captureScreenshot', { format: 'png' })) as { data: string };
       return { content: [{ type: 'image', data: await shrink(shot.data, 1280), mimeType: 'image/png' }] };
     },
     console_logs: async ({ tabId, level, limit = 50 }) => {
@@ -381,10 +381,10 @@ export function registerNativeHost(ctx: NativeHostContext) {
     },
     click: async ({ tabId, selector, allowVisibleTab }) => {
       const t = await editTarget(tabId, `clicking ${selector}`, allowVisibleTab);
-      const point = (await evaluate(t.chromeId, centerOf(String(selector)))) as { x: number; y: number } | undefined;
+      const point = (await evaluate(t, centerOf(String(selector)))) as { x: number; y: number } | undefined;
       if (!point) return fail(`No visible element matches ${selector}`);
       for (const type of ['mousePressed', 'mouseReleased']) {
-        await debug(t.chromeId, 'Input.dispatchMouseEvent', { type, x: point.x, y: point.y, button: 'left', clickCount: 1 });
+        await debug(t, 'Input.dispatchMouseEvent', { type, x: point.x, y: point.y, button: 'left', clickCount: 1 });
       }
       await settle(t.chromeId);
       return text({ clicked: selector, url: (await chrome.tabs.get(t.chromeId)).url });
@@ -393,7 +393,7 @@ export function registerNativeHost(ctx: NativeHostContext) {
       const t = await editTarget(tabId, `typing into ${selector ?? 'the page'}`, allowVisibleTab);
       if (selector) {
         const found = await evaluate(
-          t.chromeId,
+          t,
           `(() => {
             const el = document.querySelector(${JSON.stringify(selector)});
             if (!el) return false;
@@ -405,20 +405,20 @@ export function registerNativeHost(ctx: NativeHostContext) {
         );
         if (!found) return fail(`No element matches ${selector}`);
       }
-      await debug(t.chromeId, 'Input.insertText', { text: String(value) });
-      if (submit) await pressKey(t.chromeId, 'Enter');
+      await debug(t, 'Input.insertText', { text: String(value) });
+      if (submit) await pressKey(t, 'Enter');
       await settle(t.chromeId);
       return text('ok');
     },
     press_key: async ({ tabId, key, allowVisibleTab }) => {
       const t = await editTarget(tabId, `pressing ${key}`, allowVisibleTab);
-      await pressKey(t.chromeId, String(key));
+      await pressKey(t, String(key));
       await settle(t.chromeId);
       return text('ok');
     },
     evaluate: async ({ tabId, expression, allowVisibleTab }) => {
       const t = await editTarget(tabId, 'running JavaScript', allowVisibleTab);
-      const result = await evaluate(t.chromeId, String(expression));
+      const result = await evaluate(t, String(expression));
       return text(result === undefined ? 'undefined' : result);
     },
     wait_for: async ({ tabId, selector, timeoutMs = 10000 }) => {
@@ -426,7 +426,7 @@ export function registerNativeHost(ctx: NativeHostContext) {
       const deadline = Date.now() + timeoutMs;
       while (Date.now() < deadline) {
         const ready = selector
-          ? await evaluate(t.chromeId, `!!document.querySelector(${JSON.stringify(selector)})`).catch(() => false)
+          ? await evaluate(t, `!!document.querySelector(${JSON.stringify(selector)})`).catch(() => false)
           : (await chrome.tabs.get(t.chromeId)).status !== 'loading';
         if (ready) return text('ready');
         await wait(200);
@@ -546,16 +546,18 @@ export function registerNativeHost(ctx: NativeHostContext) {
     return pending;
   }
 
-  async function debug(chromeId: number, method: string, params?: object) {
+  async function debug({ chromeId, checkEditable }: PageTarget, method: string, params?: object) {
     await attach(chromeId);
+    // A user can bring the tab forward while a tool is waiting for the debugger or the page.
+    checkEditable?.();
     // Chromium also lets go of a tab when another extension's frame loads in it mid-command.
     return chrome.debugger.sendCommand({ tabId: chromeId }, method, params).catch(async (error: unknown) => {
       throw await attachRefused(chromeId, error);
     });
   }
 
-  async function evaluate(chromeId: number, expression: string): Promise<unknown> {
-    const result = (await debug(chromeId, 'Runtime.evaluate', {
+  async function evaluate(tab: PageTarget, expression: string): Promise<unknown> {
+    const result = (await debug(tab, 'Runtime.evaluate', {
       expression,
       awaitPromise: true,
       returnByValue: true,
@@ -590,7 +592,7 @@ export function registerNativeHost(ctx: NativeHostContext) {
   chrome.debugger.onDetach.addListener((source) => source.tabId !== undefined && forget(source.tabId));
   chrome.tabs.onRemoved.addListener((chromeId) => forget(chromeId));
 
-  async function pressKey(chromeId: number, key: string) {
+  async function pressKey(tab: PageTarget, key: string) {
     const named: Record<string, [code: string, keyCode: number, text?: string]> = {
       Enter: ['Enter', 13, '\r'],
       Tab: ['Tab', 9],
@@ -610,8 +612,8 @@ export function registerNativeHost(ctx: NativeHostContext) {
     const [code, keyCode, keyText] =
       named[key] ?? (key.length === 1 ? [`Key${key.toUpperCase()}`, key.toUpperCase().charCodeAt(0), key] : [key, 0]);
     const base = { key, code, windowsVirtualKeyCode: keyCode, nativeVirtualKeyCode: keyCode };
-    await debug(chromeId, 'Input.dispatchKeyEvent', { type: keyText ? 'keyDown' : 'rawKeyDown', ...base, text: keyText, unmodifiedText: keyText });
-    await debug(chromeId, 'Input.dispatchKeyEvent', { type: 'keyUp', ...base });
+    await debug(tab, 'Input.dispatchKeyEvent', { type: keyText ? 'keyDown' : 'rawKeyDown', ...base, text: keyText, unmodifiedText: keyText });
+    await debug(tab, 'Input.dispatchKeyEvent', { type: 'keyUp', ...base });
   }
 
   return {

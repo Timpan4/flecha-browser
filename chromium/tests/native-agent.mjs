@@ -447,6 +447,36 @@ try {
   await draftIs('abcdef');
   await yours('refused operations on a visible tab');
   console.log('PASS MCP leaves the visible draft alone unless explicitly allowed to act on it');
+
+  const race = JSON.parse((await call('open_tab', { url: base + '/switch-race' })).content[0].text).tabId;
+  const racePage = await attach((await findTarget((tab) => tab.type === 'page' && tab.url === base + '/switch-race')).targetId);
+  await loaded(racePage, base + '/switch-race');
+  await evaluate(worker, `
+    globalThis.originalAttach = chrome.debugger.attach;
+    globalThis.attachStarted = new Promise(resolve => { globalThis.notifyAttach = resolve; });
+    globalThis.attachGate = new Promise(resolve => { globalThis.releaseAttach = resolve; });
+    chrome.debugger.attach = async (...args) => { notifyAttach(); await attachGate; return originalAttach(...args); };
+    void 0;
+  `);
+  const pendingClick = client.callTool({ name: 'click', arguments: { tabId: race, selector: '#count' } });
+  try {
+    await evaluate(worker, 'attachStarted');
+    await rpc('activate', race);
+    await stateWhere(`s => s.spaces.find(sp => sp.id === s.activeSpaceId).activeTabId === ${JSON.stringify(race)}`);
+    assert.equal(await evaluate(racePage, 'document.visibilityState'), 'visible');
+    await evaluate(worker, 'releaseAttach()');
+    const result = await pendingClick;
+    assert.equal(result.isError, true, 'the pending click must stop when its tab becomes visible');
+    assert.match(result.content[0].text, /This tab is visible/);
+    assert.equal(await evaluate(racePage, 'counter'), 0);
+  } finally {
+    await evaluate(worker, 'releaseAttach(); chrome.debugger.attach = originalAttach;');
+    await Promise.allSettled([pendingClick]);
+    await rpc('activate', mine);
+    await yours('the pending click');
+    await call('close_tab', { tabId: race });
+  }
+  console.log('PASS a click waiting for its debugger stops if the user brings its tab forward');
   if (artifacts) await fs.writeFile(path.join(artifacts, 'agent-screenshot.png'), Buffer.from(shot.content[0].data, 'base64'));
 
   // Tab sleep may discard an agent tab the bridge isn't attached to: one it opened and hasn't used
