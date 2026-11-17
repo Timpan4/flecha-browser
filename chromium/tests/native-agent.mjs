@@ -45,7 +45,7 @@ const server = createServer((request, response) => {
   response.setHeader('Content-Type', 'text/html');
   if (request.url === '/mine') return response.end('<title>My page</title><textarea id="draft" style="position: fixed; inset: 0; width: 100%; height: 100%"></textarea>');
   response.end(
-    '<title>Agent page</title><svg><title>Site icon</title></svg><math><mi>x</mi></math><h1>Agent page</h1><input id="field"><button id="count" onclick="counter++">Count</button>' +
+    '<title>Agent page</title><svg><title>Site icon</title></svg><math><mi>x</mi></math><h1>Agent page</h1><input id="field"><input id="date" type="date" value="2026-10-01"><button id="count" onclick="counter++">Count</button>' +
       '<script>window.counter = 0; window.keys = []; addEventListener("keydown", (e) => keys.push(e.key));</script>',
   );
 });
@@ -420,6 +420,8 @@ try {
     await evaluate(agentPage, "({ counter, field: document.querySelector('#field').value, keys: keys.filter(k => k === 'Enter' || k === 'Escape') })"),
     { counter: 1, field: 'from the agent', keys: ['Enter', 'Escape'] },
   );
+  await call('type', { tabId: agentTab, selector: '#date', text: '2026-11-17', clear: true });
+  assert.equal(await evaluate(agentPage, "document.querySelector('#date').value"), '2026-11-17');
   console.log("PASS click, type, press_key, screenshot and read_page work in the agent's tab while it is hidden");
   x11('type', 'e');
   await draftIs('abcde');
@@ -459,6 +461,7 @@ try {
     void 0;
   `);
   const pendingClick = client.callTool({ name: 'click', arguments: { tabId: race, selector: '#count' } });
+  let approvedRead;
   try {
     await Promise.race([
       evaluate(worker, 'attachStarted'),
@@ -475,18 +478,22 @@ try {
       document.addEventListener('visibilitychange', visible);
       visible();
     })`);
+    approvedRead = client.callTool({ name: 'evaluate', arguments: { tabId: race, expression: 'document.title', allowVisibleTab: true } });
+    await stateWhere(`s => s.agent?.action === 'running JavaScript' && s.agent.tabId === ${JSON.stringify(race)}`);
     await evaluate(worker, 'releaseAttach()');
-    const result = await pendingClick;
+    const [result, approved] = await Promise.all([pendingClick, approvedRead]);
     assert.equal(result.isError, true, 'the pending click must stop when its tab becomes visible');
     assert.match(result.content[0].text, /This tab is visible/);
     assert.equal(await evaluate(racePage, 'counter'), 0);
+    assert.equal(approved.isError, undefined, approved.content[0]?.text);
+    assert.equal(approved.content[0].text, 'Agent page');
   } finally {
     await evaluate(worker, 'releaseAttach(); chrome.debugger.attach = originalAttach;');
-    await Promise.allSettled([pendingClick]);
+    await Promise.allSettled([pendingClick, approvedRead]);
     await rpc('activate', mine);
     await yours('the pending click');
   }
-  console.log('PASS a click waiting for its debugger stops if the user brings its tab forward');
+  console.log('PASS a pending click stops after activation while an explicitly allowed call still works');
 
   await rpc('splitWith', race);
   await stateWhere('s => !!s.spaces.find(sp => sp.id === s.activeSpaceId).split');

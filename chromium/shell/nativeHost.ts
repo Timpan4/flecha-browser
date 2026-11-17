@@ -291,7 +291,7 @@ export function registerNativeHost(ctx: NativeHostContext) {
     }
   }
 
-  type PageTarget = { chromeId: number; checkEditable?: () => Promise<void> };
+  type PageTarget = { chromeId: number; checkEditable?: () => Promise<boolean> };
 
   /**
    * The tool's tab with its Chromium tab, after telling the sidebar. It stays where it is: tools
@@ -315,18 +315,21 @@ export function registerNativeHost(ctx: NativeHostContext) {
 
   async function checkEditable(tabId: string, chromeId: number | undefined, allowVisibleTab: unknown) {
     requireBackgroundTab(tabId, allowVisibleTab);
-    if (allowVisibleTab !== true && chromeId !== undefined) {
+    let visibleInChrome = false;
+    if (chromeId !== undefined) {
       // The Store can switch before Chromium finishes showing the replacement tab.
       const tab = await chrome.tabs.get(chromeId);
       const split = tab.splitViewId;
       const peers = !tab.active && split !== undefined && split >= 0
         ? await chrome.tabs.query({ windowId: tab.windowId, active: true })
         : [];
-      requireBackgroundTab(tabId, allowVisibleTab, tab.active || peers.some((peer) => peer.splitViewId === split));
+      visibleInChrome = tab.active || peers.some((peer) => peer.splitViewId === split);
+      requireBackgroundTab(tabId, allowVisibleTab, visibleInChrome);
     }
     if (!store.state.tabs[tabId] || ctx.tabs.currentChromeTab(tabId) !== chromeId) {
       throw new Error('Tab ownership changed before the agent action could run.');
     }
+    return visibleInChrome;
   }
 
   async function editTarget(tabId: string, action: string, allowVisibleTab: unknown): Promise<PageTarget> {
@@ -409,28 +412,35 @@ export function registerNativeHost(ctx: NativeHostContext) {
     },
     type: async ({ tabId, selector, text: value, clear, submit, allowVisibleTab }) => {
       const t = await editTarget(tabId, `typing into ${selector ?? 'the page'}`, allowVisibleTab);
-      const emptyReplacement = !!selector && !!clear && value === '';
+      const input = String(value);
+      let replaced = false;
       if (selector) {
-        const found = await evaluate(
+        const result = await evaluate(
           t,
           `(() => {
             const el = document.querySelector(${JSON.stringify(selector)});
-            if (!el) return false;
+            if (!el) return 'missing';
             el.scrollIntoView({ block: 'center' });
             el.focus();
-            if (${emptyReplacement} && 'value' in el) {
-              el.value = '';
+            if (${!!clear} && 'value' in el && (${input === ''} || (el instanceof HTMLInputElement && el.selectionStart === null))) {
+              const previous = el.value;
+              const replacement = ${JSON.stringify(input)};
+              el.value = replacement;
+              if (el.value !== replacement) { el.value = previous; return 'invalid'; }
               el.dispatchEvent(new Event('input', { bubbles: true }));
+              return 'replaced';
             } else if (${!!clear} && (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) {
               el.select();
             }
-            return true;
+            return 'focused';
           })()`,
         );
-        if (!found) return fail(`No element matches ${selector}`);
+        if (result === 'missing') return fail(`No element matches ${selector}`);
+        if (result === 'invalid') return fail(`The field matching ${selector} rejected the replacement value`);
+        replaced = result === 'replaced';
       }
       // Select for replacement first. A tab switch before insertion leaves the original text intact.
-      if (!emptyReplacement) await debug(t, 'Input.insertText', { text: String(value) });
+      if (!replaced) await debug(t, 'Input.insertText', { text: input });
       if (submit) await pressKey(t, 'Enter');
       await settle(t.chromeId);
       return text('ok');
@@ -462,8 +472,8 @@ export function registerNativeHost(ctx: NativeHostContext) {
 
   // ---- chrome.debugger --------------------------------------------------------
   // Attached on first use and kept while the agent works, so console messages keep coming
-  // (Runtime.enable replays the ones logged before); let go after two quiet minutes. While
-  // attached, the page acts focused although its tab isn't on screen, and tab sleep leaves it be.
+  // (Runtime.enable replays the ones logged before); let go after two quiet minutes.
+  // Tab sleep leaves an attached page alone.
 
   const DEBUG_IDLE = 120_000;
   const attached = new Map<number, ReturnType<typeof setTimeout>>();
@@ -533,7 +543,7 @@ export function registerNativeHost(ctx: NativeHostContext) {
     );
   }
 
-  function attach(chromeId: number, checkTarget?: PageTarget['checkEditable']): Promise<void> {
+  function attach(chromeId: number): Promise<void> {
     // Attached counts from the debugger's attach, but commands wait until the tab is awake and set
     // up: a call during that time waits for it too.
     let pending = attaching.get(chromeId);
@@ -549,14 +559,10 @@ export function registerNativeHost(ctx: NativeHostContext) {
       try {
         // A frozen tab answers nothing; tab sleep wakes it now that it's in use, before any command.
         await ctx.agentTabsChanged();
-        await checkTarget?.();
-        // focus(), :focus and key events work as on screen, without taking the window's focus.
-        await chrome.debugger.sendCommand({ tabId: chromeId }, 'Emulation.setFocusEmulationEnabled', { enabled: true });
         await chrome.debugger.sendCommand({ tabId: chromeId }, 'Runtime.enable');
         await chrome.debugger.sendCommand({ tabId: chromeId }, 'Log.enable');
         // The replayed messages arrive right after enabling.
         await wait(100);
-        await checkTarget?.();
       } catch (error) {
         // A tab left half set up would skip the setup on later calls; let go so the next call
         // starts over. onDetach doesn't fire for our own detach, so forget it here.
@@ -574,12 +580,23 @@ export function registerNativeHost(ctx: NativeHostContext) {
   }
 
   async function debuggerFor({ chromeId, checkEditable }: PageTarget) {
-    await attach(chromeId, checkEditable);
-    await checkEditable?.();
+    // Attach is shared. Permission to edit belongs to each tool request.
+    await attach(chromeId);
     // Chromium also lets go of a tab when another extension's frame loads in it mid-command.
-    return (method: string, params?: object) => chrome.debugger.sendCommand({ tabId: chromeId }, method, params).catch(async (error: unknown) => {
+    const send = (method: string, params?: object) => chrome.debugger.sendCommand({ tabId: chromeId }, method, params).catch(async (error: unknown) => {
       throw await attachRefused(chromeId, error);
     });
+    if (checkEditable && !await checkEditable()) {
+      // Let background input behave as focused without changing the user's native focus.
+      await send('Emulation.setFocusEmulationEnabled', { enabled: true });
+      try {
+        await checkEditable();
+      } catch (error) {
+        await send('Emulation.setFocusEmulationEnabled', { enabled: false }).catch(() => undefined);
+        throw error;
+      }
+    }
+    return send;
   }
 
   async function debug(tab: PageTarget, method: string, params?: object) {
