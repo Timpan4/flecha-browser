@@ -29,6 +29,8 @@ jobs:
   publish:
     if: github.ref_name == github.event.repository.default_branch
     runs-on: ubuntu-24.04
+    # Use the same one-hour upload allowance as the native release stages.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
         with:
