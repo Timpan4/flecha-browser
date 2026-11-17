@@ -52,7 +52,7 @@ jobs:
         include: ${{ fromJSON(needs.prepare.outputs.platforms) }}
     uses: ./.github/workflows/release-platform.yml
     permissions:
-      contents: write
+      contents: read
       actions: write
     with:
       platforms: ${{ format('[{0}]', toJSON(matrix)) }}

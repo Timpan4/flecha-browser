@@ -9,9 +9,16 @@ on:
       previous:
         type: number
         required: true
+      last:
+        type: boolean
+        default: false
       platforms:
         type: string
         required: true
+    outputs:
+      incomplete:
+        description: The stage needs another Chromium build job.
+        value: ${{ jobs.build.outputs.incomplete }}
 
 permissions:
   contents: read
@@ -20,6 +27,8 @@ permissions:
 jobs:
   build:
     name: ${{ matrix.platform }} stage ${{ inputs.stage }}
+    outputs:
+      incomplete: ${{ steps.checkpoint.outputs.complete == 'false' }}
     strategy:
       fail-fast: false
       matrix:
@@ -74,6 +83,7 @@ jobs:
         if: runner.os == 'macOS'
         run: npm ci
       - name: Prepare Chromium source and toolchains
+        id: prepare
         if: inputs.stage == 0
         env:
           GH_TOKEN: ${{ github.token }}
@@ -82,6 +92,7 @@ jobs:
           FLECHA_REUSE_BUDGET_MINUTES: '60'
         run: node chromium/scripts/ci-release.mjs prepare
       - name: Compile and package
+        id: compile
         if: inputs.stage != 0
         shell: bash
         run: |
@@ -89,20 +100,33 @@ jobs:
           export FLECHA_DISK="$RUNNER_WORKSPACE/flecha-chromium"
           node chromium/scripts/ci-release.mjs build
       - name: Upload completed platform package
+        if: steps.prepare.outputs.package != '' || steps.compile.outputs.package != ''
         uses: actions/upload-artifact@v7
         with:
-          name: release-${{ matrix.platform }}
+          name: ${{ steps.prepare.outputs.package || steps.compile.outputs.package }}
           path: release/*
           overwrite: true
-          if-no-files-found: ignore
+          if-no-files-found: error
           compression-level: 0
-          # A finished platform must remain available until its publish job runs.
-          # 35 days is GitHub's maximum lifetime for the entire workflow.
           retention-days: 35
+      - name: Hand the package to the publisher
+        if: steps.prepare.outputs.package != '' || steps.compile.outputs.package != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          PACKAGE_ARTIFACT: ${{ steps.prepare.outputs.package || steps.compile.outputs.package }}
+          RELEASE_PLATFORM: ${{ matrix.platform }}
+        run: >-
+          gh workflow run publish-nightly-platform.yml --repo "$GITHUB_REPOSITORY" --ref "$DEFAULT_BRANCH"
+          --raw-field "build_run=$GITHUB_RUN_ID" --raw-field "platform=$RELEASE_PLATFORM"
+          --raw-field "artifact=$PACKAGE_ARTIFACT"
       - name: Save checkpoint
         id: checkpoint
+        if: steps.prepare.outputs.package == '' && steps.compile.outputs.package == ''
         run: node chromium/scripts/ci-release.mjs checkpoint
       - uses: actions/upload-artifact@v7
+        if: steps.checkpoint.outputs.complete == 'false'
         with:
           name: checkpoint-${{ matrix.platform }}-${{ inputs.stage }}
           path: checkpoint.tar.gz
@@ -121,7 +145,7 @@ jobs:
           overwrite: true
           retention-days: 35
       - name: Delete superseded checkpoint after successful handoff
-        if: inputs.stage != 0 && steps.checkpoint.outputs.complete != 'true'
+        if: inputs.stage != 0 && steps.checkpoint.outputs.complete == 'false'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -133,7 +157,7 @@ jobs:
           fi
       - name: Create optional native snapshot after required release uploads
         id: native
-        if: ${{ !cancelled() && inputs.stage != 0 }}
+        if: ${{ !cancelled() && inputs.stage != 0 && (runner.os == 'macOS' || failure()) }}
         continue-on-error: true
         run: node chromium/scripts/ci-release.mjs native-checkpoint
       - name: Preserve native outputs for later nightlies and packaging recovery
@@ -148,3 +172,6 @@ jobs:
           if-no-files-found: error
           overwrite: true
           retention-days: 35
+      - name: Report an unfinished final stage
+        if: inputs.last && steps.checkpoint.outputs.complete == 'false'
+        run: exit 1

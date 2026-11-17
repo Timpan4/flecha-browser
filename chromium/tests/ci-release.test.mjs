@@ -6,9 +6,9 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { checkIdentity, compile, configureReleaseTree, depotRevision, prepareNativeTree, preserveNativeOutputs, releaseConfiguration, saveCheckpoint, restoreCheckpoint, validateReusableTree } from '../scripts/ci-release.mjs';
+import { checkIdentity, compile, configureReleaseTree, depotRevision, prepareNativeTree, preserveNativeOutputs, releaseConfiguration, saveCheckpoint, restoreCheckpoint, restorePortableRuntime, stagePortableShell, validateReusableTree } from '../scripts/ci-release.mjs';
 import { createReuseBudget, downloadReusableTree, findReusableArtifacts, nativeKey, removeNativeTree, reusableArtifact, runNativeCommand, withoutGitHubTokens } from '../scripts/ci-reuse.mjs';
-import { publishAssets, verifyRelease } from '../scripts/ci-publish.mjs';
+import { publicationSource, publishAssets, verifyRelease } from '../scripts/ci-publish.mjs';
 
 test('the owner-selected reuse budget leaves clean preparation time and never exceeds the stage deadline', () => {
   const started = Date.now();
@@ -371,7 +371,7 @@ test('native checkpoint CLI recovers completed compilation after packaging failu
   const root = path.join(dir, 'release tooling');
   const scripts = path.join(root, 'chromium/scripts');
   await fs.mkdir(scripts, { recursive: true });
-  for (const file of ['ci-release.mjs', 'ci-reuse.mjs']) {
+  for (const file of ['ci-release.mjs', 'ci-reuse.mjs', 'ci-publish.mjs']) {
     await fs.copyFile(fileURLToPath(new URL(`../scripts/${file}`, import.meta.url)), path.join(scripts, file));
   }
   await fs.writeFile(path.join(root, 'chromium/CHROMIUM_VERSION'), 'fixture');
@@ -435,6 +435,9 @@ test('recovery searches trusted nightly runs and skips expired or superseded che
   assert.equal(reusableArtifact([{ name: 'reuse-linux-x64-other-key-1' }, { name: 'checkpoint-linux-x64-1' }], options.platform, options.key), undefined);
   assert.deepEqual(reusableArtifact([{ name: 'native-linux-x64-native-key' }], options.platform, options.key),
     { name: 'native-linux-x64-native-key', archive: 'native.tar.gz' });
+  assert.deepEqual(reusableArtifact([{ name: 'release-linux-x64-native-key' }, { name: 'native-linux-x64-native-key' }], options.platform, options.key),
+    { name: 'release-linux-x64-native-key', archive: 'Flecha-linux-x64.tar.gz' });
+  assert.equal(reusableArtifact([{ name: 'release-macos-arm64-native-key' }], 'macos-arm64', options.key), undefined);
   assert.equal((await findReusableArtifacts(options, () => ({ artifacts: [], total_count: 0 })).next()).done, true);
 });
 
@@ -485,6 +488,7 @@ test('completed platforms pass through later build and checkpoint CLI stages wit
   const script = path.join(scripts, 'ci-release.mjs');
   await fs.copyFile(fileURLToPath(new URL('../scripts/ci-release.mjs', import.meta.url)), script);
   await fs.copyFile(fileURLToPath(new URL('../scripts/ci-reuse.mjs', import.meta.url)), path.join(scripts, 'ci-reuse.mjs'));
+  await fs.copyFile(fileURLToPath(new URL('../scripts/ci-publish.mjs', import.meta.url)), path.join(scripts, 'ci-publish.mjs'));
   await fs.writeFile(path.join(root, 'chromium/CHROMIUM_VERSION'), 'fixture');
   execFileSync('git', ['init', '--quiet', root]);
   execFileSync('git', ['-c', 'user.name=Release test', '-c', 'user.email=release@example.invalid',
@@ -632,6 +636,74 @@ test('publication requires every platform, matching provenance and untampered pa
   await assert.rejects(verifyRelease(dir, platforms, expected), /Checksum mismatch/);
   await fs.rm(path.join(dir, 'Flecha-windows-x64.zip'));
   await assert.rejects(verifyRelease(dir, [platforms[1]], expected), /Missing release asset/);
+});
+
+test('the publisher accepts a package from an active default-branch build and uses that build’s Chromium pin', () => {
+  const repository = 'owner/repo';
+  const branch = 'main';
+  const platform = 'linux-x64';
+  const nativeKey = 'a'.repeat(64);
+  const artifact = `release-${platform}-${nativeKey}`;
+  const sha = 'b'.repeat(40);
+  const run = { id: 11, status: 'in_progress', head_sha: sha, path: '.github/workflows/nightly-release.yml',
+    head_branch: branch, head_repository: { full_name: repository }, event: 'schedule' };
+  const inputs = { repository, branch, currentRun: '12', run: '11', platform, artifact };
+  const readRun = (overrides = {}) => args => {
+    if (args[1] === `repos/${repository}/actions/runs/11`) return JSON.stringify({ ...run, ...overrides });
+    assert.equal(args.at(-1), `repos/${repository}/contents/chromium/CHROMIUM_VERSION?ref=${sha}`);
+    return '158.0.8127.2\n';
+  };
+  assert.deepEqual(publicationSource(inputs, readRun()), { sha, chromium: '158.0.8127.2', nativeKey });
+  for (const untrusted of [{ head_repository: { full_name: 'other/repo' } }, { head_branch: 'other' },
+    { event: 'pull_request' }, { path: '.github/workflows/ci.yml' }, { id: 13 }]) {
+    assert.throws(() => publicationSource(inputs, readRun(untrusted)), /default-branch nightly/);
+  }
+  assert.throws(() => publicationSource({ ...inputs, artifact: 'release-windows-x64-*' }, readRun()), /Invalid nightly/);
+});
+
+test('a portable release reuses the verified browser with the current shell and host', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-portable-reuse-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const platform = process.platform === 'win32' ? 'windows-x64' : 'linux-x64';
+  const exe = platform === 'windows-x64' ? 'chrome.exe' : 'chrome';
+  const release = path.join(root, 'previous-release');
+  const stage = path.join(root, 'portable');
+  const shell = path.join(stage, 'resources/flecha-shell');
+  const bin = path.join(root, 'node/bin');
+  const node = path.join(bin, 'fixture-node');
+  const provenance = { platform, sha: 'previous', nativeKey: 'native-key', chromium: 'fixture', depot: 'toolchain', args: 'native args' };
+  await Promise.all([release, path.join(root, 'chromium/shell/dist'), path.join(root, 'chromium/native-host/dist'),
+    path.join(root, 'chromium/scripts'), bin].map(directory => fs.mkdir(directory, { recursive: true })));
+  await Promise.all([
+    fs.writeFile(path.join(root, 'chromium/shell/dist/frame.js'), 'new shell'),
+    fs.writeFile(path.join(root, 'chromium/native-host/dist/flecha-host.cjs'), 'new host'),
+    fs.writeFile(path.join(root, 'chromium/scripts/portable-launch.mjs'), 'new launcher'),
+    fs.writeFile(path.join(root, 'LICENSE'), 'Flecha license'),
+    fs.writeFile(path.join(bin, platform === 'windows-x64' ? 'LICENSE' : '../LICENSE'), 'Node license'),
+    fs.writeFile(node, 'node'),
+  ]);
+  const archiveName = `Flecha-${platform}.${platform === 'windows-x64' ? 'zip' : 'tar.gz'}`;
+  const archive = path.join(release, archiveName);
+  const files = { [archiveName]: 'fixture archive', [`${platform}.json`]: JSON.stringify(provenance) };
+  await Promise.all(Object.entries(files).map(([file, contents]) => fs.writeFile(path.join(release, file), contents)));
+  await fs.writeFile(path.join(release, `${platform}-SHA256SUMS`), Object.entries(files).map(([file, contents]) =>
+    `${createHash('sha256').update(contents).digest('hex')}  ${file}\n`).join(''));
+  const extract = async (file, target) => {
+    assert.equal(file, archive);
+    await fs.mkdir(shell, { recursive: true });
+    await fs.mkdir(path.join(target, 'native-host'));
+    await fs.writeFile(path.join(shell, 'obsolete.js'), 'old shell');
+    await fs.writeFile(path.join(target, 'native-host/old.js'), 'old host');
+    await fs.writeFile(path.join(target, exe), 'original browser');
+  };
+  await assert.rejects(restorePortableRuntime(archive, stage, { ...provenance, nativeKey: 'other' }, extract), /provenance mismatch/);
+  assert.equal(await restorePortableRuntime(archive, stage, provenance, extract), provenance.args);
+  await stagePortableShell(root, stage, node);
+  assert.equal(await fs.readFile(path.join(stage, exe), 'utf8'), 'original browser');
+  assert.equal(await fs.readFile(path.join(shell, 'frame.js'), 'utf8'), 'new shell');
+  assert.deepEqual(await fs.readdir(shell), ['frame.js']);
+  assert.equal(await fs.readFile(path.join(stage, 'native-host/flecha-host.cjs'), 'utf8'), 'new host');
+  assert.deepEqual(await fs.readdir(path.join(stage, 'native-host')), ['flecha-host.cjs']);
 });
 
 test('a platform joins its run release at the source commit and lists its checksums only after its other files', () => {

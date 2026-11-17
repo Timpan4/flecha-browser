@@ -1,0 +1,46 @@
+name: Publish nightly platform
+run-name: Publish ${{ inputs.platform }} from nightly ${{ inputs.build_run }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_run:
+        description: Nightly build run ID
+        type: string
+        required: true
+      platform:
+        description: Packaged platform
+        type: string
+        required: true
+      artifact:
+        description: Artifact holding the platform package and checksums
+        type: string
+        required: true
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: nightly-publish-${{ inputs.build_run }}-${{ inputs.platform }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+      - name: Verify this platform and add it to the nightly prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FLECHA_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          FLECHA_BUILD_RUN: ${{ inputs.build_run }}
+          FLECHA_PLATFORM: ${{ inputs.platform }}
+          FLECHA_PACKAGE_ARTIFACT: ${{ inputs.artifact }}
+        run: node chromium/scripts/ci-publish.mjs

@@ -6,8 +6,9 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { pipeline } from 'node:stream/promises';
 import { execFileSync } from 'node:child_process';
+import { trustedRun } from './ci-reuse.mjs';
 
-export async function verifyRelease(dir, platforms, { sha, chromium }) {
+export async function verifyRelease(dir, platforms, { sha, chromium, nativeKey }) {
   const files = new Set(await fs.readdir(dir));
   for (const { platform } of platforms) {
     const archive = `Flecha-${platform}.${platform.startsWith('windows-') ? 'zip' : 'tar.gz'}`;
@@ -18,7 +19,8 @@ export async function verifyRelease(dir, platforms, { sha, chromium }) {
       files.delete(file);
     }
     const provenance = JSON.parse(await fs.readFile(path.join(dir, provenanceName), 'utf8'));
-    if (provenance.sha !== sha || provenance.chromium !== chromium || provenance.platform !== platform) {
+    if (provenance.sha !== sha || provenance.chromium !== chromium || provenance.platform !== platform ||
+        (nativeKey !== undefined && provenance.nativeKey !== nativeKey)) {
       throw new Error(`Release provenance mismatch: ${platform}`);
     }
     const checksums = new Map();
@@ -78,16 +80,37 @@ export function publishAssets({ repository, tag, sha, title, notes, files, check
   }
 }
 
+export function publicationSource({ repository, branch, currentRun, run, platform, artifact }, gh) {
+  const prefix = `release-${platform}-`;
+  const nativeKey = artifact?.startsWith(prefix) && artifact.slice(prefix.length);
+  if (!repository || !branch || !/^\d+$/.test(run || '') || !/^[a-f0-9]{64}$/.test(nativeKey || '')) {
+    throw new Error('Invalid nightly publication inputs.');
+  }
+  const source = JSON.parse(gh(['api', `repos/${repository}/actions/runs/${run}`]));
+  const sha = source.head_sha;
+  if (String(source.id) !== run || !/^[a-f0-9]{40}$/.test(sha || '') || !trustedRun(source, { repository, branch, currentRun })) {
+    throw new Error('The package must come from a default-branch nightly build in this repository.');
+  }
+  const chromium = gh(['api', '-H', 'Accept: application/vnd.github.raw+json',
+    `repos/${repository}/contents/chromium/CHROMIUM_VERSION?ref=${sha}`]).trim();
+  return { sha, chromium, nativeKey };
+}
+
 async function main() {
   const root = fileURLToPath(new URL('../..', import.meta.url));
   const platforms = JSON.parse(await fs.readFile(path.join(root, 'chromium/build/ci-platforms.json'), 'utf8'));
   const selected = platforms.filter(({ platform }) => platform === process.env.FLECHA_PLATFORM);
   if (selected.length !== 1) throw new Error(`Unknown release platform: ${process.env.FLECHA_PLATFORM}`);
-  const chromium = (await fs.readFile(path.join(root, 'chromium/CHROMIUM_VERSION'), 'utf8')).trim();
-  const { GITHUB_SHA: sha, GITHUB_RUN_ID: run, GITHUB_REPOSITORY: repository, GITHUB_SERVER_URL: server } = process.env;
-  if (!sha || !/^\d+$/.test(run || '') || !repository || !server) throw new Error('Missing GitHub release context.');
+  const { FLECHA_BUILD_RUN: run, FLECHA_DEFAULT_BRANCH: branch, FLECHA_PACKAGE_ARTIFACT: artifact,
+    GITHUB_RUN_ID: currentRun, GITHUB_REPOSITORY: repository, GITHUB_SERVER_URL: server } = process.env;
+  if (!currentRun || !server) throw new Error('Missing GitHub release context.');
+  const gh = args => execFileSync('gh', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
+  const source = publicationSource({ repository, branch, currentRun, run, platform: selected[0].platform, artifact }, gh);
+  const { sha, chromium } = source;
   const dir = path.join(root, 'release');
-  await verifyRelease(dir, selected, { sha, chromium });
+  await fs.mkdir(dir);
+  gh(['run', 'download', run, '--repo', repository, '--name', artifact, '--dir', dir]);
+  await verifyRelease(dir, selected, source);
   const tag = `nightly-${run}`;
   const notes = path.join(root, 'release-notes.md');
   await fs.writeFile(notes, `Nightly build of Flecha from ${sha}, based on Chromium ${chromium}.\n\n` +
@@ -99,8 +122,7 @@ async function main() {
   // verifyRelease left exactly this platform's archive, provenance and checksum file in dir.
   const checksums = path.join(dir, `${selected[0].platform}-SHA256SUMS`);
   const files = (await fs.readdir(dir)).map(file => path.join(dir, file)).filter(file => file !== checksums);
-  publishAssets({ repository, tag, sha, notes, files, checksums, title: `Nightly ${new Date().toISOString().slice(0, 10)} (${run})` },
-    args => execFileSync('gh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] }));
+  publishAssets({ repository, tag, sha, notes, files, checksums, title: `Nightly ${new Date().toISOString().slice(0, 10)} (${run})` }, gh);
   await fs.appendFile(process.env.GITHUB_STEP_SUMMARY,
     `Published ${selected[0].platform} to [${tag}](${server}/${repository}/releases/tag/${tag}) from ${sha}.\n`);
 }

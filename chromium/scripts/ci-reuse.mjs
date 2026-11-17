@@ -119,6 +119,10 @@ export function nativeKey(root, configuration) {
 
 export function reusableArtifact(artifacts, platform, key) {
   const available = artifacts.filter(artifact => !artifact.expired);
+  if (!platform.startsWith('macos-')) {
+    const release = available.find(artifact => artifact.name === `release-${platform}-${key}`);
+    if (release) return { name: release.name, archive: `Flecha-${platform}.${platform.startsWith('windows-') ? 'zip' : 'tar.gz'}` };
+  }
   const native = available.find(artifact => artifact.name === `native-${platform}-${key}`);
   if (native) return { name: native.name, archive: 'native.tar.gz' };
   const prefix = `reuse-${platform}-${key}-`;
@@ -153,6 +157,7 @@ export async function* findReusableArtifacts(options, api) {
     visited += response.artifacts.length;
     for (const artifact of response.artifacts) {
       if (artifact.name !== `native-${platform}-${key}` &&
+          artifact.name !== `release-${platform}-${key}` &&
           !artifact.name.startsWith(`reuse-${platform}-${key}-`) &&
           !artifact.name.startsWith(`checkpoint-${platform}-`)) continue;
       const runId = String(artifact.workflow_run?.id);

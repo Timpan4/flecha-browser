@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import { pipeline } from 'node:stream/promises';
 import { createReadStream } from 'node:fs';
 import { nativeKey, downloadReusableTree, createReuseBudget, removeNativeTree, runNativeCommand, withoutGitHubTokens } from './ci-reuse.mjs';
+import { verifyRelease } from './ci-publish.mjs';
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
 const windows = process.platform === 'win32';
@@ -188,6 +189,41 @@ export async function compile(command, args, { cwd, env, milliseconds, signal })
   }
 }
 
+export async function stagePortableShell(root, stage, nodeExecutable = process.execPath) {
+  const shell = path.join(stage, 'resources/flecha-shell');
+  const host = path.join(stage, 'native-host');
+  await fs.rm(shell, { recursive: true, force: true });
+  await fs.rm(host, { recursive: true, force: true });
+  await fs.mkdir(host);
+  await fs.cp(path.join(root, 'chromium/shell/dist'), shell, { recursive: true });
+  await fs.copyFile(nodeExecutable, path.join(stage, windows ? 'node.exe' : 'node'));
+  await fs.copyFile(path.join(root, 'chromium/native-host/dist/flecha-host.cjs'), path.join(host, 'flecha-host.cjs'));
+  await fs.copyFile(path.join(root, 'chromium/scripts/portable-launch.mjs'), path.join(stage, 'portable-launch.mjs'));
+  await fs.copyFile(path.join(root, 'LICENSE'), path.join(stage, 'FLECHA-LICENSE'));
+  const nodeLicense = path.join(path.dirname(nodeExecutable), windows ? 'LICENSE' : '../LICENSE');
+  await fs.copyFile(nodeLicense, path.join(stage, 'NODE-LICENSE'));
+  if (windows) {
+    await fs.writeFile(path.join(stage, 'Flecha.cmd'), '@echo off\r\n"%~dp0node.exe" "%~dp0portable-launch.mjs" %*\r\n');
+  } else {
+    await fs.chmod(path.join(stage, 'node'), 0o755);
+    await fs.writeFile(path.join(stage, 'flecha'), '#!/bin/sh\nhere="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"\nexec "$here/node" "$here/portable-launch.mjs" "$@"\n', { mode: 0o755 });
+  }
+}
+
+export async function restorePortableRuntime(archive, stage, source, extract) {
+  const directory = path.dirname(archive);
+  await verifyRelease(directory, [{ platform: source.platform }], source);
+  const provenance = JSON.parse(await fs.readFile(path.join(directory, `${source.platform}.json`), 'utf8'));
+  if (provenance.depot !== source.depot || typeof provenance.args !== 'string') {
+    throw new Error('Portable runtime has no compatible build configuration.');
+  }
+  await fs.mkdir(stage);
+  await extract(archive, stage);
+  const executable = path.join(stage, source.platform === 'windows-x64' ? 'chrome.exe' : 'chrome');
+  if (!(await fs.stat(executable)).isFile()) throw new Error('Portable runtime has no browser executable.');
+  return provenance.args;
+}
+
 async function main() {
   if (process.env.GITHUB_ACTIONS !== 'true' || process.env.RUNNER_ENVIRONMENT !== 'github-hosted') {
     throw new Error('This script writes only to disposable GitHub-hosted build trees.');
@@ -213,12 +249,29 @@ async function main() {
   const stateFile = path.join(work, 'state.json');
   const gn = path.join(src, 'buildtools', windows ? 'win/gn.exe' : mac ? 'mac/gn' : 'linux64/gn');
   const archive = path.join(root, 'checkpoint.tar.gz');
+  const dist = path.join(root, 'release');
   const showDisk = () => {
     const disk = capture(windows ? 'fsutil' : 'df', windows ? ['volume', 'diskfree', path.parse(work).root] : ['-h', work], work);
     console.log(disk);
   };
   const output = async (key, value) => {
     if (process.env.GITHUB_OUTPUT) await fs.appendFile(process.env.GITHUB_OUTPUT, `${key}=${value}\n`);
+  };
+
+  const packagePortable = async (stage, invoke = run) => {
+    await fs.mkdir(dist);
+    await stagePortableShell(root, stage);
+    if (windows) await invoke('7z', ['a', '-tzip', path.join(dist, 'Flecha-windows-x64.zip'), '.'], stage);
+    else await invoke('tar', ['-czf', path.join(dist, 'Flecha-linux-x64.tar.gz'), '-C', stage, '.'], root);
+  };
+  const writePackageMetadata = async (key, args, reusedFrom) => {
+    const provenance = { ...identity, nativeKey: key, reusedFrom, args };
+    await fs.writeFile(path.join(dist, `${platform}.json`), JSON.stringify(provenance, null, 2) + '\n');
+    for (const file of await fs.readdir(dist)) {
+      const hash = createHash('sha256');
+      await pipeline(createReadStream(path.join(dist, file)), hash);
+      await fs.appendFile(path.join(dist, `${platform}-SHA256SUMS`), `${hash.digest('hex')}  ${file}\n`);
+    }
   };
 
   if (mode === 'prepare') return withStageCancellation(async signal => {
@@ -245,11 +298,20 @@ async function main() {
           prepareRun('sudo', ['-n', 'bash', 'build/install-build-deps.sh', '--no-prompt']));
         await prepareRun(gn, ['gen', 'out/Release', '--fail-on-unused-args'], src, candidate ? budget.deadline : undefined);
       } });
+    const stage = path.join(work, 'portable');
+    let cachedArgs;
     const reused = await downloadReusableTree(root, { repository: process.env.GITHUB_REPOSITORY,
       branch: process.env.FLECHA_DEFAULT_BRANCH, currentRun: process.env.GITHUB_RUN_ID, platform, key, work,
       get deadline() { return budget.deadline; }, signal,
       cleanup: directory => budget.required(() => removeNativeTree(directory, { deadline: budget.stageDeadline, signal })) },
     async (archive, candidate) => {
+      if (candidate.name === `release-${platform}-${key}`) {
+        cachedArgs = await restorePortableRuntime(archive, stage, { ...identity, sha: candidate.sha, nativeKey: key },
+          (file, directory) => windows
+            ? prepareRun('7z', ['x', '-y', file], directory, budget.deadline)
+            : prepareRun('tar', ['-xzf', file], directory, budget.deadline));
+        return;
+      }
       await restoreCheckpoint(work, archive, { create: false, deadline: budget.deadline, signal });
       await validateReusableTree(work, { ...identity, sha: candidate.sha, nativeKey: key });
       await configure(candidate);
@@ -257,6 +319,10 @@ async function main() {
     if (!reused) {
       await prepareNativeTree({ work, depot, src, configuration, run: prepareRun, chromium, signal });
       await configure();
+    } else if (cachedArgs !== undefined) {
+      await packagePortable(stage, (command, args, cwd) => prepareRun(command, args, cwd));
+      await writePackageMetadata(key, cachedArgs, reused);
+      await output('package', `release-${platform}-${key}`);
     }
     showDisk();
     return;
@@ -317,13 +383,9 @@ async function main() {
   state.nativeComplete = true;
   await fs.writeFile(stateFile, JSON.stringify(state));
 
-  const dist = path.join(root, 'release');
-  await fs.mkdir(dist, { recursive: true });
-  const provenance = { ...identity, nativeKey: state.nativeKey, reusedFrom: state.reusedFrom,
-    args: await fs.readFile(path.join(out, 'args.gn'), 'utf8') };
-  await fs.writeFile(path.join(dist, `${platform}.json`), JSON.stringify(provenance, null, 2) + '\n');
   if (mac) {
     // Existing signing code seals the app ad hoc. No stable updater or notarization credentials.
+    await fs.mkdir(dist);
     run('bash', [path.join(root, 'chromium/scripts/package-release.sh')], root);
     run('tar', ['-czf', path.join(dist, 'Flecha-macos-arm64.tar.gz'), '-C', path.join(out, 'flecha-release/Flecha'), 'Flecha.app'], root);
   } else {
@@ -339,32 +401,13 @@ async function main() {
       await fs.mkdir(path.dirname(target), { recursive: true });
       await fs.cp(source, target, { recursive: true, preserveTimestamps: true });
     }
-    await fs.cp(path.join(root, 'chromium/shell/dist'), path.join(stage, 'resources/flecha-shell'), { recursive: true });
-    await fs.mkdir(path.join(stage, 'native-host'), { recursive: true });
-    await fs.copyFile(process.execPath, path.join(stage, windows ? 'node.exe' : 'node'));
-    await fs.copyFile(path.join(root, 'chromium/native-host/dist/flecha-host.cjs'), path.join(stage, 'native-host/flecha-host.cjs'));
-    await fs.copyFile(path.join(root, 'chromium/scripts/portable-launch.mjs'), path.join(stage, 'portable-launch.mjs'));
     await fs.copyFile(path.join(src, 'LICENSE'), path.join(stage, 'CHROMIUM-LICENSE'));
-    await fs.copyFile(path.join(root, 'LICENSE'), path.join(stage, 'FLECHA-LICENSE'));
-    const nodeLicense = path.join(path.dirname(process.execPath), windows ? 'LICENSE' : '../LICENSE');
-    await fs.copyFile(nodeLicense, path.join(stage, 'NODE-LICENSE'));
-    if (windows) {
-      await fs.writeFile(path.join(stage, 'Flecha.cmd'), '@echo off\r\n"%~dp0node.exe" "%~dp0portable-launch.mjs" %*\r\n');
-      run('7z', ['a', '-tzip', path.join(dist, 'Flecha-windows-x64.zip'), '.'], stage);
-    } else {
-      await fs.chmod(path.join(stage, 'node'), 0o755);
-      await fs.writeFile(path.join(stage, 'flecha'), '#!/bin/sh\nhere="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"\nexec "$here/node" "$here/portable-launch.mjs" "$@"\n', { mode: 0o755 });
-      run('tar', ['-czf', path.join(dist, 'Flecha-linux-x64.tar.gz'), '-C', stage, '.'], root);
-    }
+    await packagePortable(stage);
   }
-  for (const file of await fs.readdir(dist)) {
-    const hash = createHash('sha256');
-    await pipeline(createReadStream(path.join(dist, file)), hash);
-    await fs.appendFile(path.join(dist, `${platform}-SHA256SUMS`), `${hash.digest('hex')}  ${file}\n`);
-  }
-  // Publish completion only after every packaging and checksum operation succeeds.
+  await writePackageMetadata(state.nativeKey, await fs.readFile(path.join(out, 'args.gn'), 'utf8'), state.reusedFrom);
   await fs.writeFile(stateFile, JSON.stringify({ ...state, complete: true }));
   showDisk();
+  await output('package', `release-${platform}-${state.nativeKey}`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();
