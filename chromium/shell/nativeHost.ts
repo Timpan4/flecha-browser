@@ -420,6 +420,7 @@ export function registerNativeHost(ctx: NativeHostContext) {
           `(() => {
             const el = document.querySelector(${JSON.stringify(selector)});
             if (!el) return 'missing';
+            if (el.matches(':disabled') || ((el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) && el.readOnly)) return 'readonly';
             el.scrollIntoView({ block: 'center' });
             el.focus();
             if (${!!clear} && 'value' in el && (${input === ''} || (el instanceof HTMLInputElement && el.selectionStart === null))) {
@@ -436,6 +437,7 @@ export function registerNativeHost(ctx: NativeHostContext) {
           })()`,
         );
         if (result === 'missing') return fail(`No element matches ${selector}`);
+        if (result === 'readonly') return fail(`The field matching ${selector} is read-only or disabled`);
         if (result === 'invalid') return fail(`The field matching ${selector} rejected the replacement value`);
         replaced = result === 'replaced';
       }

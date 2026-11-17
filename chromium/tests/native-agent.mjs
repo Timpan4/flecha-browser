@@ -422,6 +422,13 @@ try {
   );
   await call('type', { tabId: agentTab, selector: '#date', text: '2026-11-17', clear: true });
   assert.equal(await evaluate(agentPage, "document.querySelector('#date').value"), '2026-11-17');
+  for (const property of ['readOnly', 'disabled']) {
+    await evaluate(agentPage, `document.querySelector('#date')[${JSON.stringify(property)}] = true`);
+    const refused = await client.callTool({ name: 'type', arguments: { tabId: agentTab, selector: '#date', text: '2026-12-01', clear: true } });
+    assert.equal(refused.isError, true, property);
+    assert.equal(await evaluate(agentPage, "document.querySelector('#date').value"), '2026-11-17', property);
+    await evaluate(agentPage, `document.querySelector('#date')[${JSON.stringify(property)}] = false`);
+  }
   console.log("PASS click, type, press_key, screenshot and read_page work in the agent's tab while it is hidden");
   x11('type', 'e');
   await draftIs('abcde');
