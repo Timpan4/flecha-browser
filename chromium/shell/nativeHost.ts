@@ -29,7 +29,7 @@ export interface NativeHostContext {
     chromeTab(tabId: string): Promise<number | undefined>;
     currentChromeTab(tabId: string): number | undefined;
     activate(tabId: string): void;
-    close(tabId: string, chromeId: number | undefined, checkBackground?: () => Promise<boolean>): Promise<void>;
+    close(tabId: string, chromeId: number | undefined, checkBackground?: () => Promise<void>): Promise<void>;
   };
   /** The agent started or stopped working in a tab (`agentTabsInUse` changed): tab sleep wakes it and lets it be. Settles once woken. */
   agentTabsChanged(): Promise<void>;
@@ -165,7 +165,7 @@ export function registerNativeHost(ctx: NativeHostContext) {
       if (message.error) console.error('Flecha shell: agent bridge failed:', message.error);
       changed();
     } else if (message.type === 'tool') {
-      void runTool(message.name as AgentToolName, message.args ?? {}).then((result) => {
+      void runTool(message.name as AgentToolName, message.args ?? {}, message.deadline).then((result) => {
         try {
           post({ type: 'toolResult', id: message.id, result });
         } catch {
@@ -283,15 +283,20 @@ export function registerNativeHost(ctx: NativeHostContext) {
     return tabs;
   }
 
-  async function runTool(name: AgentToolName, args: Record<string, any>): Promise<AgentResult> {
+  async function runTool(name: AgentToolName, args: Record<string, any>, deadline?: number): Promise<AgentResult> {
+    const requireCurrent = () => {
+      if (deadline !== undefined && Date.now() >= deadline) throw new Error('The agent request expired.');
+    };
     try {
-      return await tools[name](args);
+      requireCurrent();
+      return await tools[name](args, requireCurrent);
     } catch (err) {
       return fail(err instanceof Error ? err.message : String(err));
     }
   }
 
-  type PageTarget = { chromeId: number; checkEditable?: () => Promise<boolean> };
+  type EditableState = { visible: boolean; discarded: boolean };
+  type PageTarget = { chromeId: number; checkEditable?: () => Promise<EditableState>; requireCurrent?: () => void };
 
   /**
    * The tool's tab with its Chromium tab, after telling the sidebar. It stays where it is: tools
@@ -314,11 +319,13 @@ export function registerNativeHost(ctx: NativeHostContext) {
   async function checkEditable(tabId: string, chromeId: number | undefined, allowVisibleTab: unknown) {
     requireBackgroundTab(tabId, allowVisibleTab);
     let visibleInChrome = false;
+    let discarded = false;
     if (chromeId !== undefined) {
       // The Store can switch before Chromium finishes showing the replacement tab.
       const tabs = await chrome.tabs.query({});
       const tab = tabs.find((candidate) => candidate.id === chromeId);
       if (!tab) throw new Error('The Chromium tab has closed.');
+      discarded = tab.discarded === true;
       const split = tab.splitViewId;
       visibleInChrome = tab.active || (split !== undefined && split >= 0 &&
         tabs.some((peer) => peer.active && peer.windowId === tab.windowId && peer.splitViewId === split));
@@ -327,16 +334,25 @@ export function registerNativeHost(ctx: NativeHostContext) {
     if (!store.state.tabs[tabId] || ctx.tabs.currentChromeTab(tabId) !== chromeId) {
       throw new Error('Tab ownership changed before the agent action could run.');
     }
-    return visibleInChrome;
+    return { visible: visibleInChrome, discarded };
   }
 
-  async function editTarget(tabId: string, action: string, allowVisibleTab: unknown): Promise<PageTarget> {
+  async function editTarget(tabId: string, action: string, allowVisibleTab: unknown, requireCurrent: () => void): Promise<PageTarget> {
     requireBackgroundTab(tabId, allowVisibleTab);
     const page = await target(tabId, action);
-    return { chromeId: page.chromeId, checkEditable: () => checkEditable(tabId, page.chromeId, allowVisibleTab) };
+    return {
+      chromeId: page.chromeId,
+      requireCurrent,
+      checkEditable: async () => {
+        requireCurrent();
+        const state = await checkEditable(tabId, page.chromeId, allowVisibleTab);
+        requireCurrent();
+        return state;
+      },
+    };
   }
 
-  const tools: Record<AgentToolName, (args: Record<string, any>) => Promise<AgentResult>> = {
+  const tools: Record<AgentToolName, (args: Record<string, any>, requireCurrent: () => void) => Promise<AgentResult>> = {
     list_tabs: async () => {
       showActivity(undefined, 'listing tabs');
       return text(listTabs());
@@ -355,16 +371,20 @@ export function registerNativeHost(ctx: NativeHostContext) {
       showActivity(tabId, 'switching tab');
       return text('ok');
     },
-    close_tab: async ({ tabId, allowVisibleTab }) => {
+    close_tab: async ({ tabId, allowVisibleTab }, requireCurrent) => {
       if (!store.state.tabs[tabId]) return fail(`No tab with id ${tabId}`);
       const chromeId = ctx.tabs.currentChromeTab(tabId);
-      if (allowVisibleTab === true) await checkEditable(tabId, chromeId, allowVisibleTab);
-      await ctx.tabs.close(tabId, chromeId, allowVisibleTab === true ? undefined : () => checkEditable(tabId, chromeId, allowVisibleTab));
+      const check = async () => {
+        await checkEditable(tabId, chromeId, allowVisibleTab);
+        requireCurrent();
+      };
+      if (allowVisibleTab === true) await check();
+      await ctx.tabs.close(tabId, chromeId, allowVisibleTab === true ? undefined : check);
       showActivity(tabId, 'closing a tab');
       return text('ok');
     },
-    navigate: async ({ tabId, url, action, allowVisibleTab }) => {
-      const t = await editTarget(tabId, url ? `opening ${url}` : (action ?? 'navigating'), allowVisibleTab);
+    navigate: async ({ tabId, url, action, allowVisibleTab }, requireCurrent) => {
+      const t = await editTarget(tabId, url ? `opening ${url}` : (action ?? 'navigating'), allowVisibleTab, requireCurrent);
       await t.checkEditable?.();
       if (url) await chrome.tabs.update(t.chromeId, { url: String(url) });
       else if (action === 'back') await chrome.tabs.goBack(t.chromeId).catch(() => undefined);
@@ -394,12 +414,12 @@ export function registerNativeHost(ctx: NativeHostContext) {
     },
     console_logs: async ({ tabId, level, limit = 50 }) => {
       const t = await target(tabId, 'reading the console');
-      await attach(t.chromeId);
+      await attachTarget(t);
       const entries = (consoleLogs.get(t.chromeId) ?? []).filter((e) => !level || e.level === level);
       return text(entries.slice(-limit).map((e) => `[${e.level}] ${e.message}${e.source ? `  (${e.source})` : ''}`).join('\n') || '(no messages)');
     },
-    click: async ({ tabId, selector, allowVisibleTab }) => {
-      const t = await editTarget(tabId, `clicking ${selector}`, allowVisibleTab);
+    click: async ({ tabId, selector, allowVisibleTab }, requireCurrent) => {
+      const t = await editTarget(tabId, `clicking ${selector}`, allowVisibleTab, requireCurrent);
       const clicked = await withInput(t, async () => {
         const point = (await evaluate(t, centerOf(String(selector)))) as { x: number; y: number } | undefined;
         if (!point) return false;
@@ -413,8 +433,8 @@ export function registerNativeHost(ctx: NativeHostContext) {
       await settle(t.chromeId);
       return text({ clicked: selector, url: (await chrome.tabs.get(t.chromeId)).url });
     },
-    type: async ({ tabId, selector, text: value, clear, submit, allowVisibleTab }) => {
-      const t = await editTarget(tabId, `typing into ${selector ?? 'the page'}`, allowVisibleTab);
+    type: async ({ tabId, selector, text: value, clear, submit, allowVisibleTab }, requireCurrent) => {
+      const t = await editTarget(tabId, `typing into ${selector ?? 'the page'}`, allowVisibleTab, requireCurrent);
       const input = String(value);
       const problem = await withInput(t, async () => {
         let replaced = false;
@@ -429,14 +449,25 @@ export function registerNativeHost(ctx: NativeHostContext) {
               el.focus();
               if (document.activeElement !== el) return 'unfocused';
               if (${!!clear} && el instanceof HTMLInputElement && /^(date|datetime-local|month|time|week)$/.test(el.type)) {
-                const previous = el.value;
                 const replacement = ${JSON.stringify(input)};
-                el.value = replacement;
-                if (el.value !== replacement) { el.value = previous; return 'invalid'; }
+                const candidate = document.createElement('input');
+                candidate.type = el.type;
+                candidate.value = replacement;
+                if (replacement && !candidate.value) return 'invalid';
+                el.value = candidate.value;
                 el.dispatchEvent(new Event('input', { bubbles: true }));
                 return 'replaced';
               }
-              if (${!!clear} && (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) el.select();
+              if (${!!clear}) {
+                if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) el.select();
+                else if (el.isContentEditable) {
+                  const range = document.createRange();
+                  range.selectNodeContents(el);
+                  const selection = window.getSelection();
+                  selection.removeAllRanges();
+                  selection.addRange(range);
+                } else return 'cannot-clear';
+              }
               return document.activeElement === el ? 'focused' : 'unfocused';
             })()`,
           );
@@ -444,27 +475,33 @@ export function registerNativeHost(ctx: NativeHostContext) {
           if (result === 'readonly') return `The field matching ${selector} is read-only or disabled`;
           if (result === 'unfocused') return `The field matching ${selector} could not hold focus`;
           if (result === 'invalid') return `The field matching ${selector} rejected the replacement value`;
+          if (result === 'cannot-clear') return `The element matching ${selector} does not support text replacement`;
           replaced = result === 'replaced';
         }
         // Select for replacement first so a tab switch before insertion preserves the original text.
         if (!replaced) {
-          if (selector && clear && input === '') await pressKey(t, 'Backspace');
-          else await debug(t, 'Input.insertText', { text: input });
+          const send = await debuggerFor(t);
+          if (selector && !await evaluateWith(send, `document.activeElement === document.querySelector(${JSON.stringify(selector)})`)) {
+            return `The field matching ${selector} could not hold focus`;
+          }
+          requireCurrent();
+          if (selector && clear && input === '') await dispatchKey(send, 'Backspace');
+          else await send('Input.insertText', { text: input });
         }
-        if (submit) await pressKey(t, 'Enter');
+        if (submit) await dispatchKey(await debuggerFor(t), 'Enter');
       });
       if (problem) return fail(problem);
       await settle(t.chromeId);
       return text('ok');
     },
-    press_key: async ({ tabId, key, allowVisibleTab }) => {
-      const t = await editTarget(tabId, `pressing ${key}`, allowVisibleTab);
-      await withInput(t, () => pressKey(t, String(key)));
+    press_key: async ({ tabId, key, allowVisibleTab }, requireCurrent) => {
+      const t = await editTarget(tabId, `pressing ${key}`, allowVisibleTab, requireCurrent);
+      await withInput(t, async () => dispatchKey(await debuggerFor(t), String(key)));
       await settle(t.chromeId);
       return text('ok');
     },
-    evaluate: async ({ tabId, expression, allowVisibleTab }) => {
-      const t = await editTarget(tabId, 'running JavaScript', allowVisibleTab);
+    evaluate: async ({ tabId, expression, allowVisibleTab }, requireCurrent) => {
+      const t = await editTarget(tabId, 'running JavaScript', allowVisibleTab, requireCurrent);
       const result = await evaluate(t, String(expression));
       return text(result === undefined ? 'undefined' : result);
     },
@@ -555,7 +592,7 @@ export function registerNativeHost(ctx: NativeHostContext) {
     );
   }
 
-  function attach(chromeId: number): Promise<void> {
+  function attach(chromeId: number, discarded = false): Promise<void> {
     // Attached counts from the debugger's attach, but commands wait until the tab is awake and set
     // up: a call during that time waits for it too.
     let pending = attaching.get(chromeId);
@@ -565,7 +602,6 @@ export function registerNativeHost(ctx: NativeHostContext) {
       return Promise.resolve();
     }
     pending = (async () => {
-      const { discarded } = await chrome.tabs.get(chromeId);
       // Reload a discarded page in place, without activating its tab.
       if (discarded) {
         await chrome.tabs.reload(chromeId);
@@ -603,11 +639,20 @@ export function registerNativeHost(ctx: NativeHostContext) {
     });
   }
 
-  async function debuggerFor({ chromeId, checkEditable }: PageTarget) {
+  async function attachTarget({ chromeId, checkEditable, requireCurrent }: PageTarget) {
+    requireCurrent?.();
+    if (attached.has(chromeId) || attaching.has(chromeId)) return attach(chromeId);
+    const state = checkEditable ? await checkEditable() : await chrome.tabs.get(chromeId);
+    return attach(chromeId, state.discarded);
+  }
+
+  type SendDebug = (method: string, params?: object) => ReturnType<typeof sendDebug>;
+
+  async function debuggerFor(tab: PageTarget): Promise<SendDebug> {
     // Attach is shared. Permission to edit belongs to each tool request.
-    await attach(chromeId);
-    await checkEditable?.();
-    return (method: string, params?: object) => sendDebug(chromeId, method, params);
+    await attachTarget(tab);
+    await tab.checkEditable?.();
+    return (method, params) => sendDebug(tab.chromeId, method, params);
   }
 
   const inputTail = new Map<number, Promise<void>>();
@@ -616,8 +661,9 @@ export function registerNativeHost(ctx: NativeHostContext) {
     const { chromeId, checkEditable } = tab;
     // Input operations on one page share its focus and selection.
     const run = (inputTail.get(chromeId) ?? Promise.resolve()).then(async () => {
-      await attach(chromeId);
-      const emulateFocus = await checkEditable?.() === false;
+      tab.requireCurrent?.();
+      await attachTarget(tab);
+      const emulateFocus = (await checkEditable?.())?.visible === false;
       if (emulateFocus) await sendDebug(chromeId, 'Emulation.setFocusEmulationEnabled', { enabled: true });
       try {
         return await action();
@@ -642,7 +688,11 @@ export function registerNativeHost(ctx: NativeHostContext) {
   }
 
   async function evaluate(tab: PageTarget, expression: string): Promise<unknown> {
-    const result = (await debug(tab, 'Runtime.evaluate', {
+    return evaluateWith(await debuggerFor(tab), expression);
+  }
+
+  async function evaluateWith(send: SendDebug, expression: string): Promise<unknown> {
+    const result = (await send('Runtime.evaluate', {
       expression,
       awaitPromise: true,
       returnByValue: true,
@@ -677,7 +727,7 @@ export function registerNativeHost(ctx: NativeHostContext) {
   chrome.debugger.onDetach.addListener((source) => source.tabId !== undefined && forget(source.tabId));
   chrome.tabs.onRemoved.addListener((chromeId) => forget(chromeId));
 
-  async function pressKey(tab: PageTarget, key: string) {
+  async function dispatchKey(send: SendDebug, key: string) {
     const named: Record<string, [code: string, keyCode: number, text?: string]> = {
       Enter: ['Enter', 13, '\r'],
       Tab: ['Tab', 9],
@@ -697,7 +747,6 @@ export function registerNativeHost(ctx: NativeHostContext) {
     const [code, keyCode, keyText] =
       named[key] ?? (key.length === 1 ? [`Key${key.toUpperCase()}`, key.toUpperCase().charCodeAt(0), key] : [key, 0]);
     const base = { key, code, windowsVirtualKeyCode: keyCode, nativeVirtualKeyCode: keyCode };
-    const send = await debuggerFor(tab);
     // Send the gesture as a pair after one check so a tab switch cannot strand a key down.
     await Promise.all([
       send('Input.dispatchKeyEvent', { type: keyText ? 'keyDown' : 'rawKeyDown', ...base, text: keyText, unmodifiedText: keyText }),

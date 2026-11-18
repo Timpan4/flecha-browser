@@ -120,6 +120,7 @@ function register(mcp: McpServer) {
       new Promise<AgentResult>((resolve) => {
         const id = nextTool++;
         const wait = TOOL_TIMEOUT + (typeof args.timeoutMs === 'number' ? args.timeoutMs : 0);
+        const deadline = Date.now() + wait;
         const timer = setTimeout(() => finish(fail(`Flecha didn’t answer ${name} within ${wait / 1000}s`)), wait);
         const finish = (result: AgentResult) => {
           clearTimeout(timer);
@@ -127,7 +128,7 @@ function register(mcp: McpServer) {
           resolve(result);
         };
         tools.set(id, finish);
-        send({ type: 'tool', id, name, args });
+        send({ type: 'tool', id, name, args, deadline });
       });
     // The specs are typed one by one; in a loop they're all the same to us.
     (mcp.registerTool as (name: string, spec: object, cb: (args: Record<string, unknown>) => Promise<AgentResult>) => void)(

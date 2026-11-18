@@ -22,7 +22,7 @@ export type ToShell =
   /** The agent bridge started (with its address), stopped, or failed. */
   | { type: 'agent'; endpoint?: string; error?: string }
   /** A coding agent called a tool: the shell runs it and answers with a `toolResult`. */
-  | { type: 'tool'; id: number; name: string; args: Record<string, unknown> }
+  | { type: 'tool'; id: number; name: string; args: Record<string, unknown>; deadline?: number }
   /** One part of a message too big to send at once; the parts, joined, are its JSON. */
   | { type: 'chunk'; id: number; index: number; total: number; data: string };
 

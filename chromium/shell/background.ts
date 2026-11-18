@@ -1447,7 +1447,7 @@ async function start() {
               ours.delete(chromeId);
               throw error;
             }
-            if (live.get(id) !== chromeId) return;
+            if (live.get(id) !== chromeId) throw new Error('Tab ownership changed while closing the agent target.');
             live.delete(id);
             livePartition.delete(id);
             rememberLive();

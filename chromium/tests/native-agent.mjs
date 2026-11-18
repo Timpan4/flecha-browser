@@ -447,7 +447,14 @@ try {
     email.maxLength = 8;
     email.value = 'old@exam';
     email.addEventListener('beforeinput', event => { window.trustedEmailInput = event.isTrusted; });
-    document.body.append(redirected, email);
+    const dateTime = document.createElement('input');
+    dateTime.id = 'date-time';
+    dateTime.type = 'datetime-local';
+    const editable = document.createElement('div');
+    editable.id = 'editable';
+    editable.contentEditable = 'true';
+    editable.textContent = 'before';
+    document.body.append(redirected, email, dateTime, editable);
     field.focus();
   })()`);
   const redirected = await client.callTool({ name: 'type', arguments: { tabId: agentTab, selector: '#redirected', text: 'wrong', clear: true } });
@@ -456,6 +463,38 @@ try {
   await call('type', { tabId: agentTab, selector: '#email', text: 'new@example.test', clear: true });
   assert.deepEqual(await evaluate(agentPage, "({ value: document.querySelector('#email').value, trusted: window.trustedEmailInput })"),
     { value: 'new@exam', trusted: true });
+  await call('type', { tabId: agentTab, selector: '#date-time', text: '2026-11-17 09:30', clear: true });
+  assert.equal(await evaluate(agentPage, "document.querySelector('#date-time').value"), '2026-11-17T09:30');
+  await call('type', { tabId: agentTab, selector: '#editable', text: 'replacement', clear: true });
+  assert.equal(await evaluate(agentPage, "document.querySelector('#editable').textContent"), 'replacement');
+  await call('type', { tabId: agentTab, selector: '#editable', text: '', clear: true });
+  assert.equal(await evaluate(agentPage, "document.querySelector('#editable').textContent"), '');
+  await evaluate(worker, `
+    globalThis.realClock = Date.now;
+    globalThis.realCommand = chrome.debugger.sendCommand;
+    globalThis.inserting = new Promise(resolve => { globalThis.notifyInsert = resolve; });
+    globalThis.insertGate = new Promise(resolve => { globalThis.releaseInsert = resolve; });
+    chrome.debugger.sendCommand = async (...args) => {
+      if (args[1] === 'Input.insertText') { notifyInsert(); await insertGate; }
+      return realCommand(...args);
+    };
+    void 0;
+  `);
+  const stalledInput = call('type', { tabId: agentTab, selector: '#field', text: 'held', clear: true });
+  let queuedClick;
+  try {
+    await evaluate(worker, 'inserting');
+    queuedClick = client.callTool({ name: 'click', arguments: { tabId: agentTab, selector: '#count' } });
+    await stateWhere(`s => s.agent?.tabId === ${JSON.stringify(agentTab)} && s.agent.action === 'clicking #count'`);
+    await evaluate(worker, 'Date.now = () => Number.MAX_SAFE_INTEGER; releaseInsert();');
+    const expired = await queuedClick;
+    assert.equal(expired.isError, true);
+    assert.match(expired.content[0].text, /request expired/);
+    assert.equal(await evaluate(agentPage, 'counter'), 1, 'an expired click never edits the page');
+  } finally {
+    await evaluate(worker, 'Date.now = realClock; releaseInsert(); chrome.debugger.sendCommand = realCommand;');
+    await Promise.allSettled([stalledInput, queuedClick]);
+  }
   await call('activate_tab', { tabId: agentTab });
   await nativeActive(base + '/agent');
   await rpc('activate', mine);
@@ -542,6 +581,14 @@ try {
     const refused = await client.callTool({ name: 'press_key', arguments: { tabId: id, key: 'Enter' } });
     assert.equal(refused.isError, true, 'the visible split pane is protected');
     assert.match(refused.content[0].text, /This tab is visible/);
+  }
+  waitingFor = 'Chromium to show the draft and the agent tab in one split';
+  while (!await evaluate(worker, `chrome.tabs.query({}).then(tabs => {
+    const mine = tabs.find(tab => tab.url === ${JSON.stringify(base + '/mine')});
+    const race = tabs.find(tab => tab.url === ${JSON.stringify(base + '/switch-race')});
+    return mine?.splitViewId >= 0 && mine.splitViewId === race?.splitViewId;
+  })`)) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
   }
   await evaluate(worker, `
     globalThis.realUnsplit = chrome.tabs.unsplit;
