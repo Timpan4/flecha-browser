@@ -192,7 +192,7 @@ index c1378ee..26b4700 100644
 
  // Implements the debugger.getTargets() extension function.
 diff --git a/chrome/browser/extensions/api/tabs/tabs_api.cc b/chrome/browser/extensions/api/tabs/tabs_api.cc
-index a63c327..813ef9e 100644
+index a63c327..542acb6 100644
 --- a/chrome/browser/extensions/api/tabs/tabs_api.cc
 +++ b/chrome/browser/extensions/api/tabs/tabs_api.cc
 @@ -12,6 +12,7 @@
@@ -261,13 +261,13 @@ index a63c327..813ef9e 100644
    std::string error;
 +  const bool background_only = params->background_only.value_or(false);
    if (params->tab_ids.as_integers) {
-+    if (background_only || params->deadline) {
++    if (background_only || params->deadline || params->replacement_tab_id) {
 +      return RespondNow(Error("A guarded removal requires one tab ID."));
 +    }
      std::vector<int>& tab_ids = *params->tab_ids.as_integers;
      for (int tab_id : tab_ids) {
 -      if (!RemoveTab(tab_id, &error)) {
-+      if (!RemoveTab(tab_id, false, std::nullopt, &error)) {
++      if (!RemoveTab(tab_id, false, std::nullopt, std::nullopt, &error)) {
          return RespondNow(Error(std::move(error)));
        }
      }
@@ -275,11 +275,11 @@ index a63c327..813ef9e 100644
      EXTENSION_FUNCTION_VALIDATE(params->tab_ids.as_integer);
 -    if (!RemoveTab(*params->tab_ids.as_integer, &error)) {
 +    if (!RemoveTab(*params->tab_ids.as_integer, background_only,
-+                   params->deadline, &error)) {
++                   params->deadline, params->replacement_tab_id, &error)) {
        return RespondNow(Error(std::move(error)));
      }
    }
-@@ -2033,7 +2070,10 @@ ExtensionFunction::ResponseAction TabsRemoveFunction::Run() {
+@@ -2033,7 +2070,11 @@ ExtensionFunction::ResponseAction TabsRemoveFunction::Run() {
    return RespondLater();
  }
 
@@ -287,11 +287,12 @@ index a63c327..813ef9e 100644
 +bool TabsRemoveFunction::RemoveTab(int tab_id,
 +                                   bool background_only,
 +                                   std::optional<double> deadline,
++                                   std::optional<int> replacement_tab_id,
 +                                   std::string* error) {
    WindowController* window = nullptr;
    content::WebContents* contents = nullptr;
    if (!tabs_util::GetTabById(tab_id, browser_context(),
-@@ -2069,6 +2109,12 @@ bool TabsRemoveFunction::RemoveTab(int tab_id, std::string* error) {
+@@ -2069,6 +2110,39 @@ bool TabsRemoveFunction::RemoveTab(int tab_id, std::string* error) {
                             /*new_url=*/std::string(), js_callstack());
  #endif
 
@@ -301,10 +302,52 @@ index a63c327..813ef9e 100644
 +    return false;
 +  }
 +
++  TabListInterface* tab_list = nullptr;
++  ::tabs::TabInterface* replacement = nullptr;
++  if (replacement_tab_id && window->GetActiveTab() == contents) {
++    WindowController* replacement_window = nullptr;
++    int replacement_index = -1;
++    if (!tabs_util::GetTabById(*replacement_tab_id, browser_context(),
++                               include_incognito_information(),
++                               &replacement_window, nullptr,
++                               &replacement_index, error)) {
++      return false;
++    }
++    if (replacement_window != window || *replacement_tab_id == tab_id) {
++      *error = "The replacement must be a different tab in the same window.";
++      return false;
++    }
++    auto* browser = window->GetBrowserWindowInterface();
++    tab_list = browser ? TabListInterface::From(browser) : nullptr;
++    if (tab_list && replacement_index >= 0 &&
++        replacement_index < tab_list->GetTabCount()) {
++      replacement = tab_list->GetTab(replacement_index);
++    }
++    if (!replacement) {
++      *error = "The replacement tab is unavailable.";
++      return false;
++    }
++  }
++
    // The tab might not immediately close after calling Close() below, so we
    // should wait until WebContentsDestroyed is called before responding.
    web_contents_destroyed_observers_.push_back(
-@@ -3133,6 +3179,12 @@ ExtensionFunction::ResponseAction TabsGoForwardFunction::Run() {
+@@ -2080,6 +2154,14 @@ bool TabsRemoveFunction::RemoveTab(int tab_id, std::string* error) {
+   AddRef();
+   remaining_tabs_count_++;
+
++  // Switch only after all removal checks succeeded.
++  if (replacement) {
++    tab_list->ActivateTab(replacement->GetHandle());
++    if (remaining_tabs_count_ == 0) {
++      return true;
++    }
++  }
++
+   // There's a chance that the tab is being dragged, or we're in some other
+   // nested event loop. This code path ensures that the tab is safely closed
+   // under such circumstances, whereas |TabStripModel::CloseWebContentsAt()|
+@@ -3133,6 +3215,12 @@ ExtensionFunction::ResponseAction TabsGoForwardFunction::Run() {
      return RespondNow(Error(std::move(error)));
    }
 
@@ -317,7 +360,7 @@ index a63c327..813ef9e 100644
    content::NavigationController& controller = web_contents->GetController();
    if (!controller.CanGoForward()) {
      return RespondNow(Error(tabs_constants::kNotFoundNextPageError));
-@@ -3155,6 +3207,12 @@ ExtensionFunction::ResponseAction TabsGoBackFunction::Run() {
+@@ -3155,6 +3243,12 @@ ExtensionFunction::ResponseAction TabsGoBackFunction::Run() {
      return RespondNow(Error(std::move(error)));
    }
 
@@ -331,10 +374,10 @@ index a63c327..813ef9e 100644
    if (!controller.CanGoBack()) {
      return RespondNow(Error(tabs_constants::kNotFoundNextPageError));
 diff --git a/chrome/browser/extensions/api/tabs/tabs_api.h b/chrome/browser/extensions/api/tabs/tabs_api.h
-index 85f383e..1fbce48 100644
+index 85f383e..07912e1 100644
 --- a/chrome/browser/extensions/api/tabs/tabs_api.h
 +++ b/chrome/browser/extensions/api/tabs/tabs_api.h
-@@ -207,7 +207,10 @@ class TabsRemoveFunction : public ExtensionFunction {
+@@ -207,7 +207,11 @@ class TabsRemoveFunction : public ExtensionFunction {
   private:
    ~TabsRemoveFunction() override;
    ResponseAction Run() override;
@@ -342,6 +385,7 @@ index 85f383e..1fbce48 100644
 +  bool RemoveTab(int tab_id,
 +                 bool background_only,
 +                 std::optional<double> deadline,
++                 std::optional<int> replacement_tab_id,
 +                 std::string* error);
 
    int remaining_tabs_count_ = 0;
@@ -381,7 +425,7 @@ index 7261b8e..25bf60d 100644
          ],
          "returns_async": {
 diff --git a/chrome/common/extensions/api/tabs.json b/chrome/common/extensions/api/tabs.json
-index dbd3c25..fc5e80c 100644
+index dbd3c25..343f5ef 100644
 --- a/chrome/common/extensions/api/tabs.json
 +++ b/chrome/common/extensions/api/tabs.json
 @@ -693,6 +693,18 @@
@@ -422,7 +466,7 @@ index dbd3c25..fc5e80c 100644
            }
          ],
          "returns_async": {"name": "callback", "optional": true, "parameters": []}
-@@ -787,6 +811,18 @@
+@@ -787,6 +811,25 @@
                {"type": "integer", "minimum": 0},
                {"type": "array", "items": {"type": "integer", "minimum": 0}}
              ]
@@ -438,10 +482,17 @@ index dbd3c25..fc5e80c 100644
 +            "name": "deadline",
 +            "optional": true,
 +            "description": "Unix time in milliseconds after which the command must not start."
++          },
++          {
++            "type": "integer",
++            "name": "replacementTabId",
++            "minimum": 0,
++            "optional": true,
++            "description": "If the tab being closed is active, activate this tab in its window after the removal checks pass."
            }
          ],
          "returns_async": {"name": "callback", "optional": true, "parameters": []}
-@@ -1141,6 +1177,18 @@
+@@ -1141,6 +1184,18 @@
              "optional": true,
              "minimum": 0,
              "description": "The ID of the tab to navigate forward; defaults to the selected tab of the current window."
@@ -460,7 +511,7 @@ index dbd3c25..fc5e80c 100644
            }
          ],
          "returns_async": {
-@@ -1160,6 +1208,18 @@
+@@ -1160,6 +1215,18 @@
              "optional": true,
              "minimum": 0,
              "description": "The ID of the tab to navigate back; defaults to the selected tab of the current window."

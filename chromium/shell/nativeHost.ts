@@ -26,7 +26,7 @@ export interface NativeHostContext {
     /** Opens an address in a new background Today tab, in the agent's folder; returns its id. */
     open(url: string, requireCurrent: () => void): string;
     /** The Chromium tab showing a Flecha tab, opened (in the background) if it has none yet. */
-    chromeTab(tabId: string, requireCurrent: () => void): Promise<number | undefined>;
+    chromeTab(tabId: string, requireCurrent: () => void, deadline?: number): Promise<number | undefined>;
     finishOpen(tabId: string, expired: boolean): Promise<void>;
     currentChromeTab(tabId: string): number | undefined;
     activate(tabId: string): void;
@@ -325,7 +325,7 @@ export function registerNativeHost(ctx: NativeHostContext) {
     requireCurrent();
     if (!store.state.tabs[tabId]) throw new Error(`No tab with id ${tabId}`);
     showActivity(tabId, action);
-    const chromeId = await ctx.tabs.chromeTab(tabId, requireCurrent);
+    const chromeId = await ctx.tabs.chromeTab(tabId, requireCurrent, deadline);
     requireCurrent();
     if (chromeId === undefined) throw new Error(`Tab ${tabId} couldn’t be opened`);
     const requireTarget = () => {
@@ -386,12 +386,12 @@ export function registerNativeHost(ctx: NativeHostContext) {
       showActivity(undefined, 'listing tabs');
       return text(listTabs());
     },
-    open_tab: async ({ url }, requireCurrent) => {
+    open_tab: async ({ url }, requireCurrent, deadline) => {
       const tabId = ctx.tabs.open(String(url), requireCurrent);
       showActivity(tabId, 'opening a tab');
       let expired = false;
       try {
-        const chromeId = await ctx.tabs.chromeTab(tabId, requireCurrent);
+        const chromeId = await ctx.tabs.chromeTab(tabId, requireCurrent, deadline);
         if (chromeId === undefined) throw new Error(`Tab ${tabId} couldn’t be opened`);
         requireCurrent();
         await settle(chromeId);

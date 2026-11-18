@@ -41,7 +41,9 @@ env.HOME = path.join(profile, 'home');
 for (const name of ['XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_STATE_HOME']) env[name] = path.join(profile, name.toLowerCase());
 
 // Your page, with a draft you type into, and the agent's, which counts clicks and logs keys.
+const requestedUrls = new Set();
 const server = createServer((request, response) => {
+  requestedUrls.add(request.url);
   response.setHeader('Content-Type', 'text/html');
   if (request.url === '/mine') return response.end('<title>My page</title><textarea id="draft" style="position: fixed; inset: 0; width: 100%; height: 100%"></textarea>');
   response.end(
@@ -1184,19 +1186,92 @@ try {
   `);
   const expiredUrl = base + '/agent?expired-setup';
   const expiresDuringSetup = client.callTool({ name: 'open_tab', arguments: { url: expiredUrl } });
+  let expiredReader;
   try {
     await Promise.race([evaluate(worker, 'setupMarked'), expiresDuringSetup.then(() => assert.fail('Open finished before marking the new tab'))]);
+    const opening = await stateWhere(`s => Object.values(s.tabs).some(t => t.url === ${JSON.stringify(expiredUrl)})`);
+    const tabId = Object.values(opening.tabs).find((tab) => tab.url === expiredUrl).id;
+    expiredReader = client.callTool({ name: 'read_page', arguments: { tabId } });
+    await stateWhere(`s => s.agent?.tabId === ${JSON.stringify(tabId)} && s.agent.action === 'reading the page'`);
     await evaluate(worker, 'Date.now = () => Number.MAX_SAFE_INTEGER; releaseSetup();');
-    const failure = await expiresDuringSetup;
-    assert.equal(failure.isError, true);
-    assert.match(failure.content[0].text, /request expired/);
+    for (const failure of await Promise.all([expiresDuringSetup, expiredReader])) {
+      assert.equal(failure.isError, true);
+      assert.match(failure.content[0].text, /request expired/);
+    }
+    await evaluate(worker, 'Date.now = setupClock;');
     assert.equal(await evaluate(worker, 'chrome.tabs.query({}).then(tabs => tabs.some(tab => tab.id === expiredSetupId))'), false);
-    await stateWhere(`s => !Object.values(s.tabs).some(t => t.url === ${JSON.stringify(expiredUrl)})`);
+    assert.ok(!JSON.parse((await call('list_tabs')).content[0].text).some((tab) => tab.id === tabId));
   } finally {
     await evaluate(worker, 'Date.now = setupClock; releaseSetup(); chrome.flechaPrivate.setAgentTab = setupMark;');
-    await Promise.allSettled([expiresDuringSetup]);
+    await Promise.allSettled([expiresDuringSetup, expiredReader]);
   }
-  console.log('PASS an expired open removes its unfinished agent tab');
+  console.log('PASS expired open and read requests leave no unfinished agent tab');
+
+  const setupPath = '/agent?expired-before-navigation';
+  const beforeNavigation = base + setupPath;
+  await evaluate(worker, `
+    globalThis.beforeSetupUpdate = chrome.tabs.update;
+    globalThis.beforeSetupClock = Date.now;
+    chrome.tabs.update = (id, properties, backgroundOnly, deadline) => {
+      if (properties.url !== ${JSON.stringify(beforeNavigation)}) return beforeSetupUpdate(id, properties);
+      if (!Number.isFinite(deadline)) throw new Error('Missing setup navigation deadline');
+      Date.now = () => Number.MAX_SAFE_INTEGER;
+      return beforeSetupUpdate(id, properties, backgroundOnly, 0);
+    };
+    void 0;
+  `);
+  try {
+    const refused = await client.callTool({ name: 'open_tab', arguments: { url: beforeNavigation } });
+    assert.equal(refused.isError, true);
+    assert.match(refused.content[0].text, /request expired/);
+    assert.equal(requestedUrls.has(setupPath), false);
+    await evaluate(worker, 'Date.now = beforeSetupClock;');
+    assert.ok(!JSON.parse((await call('list_tabs')).content[0].text).some((tab) => tab.url === beforeNavigation));
+  } finally {
+    await evaluate(worker, 'Date.now = beforeSetupClock; chrome.tabs.update = beforeSetupUpdate;');
+  }
+  console.log('PASS expired setup navigation never requests its URL');
+
+  const sharedUrl = base + '/agent?shared-setup-retry';
+  await evaluate(worker, `
+    globalThis.beforeSharedUpdate = chrome.tabs.update;
+    globalThis.firstSharedNavigation = new Promise(resolve => { globalThis.notifySharedNavigation = resolve; });
+    globalThis.sharedNavigationGate = new Promise(resolve => { globalThis.releaseSharedNavigation = resolve; });
+    globalThis.sharedDeadlines = [];
+    chrome.tabs.update = async (id, properties, backgroundOnly, deadline) => {
+      if (properties.url !== ${JSON.stringify(sharedUrl)}) return beforeSharedUpdate(id, properties);
+      if (!Number.isFinite(deadline)) throw new Error('Missing shared setup deadline');
+      sharedDeadlines.push(deadline);
+      if (sharedDeadlines.length === 1) {
+        notifySharedNavigation();
+        await sharedNavigationGate;
+        return beforeSharedUpdate(id, properties, backgroundOnly, 0);
+      }
+      return beforeSharedUpdate(id, properties, backgroundOnly, deadline);
+    };
+    void 0;
+  `);
+  const sharedOpen = client.callTool({ name: 'open_tab', arguments: { url: sharedUrl } });
+  let sharedRead;
+  try {
+    await Promise.race([evaluate(worker, 'firstSharedNavigation'), sharedOpen.then(() => assert.fail('Open finished before guarded navigation'))]);
+    const opening = await stateWhere(`s => Object.values(s.tabs).some(t => t.url === ${JSON.stringify(sharedUrl)})`);
+    const tabId = Object.values(opening.tabs).find((tab) => tab.url === sharedUrl).id;
+    sharedRead = client.callTool({ name: 'read_page', arguments: { tabId } });
+    await stateWhere(`s => s.agent?.tabId === ${JSON.stringify(tabId)} && s.agent.action === 'reading the page'`);
+    await evaluate(worker, 'releaseSharedNavigation()');
+    for (const result of await Promise.all([sharedOpen, sharedRead])) {
+      assert.equal(result.isError, undefined, result.content[0].text);
+    }
+    const deadlines = await evaluate(worker, 'sharedDeadlines');
+    assert.equal(deadlines.length, 2);
+    assert.ok(deadlines[1] > deadlines[0]);
+    await call('close_tab', { tabId });
+  } finally {
+    await evaluate(worker, 'releaseSharedNavigation(); chrome.tabs.update = beforeSharedUpdate;');
+    await Promise.allSettled([sharedOpen, sharedRead]);
+  }
+  console.log('PASS a reader joining during dispatch can keep shared setup alive');
 
   const lateUrl = base + '/agent?expired-after-navigation';
   await evaluate(worker, `
@@ -1262,14 +1337,18 @@ try {
   await evaluate(worker, `
     globalThis.updateBeforeExpiry = chrome.tabs.update;
     globalThis.removeBeforeExpiry = chrome.tabs.remove;
+    globalThis.expiredActivations = [];
+    globalThis.watchExpiredActivation = ({ tabId }) => expiredActivations.push(tabId);
+    chrome.tabs.onActivated.addListener(watchExpiredActivation);
     chrome.tabs.update = (id, properties, backgroundOnly, deadline) => {
       if (properties.url !== ${JSON.stringify(base + '/expired-navigation')}) return updateBeforeExpiry(id, properties);
       if (!Number.isFinite(deadline)) throw new Error('Missing native navigation deadline');
       return updateBeforeExpiry(id, properties, backgroundOnly, 0);
     };
-    chrome.tabs.remove = (id, backgroundOnly, deadline) => {
+    chrome.tabs.remove = (id, backgroundOnly, deadline, replacement) => {
       if (!Number.isFinite(deadline)) return removeBeforeExpiry(id);
-      return removeBeforeExpiry(id, backgroundOnly, 0);
+      if (!Number.isInteger(replacement)) throw new Error('Missing native replacement tab');
+      return removeBeforeExpiry(id, backgroundOnly, 0, replacement);
     };
     void 0;
   `);
@@ -1283,8 +1362,9 @@ try {
       assert.match(result.content[0].text, /request expired/, name);
       await nativeActive(closingUrl);
     }
+    assert.deepEqual(await evaluate(worker, 'expiredActivations'), [], 'an expired visible close never switches tabs');
   } finally {
-    await evaluate(worker, 'chrome.tabs.update = updateBeforeExpiry; chrome.tabs.remove = removeBeforeExpiry;');
+    await evaluate(worker, 'chrome.tabs.update = updateBeforeExpiry; chrome.tabs.remove = removeBeforeExpiry; chrome.tabs.onActivated.removeListener(watchExpiredActivation);');
   }
   console.log('PASS Chromium refuses native navigation and removal with expired deadlines');
 
@@ -1367,6 +1447,10 @@ try {
 
   await client.close();
   // The deadline stays armed through the cleanup, so a browser that hangs on its way out is killed.
+  waitingFor = 'the test browser to close';
+  const browserExited = once(browser, 'exit');
+  await send('Browser.close');
+  await browserExited;
   await cleanUp();
   finished = true;
   clearTimeout(watchdog);
