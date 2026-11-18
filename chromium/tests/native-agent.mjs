@@ -426,8 +426,12 @@ try {
     await evaluate(agentPage, "({ counter, field: document.querySelector('#field').value, keys: keys.filter(k => k === 'Enter' || k === 'Escape') })"),
     { counter: 1, field: 'from the agent', keys: ['Enter', 'Escape'] },
   );
-  await call('type', { tabId: agentTab, selector: '#date', text: '2026-11-17', clear: true });
-  assert.equal(await evaluate(agentPage, "document.querySelector('#date').value"), '2026-11-17');
+  await evaluate(agentPage, `window.dateChanges = []; document.body.addEventListener('change', event => {
+    if (event.target.id === 'date') dateChanges.push(event.target.value);
+  }); void 0;`);
+  for (let i = 0; i < 2; i++) await call('type', { tabId: agentTab, selector: '#date', text: '2026-11-17', clear: true });
+  assert.deepEqual(await evaluate(agentPage, "({ value: document.querySelector('#date').value, changes: dateChanges })"),
+    { value: '2026-11-17', changes: ['2026-11-17'] });
   for (const property of ['readOnly', 'disabled']) {
     await evaluate(agentPage, `document.querySelector('#date')[${JSON.stringify(property)}] = true`);
     const refused = await client.callTool({ name: 'type', arguments: { tabId: agentTab, selector: '#date', text: '2026-12-01', clear: true } });
@@ -451,6 +455,9 @@ try {
     const redirected = document.createElement('input');
     redirected.id = 'redirected';
     redirected.addEventListener('focus', () => field.focus());
+    const redirectedSubmit = document.createElement('input');
+    redirectedSubmit.id = 'redirected-submit';
+    redirectedSubmit.addEventListener('input', () => field.focus());
     const email = document.createElement('input');
     email.id = 'email';
     email.type = 'email';
@@ -464,12 +471,21 @@ try {
     editable.id = 'editable';
     editable.contentEditable = 'true';
     editable.textContent = 'before';
-    document.body.append(redirected, email, dateTime, editable);
+    document.body.append(redirected, redirectedSubmit, email, dateTime, editable);
     field.focus();
   })()`);
   const redirected = await client.callTool({ name: 'type', arguments: { tabId: agentTab, selector: '#redirected', text: 'wrong', clear: true } });
   assert.equal(redirected.isError, true, 'typing must stop when focus moves to another field');
   assert.equal(await evaluate(agentPage, "document.querySelector('#field').value"), 'keep');
+  const enterCount = await evaluate(agentPage, "keys.filter(key => key === 'Enter').length");
+  const redirectSubmit = await client.callTool({
+    name: 'type', arguments: { tabId: agentTab, selector: '#redirected-submit', text: 'entered', submit: true },
+  });
+  assert.equal(redirectSubmit.isError, true);
+  assert.match(redirectSubmit.content[0].text, /lost focus before Enter/);
+  assert.deepEqual(await evaluate(agentPage, "({ focus: document.activeElement.id, enters: keys.filter(key => key === 'Enter').length })"),
+    { focus: 'field', enters: enterCount });
+  console.log('PASS submit skips Enter when an input handler moves focus');
   await call('type', { tabId: agentTab, selector: '#email', text: 'new@example.test', clear: true });
   assert.deepEqual(await evaluate(agentPage, "({ value: document.querySelector('#email').value, trusted: window.trustedEmailInput })"),
     { value: 'new@exam', trusted: true });
@@ -541,6 +557,71 @@ try {
     }
   }
   console.log('PASS both halves of a failed input gesture settle before focus cleanup');
+  await evaluate(worker, `
+    globalThis.focusCleanupCommand = chrome.debugger.sendCommand;
+    globalThis.focusCleanupDetach = chrome.debugger.detach;
+    globalThis.focusDetached = false;
+    chrome.debugger.sendCommand = async (...args) => {
+      if (args[1] === 'Emulation.setFocusEmulationEnabled' && !args[2].enabled) throw new Error('Simulated cleanup failure');
+      return focusCleanupCommand(...args);
+    };
+    chrome.debugger.detach = async (...args) => {
+      await focusCleanupDetach(...args);
+      focusDetached = true;
+    };
+    void 0;
+  `);
+  try {
+    await call('press_key', { tabId: agentTab, key: 'Escape' });
+    assert.equal(await evaluate(worker, 'focusDetached'), true);
+  } finally {
+    await evaluate(worker, 'chrome.debugger.sendCommand = focusCleanupCommand; chrome.debugger.detach = focusCleanupDetach;');
+  }
+  await call('read_page', { tabId: agentTab });
+  console.log('PASS failed focus cleanup detaches and the next read reattaches');
+  await evaluate(agentPage, `(() => {
+    const button = document.createElement('button');
+    button.id = 'queued-click-probe';
+    button.textContent = 'Original button';
+    document.body.append(button);
+    window.queuedScriptRan = false;
+    window.replacementClicks = 0;
+  })()`);
+  await evaluate(worker, `
+    globalThis.beforeQueuedClick = chrome.debugger.sendCommand;
+    globalThis.clickProbeStarted = new Promise(resolve => { globalThis.notifyClickProbe = resolve; });
+    globalThis.clickProbeGate = new Promise(resolve => { globalThis.releaseClickProbe = resolve; });
+    chrome.debugger.sendCommand = async (...args) => {
+      if (args[1] === 'Runtime.callFunctionOn' && args[2].functionDeclaration.includes('queued-click-probe')) {
+        notifyClickProbe();
+        await clickProbeGate;
+      }
+      return beforeQueuedClick(...args);
+    };
+    void 0;
+  `);
+  const queuedProbe = client.callTool({ name: 'click', arguments: { tabId: agentTab, selector: '#queued-click-probe' } });
+  let queuedEvaluation;
+  try {
+    await Promise.race([evaluate(worker, 'clickProbeStarted'), queuedProbe.then(() => assert.fail('Click finished before its element check'))]);
+    queuedEvaluation = client.callTool({ name: 'evaluate', arguments: { tabId: agentTab, expression: 'window.queuedScriptRan = true' } });
+    await stateWhere(`s => s.agent?.tabId === ${JSON.stringify(agentTab)} && s.agent.action === 'running JavaScript'`);
+    assert.equal(await evaluate(agentPage, 'queuedScriptRan'), false);
+    await evaluate(agentPage, `(() => {
+      const button = document.querySelector('#queued-click-probe');
+      const replacement = button.cloneNode(true);
+      replacement.addEventListener('click', () => replacementClicks++);
+      button.replaceWith(replacement);
+    })()`);
+    await evaluate(worker, 'releaseClickProbe()');
+    assert.equal((await queuedProbe).isError, true);
+    assert.equal((await queuedEvaluation).isError, undefined);
+    assert.deepEqual(await evaluate(agentPage, '({ queuedScriptRan, replacementClicks })'), { queuedScriptRan: true, replacementClicks: 0 });
+  } finally {
+    await evaluate(worker, 'releaseClickProbe(); chrome.debugger.sendCommand = beforeQueuedClick;');
+    await Promise.allSettled([queuedProbe, queuedEvaluation]);
+  }
+  console.log('PASS scripts wait for input and a click refuses a replaced element');
   await call('activate_tab', { tabId: agentTab });
   await nativeActive(base + '/agent');
   await rpc('activate', mine);
@@ -879,6 +960,36 @@ try {
     await Promise.allSettled([pendingOpen, closeWhileOpening]);
   }
   console.log('PASS closing a pinned tab waits for native setup and unloads it');
+  await evaluate(worker, `
+    globalThis.setupClock = Date.now;
+    globalThis.setupMark = chrome.flechaPrivate.setAgentTab;
+    globalThis.setupMarked = new Promise(resolve => { globalThis.notifySetupMark = resolve; });
+    globalThis.setupGate = new Promise(resolve => { globalThis.releaseSetup = resolve; });
+    chrome.flechaPrivate.setAgentTab = async (id, enabled) => {
+      if (enabled) {
+        globalThis.expiredSetupId = id;
+        notifySetupMark();
+        await setupGate;
+      }
+      return setupMark(id, enabled);
+    };
+    void 0;
+  `);
+  const expiredUrl = base + '/agent?expired-setup';
+  const expiresDuringSetup = client.callTool({ name: 'open_tab', arguments: { url: expiredUrl } });
+  try {
+    await Promise.race([evaluate(worker, 'setupMarked'), expiresDuringSetup.then(() => assert.fail('Open finished before marking the new tab'))]);
+    await evaluate(worker, 'Date.now = () => Number.MAX_SAFE_INTEGER; releaseSetup();');
+    const failure = await expiresDuringSetup;
+    assert.equal(failure.isError, true);
+    assert.match(failure.content[0].text, /request expired/);
+    assert.equal(await evaluate(worker, 'chrome.tabs.query({}).then(tabs => tabs.some(tab => tab.id === expiredSetupId))'), false);
+    await stateWhere(`s => !Object.values(s.tabs).some(t => t.url === ${JSON.stringify(expiredUrl)})`);
+  } finally {
+    await evaluate(worker, 'Date.now = setupClock; releaseSetup(); chrome.flechaPrivate.setAgentTab = setupMark;');
+    await Promise.allSettled([expiresDuringSetup]);
+  }
+  console.log('PASS an expired open removes its unfinished agent tab');
 
   // Taken from the agent, the tab is yours: its next page runs your extensions again.
   await rpc('togglePin', agentLogin);

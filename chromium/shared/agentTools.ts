@@ -85,3 +85,8 @@ export const AGENT_TOOLS = {
 } as const;
 
 export type AgentToolName = keyof typeof AGENT_TOOLS;
+export type AgentToolArgs = {
+  [Name in AgentToolName]: (typeof AGENT_TOOLS)[Name] extends { inputSchema: infer Shape extends z.ZodRawShape }
+    ? z.infer<z.ZodObject<Shape>>
+    : Record<string, never>;
+};

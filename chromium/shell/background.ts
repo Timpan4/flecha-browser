@@ -82,7 +82,8 @@ async function start() {
       };
   const store = new Store(persistence);
   /** Physical tabs can be mapped before they are ready; consumers share their pending setup. */
-  const tabSetups = new Map<string, { promise: Promise<number>; transferred: boolean }>();
+  type TabSetup = { promise: Promise<number>; transferred: boolean; requests?: Set<() => void> };
+  const tabSetups = new Map<string, TabSetup>();
   let nativeHost: ReturnType<typeof registerNativeHost> | undefined;
   let features: Features | undefined;
   // Asked of macOS on start and whenever a window takes focus (the user may have changed it in System Settings).
@@ -328,12 +329,28 @@ async function start() {
     await chrome.flechaPrivate.setAgentTab(chromeId, true);
   }
   /** Starts setup once per logical tab, before its first asynchronous operation can yield. */
-  function setupTab(id: string, setup: () => Promise<number>): Promise<number> {
+  function joinTabSetup(setup: TabSetup, requireCurrent?: () => void) {
+    if (requireCurrent) setup.requests?.add(requireCurrent);
+    else setup.requests = undefined;
+    return setup.promise;
+  }
+
+  function setupTab(id: string, setup: (requireCurrent: () => void) => Promise<number>, requireCurrent?: () => void): Promise<number> {
     const pending = tabSetups.get(id);
-    if (pending) return pending.promise;
-    const entry = {
+    if (pending) return joinTabSetup(pending, requireCurrent);
+    const entry: TabSetup = {
       transferred: false,
-      promise: Promise.resolve().then(setup).finally(() => {
+      requests: requireCurrent ? new Set([requireCurrent]) : undefined,
+      promise: Promise.resolve().then(() => setup(() => {
+        // A visible tab belongs to the window, and a shared setup can outlive one agent request.
+        if (!entry.requests || store.windowShowing(id) !== undefined) return;
+        let expired: unknown;
+        for (const request of entry.requests) {
+          try { request(); return; }
+          catch (error) { expired = error; }
+        }
+        throw expired;
+      })).finally(() => {
         if (tabSetups.get(id) === entry) tabSetups.delete(id);
       }),
     };
@@ -341,7 +358,8 @@ async function start() {
     return entry.promise;
   }
   /** Marks before navigating, and leaves a tab taken by the user to its new owner. */
-  async function prepareChromeTab(id: string, chromeId: number, url?: string, active?: boolean) {
+  async function prepareChromeTab(id: string, chromeId: number, url?: string, active?: boolean, requireCurrent?: () => void) {
+    requireCurrent?.();
     const agent = !!store.state.tabs[id]?.agent;
     await markAgentTab(id, chromeId);
     if (tabSetups.get(id)?.transferred) {
@@ -353,12 +371,13 @@ async function start() {
     if (agent && !store.state.tabs[id].agent) {
       await chrome.flechaPrivate.setAgentTab(chromeId, false);
     }
+    requireCurrent?.();
     if (url) await chrome.tabs.update(chromeId, { url, ...(active === undefined ? {} : { active }) });
   }
   /** A window's start tab follows the same readiness and failure rules as a newly created tab. */
   function adoptChromeTab(id: string, chromeId: number, url?: string, active?: boolean) {
     const pending = tabSetups.get(id);
-    if (pending) return pending.promise;
+    if (pending) return joinTabSetup(pending);
     // Startup can visit several blank tabs in one turn; reserve the first before yielding.
     live.set(id, chromeId);
     return setupTab(id, async () => {
@@ -389,8 +408,9 @@ async function start() {
     void chrome.flechaPrivate.setAgentTab(chromeId, false).catch(() => undefined);
   }
 
-  function openChromeTab(id: string, active: boolean, windowId: string) {
-    return setupTab(id, async () => {
+  function openChromeTab(id: string, active: boolean, windowId: string, requireCurrent?: () => void) {
+    return setupTab(id, async (requireSetupCurrent) => {
+      requireSetupCurrent();
       const tab = store.state.tabs[id];
       if (!tab) throw new Error('Tab closed before setup');
       const partition = partitionFor(id);
@@ -401,13 +421,14 @@ async function start() {
       let chromeId: number | undefined;
       try {
         const options = { windowId: await chromeWindowFor(windowId), url: agent ? 'about:blank' : url, active };
+        requireSetupCurrent();
         // A Space with separate cookies and logins: its own storage partition (patch 0034).
         chromeId = partition
           ? await chrome.flechaPrivate.createTab({ ...options, partition })
           : (await chrome.tabs.create(options)).id!;
         live.set(id, chromeId);
         livePartition.set(id, partition);
-        if (agent) await prepareChromeTab(id, chromeId, url);
+        if (agent) await prepareChromeTab(id, chromeId, url, undefined, requireSetupCurrent);
         if (tab.muted) void chrome.tabs.update(chromeId, { muted: true });
         rememberLive();
         return chromeId;
@@ -417,7 +438,7 @@ async function start() {
       } finally {
         creating--;
       }
-    });
+    }, requireCurrent);
   }
 
   /**
@@ -1431,8 +1452,11 @@ async function start() {
         await syncing;
         requireCurrent();
         const pending = tabSetups.get(id);
-        if (pending) return pending.promise;
-        return live.get(id) ?? (store.state.tabs[id] ? openChromeTab(id, false, store.locate(id)?.windowId ?? store.focusedWindowId) : undefined);
+        if (pending) return joinTabSetup(pending, requireCurrent);
+        return live.get(id) ?? (store.state.tabs[id] ? openChromeTab(id, false, store.locate(id)?.windowId ?? store.focusedWindowId, requireCurrent) : undefined);
+      },
+      discardUnopenedAgentTab: (id) => {
+        if (store.state.tabs[id]?.agent && !tabSetups.has(id) && !live.has(id) && store.windowShowing(id) === undefined) store.closeTab(id);
       },
       currentChromeTab: (id) => live.get(id),
       activate: (id) => void store.activate(id),
