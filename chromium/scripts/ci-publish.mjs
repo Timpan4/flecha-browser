@@ -6,8 +6,10 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { pipeline } from 'node:stream/promises';
 import { execFileSync } from 'node:child_process';
+import { trustedRun } from './ci-reuse.mjs';
 
-export async function verifyRelease(dir, platforms, { sha, chromium }) {
+export async function verifyRelease(dir, platforms, { sha, chromium, nativeKey }, { signal } = {}) {
+  signal?.throwIfAborted();
   const files = new Set(await fs.readdir(dir));
   for (const { platform } of platforms) {
     const archive = `Flecha-${platform}.${platform.startsWith('windows-') ? 'zip' : 'tar.gz'}`;
@@ -18,7 +20,8 @@ export async function verifyRelease(dir, platforms, { sha, chromium }) {
       files.delete(file);
     }
     const provenance = JSON.parse(await fs.readFile(path.join(dir, provenanceName), 'utf8'));
-    if (provenance.sha !== sha || provenance.chromium !== chromium || provenance.platform !== platform) {
+    if (provenance.sha !== sha || provenance.chromium !== chromium || provenance.platform !== platform ||
+        (nativeKey !== undefined && provenance.nativeKey !== nativeKey)) {
       throw new Error(`Release provenance mismatch: ${platform}`);
     }
     const checksums = new Map();
@@ -32,7 +35,7 @@ export async function verifyRelease(dir, platforms, { sha, chromium }) {
     }
     for (const [file, expected] of checksums) {
       const hash = createHash('sha256');
-      await pipeline(createReadStream(path.join(dir, file)), hash);
+      await pipeline(createReadStream(path.join(dir, file)), hash, { signal });
       if (hash.digest('hex') !== expected) throw new Error(`Checksum mismatch: ${file}`);
     }
   }
@@ -46,7 +49,8 @@ export async function verifyRelease(dir, platforms, { sha, chromium }) {
 // last and marks it complete. A failed upload of the other files leaves no
 // checksum file, and a failed checksum upload triggers a best-effort deletion.
 // A retry removes any listed checksum asset before replacing the other files.
-export function publishAssets({ repository, tag, sha, title, notes, files, checksums }, gh) {
+export function publishAssets({ repository, tag, sha, title, notes, files, checksums }, gh, requireCurrent = () => {}) {
+  requireCurrent();
   let createError;
   try {
     gh(['release', 'create', tag, '--repo', repository, '--target', sha, '--title', title,
@@ -63,11 +67,13 @@ export function publishAssets({ repository, tag, sha, title, notes, files, check
   }
   const { object } = JSON.parse(gh(['api', `repos/${repository}/git/ref/tags/${tag}`]));
   if (object?.type !== 'commit' || object.sha !== sha) throw new Error(`Release tag ${tag} does not point to ${sha}.`);
+  requireCurrent();
   const marker = path.basename(checksums);
   if (release.assets.some(({ name }) => name === marker)) {
     gh(['release', 'delete-asset', tag, marker, '--repo', repository, '--yes']);
   }
   gh(['release', 'upload', tag, ...files, '--repo', repository, '--clobber']);
+  requireCurrent();
   try {
     gh(['release', 'upload', tag, checksums, '--repo', repository]);
   } catch (error) {
@@ -78,16 +84,51 @@ export function publishAssets({ repository, tag, sha, title, notes, files, check
   }
 }
 
+function currentSourceRun({ repository, branch, currentRun, run, attempt }, gh) {
+  const source = JSON.parse(gh(['api', `repos/${repository}/actions/runs/${run}`]));
+  if (String(source.id) !== run || !/^[a-f0-9]{40}$/.test(source.head_sha || '') || !trustedRun(source, { repository, branch, currentRun })) {
+    throw new Error('The package must come from a default-branch nightly build in this repository.');
+  }
+  if (String(source.run_attempt) !== attempt || source.conclusion === 'cancelled') {
+    throw new Error('The source nightly attempt was cancelled or superseded.');
+  }
+  return source;
+}
+
+export function publicationSource(input, gh) {
+  const { repository, branch, run, attempt, platform, artifact, artifactId } = input;
+  const prefix = `release-${platform}-`;
+  const keys = artifact?.startsWith(prefix) && artifact.slice(prefix.length);
+  const match = /^([a-f0-9]{64})(?:-[a-f0-9]{64})?$/.exec(keys || '');
+  if (!repository || !branch || ![run, attempt, artifactId].every(id => /^[1-9]\d*$/.test(id || '')) || !match) {
+    throw new Error('Invalid nightly publication inputs.');
+  }
+  const { head_sha: sha } = currentSourceRun(input, gh);
+  const upload = JSON.parse(gh(['api', `repos/${repository}/actions/artifacts/${artifactId}`]));
+  if (String(upload.id) !== artifactId || String(upload.workflow_run?.id) !== run || upload.name !== artifact || upload.expired) {
+    throw new Error('The artifact does not match the source nightly upload.');
+  }
+  const readSource = file => gh(['api', '-H', 'Accept: application/vnd.github.raw+json',
+    `repos/${repository}/contents/chromium/${file}?ref=${sha}`]);
+  const platforms = JSON.parse(readSource('build/ci-platforms.json'));
+  if (!platforms.some(entry => entry.platform === platform)) throw new Error(`Unknown release platform: ${platform}`);
+  const chromium = readSource('CHROMIUM_VERSION').trim();
+  const nativeKey = match[1];
+  return { sha, chromium, nativeKey };
+}
+
 async function main() {
   const root = fileURLToPath(new URL('../..', import.meta.url));
-  const platforms = JSON.parse(await fs.readFile(path.join(root, 'chromium/build/ci-platforms.json'), 'utf8'));
-  const selected = platforms.filter(({ platform }) => platform === process.env.FLECHA_PLATFORM);
-  if (selected.length !== 1) throw new Error(`Unknown release platform: ${process.env.FLECHA_PLATFORM}`);
-  const chromium = (await fs.readFile(path.join(root, 'chromium/CHROMIUM_VERSION'), 'utf8')).trim();
-  const { GITHUB_SHA: sha, GITHUB_RUN_ID: run, GITHUB_REPOSITORY: repository, GITHUB_SERVER_URL: server } = process.env;
-  if (!sha || !/^\d+$/.test(run || '') || !repository || !server) throw new Error('Missing GitHub release context.');
+  const { FLECHA_BUILD_RUN: run, FLECHA_DEFAULT_BRANCH: branch, FLECHA_PACKAGE_ARTIFACT: artifact, FLECHA_PLATFORM: platform,
+    GITHUB_RUN_ID: currentRun, GITHUB_REPOSITORY: repository, GITHUB_SERVER_URL: server,
+    FLECHA_BUILD_ATTEMPT: attempt, FLECHA_PACKAGE_ARTIFACT_ID: artifactId } = process.env;
+  if (!currentRun || !server) throw new Error('Missing GitHub release context.');
+  const gh = args => execFileSync('gh', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
+  const input = { repository, branch, currentRun, run, attempt, platform, artifact, artifactId };
+  const source = publicationSource(input, gh);
+  const { sha, chromium } = source;
   const dir = path.join(root, 'release');
-  await verifyRelease(dir, selected, { sha, chromium });
+  await verifyRelease(dir, [{ platform }], source);
   const tag = `nightly-${run}`;
   const notes = path.join(root, 'release-notes.md');
   await fs.writeFile(notes, `Nightly build of Flecha from ${sha}, based on Chromium ${chromium}.\n\n` +
@@ -97,12 +138,12 @@ async function main() {
     'The macOS app is ad hoc signed and is not notarized. Its native host can be registered with chromium/scripts/install-native-host.sh --app /path/to/Flecha.app from the matching source checkout.\n\n' +
     'These prereleases do not use the stable Sparkle update feed. SHA256SUMS files cover each package and its source provenance.\n');
   // verifyRelease left exactly this platform's archive, provenance and checksum file in dir.
-  const checksums = path.join(dir, `${selected[0].platform}-SHA256SUMS`);
+  const checksums = path.join(dir, `${platform}-SHA256SUMS`);
   const files = (await fs.readdir(dir)).map(file => path.join(dir, file)).filter(file => file !== checksums);
-  publishAssets({ repository, tag, sha, notes, files, checksums, title: `Nightly ${new Date().toISOString().slice(0, 10)} (${run})` },
-    args => execFileSync('gh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] }));
+  publishAssets({ repository, tag, sha, notes, files, checksums, title: `Nightly ${new Date().toISOString().slice(0, 10)} (${run})` }, gh,
+    () => currentSourceRun(input, gh));
   await fs.appendFile(process.env.GITHUB_STEP_SUMMARY,
-    `Published ${selected[0].platform} to [${tag}](${server}/${repository}/releases/tag/${tag}) from ${sha}.\n`);
+    `Published ${platform} to [${tag}](${server}/${repository}/releases/tag/${tag}) from ${sha}.\n`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();

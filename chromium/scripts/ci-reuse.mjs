@@ -71,7 +71,9 @@ export async function runNativeCommand(command, args, { cwd, env, deadline, sign
     if (terminationFailure) throw terminationFailure;
     signal?.throwIfAborted();
     if (expired) throw timeoutError();
-    if (result.code !== 0) throw Object.assign(new Error(`Native command failed: ${result.code ?? result.signal}`), { signal: result.signal });
+    if (result.code !== 0) {
+      throw Object.assign(new Error(`Native command failed: ${result.code ?? result.signal}`), { signal: result.signal, stdout });
+    }
     return stdout;
   } finally {
     clearTimeout(timer);
@@ -117,8 +119,12 @@ export function nativeKey(root, configuration) {
   return createHash('sha256').update(tree).update(JSON.stringify(configuration)).digest('hex');
 }
 
-export function reusableArtifact(artifacts, platform, key) {
+export function reusableArtifact(artifacts, platform, key, releaseName) {
   const available = artifacts.filter(artifact => !artifact.expired);
+  if (releaseName) {
+    const release = available.find(artifact => artifact.name === releaseName);
+    if (release) return { name: release.name, archive: `Flecha-${platform}.${platform.startsWith('windows-') ? 'zip' : 'tar.gz'}` };
+  }
   const native = available.find(artifact => artifact.name === `native-${platform}-${key}`);
   if (native) return { name: native.name, archive: 'native.tar.gz' };
   const prefix = `reuse-${platform}-${key}-`;
@@ -139,36 +145,46 @@ export function trustedRun(run, { repository, branch, currentRun }) {
     ['schedule', 'workflow_dispatch'].includes(run.event);
 }
 
-// Search only this repository's default-branch nightly workflow, including failed runs.
-export async function* findReusableArtifacts(options, api) {
-  const { repository, branch, currentRun, platform, key } = options;
-  const byRun = new Map();
-  const runs = new Map();
-  const excluded = new Set();
+async function* listArtifacts(endpoint, options, api) {
   let visited = 0;
   for (let page = 1; ; page++) {
     if (options.deadline !== undefined && Date.now() >= options.deadline) throw new Error('Native reuse reached the stage deadline.');
     // GitHub documents 100 as the maximum artifacts page size.
-    const response = await api(`repos/${repository}/actions/artifacts?per_page=100&page=${page}`);
+    const response = await api(`${endpoint}?per_page=100&page=${page}`);
     visited += response.artifacts.length;
-    for (const artifact of response.artifacts) {
-      if (artifact.name !== `native-${platform}-${key}` &&
-          !artifact.name.startsWith(`reuse-${platform}-${key}-`) &&
-          !artifact.name.startsWith(`checkpoint-${platform}-`)) continue;
-      const runId = String(artifact.workflow_run?.id);
-      if (!artifact.workflow_run || artifact.expired || runId === currentRun) continue;
-      const artifacts = byRun.get(runId) || [];
-      artifacts.push(artifact);
-      byRun.set(runId, artifacts);
-      const candidate = reusableArtifact(artifacts.filter(item => !excluded.has(`${runId}/${item.name}`)), platform, key);
-      if (!candidate) continue;
-      if (!runs.has(runId)) runs.set(runId, await api(`repos/${repository}/actions/runs/${runId}`));
-      const run = runs.get(runId);
+    yield* response.artifacts;
+    if (visited >= response.total_count || !response.artifacts.length) return;
+  }
+}
+
+// Search only this repository's default-branch nightly workflow, including failed runs.
+export async function* findReusableArtifacts(options, api) {
+  const { repository, branch, currentRun, platform, key, releaseName } = options;
+  const actions = `repos/${repository}/actions`;
+  const seen = new Set();
+  for await (const artifact of listArtifacts(`${actions}/artifacts`, options, api)) {
+    if (artifact.name !== releaseName && artifact.name !== `native-${platform}-${key}` &&
+        !artifact.name.startsWith(`reuse-${platform}-${key}-`)) continue;
+    const runId = String(artifact.workflow_run?.id);
+    if (!artifact.workflow_run || artifact.expired || runId === currentRun || seen.has(runId)) continue;
+    seen.add(runId);
+    const endpoint = `${actions}/runs/${runId}`;
+    let run, artifacts;
+    try {
+      run = await api(endpoint);
       if (!trustedRun(run, { repository, branch, currentRun })) continue;
-      excluded.add(`${runId}/${candidate.name}`);
-      yield { ...candidate, run: runId, sha: run.head_sha };
+      // Finish reading the run before ranking its portable, native and checkpoint artifacts.
+      artifacts = await Array.fromAsync(listArtifacts(`${endpoint}/artifacts`, options, api));
+    } catch (error) {
+      if (error?.status === 404) continue;
+      throw error;
     }
-    if (visited >= response.total_count || !response.artifacts.length) return undefined;
+    for (;;) {
+      const candidate = reusableArtifact(artifacts, platform, key, releaseName);
+      if (!candidate) break;
+      yield { ...candidate, run: runId, sha: run.head_sha };
+      artifacts = artifacts.filter(item => item.name !== candidate.name);
+    }
   }
 }
 
@@ -177,7 +193,19 @@ export async function downloadReusableTree(root, options, restore,
   if (!/^[\w.-]+\/[\w.-]+$/.test(options.repository || '') || !options.branch || !/^\d+$/.test(options.currentRun || '')) {
     throw new Error('Missing GitHub context for native checkpoint reuse.');
   }
-  const candidates = findReusableArtifacts(options, async endpoint => JSON.parse(await gh(['api', endpoint])));
+  const candidates = findReusableArtifacts(options, async endpoint => {
+    if (!endpoint.includes('/actions/runs/')) return JSON.parse(await gh(['api', endpoint]));
+    try {
+      const response = await gh(['api', endpoint, '--include']);
+      // The CLI prints the status and headers before the JSON payload.
+      return JSON.parse(response.replace(/^HTTP\/.*?\r?\n\r?\n/s, ''));
+    } catch (error) {
+      if (/^HTTP\/\S+ 404\b/.test(error?.stdout || '')) {
+        throw Object.assign(new Error('The nightly run disappeared during discovery.', { cause: error }), { status: 404 });
+      }
+      throw error;
+    }
+  });
   const cleanup = directory => options.cleanup ? options.cleanup(directory) : removeNativeTree(directory,
     { deadline: options.cleanupDeadline, signal: options.signal });
   for (;;) {

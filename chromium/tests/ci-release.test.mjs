@@ -6,9 +6,9 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { checkIdentity, compile, configureReleaseTree, depotRevision, prepareNativeTree, preserveNativeOutputs, releaseConfiguration, saveCheckpoint, restoreCheckpoint, validateReusableTree } from '../scripts/ci-release.mjs';
+import { checkIdentity, compile, configureReleaseTree, depotRevision, extractPortable, packagePortable, prepareNativeTree, preserveNativeOutputs, releaseConfiguration, saveCheckpoint, restoreCheckpoint, restorePortableRuntime, validateReusableTree } from '../scripts/ci-release.mjs';
 import { createReuseBudget, downloadReusableTree, findReusableArtifacts, nativeKey, removeNativeTree, reusableArtifact, runNativeCommand, withoutGitHubTokens } from '../scripts/ci-reuse.mjs';
-import { publishAssets, verifyRelease } from '../scripts/ci-publish.mjs';
+import { publicationSource, publishAssets, verifyRelease } from '../scripts/ci-publish.mjs';
 
 test('the owner-selected reuse budget leaves clean preparation time and never exceeds the stage deadline', () => {
   const started = Date.now();
@@ -31,9 +31,9 @@ test('required preparation time preserves optional reuse time across candidate p
   const options = { repository: 'owner/repo', branch: 'main', currentRun: '2', platform: 'linux-x64', key: 'key',
     get deadline() { return budget.deadline; } };
   const candidates = findReusableArtifacts(options, endpoint => {
-    if (endpoint.endsWith('page=1')) return { artifacts: [{ name: 'native-linux-x64-key', workflow_run: { id: 1 } }], total_count: 3 };
-    if (endpoint.endsWith('page=2')) return { artifacts: ['reuse-linux-x64-key-1', 'checkpoint-linux-x64-1']
-      .map(name => ({ name, workflow_run: { id: 1 } })), total_count: 3 };
+    if (endpoint.includes('/runs/1/artifacts?')) return {
+      artifacts: ['native-linux-x64-key', 'reuse-linux-x64-key-1', 'checkpoint-linux-x64-1'].map(name => ({ name })), total_count: 3 };
+    if (endpoint.endsWith('page=1')) return { artifacts: [{ name: 'native-linux-x64-key', workflow_run: { id: 1 } }], total_count: 1 };
     return { id: 1, head_sha: 'source', head_repository: { full_name: 'owner/repo' },
       path: '.github/workflows/nightly-release.yml', head_branch: 'main', event: 'workflow_dispatch' };
   });
@@ -371,7 +371,7 @@ test('native checkpoint CLI recovers completed compilation after packaging failu
   const root = path.join(dir, 'release tooling');
   const scripts = path.join(root, 'chromium/scripts');
   await fs.mkdir(scripts, { recursive: true });
-  for (const file of ['ci-release.mjs', 'ci-reuse.mjs']) {
+  for (const file of ['ci-release.mjs', 'ci-reuse.mjs', 'ci-publish.mjs']) {
     await fs.copyFile(fileURLToPath(new URL(`../scripts/${file}`, import.meta.url)), path.join(scripts, file));
   }
   await fs.writeFile(path.join(root, 'chromium/CHROMIUM_VERSION'), 'fixture');
@@ -409,7 +409,8 @@ test('native checkpoint CLI recovers completed compilation after packaging failu
 });
 
 test('recovery searches trusted nightly runs and skips expired or superseded checkpoints', async () => {
-  const options = { repository: 'owner/repo', branch: 'main', currentRun: '10', platform: 'linux-x64', key: 'native-key' };
+  const releaseName = 'release-linux-x64-native-key-current-layout';
+  const options = { repository: 'owner/repo', branch: 'main', currentRun: '10', platform: 'linux-x64', key: 'native-key', releaseName };
   const run = (id, overrides = {}) => ({ id, head_sha: `sha-${id}`, head_repository: { full_name: options.repository },
     path: '.github/workflows/nightly-release.yml', head_branch: 'main', event: 'workflow_dispatch', ...overrides });
   const requests = [];
@@ -419,22 +420,34 @@ test('recovery searches trusted nightly runs and skips expired or superseded che
   ]);
   const candidates = findReusableArtifacts(options, endpoint => {
     requests.push(endpoint);
+    if (endpoint.includes('/runs/5/artifacts?')) {
+      if (endpoint.endsWith('page=1')) return { artifacts: [
+        { name: 'native-linux-x64-native-key' }, { name: 'release-linux-x64-native-key-old-layout' },
+        { name: 'reuse-linux-x64-native-key-2' }, { name: 'reuse-linux-x64-native-key-1' },
+      ], total_count: 7 };
+      return { artifacts: [
+        { name: releaseName }, { name: 'checkpoint-linux-x64-2', expired: true }, { name: 'checkpoint-linux-x64-1' },
+      ], total_count: 7 };
+    }
+    if (endpoint.includes('/runs/4/artifacts?')) throw Object.assign(new Error('Run removed'), { status: 404 });
+    if (endpoint.includes('/runs/3/artifacts?')) return { artifacts: [{ name: 'native-linux-x64-native-key' }], total_count: 1 };
     if (endpoint.endsWith('page=1')) return { artifacts: ['10', ...rejected.keys()].map(id =>
-      ({ name: 'native-linux-x64-native-key', workflow_run: { id } })), total_count: 9 };
-    if (endpoint.endsWith('page=2')) return { artifacts: [
-      { name: 'reuse-linux-x64-native-key-2' }, { name: 'reuse-linux-x64-native-key-1' },
-    ].map(artifact => ({ ...artifact, workflow_run: { id: 5 } })), total_count: 9 };
-    if (endpoint.endsWith('page=3')) return { artifacts: [
-      { name: 'checkpoint-linux-x64-2', expired: true }, { name: 'checkpoint-linux-x64-1' },
-    ].map(artifact => ({ ...artifact, workflow_run: { id: 5 } })), total_count: 9 };
+      ({ name: 'native-linux-x64-native-key', workflow_run: { id } })), total_count: 8 };
+    if (endpoint.endsWith('page=2')) return { artifacts: [5, 4, 3].map(id =>
+      ({ name: 'native-linux-x64-native-key', workflow_run: { id } })), total_count: 8 };
     const id = endpoint.split('/').at(-1);
     return run(Number(id), rejected.get(id));
   });
-  assert.deepEqual((await candidates.next()).value, { run: '5', sha: 'sha-5', name: 'checkpoint-linux-x64-1', archive: 'checkpoint.tar.gz' });
-  assert.equal(requests.length, 8);
+  assert.deepEqual((await candidates.next()).value, { run: '5', sha: 'sha-5', name: releaseName, archive: 'Flecha-linux-x64.tar.gz' });
+  assert.equal((await candidates.next()).value.name, 'native-linux-x64-native-key');
+  assert.equal((await candidates.next()).value.name, 'checkpoint-linux-x64-1');
+  assert.equal((await candidates.next()).value.run, '3');
+  assert.equal((await candidates.next()).done, true);
+  assert.equal(requests.length, 13);
   assert.equal(reusableArtifact([{ name: 'reuse-linux-x64-other-key-1' }, { name: 'checkpoint-linux-x64-1' }], options.platform, options.key), undefined);
   assert.deepEqual(reusableArtifact([{ name: 'native-linux-x64-native-key' }], options.platform, options.key),
     { name: 'native-linux-x64-native-key', archive: 'native.tar.gz' });
+  assert.equal(reusableArtifact([{ name: 'release-macos-arm64-native-key' }], 'macos-arm64', options.key), undefined);
   assert.equal((await findReusableArtifacts(options, () => ({ artifacts: [], total_count: 0 })).next()).done, true);
 });
 
@@ -485,6 +498,7 @@ test('completed platforms pass through later build and checkpoint CLI stages wit
   const script = path.join(scripts, 'ci-release.mjs');
   await fs.copyFile(fileURLToPath(new URL('../scripts/ci-release.mjs', import.meta.url)), script);
   await fs.copyFile(fileURLToPath(new URL('../scripts/ci-reuse.mjs', import.meta.url)), path.join(scripts, 'ci-reuse.mjs'));
+  await fs.copyFile(fileURLToPath(new URL('../scripts/ci-publish.mjs', import.meta.url)), path.join(scripts, 'ci-publish.mjs'));
   await fs.writeFile(path.join(root, 'chromium/CHROMIUM_VERSION'), 'fixture');
   execFileSync('git', ['init', '--quiet', root]);
   execFileSync('git', ['-c', 'user.name=Release test', '-c', 'user.email=release@example.invalid',
@@ -627,11 +641,111 @@ test('publication requires every platform, matching provenance and untampered pa
     await fs.writeFile(path.join(dir, `${platform}-SHA256SUMS`), sums);
   }
   await verifyRelease(dir, platforms, expected);
+  const controller = new AbortController();
+  controller.abort(new Error('Verification cancelled'));
+  await assert.rejects(verifyRelease(dir, platforms, expected, { signal: controller.signal }), /Verification cancelled/);
   await assert.rejects(verifyRelease(dir, platforms, { ...expected, sha: 'other' }), /provenance mismatch/);
   await fs.writeFile(path.join(dir, 'Flecha-linux-x64.tar.gz'), 'corrupt');
   await assert.rejects(verifyRelease(dir, platforms, expected), /Checksum mismatch/);
   await fs.rm(path.join(dir, 'Flecha-windows-x64.zip'));
   await assert.rejects(verifyRelease(dir, [platforms[1]], expected), /Missing release asset/);
+});
+
+test('the publisher uses the active default-branch build’s platform catalog and Chromium pin', () => {
+  const repository = 'owner/repo';
+  const branch = 'main';
+  const platform = 'linux-x64';
+  const nativeKey = 'a'.repeat(64);
+  const artifact = `release-${platform}-${nativeKey}`;
+  const sha = 'b'.repeat(40);
+  const run = { id: 11, run_attempt: 2, status: 'in_progress', head_sha: sha, path: '.github/workflows/nightly-release.yml',
+    head_branch: branch, head_repository: { full_name: repository }, event: 'schedule' };
+  const inputs = { repository, branch, currentRun: '12', run: '11', attempt: '2', platform, artifact, artifactId: '22' };
+  const readRun = (overrides = {}, upload = {}) => args => {
+    if (args[1] === `repos/${repository}/actions/runs/11`) return JSON.stringify({ ...run, ...overrides });
+    if (args[1] === `repos/${repository}/actions/artifacts/22`) {
+      return JSON.stringify({ id: 22, name: artifact, workflow_run: { id: 11 }, ...upload });
+    }
+    if (args.at(-1) === `repos/${repository}/contents/chromium/build/ci-platforms.json?ref=${sha}`) {
+      return JSON.stringify([{ platform }]);
+    }
+    assert.equal(args.at(-1), `repos/${repository}/contents/chromium/CHROMIUM_VERSION?ref=${sha}`);
+    return '158.0.8127.2\n';
+  };
+  assert.deepEqual(publicationSource(inputs, readRun()), { sha, chromium: '158.0.8127.2', nativeKey });
+  const portable = `${artifact}-${'c'.repeat(64)}`;
+  assert.deepEqual(publicationSource({ ...inputs, artifact: portable }, readRun({}, { name: portable })),
+    { sha, chromium: '158.0.8127.2', nativeKey });
+  assert.throws(() => publicationSource({ ...inputs, platform: 'linux-other', artifact: `release-linux-other-${nativeKey}` },
+    readRun({}, { name: `release-linux-other-${nativeKey}` })), /Unknown release platform/);
+  for (const untrusted of [{ head_repository: { full_name: 'other/repo' } }, { head_branch: 'other' },
+    { event: 'pull_request' }, { path: '.github/workflows/ci.yml' }, { id: 13 }]) {
+    assert.throws(() => publicationSource(inputs, readRun(untrusted)), /default-branch nightly/);
+  }
+  assert.throws(() => publicationSource({ ...inputs, artifact: 'release-windows-x64-*' }, readRun()), /Invalid nightly/);
+  for (const obsolete of [{ run_attempt: 3 }, { status: 'completed', conclusion: 'cancelled' }]) {
+    assert.throws(() => publicationSource(inputs, readRun(obsolete)), /cancelled or superseded/);
+  }
+  for (const wrong of [{ id: 23 }, { workflow_run: { id: 12 } }, { name: portable }, { expired: true }]) {
+    assert.throws(() => publicationSource(inputs, readRun({}, wrong)), /does not match/);
+  }
+});
+
+test('a portable release reuses the verified browser with the current shell and host', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-portable-reuse-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const platform = process.platform === 'win32' ? 'windows-x64' : 'linux-x64';
+  const exe = platform === 'windows-x64' ? 'chrome.exe' : 'chrome';
+  const release = path.join(root, 'previous-release');
+  const stage = path.join(root, 'portable');
+  const previousStage = path.join(root, 'previous-portable');
+  const repacked = path.join(root, 'repacked');
+  const verified = path.join(root, 'verified');
+  const shellSource = path.join(root, 'chromium/shell/dist');
+  const bin = path.join(root, 'node/bin');
+  const node = path.join(bin, 'fixture-node');
+  const provenance = { platform, sha: 'previous', nativeKey: 'native-key', chromium: 'fixture', depot: 'toolchain', args: 'native args' };
+  await Promise.all([previousStage, shellSource, path.join(root, 'chromium/native-host/dist'),
+    path.join(root, 'chromium/scripts'), bin].map(directory => fs.mkdir(directory, { recursive: true })));
+  const hostSource = path.join(root, 'chromium/native-host/dist/flecha-host.cjs');
+  await Promise.all([
+    fs.writeFile(path.join(previousStage, exe), 'original browser', { mode: 0o755 }),
+    fs.writeFile(path.join(shellSource, 'obsolete.js'), 'old shell'),
+    fs.writeFile(hostSource, 'old host'),
+    fs.writeFile(path.join(root, 'chromium/scripts/portable-launch.mjs'), 'new launcher'),
+    fs.writeFile(path.join(root, 'LICENSE'), 'Flecha license'),
+    fs.writeFile(path.join(bin, platform === 'windows-x64' ? 'LICENSE' : '../LICENSE'), 'Node license'),
+    fs.writeFile(node, 'node'),
+  ]);
+  const invoke = (command, args, cwd) => execFileSync(command, args, { cwd });
+  await packagePortable(root, previousStage, release, invoke, node);
+  const archiveName = `Flecha-${platform}.${platform === 'windows-x64' ? 'zip' : 'tar.gz'}`;
+  const archive = path.join(release, archiveName);
+  const provenanceName = `${platform}.json`;
+  const files = { [archiveName]: await fs.readFile(archive), [provenanceName]: JSON.stringify(provenance) };
+  await fs.writeFile(path.join(release, provenanceName), files[provenanceName]);
+  await fs.writeFile(path.join(release, `${platform}-SHA256SUMS`), Object.entries(files).map(([file, contents]) =>
+    `${createHash('sha256').update(contents).digest('hex')}  ${file}\n`).join(''));
+  const extract = (file, target) => extractPortable(file, target, invoke);
+  await assert.rejects(restorePortableRuntime(archive, stage, { ...provenance, nativeKey: 'other' }, extract), /provenance mismatch/);
+  assert.equal(await restorePortableRuntime(archive, stage, provenance, extract), provenance.args);
+  await fs.unlink(path.join(shellSource, 'obsolete.js'));
+  await fs.writeFile(path.join(shellSource, 'frame.js'), 'new shell');
+  await fs.writeFile(hostSource, 'new host');
+  await packagePortable(root, stage, repacked, invoke, node);
+  await fs.mkdir(verified);
+  await extract(path.join(repacked, archiveName), verified);
+  const shell = path.join(verified, 'resources/flecha-shell');
+  assert.equal(await fs.readFile(path.join(verified, exe), 'utf8'), 'original browser');
+  assert.equal(await fs.readFile(path.join(shell, 'frame.js'), 'utf8'), 'new shell');
+  assert.deepEqual(await fs.readdir(shell), ['frame.js']);
+  assert.equal(await fs.readFile(path.join(verified, 'native-host/flecha-host.cjs'), 'utf8'), 'new host');
+  assert.deepEqual(await fs.readdir(path.join(verified, 'native-host')), ['flecha-host.cjs']);
+  const launcher = platform === 'windows-x64' ? 'Flecha.cmd' : 'flecha';
+  assert.match(await fs.readFile(path.join(verified, launcher), 'utf8'), /portable-launch\.mjs/);
+  if (platform === 'linux-x64') {
+    for (const file of [exe, launcher]) assert.ok((await fs.stat(path.join(verified, file))).mode & 0o111);
+  }
 });
 
 test('a platform joins its run release at the source commit and lists its checksums only after its other files', () => {
@@ -657,6 +771,13 @@ test('a platform joins its run release at the source commit and lists its checks
     const { gh, writes } = fakeGh({ created, assets: ['Flecha-windows-x64.zip', 'windows-x64-SHA256SUMS'] });
     publishAssets(options, gh);
     assert.deepEqual(writes, [upload, uploadChecksums]);
+  }
+  {
+    const { gh, writes } = fakeGh();
+    assert.throws(() => publishAssets(options, gh, () => {
+      if (writes.some(args => args.includes('--clobber'))) throw new Error('Source attempt superseded');
+    }), /Source attempt superseded/);
+    assert.deepEqual(writes, [upload]);
   }
 
   const interrupted = fakeGh({ failUpload: true });
