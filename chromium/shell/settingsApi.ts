@@ -5,7 +5,7 @@
  */
 import type { RecordedKey, SettingsApi, SettingsView, TabsMenuAction, TabsView } from '../shared/types';
 import type { AskOptions, TabsMenuItem } from './lib/tabManager';
-import { cmd, invoke, on } from './client';
+import { cmd, invoke, on, onReconnect } from './client';
 import type { NotYet } from './settingsHandlers';
 import { askDialog, popupMenu, toast } from './settingsUi';
 import { isMac, primaryModifier } from './lib/platform';
@@ -52,6 +52,9 @@ function setRecording(on: boolean) {
   recording = on;
   cmd('settings:recording')(on);
 }
+onReconnect(() => {
+  if (recording) cmd('settings:recording')(true);
+});
 
 // The background (Flecha's ⌘F, say) can ask for the search field too.
 on('settings:find', () => {
@@ -94,7 +97,20 @@ const api: SettingsApi = {
     const picked = await popupMenu(items);
     return picked ? invoke<TabsMenuAction | undefined>('settings:tabs-menu-run', picked.run) : undefined;
   },
-  onTabs: (cb) => on('settings:tabs', cb),
+  onTabs: (cb, onError) => {
+    let generation = 0;
+    on('settings:tabs', (view: TabsView) => {
+      generation++;
+      cb(view);
+    });
+    onReconnect(() => {
+      const request = ++generation;
+      void api.tabs().then(
+        (view) => { if (request === generation) cb(view); },
+        () => { if (request === generation) onError?.(); },
+      );
+    });
+  },
   showTab: (tabId) => invoke('settings:show-tab', tabId).then(() => undefined),
   showEmojiPanel: () => invoke('settings:emoji-panel').then(tellNotYet).then(() => undefined),
 };

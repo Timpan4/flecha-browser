@@ -4,7 +4,8 @@
  * tabs), as saving the file did in Electron.
  */
 import './noPageMenu';
-import { invoke, on } from './client';
+import { invoke, on, onReconnect } from './client';
+import { ConnectionError } from './protocol';
 import type { BoostFile } from './features/boosts';
 import { compileBoost } from './features/compileBoost';
 
@@ -13,43 +14,142 @@ const list = $<HTMLUListElement>('list');
 const main = document.querySelector('main')!;
 const code = $<HTMLTextAreaElement>('code');
 const status = $('status');
+const listError = $('list-error');
+const retryList = $<HTMLButtonElement>('retry-list');
+const openError = $('open-error');
+const retryOpen = $('retry-open');
+const deleteCheckStatus = $('delete-check-status');
+const retryDeleteCheck = $<HTMLButtonElement>('retry-delete-check');
+const saveButton = $<HTMLButtonElement>('save');
+const deleteButton = $<HTMLButtonElement>('delete');
 
 let current: BoostFile | undefined;
 let savedCode = '';
+let editorSession = Symbol();
+let navigation: symbol | undefined;
+let listRead: symbol | undefined;
+let discard: { name: string; draft: string } | undefined;
+let reconnectSelection: { name: string; fallback: string } | undefined;
+const writes = new Map<string, Promise<void>>();
+const writeRevisions = new Map<string, symbol>();
+const deleting = new Set<string>();
+const unconfirmedDeletes = new Set<string>();
+let checkingDeletes: Promise<void> | undefined;
+let deletedDraft: symbol | undefined;
 
 const dirty = () => !!current && code.value !== savedCode;
-const selected = () => decodeURIComponent(location.hash.slice(1));
+function selected() {
+  try { return decodeURIComponent(location.hash.slice(1)); }
+  catch { return ''; }
+}
+
+function updateEditorActions() {
+  const unavailable = !!current && (deleting.has(current.name) || deletedDraft === editorSession);
+  saveButton.disabled = deleteButton.disabled = code.readOnly = unavailable;
+}
 
 function setStatus(text: string, error = false) {
   status.textContent = text;
   status.classList.toggle('error', error);
 }
 
+function clearEditor() {
+  current = undefined;
+  editorSession = Symbol();
+  savedCode = code.value = '';
+  main.classList.add('empty');
+  document.title = 'Boosts';
+  highlightListSelection();
+}
+
+function highlightListSelection() {
+  for (const button of list.querySelectorAll<HTMLButtonElement>('button[data-boost-name]')) {
+    button.classList.toggle('current', button.dataset.boostName === current?.name);
+  }
+}
+
 async function renderList() {
-  const boosts = await invoke<BoostFile[]>('boosts:list');
+  const request = listRead = Symbol();
+  retryList.disabled = true;
+  const boosts = await invoke<BoostFile[]>('boosts:list').catch(() => undefined);
+  if (listRead !== request) return;
+  retryList.disabled = false;
+  retryList.hidden = !!boosts;
+  listError.textContent = boosts ? '' : 'Couldn’t load Boosts.';
+  $('empty').hidden = !boosts || boosts.length > 0;
+  if (!boosts) return;
+  const shown = list.querySelectorAll<HTMLButtonElement>('button[data-boost-name]');
+  if (shown.length === boosts.length &&
+    boosts.every((boost, index) => shown[index].dataset.boostName === boost.name && shown[index].title === (boost.error ?? ''))) return;
   list.replaceChildren(
     ...boosts.map((b) => {
       const li = document.createElement('li');
       const button = document.createElement('button');
+      button.dataset.boostName = b.name;
       button.className = `${b.name === current?.name ? 'current' : ''} ${b.error ? 'broken' : ''}`;
       button.title = b.error ?? '';
       const host = Object.assign(document.createElement('span'), { textContent: b.host });
       const kind = Object.assign(document.createElement('span'), { className: 'kind', textContent: b.kind === 'script' ? '.ts' : '.css' });
       button.append(host, kind);
-      button.onclick = () => (location.hash = encodeURIComponent(b.name));
+      button.onclick = () => {
+        if (selected() === b.name && current?.name !== b.name) void refresh();
+        else location.hash = encodeURIComponent(b.name);
+      };
       li.append(button);
       return li;
     }),
   );
-  $('empty').hidden = boosts.length > 0;
 }
 
-async function open(name: string) {
-  if (dirty() && !confirm(`Discard your changes to ${current!.name}?`)) {
-    history.replaceState(null, '', `#${encodeURIComponent(current!.name)}`);
+async function open(name: string, reload = false) {
+  const request = navigation = Symbol();
+  const stillSelected = () => navigation === request && selected() === name;
+  const restoreHash = () => {
+    discard = undefined;
+    if (current) history.replaceState(null, '', `#${encodeURIComponent(current.name)}`);
+  };
+  const oldCode = code.value;
+  const previousEditor = editorSession;
+  if (dirty() && (discard?.name !== name || discard.draft !== oldCode)) {
+    if (!confirm(`Discard your changes to ${current!.name}?`)) {
+      discard = undefined;
+      restoreHash();
+      return false;
+    }
+    discard = { name, draft: oldCode };
+  }
+  let file: BoostFile | undefined;
+  let revision: symbol | undefined;
+  try {
+    for (let pending = writes.get(name); pending; pending = writes.get(name)) {
+      await pending;
+      if (!stillSelected()) return;
+    }
+    if (!stillSelected()) return;
+    revision = writeRevisions.get(name);
+    file = name ? await invoke<BoostFile | undefined>('boosts:get', name) : undefined;
+  } catch (error) {
+    if (!stillSelected()) return;
+    if (current) {
+      if (error instanceof ConnectionError) reconnectSelection = { name, fallback: current.name };
+      restoreHash();
+      setStatus('Couldn’t load this Boost.', true);
+    } else {
+      retryOpen.hidden = false;
+      openError.textContent = 'Couldn’t load this Boost.';
+    }
     return;
   }
-  current = name ? await invoke<BoostFile | undefined>('boosts:get', name) : undefined;
+  if (!stillSelected()) return;
+  if (editorSession === previousEditor && code.value !== oldCode) return restoreHash();
+  if (writeRevisions.get(name) !== revision) return open(name, reload);
+  discard = undefined;
+  openError.textContent = '';
+  retryOpen.hidden = true;
+  if (!reload || current?.name !== file?.name) editorSession = Symbol();
+  current = file;
+  highlightListSelection();
+  updateEditorActions();
   main.classList.toggle('empty', !current);
   document.title = current ? `${current.name} · Boosts` : 'Boosts';
   if (current) {
@@ -57,30 +157,96 @@ async function open(name: string) {
     code.value = savedCode = current.code;
     if (current.error) setStatus(current.error, true);
     else setStatus(current.kind === 'styles' ? 'Applies as you save' : 'Open tabs of this site reload when you save');
-    code.focus();
+    if (!reload) code.focus();
   }
-  void renderList();
 }
 
-async function save() {
-  if (!current) return;
-  const build = current.kind === 'script' ? compileBoost(current.name, code.value) : undefined;
-  const result = await invoke<BoostFile | undefined>('boosts:save', current.name, code.value, build);
-  if (!result) return setStatus('Couldn’t save', true);
-  current = result;
-  savedCode = result.code;
-  if (result.error) setStatus(result.error, true);
-  else setStatus(`Saved ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`);
-  void renderList();
+function save() {
+  if (!current || saveButton.disabled) return;
+  const file = current;
+  const session = editorSession;
+  const draft = code.value;
+  queueWrite(file.name, async () => {
+    try {
+      const build = file.kind === 'script' ? compileBoost(file.name, draft) : undefined;
+      const result = await invoke<BoostFile | undefined>('boosts:save', file.name, draft, build);
+      if (editorSession !== session) return;
+      if (!result) throw new Error('Save returned no file');
+      current = result;
+      savedCode = result.code;
+      if (result.error) setStatus(result.error, true);
+      else setStatus(dirty() ? 'Not saved' : `Saved ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`);
+      void renderList();
+    } catch {
+      if (editorSession === session) setStatus('Couldn’t save. Your edits are still here.', true);
+    }
+  });
 }
 
-$('save').onclick = () => void save();
-$('delete').onclick = async () => {
-  if (!current || !confirm(`Delete ${current.name}?`)) return;
-  await invoke('boosts:delete', current.name);
-  savedCode = code.value;
-  location.hash = '';
+function queueWrite(name: string, write: () => Promise<void>) {
+  writeRevisions.set(name, Symbol());
+  const pending = (writes.get(name) ?? Promise.resolve()).then(write).finally(() => {
+    if (writes.get(name) === pending) writes.delete(name);
+  });
+  writes.set(name, pending);
+}
+
+saveButton.onclick = () => void save();
+deleteButton.onclick = () => {
+  if (!current || deleteButton.disabled || !confirm(`Delete ${current.name}?`)) return;
+  const file = current;
+  const session = editorSession;
+  deleting.add(file.name);
+  updateEditorActions();
+  queueWrite(file.name, async () => {
+    try {
+      await invoke('boosts:delete', file.name);
+      if (editorSession === session) clearEditor();
+      if (selected() === file.name) location.hash = '';
+    } catch (error) {
+      if (error instanceof ConnectionError && error.sent) {
+        unconfirmedDeletes.add(file.name);
+        if (editorSession === session) setStatus('Couldn’t confirm deletion. Flecha will check after reconnecting.', true);
+      } else if (editorSession === session) setStatus('Couldn’t delete this Boost.', true);
+    } finally {
+      if (!unconfirmedDeletes.has(file.name)) deleting.delete(file.name);
+      updateEditorActions();
+    }
+  });
 };
+
+function verifyDeletes() {
+  if (checkingDeletes) return checkingDeletes;
+  if (!unconfirmedDeletes.size) return Promise.resolve();
+  retryDeleteCheck.disabled = true;
+  checkingDeletes = Promise.all([...unconfirmedDeletes].map((name) =>
+    invoke<BoostFile | undefined>('boosts:get', name).then((file) => {
+      if (!file) writeRevisions.set(name, Symbol());
+      unconfirmedDeletes.delete(name);
+      deleting.delete(name);
+      if (current?.name === name) {
+        if (file) setStatus('This Boost is still here.');
+        else if (dirty()) {
+          deletedDraft = editorSession;
+          setStatus('This Boost was deleted. You can still copy your draft.', true);
+        } else {
+          clearEditor();
+          if (selected() === name) history.replaceState(null, '', '#');
+        }
+      }
+      updateEditorActions();
+      return true;
+    }, () => false),
+  )).then((results) => {
+    const failed = results.includes(false);
+    deleteCheckStatus.textContent = failed ? 'Couldn’t check whether the Boost was deleted.' : '';
+    retryDeleteCheck.hidden = !failed;
+  }).finally(() => {
+    checkingDeletes = undefined;
+    retryDeleteCheck.disabled = false;
+  });
+  return checkingDeletes;
+}
 
 $<HTMLFormElement>('new').onsubmit = async (e) => {
   e.preventDefault();
@@ -93,6 +259,7 @@ $<HTMLFormElement>('new').onsubmit = async (e) => {
 };
 
 code.addEventListener('keydown', (e) => {
+  if (code.readOnly) return;
   if (e.key === 's' && (e.metaKey || e.ctrlKey)) {
     e.preventDefault();
     void save();
@@ -105,7 +272,28 @@ code.addEventListener('input', () => dirty() && setStatus('Not saved'));
 window.addEventListener('beforeunload', (e) => {
   if (dirty()) e.preventDefault();
 });
-window.addEventListener('hashchange', () => void open(selected()));
+async function refresh(reload = false) {
+  const name = selected();
+  const listing = renderList();
+  const keepEditor = reload && name === current?.name && (dirty() || unconfirmedDeletes.has(name));
+  if (!keepEditor) await open(name, reload);
+  await listing;
+}
+retryOpen.onclick = () => void refresh();
+retryList.onclick = () => void renderList();
+retryDeleteCheck.onclick = () => void verifyDeletes().then(() => refresh(true));
+window.addEventListener('hashchange', () => {
+  reconnectSelection = undefined;
+  void refresh();
+});
 on('boosts:changed', () => void renderList());
+onReconnect(() => {
+  const retry = reconnectSelection;
+  reconnectSelection = undefined;
+  if (retry && retry.fallback === selected()) {
+    history.replaceState(null, '', `#${encodeURIComponent(retry.name)}`);
+  }
+  void verifyDeletes().then(() => refresh(true));
+});
 
-void open(selected());
+void refresh();

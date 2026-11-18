@@ -3,9 +3,17 @@ export type Message =
   | { type: 'cmd'; name: string; args: unknown[] }
   | { type: 'invoke'; id: number; name: string; args: unknown[] }
   | { type: 'result'; id: number; value?: unknown; error?: string }
+  | { type: 'startup-failed' }
   | { type: 'event'; name: string; args: unknown[] }
   /** Keeps the background awake while a page is open (it sleeps after 30s of silence). */
   | { type: 'ping' };
+
+/** Whether the disconnected page had already submitted its request to the port. */
+export class ConnectionError extends Error {
+  constructor(readonly sent: boolean, message: string) {
+    super(message);
+  }
+}
 
 /**
  * What a context menu item does once picked, for menus the background builds and a page draws
