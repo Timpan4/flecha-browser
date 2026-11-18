@@ -1442,16 +1442,16 @@ async function start() {
 
   const pendingAgentOpens = new Map<string, () => void>();
 
-  async function removeAgentTab(id: string, chromeId: number, allowVisible: boolean, beforeRemove: () => void) {
+  async function removeAgentTab(id: string, chromeId: number, allowVisible: boolean, beforeRemove: () => void, deadline?: number) {
     try {
       if (allowVisible) {
         const tab = await chrome.tabs.get(chromeId);
+        beforeRemove();
         if (tab.active) await showPlaceholder(tab.windowId);
       }
       beforeRemove();
       ours.add(chromeId);
-      if (allowVisible) await chrome.tabs.remove(chromeId);
-      else await chrome.tabs.remove(chromeId, true);
+      await chrome.tabs.remove(chromeId, !allowVisible, deadline);
     } catch (error) {
       ours.delete(chromeId);
       if (allowVisible) sync();
@@ -1505,19 +1505,20 @@ async function start() {
       },
       currentChromeTab: (id) => live.get(id),
       activate: (id) => void store.activate(id),
-      close: async (id, allowVisible, check) => {
+      close: async (id, { allowVisible, check, requireCurrent, deadline }) => {
         const setup = tabSetups.get(id);
         const chromeId = setup ? await setup.promise : live.get(id);
         if (setup?.transferred) throw new Error('Tab transferred during setup.');
         await check(chromeId);
         const requireOwner = () => {
+          requireCurrent();
           if (!store.state.tabs[id] || live.get(id) !== chromeId || tabSetups.has(id)) {
             throw new Error('Tab ownership changed while closing the agent target.');
           }
         };
         requireOwner();
         pendingAgentOpens.delete(id);
-        if (chromeId !== undefined) await removeAgentTab(id, chromeId, allowVisible, requireOwner);
+        if (chromeId !== undefined) await removeAgentTab(id, chromeId, allowVisible, requireOwner, deadline);
         store.closeTab(id);
       },
     },

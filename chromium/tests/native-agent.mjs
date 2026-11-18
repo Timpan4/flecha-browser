@@ -489,6 +489,11 @@ try {
   await call('type', { tabId: agentTab, selector: '#email', text: 'new@example.test', clear: true });
   assert.deepEqual(await evaluate(agentPage, "({ value: document.querySelector('#email').value, trusted: window.trustedEmailInput })"),
     { value: 'new@exam', trusted: true });
+  await evaluate(agentPage, "document.body.insertAdjacentHTML('beforeend', '<input type=range id=range value=25>')");
+  const range = await client.callTool({ name: 'type', arguments: { tabId: agentTab, selector: '#range', text: '50', clear: true } });
+  assert.match(range.content[0].text, /does not support text replacement/);
+  assert.equal(await evaluate(agentPage, "document.querySelector('#range').value"), '25');
+  await evaluate(agentPage, "document.querySelector('#range').remove()");
   await call('type', { tabId: agentTab, selector: '#date-time', text: '2026-11-17 09:30', clear: true });
   assert.equal(await evaluate(agentPage, "document.querySelector('#date-time').value"), '2026-11-17T09:30');
   await call('type', { tabId: agentTab, selector: '#editable', text: 'replacement', clear: true });
@@ -501,26 +506,37 @@ try {
     globalThis.inserting = new Promise(resolve => { globalThis.notifyInsert = resolve; });
     globalThis.insertGate = new Promise(resolve => { globalThis.releaseInsert = resolve; });
     chrome.debugger.sendCommand = async (...args) => {
-      if (args[1] === 'Input.insertText') { notifyInsert(); await insertGate; }
+      if (args[1] === 'Input.insertText') {
+        if (!Number.isFinite(args[3]?.deadline)) throw new Error('Missing native input deadline');
+        notifyInsert();
+        await insertGate;
+        args[3] = { ...args[3], deadline: 0 };
+      }
       return realCommand(...args);
     };
     void 0;
   `);
-  const stalledInput = call('type', { tabId: agentTab, selector: '#field', text: 'held', clear: true });
+  const originalField = await evaluate(agentPage, "document.querySelector('#field').value");
+  const stalledInput = client.callTool({ name: 'type', arguments: { tabId: agentTab, selector: '#field', text: 'held', clear: true } });
   let queuedClick;
   try {
-    await evaluate(worker, 'inserting');
+    await Promise.race([evaluate(worker, 'inserting'), stalledInput.then(() => assert.fail('Input did not reach native dispatch'))]);
     queuedClick = client.callTool({ name: 'click', arguments: { tabId: agentTab, selector: '#count' } });
     await stateWhere(`s => s.agent?.tabId === ${JSON.stringify(agentTab)} && s.agent.action === 'clicking #count'`);
     await evaluate(worker, 'Date.now = () => Number.MAX_SAFE_INTEGER; releaseInsert();');
     const expired = await queuedClick;
     assert.equal(expired.isError, true);
     assert.match(expired.content[0].text, /request expired/);
+    const expiredInput = await stalledInput;
+    assert.equal(expiredInput.isError, true);
+    assert.match(expiredInput.content[0].text, /request expired/);
+    assert.equal(await evaluate(agentPage, "document.querySelector('#field').value"), originalField);
     assert.equal(await evaluate(agentPage, 'counter'), 1, 'an expired click never edits the page');
   } finally {
     await evaluate(worker, 'Date.now = realClock; releaseInsert(); chrome.debugger.sendCommand = realCommand;');
     await Promise.allSettled([stalledInput, queuedClick]);
   }
+  console.log('PASS Chromium refuses an insertion delivered after its deadline');
   for (const [name, args, method, release] of [
     ['click', { selector: '#count' }, 'Input.dispatchMouseEvent', 'mouseReleased'],
     ['press_key', { key: 'Escape' }, 'Input.dispatchKeyEvent', 'keyUp'],
@@ -667,11 +683,8 @@ try {
 
   await evaluate(worker, `
     globalThis.realEvalCommand = chrome.debugger.sendCommand;
-    globalThis.realEvalDetach = chrome.debugger.detach;
     globalThis.realEvalTimer = setTimeout;
     globalThis.evalStarted = new Promise(resolve => { globalThis.notifyEvalStarted = resolve; });
-    globalThis.evalDetaching = new Promise(resolve => { globalThis.notifyEvalDetaching = resolve; });
-    globalThis.evalDetachGate = new Promise(resolve => { globalThis.releaseEvalDetach = resolve; });
     chrome.debugger.sendCommand = (...args) => {
       if (args[1] === 'Runtime.evaluate' && args[2].expression.includes('pendingAgentEvaluation')) {
         globalThis.evalDelay = args[2].timeout;
@@ -688,36 +701,36 @@ try {
       return realEvalTimer(callback, delay, ...args);
     };
     globalThis.evalDelay = undefined;
-    chrome.debugger.detach = async (...args) => {
-      notifyEvalDetaching();
-      await evalDetachGate;
-      return realEvalDetach(...args);
-    };
     void 0;
   `);
-  const stalledEvaluation = client.callTool({
-    name: 'evaluate', arguments: { tabId: agentTab, expression: 'new Promise(function pendingAgentEvaluation() {})' },
-  });
+  const beforeEval = await evaluate(agentPage, 'counter');
+  const stalledEvaluation = client.callTool({ name: 'evaluate', arguments: {
+    tabId: agentTab,
+    expression: 'new Promise(function pendingAgentEvaluation(resolve) { window.finishAgentEvaluation = () => { delete window.finishAgentEvaluation; counter *= 2; resolve(); }; })',
+  } });
   let clickAfterExpiry;
   try {
     await Promise.race([evaluate(worker, 'evalStarted'), stalledEvaluation.then(() => assert.fail('Evaluation finished before its promise resolved'))]);
-    await evaluate(worker, 'expireEvaluation()');
-    await evaluate(worker, 'evalDetaching');
-    const before = await evaluate(agentPage, 'counter');
     clickAfterExpiry = client.callTool({ name: 'click', arguments: { tabId: agentTab, selector: '#count' } });
     await stateWhere(`s => s.agent?.tabId === ${JSON.stringify(agentTab)} && s.agent.action === 'clicking #count'`);
-    assert.equal(await evaluate(agentPage, 'counter'), before);
-    await evaluate(worker, 'releaseEvalDetach()');
-    const [expired, clicked] = await Promise.all([stalledEvaluation, clickAfterExpiry]);
+    await evaluate(worker, 'expireEvaluation()');
+    const expired = await stalledEvaluation;
+    assert.equal(expired.isError, true);
     assert.match(expired.content[0].text, /request expired/);
+    const refused = await client.callTool({ name: 'click', arguments: { tabId: agentTab, selector: '#count' } });
+    assert.match(refused.content[0].text, /evaluation is still pending/);
+    assert.equal(await evaluate(agentPage, 'counter'), beforeEval);
+    await evaluate(agentPage, 'window.finishAgentEvaluation()');
+    const clicked = await clickAfterExpiry;
     assert.equal(clicked.isError, undefined, clicked.content[0].text);
-    assert.equal(await evaluate(agentPage, 'counter'), before + 1);
-    await evaluate(agentPage, `counter = ${before}`);
+    assert.equal(await evaluate(agentPage, 'counter'), 2 * beforeEval + 1);
+    await evaluate(agentPage, `counter = ${beforeEval}`);
   } finally {
-    await evaluate(worker, 'releaseEvalDetach(); chrome.debugger.detach = realEvalDetach; chrome.debugger.sendCommand = realEvalCommand; globalThis.setTimeout = realEvalTimer;');
+    await evaluate(agentPage, 'window.finishAgentEvaluation?.()');
+    await evaluate(worker, 'chrome.debugger.sendCommand = realEvalCommand; globalThis.setTimeout = realEvalTimer;');
     await Promise.allSettled([stalledEvaluation, clickAfterExpiry]);
   }
-  console.log('PASS an expired evaluation detaches and releases the tab for the next click');
+  console.log('PASS an expired evaluation finishes its pending page work before a queued click');
   await call('activate_tab', { tabId: agentTab });
   await nativeActive(base + '/agent');
   await rpc('activate', mine);
@@ -1220,6 +1233,61 @@ try {
   const closing = JSON.parse((await call('open_tab', { url: closingUrl })).content[0].text).tabId;
   await rpc('activate', closing);
   await stateWhere(`s => s.spaces.find(sp => sp.id === s.activeSpaceId).activeTabId === ${JSON.stringify(closing)}`);
+  const tooLong = await client.callTool({ name: 'wait_for', arguments: { tabId: closing, timeoutMs: 2_147_483_647 } });
+  assert.match(tooLong.content[0].text, /timeoutMs/);
+  await evaluate(worker, `
+    globalThis.closeClock = Date.now;
+    globalThis.getBeforeClose = chrome.tabs.get;
+    let closeLookup = true;
+    chrome.tabs.get = async (...args) => {
+      const tab = await getBeforeClose(...args);
+      if (closeLookup && tab.url === ${JSON.stringify(closingUrl)}) {
+        closeLookup = false;
+        Date.now = () => Number.MAX_SAFE_INTEGER;
+      }
+      return tab;
+    };
+    void 0;
+  `);
+  try {
+    const closeExpired = await client.callTool({ name: 'close_tab', arguments: { tabId: closing, allowVisibleTab: true } });
+    assert.equal(closeExpired.isError, true);
+    assert.match(closeExpired.content[0].text, /request expired/);
+  } finally {
+    await evaluate(worker, 'chrome.tabs.get = getBeforeClose; Date.now = closeClock;');
+  }
+  await nativeActive(closingUrl);
+  console.log('PASS an approved close checks its deadline after looking up the native tab');
+
+  await evaluate(worker, `
+    globalThis.updateBeforeExpiry = chrome.tabs.update;
+    globalThis.removeBeforeExpiry = chrome.tabs.remove;
+    chrome.tabs.update = (id, properties, backgroundOnly, deadline) => {
+      if (properties.url !== ${JSON.stringify(base + '/expired-navigation')}) return updateBeforeExpiry(id, properties);
+      if (!Number.isFinite(deadline)) throw new Error('Missing native navigation deadline');
+      return updateBeforeExpiry(id, properties, backgroundOnly, 0);
+    };
+    chrome.tabs.remove = (id, backgroundOnly, deadline) => {
+      if (!Number.isFinite(deadline)) return removeBeforeExpiry(id);
+      return removeBeforeExpiry(id, backgroundOnly, 0);
+    };
+    void 0;
+  `);
+  try {
+    for (const [name, args] of [
+      ['navigate', { url: base + '/expired-navigation' }],
+      ['close_tab', {}],
+    ]) {
+      const result = await client.callTool({ name, arguments: { tabId: closing, allowVisibleTab: true, ...args } });
+      assert.equal(result.isError, true, name);
+      assert.match(result.content[0].text, /request expired/, name);
+      await nativeActive(closingUrl);
+    }
+  } finally {
+    await evaluate(worker, 'chrome.tabs.update = updateBeforeExpiry; chrome.tabs.remove = removeBeforeExpiry;');
+  }
+  console.log('PASS Chromium refuses native navigation and removal with expired deadlines');
+
   await evaluate(worker, `(async () => {
     const target = (await chrome.tabs.query({})).find(tab => tab.url === ${JSON.stringify(closingUrl)}).id;
     globalThis.beforeRefusedRemove = chrome.tabs.remove;

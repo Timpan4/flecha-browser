@@ -32,6 +32,9 @@ export const fail = (message: string): AgentResult => ({ content: [{ type: 'text
  */
 const tabId = z.string().describe('Flecha tab id, from open_tab or list_tabs');
 const allowVisibleTab = z.boolean().optional().describe('Set to true only when the user asks you to act on a tab they are viewing.');
+export const AGENT_TOOL_TIMEOUT_MS = 60_000;
+// Node's setTimeout treats a delay above 2^31 - 1 as 1 ms.
+const waitForTimeout = z.number().int().nonnegative().max(2_147_483_647 - AGENT_TOOL_TIMEOUT_MS);
 
 /**
  * Tools work in the background by default. Activating a tab and editing a visible
@@ -75,12 +78,12 @@ export const AGENT_TOOLS = {
   },
   press_key: { description: 'Press a key such as Enter, Tab, Escape or ArrowDown in a tab.', inputSchema: { tabId, allowVisibleTab, key: z.string() } },
   evaluate: {
-    description: "Run JavaScript in a tab's page and return the result (promises are awaited, values are JSON-serialized).",
+    description: "Run JavaScript in a tab's page and return the result (promises are awaited, values are JSON-serialized). If an evaluation times out while a promise is pending, further edits wait for it to finish or for the page to unload.",
     inputSchema: { tabId, allowVisibleTab, expression: z.string() },
   },
   wait_for: {
     description: 'Wait until an element matching a selector exists (or the page finishes loading when no selector is given).',
-    inputSchema: { tabId, selector: z.string().optional(), timeoutMs: z.number().optional() },
+    inputSchema: { tabId, selector: z.string().optional(), timeoutMs: waitForTimeout.optional() },
   },
 } as const;
 
