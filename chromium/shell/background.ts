@@ -1427,18 +1427,25 @@ async function start() {
     broadcastState: sendState,
     tabs: {
       open: (url) => addTab(resolveInput(url, store.state.searchEngine), { activate: false, agent: true }).id,
-      chromeTab: async (id) => {
+      chromeTab: async (id, requireCurrent) => {
         await syncing;
+        requireCurrent();
         const pending = tabSetups.get(id);
         if (pending) return pending.promise;
         return live.get(id) ?? (store.state.tabs[id] ? openChromeTab(id, false, store.locate(id)?.windowId ?? store.focusedWindowId) : undefined);
       },
       currentChromeTab: (id) => live.get(id),
       activate: (id) => void store.activate(id),
-      close: async (id, chromeId, checkBackground) => {
-        if (checkBackground) {
+      close: async (id, allowVisible, check) => {
+        const setup = tabSetups.get(id);
+        const chromeId = setup ? await setup.promise : live.get(id);
+        if (setup?.transferred) throw new Error('Tab transferred during setup.');
+        await check(chromeId);
+        if (!store.state.tabs[id] || live.get(id) !== chromeId || tabSetups.has(id)) {
+          throw new Error('Tab ownership changed while closing the agent target.');
+        }
+        if (!allowVisible) {
           // A background tab needs no placeholder or foreground switch before removal.
-          await checkBackground();
           if (chromeId !== undefined) {
             ours.add(chromeId);
             try {

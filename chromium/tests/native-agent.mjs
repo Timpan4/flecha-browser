@@ -436,6 +436,16 @@ try {
     await evaluate(agentPage, `document.querySelector('#date')[${JSON.stringify(property)}] = false`);
   }
   await evaluate(agentPage, `(() => {
+    const date = document.querySelector('#date');
+    document.querySelector('#field').focus();
+    date.addEventListener('focus', () => { date.readOnly = true; }, { once: true });
+  })()`);
+  const focusLock = await client.callTool({ name: 'type', arguments: { tabId: agentTab, selector: '#date', text: '2026-12-01', clear: true } });
+  assert.equal(focusLock.isError, true, 'focus may make a date input read-only');
+  assert.equal(await evaluate(agentPage, "document.querySelector('#date').value"), '2026-11-17');
+  await evaluate(agentPage, "document.querySelector('#date').readOnly = false");
+  console.log('PASS date replacement rechecks editability after focus');
+  await evaluate(agentPage, `(() => {
     const field = document.querySelector('#field');
     field.value = 'keep';
     const redirected = document.createElement('input');
@@ -495,6 +505,42 @@ try {
     await evaluate(worker, 'Date.now = realClock; releaseInsert(); chrome.debugger.sendCommand = realCommand;');
     await Promise.allSettled([stalledInput, queuedClick]);
   }
+  for (const [name, args, method, release] of [
+    ['click', { selector: '#count' }, 'Input.dispatchMouseEvent', 'mouseReleased'],
+    ['press_key', { key: 'Escape' }, 'Input.dispatchKeyEvent', 'keyUp'],
+  ]) {
+    await evaluate(worker, `
+      globalThis.gestureCommand = chrome.debugger.sendCommand;
+      globalThis.gestureWaiting = new Promise(resolve => { globalThis.notifyGesture = resolve; });
+      globalThis.gestureGate = new Promise(resolve => { globalThis.releaseGesture = resolve; });
+      globalThis.gestureFocusEnded = false;
+      chrome.debugger.sendCommand = async (...args) => {
+        if (args[1] === ${JSON.stringify(method)}) {
+          if (args[2].type !== ${JSON.stringify(release)}) throw new Error('Simulated gesture failure');
+          notifyGesture();
+          await gestureGate;
+          return;
+        }
+        if (args[1] === 'Emulation.setFocusEmulationEnabled' && args[2].enabled === false) gestureFocusEnded = true;
+        return gestureCommand(...args);
+      };
+      void 0;
+    `);
+    const gesture = client.callTool({ name, arguments: { tabId: agentTab, ...args } });
+    try {
+      await Promise.race([evaluate(worker, 'gestureWaiting'), gesture.then(() => assert.fail(`${name} settled before gesture release`))]);
+      assert.equal(await evaluate(worker, 'gestureFocusEnded'), false, `${name} must keep focus emulation until its release settles`);
+      await evaluate(worker, 'releaseGesture()');
+      const failure = await gesture;
+      assert.equal(failure.isError, true, name);
+      assert.match(failure.content[0].text, /Simulated gesture failure/);
+      assert.equal(await evaluate(worker, 'gestureFocusEnded'), true, name);
+    } finally {
+      await evaluate(worker, 'releaseGesture(); chrome.debugger.sendCommand = gestureCommand;');
+      await Promise.allSettled([gesture]);
+    }
+  }
+  console.log('PASS both halves of a failed input gesture settle before focus cleanup');
   await call('activate_tab', { tabId: agentTab });
   await nativeActive(base + '/agent');
   await rpc('activate', mine);
@@ -760,6 +806,34 @@ try {
     })`,
   );
   assert.equal(discardedLoginGone, true, 'Chromium discarded the agent sign-in tab');
+  await evaluate(worker, `
+    globalThis.readClock = Date.now;
+    globalThis.readGetTab = chrome.tabs.get;
+    globalThis.readLookup = new Promise(resolve => { globalThis.notifyReadLookup = resolve; });
+    globalThis.readGate = new Promise(resolve => { globalThis.releaseRead = resolve; });
+    chrome.tabs.get = async (...args) => {
+      const tab = await readGetTab(...args);
+      if (tab.discarded && tab.url === ${JSON.stringify(base + '/login?discard')}) {
+        notifyReadLookup();
+        await readGate;
+      }
+      return tab;
+    };
+    void 0;
+  `);
+  const expiredRead = client.callTool({ name: 'read_page', arguments: { tabId: discardedLogin } });
+  try {
+    await Promise.race([evaluate(worker, 'readLookup'), expiredRead.then(() => assert.fail('Read finished before its tab lookup'))]);
+    await evaluate(worker, 'Date.now = () => Number.MAX_SAFE_INTEGER; releaseRead();');
+    const failure = await expiredRead;
+    assert.equal(failure.isError, true);
+    assert.match(failure.content[0].text, /request expired/);
+    assert.equal(await evaluate(worker, `chrome.tabs.query({}).then(tabs => tabs.find(tab => tab.url === ${JSON.stringify(base + '/login?discard')})?.discarded)`), true);
+  } finally {
+    await evaluate(worker, 'Date.now = readClock; releaseRead(); chrome.tabs.get = readGetTab;');
+    await Promise.allSettled([expiredRead]);
+  }
+  console.log('PASS an expired read leaves its discarded tab asleep');
   const otherAfterDiscard = await call('evaluate', {
     tabId: discardedLogin,
     expression: "location.pathname + location.search + ' ' + document.querySelector('h1')?.textContent + ' ' + (document.documentElement.dataset.otherExtension ?? null)",
@@ -768,6 +842,43 @@ try {
   console.log('PASS a discarded agent tab comes back without other extensions');
   await call('close_tab', { tabId: discardedLogin });
   await stateWhere(`s => !s.tabs[${JSON.stringify(discardedLogin)}]`);
+
+  await evaluate(worker, `
+    globalThis.createBeforeClose = chrome.tabs.create;
+    globalThis.creatingBeforeClose = new Promise(resolve => { globalThis.notifyCloseCreation = resolve; });
+    globalThis.closeCreationGate = new Promise(resolve => { globalThis.releaseCloseCreation = resolve; });
+    chrome.tabs.create = async (options) => {
+      if (options.active !== false) return createBeforeClose(options);
+      notifyCloseCreation();
+      await closeCreationGate;
+      const tab = await createBeforeClose(options);
+      globalThis.createdBeforeClose = tab.id;
+      return tab;
+    };
+    void 0;
+  `);
+  const setupUrl = base + '/agent?closing-during-setup';
+  const pendingOpen = client.callTool({ name: 'open_tab', arguments: { url: setupUrl } });
+  let closeWhileOpening;
+  try {
+    await Promise.race([evaluate(worker, 'creatingBeforeClose'), pendingOpen.then(() => assert.fail('Open finished before native creation'))]);
+    const pending = await stateWhere(`s => Object.values(s.tabs).some(t => t.url === ${JSON.stringify(setupUrl)})`);
+    const pinned = Object.values(pending.tabs).find(tab => tab.url === setupUrl).id;
+    await rpc('togglePin', pinned);
+    await stateWhere(`s => !s.tabs[${JSON.stringify(pinned)}].agent`);
+    closeWhileOpening = client.callTool({ name: 'close_tab', arguments: { tabId: pinned } });
+    await stateWhere(`s => s.agent?.tabId === ${JSON.stringify(pinned)} && s.agent.action === 'closing a tab'`);
+    await evaluate(worker, 'releaseCloseCreation()');
+    const closed = await closeWhileOpening;
+    assert.equal(closed.isError, undefined, closed.content[0].text);
+    await pendingOpen;
+    assert.equal(await evaluate(worker, 'chrome.tabs.query({}).then(tabs => tabs.some(tab => tab.id === createdBeforeClose))'), false);
+    await stateWhere(`s => !!s.tabs[${JSON.stringify(pinned)}]`);
+  } finally {
+    await evaluate(worker, 'releaseCloseCreation(); chrome.tabs.create = createBeforeClose;');
+    await Promise.allSettled([pendingOpen, closeWhileOpening]);
+  }
+  console.log('PASS closing a pinned tab waits for native setup and unloads it');
 
   // Taken from the agent, the tab is yours: its next page runs your extensions again.
   await rpc('togglePin', agentLogin);
