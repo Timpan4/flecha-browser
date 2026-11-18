@@ -210,9 +210,9 @@ export async function stagePortableShell(root, stage, nodeExecutable = process.e
   }
 }
 
-export async function restorePortableRuntime(archive, stage, source, extract) {
+export async function restorePortableRuntime(archive, stage, source, extract, signal) {
   const directory = path.dirname(archive);
-  await verifyRelease(directory, [{ platform: source.platform }], source);
+  await verifyRelease(directory, [{ platform: source.platform }], source, { signal });
   const provenance = JSON.parse(await fs.readFile(path.join(directory, `${source.platform}.json`), 'utf8'));
   if (provenance.depot !== source.depot || typeof provenance.args !== 'string') {
     throw new Error('Portable runtime has no compatible build configuration.');
@@ -222,6 +222,39 @@ export async function restorePortableRuntime(archive, stage, source, extract) {
   const executable = path.join(stage, source.platform === 'windows-x64' ? 'chrome.exe' : 'chrome');
   if (!(await fs.stat(executable)).isFile()) throw new Error('Portable runtime has no browser executable.');
   return provenance.args;
+}
+
+async function stagePortableRuntime(src, out, stage, dependencies) {
+  await fs.mkdir(stage);
+  for (const file of dependencies) {
+    if (!file) continue;
+    const source = path.resolve(out, file);
+    const relative = path.relative(out, source);
+    if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error(`Runtime dependency outside output: ${file}`);
+    const target = path.join(stage, relative);
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.cp(source, target, { recursive: true, preserveTimestamps: true });
+  }
+  await fs.copyFile(path.join(src, 'LICENSE'), path.join(stage, 'CHROMIUM-LICENSE'));
+}
+
+export async function packagePortable(root, stage, dist, invoke, nodeExecutable = process.execPath) {
+  await fs.mkdir(dist);
+  await stagePortableShell(root, stage, nodeExecutable);
+  if (windows) await invoke('7z', ['a', '-tzip', path.join(dist, 'Flecha-windows-x64.zip'), '.'], stage);
+  else await invoke('tar', ['-czf', path.join(dist, 'Flecha-linux-x64.tar.gz'), '-C', stage, '.'], root);
+}
+
+export function extractPortable(archive, directory, invoke) {
+  return windows ? invoke('7z', ['x', '-y', archive], directory) : invoke('tar', ['-xzf', archive], directory);
+}
+
+function packageArtifact(key) {
+  if (mac) return `release-${platform}-${key}`;
+  // Package layout can change while the underlying Chromium outputs remain reusable.
+  const layout = createHash('sha256').update(stagePortableRuntime.toString()).update(stagePortableShell.toString())
+    .update(packagePortable.toString()).digest('hex');
+  return `release-${platform}-${key}-${layout}`;
 }
 
 async function main() {
@@ -258,19 +291,13 @@ async function main() {
     if (process.env.GITHUB_OUTPUT) await fs.appendFile(process.env.GITHUB_OUTPUT, `${key}=${value}\n`);
   };
 
-  const packagePortable = async (stage, invoke = run) => {
-    await fs.mkdir(dist);
-    await stagePortableShell(root, stage);
-    if (windows) await invoke('7z', ['a', '-tzip', path.join(dist, 'Flecha-windows-x64.zip'), '.'], stage);
-    else await invoke('tar', ['-czf', path.join(dist, 'Flecha-linux-x64.tar.gz'), '-C', stage, '.'], root);
-  };
-  const writePackageMetadata = async (key, args, reusedFrom) => {
+  const writePackageMetadata = async (directory, key, args, reusedFrom, signal) => {
     const provenance = { ...identity, nativeKey: key, reusedFrom, args };
-    await fs.writeFile(path.join(dist, `${platform}.json`), JSON.stringify(provenance, null, 2) + '\n');
-    for (const file of await fs.readdir(dist)) {
+    await fs.writeFile(path.join(directory, `${platform}.json`), JSON.stringify(provenance, null, 2) + '\n', { signal });
+    for (const file of await fs.readdir(directory)) {
       const hash = createHash('sha256');
-      await pipeline(createReadStream(path.join(dist, file)), hash);
-      await fs.appendFile(path.join(dist, `${platform}-SHA256SUMS`), `${hash.digest('hex')}  ${file}\n`);
+      await pipeline(createReadStream(path.join(directory, file)), hash, { signal });
+      await fs.appendFile(path.join(directory, `${platform}-SHA256SUMS`), `${hash.digest('hex')}  ${file}\n`, { signal });
     }
   };
 
@@ -299,17 +326,26 @@ async function main() {
         await prepareRun(gn, ['gen', 'out/Release', '--fail-on-unused-args'], src, candidate ? budget.deadline : undefined);
       } });
     const stage = path.join(work, 'portable');
-    let cachedArgs;
+    const releaseName = mac ? undefined : packageArtifact(key);
+    const candidateDist = path.join(work, 'release');
     const reused = await downloadReusableTree(root, { repository: process.env.GITHUB_REPOSITORY,
-      branch: process.env.FLECHA_DEFAULT_BRANCH, currentRun: process.env.GITHUB_RUN_ID, platform, key, work,
+      branch: process.env.FLECHA_DEFAULT_BRANCH, currentRun: process.env.GITHUB_RUN_ID, platform, key, work, releaseName,
       get deadline() { return budget.deadline; }, signal,
       cleanup: directory => budget.required(() => removeNativeTree(directory, { deadline: budget.stageDeadline, signal })) },
     async (archive, candidate) => {
-      if (candidate.name === `release-${platform}-${key}`) {
-        cachedArgs = await restorePortableRuntime(archive, stage, { ...identity, sha: candidate.sha, nativeKey: key },
-          (file, directory) => windows
-            ? prepareRun('7z', ['x', '-y', file], directory, budget.deadline)
-            : prepareRun('tar', ['-xzf', file], directory, budget.deadline));
+      if (candidate.name === releaseName) {
+        const reuseSignal = AbortSignal.any([signal, AbortSignal.timeout(Math.max(0, budget.deadline - Date.now()))]);
+        const invoke = (command, args, cwd) => prepareRun(command, args, cwd, budget.deadline);
+        try {
+          const args = await restorePortableRuntime(archive, stage, { ...identity, sha: candidate.sha, nativeKey: key },
+            (file, directory) => extractPortable(file, directory, invoke), reuseSignal);
+          await packagePortable(root, stage, candidateDist, invoke);
+          await writePackageMetadata(candidateDist, key, args, candidate, reuseSignal);
+        } catch (error) {
+          if (error.code === 'ABORT_ERR') reuseSignal.throwIfAborted();
+          throw error;
+        }
+        reuseSignal.throwIfAborted();
         return;
       }
       await restoreCheckpoint(work, archive, { create: false, deadline: budget.deadline, signal });
@@ -319,10 +355,9 @@ async function main() {
     if (!reused) {
       await prepareNativeTree({ work, depot, src, configuration, run: prepareRun, chromium, signal });
       await configure();
-    } else if (cachedArgs !== undefined) {
-      await packagePortable(stage, (command, args, cwd) => prepareRun(command, args, cwd));
-      await writePackageMetadata(key, cachedArgs, reused);
-      await output('package', `release-${platform}-${key}`);
+    } else if (reused.name === releaseName) {
+      await fs.rename(candidateDist, dist);
+      await output('package', releaseName);
     }
     showDisk();
     return;
@@ -390,24 +425,14 @@ async function main() {
     run('tar', ['-czf', path.join(dist, 'Flecha-macos-arm64.tar.gz'), '-C', path.join(out, 'flecha-release/Flecha'), 'Flecha.app'], root);
   } else {
     const stage = path.join(root, 'portable');
-    await fs.mkdir(stage);
     const deps = capture(gn, ['desc', 'out/Release', '//chrome:chrome', 'runtime_deps']).split(/\r?\n/);
-    for (const file of deps) {
-      if (!file) continue;
-      const source = path.resolve(out, file);
-      const relative = path.relative(out, source);
-      if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error(`Runtime dependency outside output: ${file}`);
-      const target = path.join(stage, relative);
-      await fs.mkdir(path.dirname(target), { recursive: true });
-      await fs.cp(source, target, { recursive: true, preserveTimestamps: true });
-    }
-    await fs.copyFile(path.join(src, 'LICENSE'), path.join(stage, 'CHROMIUM-LICENSE'));
-    await packagePortable(stage);
+    await stagePortableRuntime(src, out, stage, deps);
+    await packagePortable(root, stage, dist, run);
   }
-  await writePackageMetadata(state.nativeKey, await fs.readFile(path.join(out, 'args.gn'), 'utf8'), state.reusedFrom);
+  await writePackageMetadata(dist, state.nativeKey, await fs.readFile(path.join(out, 'args.gn'), 'utf8'), state.reusedFrom);
   await fs.writeFile(stateFile, JSON.stringify({ ...state, complete: true }));
   showDisk();
-  await output('package', `release-${platform}-${state.nativeKey}`);
+  await output('package', packageArtifact(state.nativeKey));
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();

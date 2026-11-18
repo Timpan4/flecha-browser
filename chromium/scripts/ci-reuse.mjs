@@ -117,10 +117,10 @@ export function nativeKey(root, configuration) {
   return createHash('sha256').update(tree).update(JSON.stringify(configuration)).digest('hex');
 }
 
-export function reusableArtifact(artifacts, platform, key) {
+export function reusableArtifact(artifacts, platform, key, releaseName) {
   const available = artifacts.filter(artifact => !artifact.expired);
-  if (!platform.startsWith('macos-')) {
-    const release = available.find(artifact => artifact.name === `release-${platform}-${key}`);
+  if (releaseName) {
+    const release = available.find(artifact => artifact.name === releaseName);
     if (release) return { name: release.name, archive: `Flecha-${platform}.${platform.startsWith('windows-') ? 'zip' : 'tar.gz'}` };
   }
   const native = available.find(artifact => artifact.name === `native-${platform}-${key}`);
@@ -143,37 +143,40 @@ export function trustedRun(run, { repository, branch, currentRun }) {
     ['schedule', 'workflow_dispatch'].includes(run.event);
 }
 
-// Search only this repository's default-branch nightly workflow, including failed runs.
-export async function* findReusableArtifacts(options, api) {
-  const { repository, branch, currentRun, platform, key } = options;
-  const byRun = new Map();
-  const runs = new Map();
-  const excluded = new Set();
+async function* listArtifacts(endpoint, options, api) {
   let visited = 0;
   for (let page = 1; ; page++) {
     if (options.deadline !== undefined && Date.now() >= options.deadline) throw new Error('Native reuse reached the stage deadline.');
     // GitHub documents 100 as the maximum artifacts page size.
-    const response = await api(`repos/${repository}/actions/artifacts?per_page=100&page=${page}`);
+    const response = await api(`${endpoint}?per_page=100&page=${page}`);
     visited += response.artifacts.length;
-    for (const artifact of response.artifacts) {
-      if (artifact.name !== `native-${platform}-${key}` &&
-          artifact.name !== `release-${platform}-${key}` &&
-          !artifact.name.startsWith(`reuse-${platform}-${key}-`) &&
-          !artifact.name.startsWith(`checkpoint-${platform}-`)) continue;
-      const runId = String(artifact.workflow_run?.id);
-      if (!artifact.workflow_run || artifact.expired || runId === currentRun) continue;
-      const artifacts = byRun.get(runId) || [];
-      artifacts.push(artifact);
-      byRun.set(runId, artifacts);
-      const candidate = reusableArtifact(artifacts.filter(item => !excluded.has(`${runId}/${item.name}`)), platform, key);
-      if (!candidate) continue;
-      if (!runs.has(runId)) runs.set(runId, await api(`repos/${repository}/actions/runs/${runId}`));
-      const run = runs.get(runId);
-      if (!trustedRun(run, { repository, branch, currentRun })) continue;
-      excluded.add(`${runId}/${candidate.name}`);
+    yield* response.artifacts;
+    if (visited >= response.total_count || !response.artifacts.length) return;
+  }
+}
+
+// Search only this repository's default-branch nightly workflow, including failed runs.
+export async function* findReusableArtifacts(options, api) {
+  const { repository, branch, currentRun, platform, key, releaseName } = options;
+  const actions = `repos/${repository}/actions`;
+  const seen = new Set();
+  for await (const artifact of listArtifacts(`${actions}/artifacts`, options, api)) {
+    if (artifact.name !== releaseName && artifact.name !== `native-${platform}-${key}` &&
+        !artifact.name.startsWith(`reuse-${platform}-${key}-`)) continue;
+    const runId = String(artifact.workflow_run?.id);
+    if (!artifact.workflow_run || artifact.expired || runId === currentRun || seen.has(runId)) continue;
+    seen.add(runId);
+    const endpoint = `${actions}/runs/${runId}`;
+    const run = await api(endpoint);
+    if (!trustedRun(run, { repository, branch, currentRun })) continue;
+    // Finish reading the run before ranking its portable, native and checkpoint artifacts.
+    let artifacts = await Array.fromAsync(listArtifacts(`${endpoint}/artifacts`, options, api));
+    for (;;) {
+      const candidate = reusableArtifact(artifacts, platform, key, releaseName);
+      if (!candidate) break;
       yield { ...candidate, run: runId, sha: run.head_sha };
+      artifacts = artifacts.filter(item => item.name !== candidate.name);
     }
-    if (visited >= response.total_count || !response.artifacts.length) return undefined;
   }
 }
 

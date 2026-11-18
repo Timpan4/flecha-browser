@@ -8,7 +8,8 @@ import { pipeline } from 'node:stream/promises';
 import { execFileSync } from 'node:child_process';
 import { trustedRun } from './ci-reuse.mjs';
 
-export async function verifyRelease(dir, platforms, { sha, chromium, nativeKey }) {
+export async function verifyRelease(dir, platforms, { sha, chromium, nativeKey }, { signal } = {}) {
+  signal?.throwIfAborted();
   const files = new Set(await fs.readdir(dir));
   for (const { platform } of platforms) {
     const archive = `Flecha-${platform}.${platform.startsWith('windows-') ? 'zip' : 'tar.gz'}`;
@@ -34,7 +35,7 @@ export async function verifyRelease(dir, platforms, { sha, chromium, nativeKey }
     }
     for (const [file, expected] of checksums) {
       const hash = createHash('sha256');
-      await pipeline(createReadStream(path.join(dir, file)), hash);
+      await pipeline(createReadStream(path.join(dir, file)), hash, { signal });
       if (hash.digest('hex') !== expected) throw new Error(`Checksum mismatch: ${file}`);
     }
   }
@@ -82,8 +83,9 @@ export function publishAssets({ repository, tag, sha, title, notes, files, check
 
 export function publicationSource({ repository, branch, currentRun, run, platform, artifact }, gh) {
   const prefix = `release-${platform}-`;
-  const nativeKey = artifact?.startsWith(prefix) && artifact.slice(prefix.length);
-  if (!repository || !branch || !/^\d+$/.test(run || '') || !/^[a-f0-9]{64}$/.test(nativeKey || '')) {
+  const keys = artifact?.startsWith(prefix) && artifact.slice(prefix.length);
+  const match = /^([a-f0-9]{64})(?:-[a-f0-9]{64})?$/.exec(keys || '');
+  if (!repository || !branch || !/^\d+$/.test(run || '') || !match) {
     throw new Error('Invalid nightly publication inputs.');
   }
   const source = JSON.parse(gh(['api', `repos/${repository}/actions/runs/${run}`]));
@@ -91,26 +93,27 @@ export function publicationSource({ repository, branch, currentRun, run, platfor
   if (String(source.id) !== run || !/^[a-f0-9]{40}$/.test(sha || '') || !trustedRun(source, { repository, branch, currentRun })) {
     throw new Error('The package must come from a default-branch nightly build in this repository.');
   }
-  const chromium = gh(['api', '-H', 'Accept: application/vnd.github.raw+json',
-    `repos/${repository}/contents/chromium/CHROMIUM_VERSION?ref=${sha}`]).trim();
+  const readSource = file => gh(['api', '-H', 'Accept: application/vnd.github.raw+json',
+    `repos/${repository}/contents/chromium/${file}?ref=${sha}`]);
+  const platforms = JSON.parse(readSource('build/ci-platforms.json'));
+  if (!platforms.some(entry => entry.platform === platform)) throw new Error(`Unknown release platform: ${platform}`);
+  const chromium = readSource('CHROMIUM_VERSION').trim();
+  const nativeKey = match[1];
   return { sha, chromium, nativeKey };
 }
 
 async function main() {
   const root = fileURLToPath(new URL('../..', import.meta.url));
-  const platforms = JSON.parse(await fs.readFile(path.join(root, 'chromium/build/ci-platforms.json'), 'utf8'));
-  const selected = platforms.filter(({ platform }) => platform === process.env.FLECHA_PLATFORM);
-  if (selected.length !== 1) throw new Error(`Unknown release platform: ${process.env.FLECHA_PLATFORM}`);
-  const { FLECHA_BUILD_RUN: run, FLECHA_DEFAULT_BRANCH: branch, FLECHA_PACKAGE_ARTIFACT: artifact,
+  const { FLECHA_BUILD_RUN: run, FLECHA_DEFAULT_BRANCH: branch, FLECHA_PACKAGE_ARTIFACT: artifact, FLECHA_PLATFORM: platform,
     GITHUB_RUN_ID: currentRun, GITHUB_REPOSITORY: repository, GITHUB_SERVER_URL: server } = process.env;
   if (!currentRun || !server) throw new Error('Missing GitHub release context.');
   const gh = args => execFileSync('gh', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
-  const source = publicationSource({ repository, branch, currentRun, run, platform: selected[0].platform, artifact }, gh);
+  const source = publicationSource({ repository, branch, currentRun, run, platform, artifact }, gh);
   const { sha, chromium } = source;
   const dir = path.join(root, 'release');
   await fs.mkdir(dir);
   gh(['run', 'download', run, '--repo', repository, '--name', artifact, '--dir', dir]);
-  await verifyRelease(dir, selected, source);
+  await verifyRelease(dir, [{ platform }], source);
   const tag = `nightly-${run}`;
   const notes = path.join(root, 'release-notes.md');
   await fs.writeFile(notes, `Nightly build of Flecha from ${sha}, based on Chromium ${chromium}.\n\n` +
@@ -120,11 +123,11 @@ async function main() {
     'The macOS app is ad hoc signed and is not notarized. Its native host can be registered with chromium/scripts/install-native-host.sh --app /path/to/Flecha.app from the matching source checkout.\n\n' +
     'These prereleases do not use the stable Sparkle update feed. SHA256SUMS files cover each package and its source provenance.\n');
   // verifyRelease left exactly this platform's archive, provenance and checksum file in dir.
-  const checksums = path.join(dir, `${selected[0].platform}-SHA256SUMS`);
+  const checksums = path.join(dir, `${platform}-SHA256SUMS`);
   const files = (await fs.readdir(dir)).map(file => path.join(dir, file)).filter(file => file !== checksums);
   publishAssets({ repository, tag, sha, notes, files, checksums, title: `Nightly ${new Date().toISOString().slice(0, 10)} (${run})` }, gh);
   await fs.appendFile(process.env.GITHUB_STEP_SUMMARY,
-    `Published ${selected[0].platform} to [${tag}](${server}/${repository}/releases/tag/${tag}) from ${sha}.\n`);
+    `Published ${platform} to [${tag}](${server}/${repository}/releases/tag/${tag}) from ${sha}.\n`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();

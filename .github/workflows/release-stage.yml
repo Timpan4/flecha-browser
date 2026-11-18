@@ -152,7 +152,7 @@ jobs:
           overwrite: true
           retention-days: 35
       - name: Delete superseded checkpoint after successful handoff
-        if: inputs.stage != 0 && steps.checkpoint.outputs.complete == 'false'
+        if: inputs.stage != 0 && !inputs.last && steps.checkpoint.outputs.complete == 'false'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -184,6 +184,8 @@ jobs:
         run: exit 1
       - name: Confirm publication succeeded
         if: ${{ !cancelled() && steps.publisher.outputs.run-id != '' }}
+        # Queueing and publication share the existing one-hour upload allowance.
+        timeout-minutes: 60
         env:
           GH_TOKEN: ${{ github.token }}
           PUBLISH_RUN_ID: ${{ steps.publisher.outputs.run-id }}
