@@ -532,10 +532,10 @@ try {
       globalThis.gestureFocusEnded = false;
       chrome.debugger.sendCommand = async (...args) => {
         if (args[1] === ${JSON.stringify(method)}) {
-          if (args[2].type !== ${JSON.stringify(release)}) throw new Error('Simulated gesture failure');
+          if (args[3]?.releaseParams?.type !== ${JSON.stringify(release)}) throw new Error('Expected a native press and release');
           notifyGesture();
           await gestureGate;
-          return;
+          throw new Error('Simulated gesture failure');
         }
         if (args[1] === 'Emulation.setFocusEmulationEnabled' && args[2].enabled === false) gestureFocusEnded = true;
         return gestureCommand(...args);
@@ -700,7 +700,69 @@ try {
   }
   console.log('PASS a pending click stops after activation while an explicitly allowed call still works');
 
-  await rpc('splitWith', race);
+  for (const [name, args, api, method, match] of [
+    ['evaluate', { expression: 'nativeGuardSentinel++' }, 'debugger', 'sendCommand', 'args[1] === "Runtime.evaluate"'],
+    ['click', { selector: '#count' }, 'debugger', 'sendCommand', 'args[1] === "Input.dispatchMouseEvent"'],
+    ['type', { text: 'blocked' }, 'debugger', 'sendCommand', 'args[1] === "Input.insertText"'],
+    ['press_key', { key: 'Escape' }, 'debugger', 'sendCommand', 'args[1] === "Input.dispatchKeyEvent"'],
+    ['navigate', { url: base + '/blocked' }, 'tabs', 'update', 'args[1]?.url !== undefined'],
+    ['navigate', { action: 'reload' }, 'tabs', 'reload', 'true'],
+    ['navigate', { action: 'back' }, 'tabs', 'goBack', 'true'],
+    ['navigate', { action: 'forward' }, 'tabs', 'goForward', 'true'],
+    ['close_tab', {}, 'tabs', 'remove', 'true'],
+  ]) {
+    await evaluate(racePage, 'window.nativeGuardSentinel = 0; document.querySelector("#field").focus()');
+    await evaluate(worker, `
+      globalThis.guardNamespace = chrome[${JSON.stringify(api)}];
+      globalThis.guardMethod = ${JSON.stringify(method)};
+      globalThis.originalGuardMethod = guardNamespace[guardMethod];
+      globalThis.guardStarted = new Promise(resolve => { globalThis.notifyGuard = resolve; });
+      globalThis.guardGate = new Promise(resolve => { globalThis.releaseGuard = resolve; });
+      guardNamespace[guardMethod] = async (...args) => {
+        if (${match}) { notifyGuard(); await guardGate; }
+        return originalGuardMethod(...args);
+      };
+      void 0;
+    `);
+    const pending = client.callTool({ name, arguments: { tabId: race, ...args } });
+    const split = name === 'close_tab';
+    try {
+      await Promise.race([
+        evaluate(worker, 'guardStarted'),
+        pending.then((result) => assert.fail(`${name} finished before native dispatch: ${result.content[0]?.text}`)),
+      ]);
+      if (split) await rpc('splitWith', race);
+      else await rpc('activate', race);
+      if (split) {
+        await stateWhere('s => !!s.spaces.find(sp => sp.id === s.activeSpaceId).split');
+        await rpc('activate', mine);
+      }
+      waitingFor = 'the pending target to become visible in Chromium';
+      while (!await evaluate(worker, `chrome.tabs.query({}).then(tabs => {
+        const race = tabs.find(tab => tab.url === ${JSON.stringify(base + '/switch-race')});
+        if (!race) return false;
+        return ${split} ? !race.active && race.splitViewId >= 0 &&
+          tabs.some(tab => tab.active && tab.windowId === race.windowId && tab.splitViewId === race.splitViewId) : race.active;
+      })`)) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      await evaluate(worker, 'releaseGuard()');
+      const refused = await pending;
+      assert.equal(refused.isError, true, name);
+      assert.match(refused.content[0].text, /requires an inactive, hidden Chromium tab/, name);
+      assert.deepEqual(await evaluate(racePage, '[nativeGuardSentinel, counter, keys.length, document.querySelector("#field").value, location.href]'),
+        [0, 0, 0, '', base + '/switch-race']);
+    } finally {
+      await evaluate(worker, 'releaseGuard(); guardNamespace[guardMethod] = originalGuardMethod;');
+      await Promise.allSettled([pending]);
+    }
+    if (!split) {
+      await rpc('activate', mine);
+      await yours('native visibility refusal');
+    }
+  }
+  console.log('PASS Chromium refuses commands dispatched after activation, including close on the inactive split pane');
+
   await stateWhere('s => !!s.spaces.find(sp => sp.id === s.activeSpaceId).split');
   const panes = JSON.parse((await call('list_tabs')).content[0].text).filter((tab) => tab.active);
   assert.deepEqual(new Set(panes.map((tab) => tab.id)), new Set([mine, race]));

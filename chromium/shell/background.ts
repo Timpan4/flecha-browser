@@ -1473,7 +1473,7 @@ async function start() {
           if (chromeId !== undefined) {
             ours.add(chromeId);
             try {
-              await chrome.tabs.remove(chromeId);
+              await chrome.tabs.remove(chromeId, true);
             } catch (error) {
               ours.delete(chromeId);
               throw error;

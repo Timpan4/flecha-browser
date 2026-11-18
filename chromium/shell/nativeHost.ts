@@ -298,7 +298,12 @@ export function registerNativeHost(ctx: NativeHostContext) {
   }
 
   type EditableState = { visible: boolean; discarded: boolean };
-  type PageTarget = { chromeId: number; checkEditable?: () => Promise<EditableState>; requireCurrent: () => void };
+  type PageTarget = {
+    chromeId: number;
+    backgroundOnly?: boolean;
+    checkEditable?: () => Promise<EditableState>;
+    requireCurrent: () => void;
+  };
 
   /**
    * The tool's tab with its Chromium tab, after telling the sidebar. It stays where it is: tools
@@ -346,6 +351,7 @@ export function registerNativeHost(ctx: NativeHostContext) {
     const page = await target(tabId, action, requireCurrent);
     return {
       chromeId: page.chromeId,
+      backgroundOnly: allowVisibleTab !== true,
       requireCurrent,
       checkEditable: async () => {
         requireCurrent();
@@ -396,10 +402,18 @@ export function registerNativeHost(ctx: NativeHostContext) {
       const t = await editTarget(tabId, url ? `opening ${url}` : (action ?? 'navigating'), allowVisibleTab, requireCurrent);
       return withMutation(t, async () => {
         await t.checkEditable?.();
-        if (url) await chrome.tabs.update(t.chromeId, { url });
-        else if (action === 'back') await chrome.tabs.goBack(t.chromeId).catch(() => undefined);
-        else if (action === 'forward') await chrome.tabs.goForward(t.chromeId).catch(() => undefined);
-        else if (action === 'reload') await chrome.tabs.reload(t.chromeId);
+        requireCurrent();
+        const backgroundOnly = allowVisibleTab !== true;
+        if (url) await chrome.tabs.update(t.chromeId, { url }, backgroundOnly);
+        else if (action === 'reload') await chrome.tabs.reload(t.chromeId, {}, backgroundOnly);
+        else {
+          try {
+            if (action === 'back') await chrome.tabs.goBack(t.chromeId, backgroundOnly);
+            if (action === 'forward') await chrome.tabs.goForward(t.chromeId, backgroundOnly);
+          } catch (error) {
+            if (!(error instanceof Error) || error.message !== 'Cannot find a next page in history.') throw error;
+          }
+        }
         await settle(t.chromeId);
         const tab = await chrome.tabs.get(t.chromeId);
         return text({ url: tab.url, title: tab.title });
@@ -442,9 +456,8 @@ export function registerNativeHost(ctx: NativeHostContext) {
         `)) as { x: number; y: number } | undefined;
         if (!point) return false;
         const send = await debuggerFor(t);
-        await settleGesture(['mousePressed', 'mouseReleased'].map((type) =>
-          send('Input.dispatchMouseEvent', { type, x: point.x, y: point.y, button: 'left', clickCount: 1 }),
-        ));
+        const mouse = { ...point, button: 'left', clickCount: 1 };
+        await send('Input.dispatchMouseEvent', { ...mouse, type: 'mousePressed' }, { ...mouse, type: 'mouseReleased' });
         return true;
       }));
       if (!clicked) return fail(`No visible element matches ${selector}`);
@@ -657,13 +670,27 @@ export function registerNativeHost(ctx: NativeHostContext) {
     return pending;
   }
 
-  function sendDebug(chromeId: number, method: string, params?: object) {
-    return chrome.debugger.sendCommand({ tabId: chromeId }, method, params).catch(async (error: unknown) => {
+  type DispatchOptions = { backgroundOnly?: boolean; releaseParams?: object };
+  const nativeDebugger: {
+    sendCommand(
+      target: chrome.debugger.Debuggee,
+      method: string,
+      params: object | undefined,
+      options: DispatchOptions,
+    ): Promise<object | undefined>;
+  } = chrome.debugger;
+
+  function sendDebug(chromeId: number, method: string, params?: object, options?: DispatchOptions) {
+    const target = { tabId: chromeId };
+    const pending = options
+      ? nativeDebugger.sendCommand(target, method, params, options)
+      : chrome.debugger.sendCommand(target, method, params);
+    return pending.catch(async (error: unknown) => {
       throw await attachRefused(chromeId, error);
     });
   }
 
-  async function attachTarget({ chromeId, checkEditable, requireCurrent }: PageTarget) {
+  async function attachTarget({ chromeId, backgroundOnly, checkEditable, requireCurrent }: PageTarget) {
     requireCurrent();
     if (!attached.has(chromeId) && !attaching.has(chromeId)) {
       let wake = waking.get(chromeId);
@@ -673,7 +700,8 @@ export function registerNativeHost(ctx: NativeHostContext) {
         wake = waking.get(chromeId);
         if (!wake && state.discarded && !attached.has(chromeId) && !attaching.has(chromeId)) {
           // Share the reload, but check each request's deadline again before attaching.
-          wake = chrome.tabs.reload(chromeId).then(() => settle(chromeId)).finally(() => waking.delete(chromeId));
+          const reload = backgroundOnly ? chrome.tabs.reload(chromeId, {}, true) : chrome.tabs.reload(chromeId);
+          wake = reload.then(() => settle(chromeId)).finally(() => waking.delete(chromeId));
           waking.set(chromeId, wake);
         }
       }
@@ -684,13 +712,18 @@ export function registerNativeHost(ctx: NativeHostContext) {
     requireCurrent();
   }
 
-  type SendDebug = (method: string, params?: object) => ReturnType<typeof sendDebug>;
+  type SendDebug = (method: string, params?: object, releaseParams?: object) => ReturnType<typeof sendDebug>;
 
   async function debuggerFor(tab: PageTarget): Promise<SendDebug> {
     // Attach is shared. Permission to edit belongs to each tool request.
     await attachTarget(tab);
     await tab.checkEditable?.();
-    return (method, params) => sendDebug(tab.chromeId, method, params);
+    return (method, params, releaseParams) => {
+      tab.requireCurrent();
+      const { backgroundOnly } = tab;
+      const options = backgroundOnly || releaseParams ? { backgroundOnly, releaseParams } : undefined;
+      return sendDebug(tab.chromeId, method, params, options);
+    };
   }
 
   const mutationTail = new Map<number, Promise<void>>();
@@ -717,7 +750,10 @@ export function registerNativeHost(ctx: NativeHostContext) {
       await attachTarget(tab);
       const emulateFocus = (await checkEditable?.())?.visible === false;
       try {
-        if (emulateFocus) await sendDebug(chromeId, 'Emulation.setFocusEmulationEnabled', { enabled: true });
+        if (emulateFocus) {
+          tab.requireCurrent();
+          await sendDebug(chromeId, 'Emulation.setFocusEmulationEnabled', { enabled: true }, { backgroundOnly: tab.backgroundOnly });
+        }
         return await action();
       } finally {
         if (emulateFocus) {
@@ -804,12 +840,6 @@ export function registerNativeHost(ctx: NativeHostContext) {
   chrome.debugger.onDetach.addListener((source) => source.tabId !== undefined && forget(source.tabId));
   chrome.tabs.onRemoved.addListener((chromeId) => forget(chromeId));
 
-  async function settleGesture(commands: Promise<unknown>[]) {
-    const outcomes = await Promise.allSettled(commands);
-    const failed = outcomes.find((outcome) => outcome.status === 'rejected');
-    if (failed) throw failed.reason;
-  }
-
   async function dispatchKey(send: SendDebug, key: string) {
     const named: Record<string, [code: string, keyCode: number, text?: string]> = {
       Enter: ['Enter', 13, '\r'],
@@ -830,11 +860,11 @@ export function registerNativeHost(ctx: NativeHostContext) {
     const [code, keyCode, keyText] =
       named[key] ?? (key.length === 1 ? [`Key${key.toUpperCase()}`, key.toUpperCase().charCodeAt(0), key] : [key, 0]);
     const base = { key, code, windowsVirtualKeyCode: keyCode, nativeVirtualKeyCode: keyCode };
-    // Send the gesture as a pair after one check so a tab switch cannot strand a key down.
-    await settleGesture([
-      send('Input.dispatchKeyEvent', { type: keyText ? 'keyDown' : 'rawKeyDown', ...base, text: keyText, unmodifiedText: keyText }),
-      send('Input.dispatchKeyEvent', { type: 'keyUp', ...base }),
-    ]);
+    await send(
+      'Input.dispatchKeyEvent',
+      { type: keyText ? 'keyDown' : 'rawKeyDown', ...base, text: keyText, unmodifiedText: keyText },
+      { type: 'keyUp', ...base },
+    );
   }
 
   return {
