@@ -348,7 +348,7 @@ export class Store {
    * Today tabs are archived and removed. Pinned tabs and favorites stay in the
    * sidebar and only unload, going back to their home URL (Arc's behaviour).
    */
-  closeTab(tabId: string): 'removed' | 'unloaded' {
+  closeTab(tabId: string, { archive = true } = {}): 'removed' | 'unloaded' {
     const tab = this.state.tabs[tabId];
     const loc = this.locate(tabId);
     if (!tab || !loc) return 'removed';
@@ -364,7 +364,7 @@ export class Store {
     const ws = this.windowSpace(loc.space!.id, loc.windowId);
     const index = ws.today.indexOf(tabId);
     ws.today.splice(index, 1);
-    this.archive(tab);
+    if (archive) this.archive(tab);
     delete this.state.tabs[tabId];
     if (ws.activeTabId === tabId) ws.activeTabId = ws.today[Math.min(index, ws.today.length - 1)];
     this.changed();

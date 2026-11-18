@@ -50,6 +50,8 @@ npm run shell:build && npm run host:build
 node chromium/tests/native-agent.mjs /absolute/path/to/out/Release/chrome [/absolute/path/to/screenshots]
 ```
 
+The MCP bridge refuses input, navigation, JavaScript, and close requests on visible tabs by default, including tabs in a split view. It leaves read and screenshot tools available. Agents can use `open_tab` for a background tab. An authenticated agent can pass `allowVisibleTab: true` to override the default. The agent is responsible for asking the user before setting that flag. `activate_tab` explicitly shows a tab.
+
 Worktrees with native C++ patch changes need a matching native build. Keep using the preserved, already-patched source tree for those incremental builds; the shared snapshot is a runtime and backup, not a replacement source checkout. Do not run the upstream macOS reset/apply scripts against that extracted Linux tree. Windows and macOS need native binaries for their own OS; this snapshot and launcher are Linux-only.
 
 ## Two kinds of change

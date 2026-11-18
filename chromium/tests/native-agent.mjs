@@ -41,11 +41,13 @@ env.HOME = path.join(profile, 'home');
 for (const name of ['XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_STATE_HOME']) env[name] = path.join(profile, name.toLowerCase());
 
 // Your page, with a draft you type into, and the agent's, which counts clicks and logs keys.
+const requestedUrls = new Set();
 const server = createServer((request, response) => {
+  requestedUrls.add(request.url);
   response.setHeader('Content-Type', 'text/html');
   if (request.url === '/mine') return response.end('<title>My page</title><textarea id="draft" style="position: fixed; inset: 0; width: 100%; height: 100%"></textarea>');
   response.end(
-    '<title>Agent page</title><svg><title>Site icon</title></svg><math><mi>x</mi></math><h1>Agent page</h1><input id="field"><button id="count" onclick="counter++">Count</button>' +
+    '<title>Agent page</title><svg><title>Site icon</title></svg><math><mi>x</mi></math><h1>Agent page</h1><input id="field"><input id="date" type="date" value="2026-10-01"><button id="count" onclick="counter++">Count</button>' +
       '<script>window.counter = 0; window.keys = []; addEventListener("keydown", (e) => keys.push(e.key));</script>',
   );
 });
@@ -272,6 +274,12 @@ try {
 
   // Fail the browser APIs at their boundary: MCP must report failure and leave no blank native tab.
   const worker = await attach((await findTarget((t) => t.type === 'service_worker' && t.url.startsWith(extension))).targetId);
+  const nativeActive = async (url) => {
+    waitingFor = `Chromium to show ${url}`;
+    while (!await evaluate(worker, `chrome.tabs.query({ active: true }).then(tabs => tabs.some(tab => tab.url === ${JSON.stringify(url)}))`)) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  };
   await evaluate(worker, `
     globalThis.originalMark = chrome.flechaPrivate.setAgentTab;
     globalThis.originalUpdate = chrome.tabs.update;
@@ -420,11 +428,522 @@ try {
     await evaluate(agentPage, "({ counter, field: document.querySelector('#field').value, keys: keys.filter(k => k === 'Enter' || k === 'Escape') })"),
     { counter: 1, field: 'from the agent', keys: ['Enter', 'Escape'] },
   );
+  await evaluate(agentPage, `window.dateChanges = []; document.body.addEventListener('change', event => {
+    if (event.target.id === 'date') dateChanges.push(event.target.value);
+  }); void 0;`);
+  for (let i = 0; i < 2; i++) await call('type', { tabId: agentTab, selector: '#date', text: '2026-11-17', clear: true });
+  assert.deepEqual(await evaluate(agentPage, "({ value: document.querySelector('#date').value, changes: dateChanges })"),
+    { value: '2026-11-17', changes: ['2026-11-17'] });
+  for (const property of ['readOnly', 'disabled']) {
+    await evaluate(agentPage, `document.querySelector('#date')[${JSON.stringify(property)}] = true`);
+    const refused = await client.callTool({ name: 'type', arguments: { tabId: agentTab, selector: '#date', text: '2026-12-01', clear: true } });
+    assert.equal(refused.isError, true, property);
+    assert.equal(await evaluate(agentPage, "document.querySelector('#date').value"), '2026-11-17', property);
+    await evaluate(agentPage, `document.querySelector('#date')[${JSON.stringify(property)}] = false`);
+  }
+  await evaluate(agentPage, `(() => {
+    const date = document.querySelector('#date');
+    document.querySelector('#field').focus();
+    date.addEventListener('focus', () => { date.readOnly = true; }, { once: true });
+  })()`);
+  const focusLock = await client.callTool({ name: 'type', arguments: { tabId: agentTab, selector: '#date', text: '2026-12-01', clear: true } });
+  assert.equal(focusLock.isError, true, 'focus may make a date input read-only');
+  assert.equal(await evaluate(agentPage, "document.querySelector('#date').value"), '2026-11-17');
+  await evaluate(agentPage, "document.querySelector('#date').readOnly = false");
+  console.log('PASS date replacement rechecks editability after focus');
+  await evaluate(agentPage, `(() => {
+    const field = document.querySelector('#field');
+    field.value = 'keep';
+    const redirected = document.createElement('input');
+    redirected.id = 'redirected';
+    redirected.addEventListener('focus', () => field.focus());
+    const redirectedSubmit = document.createElement('input');
+    redirectedSubmit.id = 'redirected-submit';
+    redirectedSubmit.addEventListener('input', () => field.focus());
+    const email = document.createElement('input');
+    email.id = 'email';
+    email.type = 'email';
+    email.maxLength = 8;
+    email.value = 'old@exam';
+    email.addEventListener('beforeinput', event => { window.trustedEmailInput = event.isTrusted; });
+    const dateTime = document.createElement('input');
+    dateTime.id = 'date-time';
+    dateTime.type = 'datetime-local';
+    const editable = document.createElement('div');
+    editable.id = 'editable';
+    editable.contentEditable = 'true';
+    editable.textContent = 'before';
+    document.body.append(redirected, redirectedSubmit, email, dateTime, editable);
+    field.focus();
+  })()`);
+  const redirected = await client.callTool({ name: 'type', arguments: { tabId: agentTab, selector: '#redirected', text: 'wrong', clear: true } });
+  assert.equal(redirected.isError, true, 'typing must stop when focus moves to another field');
+  assert.equal(await evaluate(agentPage, "document.querySelector('#field').value"), 'keep');
+  const enterCount = await evaluate(agentPage, "keys.filter(key => key === 'Enter').length");
+  const redirectSubmit = await client.callTool({
+    name: 'type', arguments: { tabId: agentTab, selector: '#redirected-submit', text: 'entered', submit: true },
+  });
+  assert.equal(redirectSubmit.isError, true);
+  assert.match(redirectSubmit.content[0].text, /lost focus before Enter/);
+  assert.deepEqual(await evaluate(agentPage, "({ focus: document.activeElement.id, enters: keys.filter(key => key === 'Enter').length })"),
+    { focus: 'field', enters: enterCount });
+  console.log('PASS submit skips Enter when an input handler moves focus');
+  await call('type', { tabId: agentTab, selector: '#email', text: 'new@example.test', clear: true });
+  assert.deepEqual(await evaluate(agentPage, "({ value: document.querySelector('#email').value, trusted: window.trustedEmailInput })"),
+    { value: 'new@exam', trusted: true });
+  await evaluate(agentPage, "document.body.insertAdjacentHTML('beforeend', '<input type=range id=range value=25>')");
+  const range = await client.callTool({ name: 'type', arguments: { tabId: agentTab, selector: '#range', text: '50', clear: true } });
+  assert.match(range.content[0].text, /does not support text replacement/);
+  assert.equal(await evaluate(agentPage, "document.querySelector('#range').value"), '25');
+  await evaluate(agentPage, "document.querySelector('#range').remove()");
+  await call('type', { tabId: agentTab, selector: '#date-time', text: '2026-11-17 09:30', clear: true });
+  assert.equal(await evaluate(agentPage, "document.querySelector('#date-time').value"), '2026-11-17T09:30');
+  await call('type', { tabId: agentTab, selector: '#editable', text: 'replacement', clear: true });
+  assert.equal(await evaluate(agentPage, "document.querySelector('#editable').textContent"), 'replacement');
+  await call('type', { tabId: agentTab, selector: '#editable', text: '', clear: true });
+  assert.equal(await evaluate(agentPage, "document.querySelector('#editable').textContent"), '');
+  await evaluate(worker, `
+    globalThis.realClock = Date.now;
+    globalThis.realCommand = chrome.debugger.sendCommand;
+    globalThis.inserting = new Promise(resolve => { globalThis.notifyInsert = resolve; });
+    globalThis.insertGate = new Promise(resolve => { globalThis.releaseInsert = resolve; });
+    chrome.debugger.sendCommand = async (...args) => {
+      if (args[1] === 'Input.insertText') {
+        if (!Number.isFinite(args[3]?.deadline)) throw new Error('Missing native input deadline');
+        notifyInsert();
+        await insertGate;
+        args[3] = { ...args[3], deadline: 0 };
+      }
+      return realCommand(...args);
+    };
+    void 0;
+  `);
+  const originalField = await evaluate(agentPage, "document.querySelector('#field').value");
+  const stalledInput = client.callTool({ name: 'type', arguments: { tabId: agentTab, selector: '#field', text: 'held', clear: true } });
+  let queuedClick;
+  try {
+    await Promise.race([evaluate(worker, 'inserting'), stalledInput.then(() => assert.fail('Input did not reach native dispatch'))]);
+    queuedClick = client.callTool({ name: 'click', arguments: { tabId: agentTab, selector: '#count' } });
+    await stateWhere(`s => s.agent?.tabId === ${JSON.stringify(agentTab)} && s.agent.action === 'clicking #count'`);
+    await evaluate(worker, 'Date.now = () => Number.MAX_SAFE_INTEGER; releaseInsert();');
+    const expired = await queuedClick;
+    assert.equal(expired.isError, true);
+    assert.match(expired.content[0].text, /request expired/);
+    const expiredInput = await stalledInput;
+    assert.equal(expiredInput.isError, true);
+    assert.match(expiredInput.content[0].text, /request expired/);
+    assert.equal(await evaluate(agentPage, "document.querySelector('#field').value"), originalField);
+    assert.equal(await evaluate(agentPage, 'counter'), 1, 'an expired click never edits the page');
+  } finally {
+    await evaluate(worker, 'Date.now = realClock; releaseInsert(); chrome.debugger.sendCommand = realCommand;');
+    await Promise.allSettled([stalledInput, queuedClick]);
+  }
+  console.log('PASS Chromium refuses an insertion delivered after its deadline');
+  for (const [name, args, method, release] of [
+    ['click', { selector: '#count' }, 'Input.dispatchMouseEvent', 'mouseReleased'],
+    ['press_key', { key: 'Escape' }, 'Input.dispatchKeyEvent', 'keyUp'],
+  ]) {
+    await evaluate(worker, `
+      globalThis.gestureCommand = chrome.debugger.sendCommand;
+      globalThis.gestureWaiting = new Promise(resolve => { globalThis.notifyGesture = resolve; });
+      globalThis.gestureGate = new Promise(resolve => { globalThis.releaseGesture = resolve; });
+      globalThis.gestureFocusEnded = false;
+      chrome.debugger.sendCommand = async (...args) => {
+        if (args[1] === ${JSON.stringify(method)}) {
+          if (args[3]?.releaseParams?.type !== ${JSON.stringify(release)}) throw new Error('Expected a native press and release');
+          notifyGesture();
+          await gestureGate;
+          throw new Error('Simulated gesture failure');
+        }
+        if (args[1] === 'Emulation.setFocusEmulationEnabled' && args[2].enabled === false) gestureFocusEnded = true;
+        return gestureCommand(...args);
+      };
+      void 0;
+    `);
+    const gesture = client.callTool({ name, arguments: { tabId: agentTab, ...args } });
+    try {
+      await Promise.race([evaluate(worker, 'gestureWaiting'), gesture.then(() => assert.fail(`${name} settled before gesture release`))]);
+      assert.equal(await evaluate(worker, 'gestureFocusEnded'), false, `${name} must keep focus emulation until its release settles`);
+      await evaluate(worker, 'releaseGesture()');
+      const failure = await gesture;
+      assert.equal(failure.isError, true, name);
+      assert.match(failure.content[0].text, /Simulated gesture failure/);
+      assert.equal(await evaluate(worker, 'gestureFocusEnded'), true, name);
+    } finally {
+      await evaluate(worker, 'releaseGesture(); chrome.debugger.sendCommand = gestureCommand;');
+      await Promise.allSettled([gesture]);
+    }
+  }
+  console.log('PASS both halves of a failed input gesture settle before focus cleanup');
+  await evaluate(worker, `
+    globalThis.focusCleanupCommand = chrome.debugger.sendCommand;
+    globalThis.focusCleanupDetach = chrome.debugger.detach;
+    globalThis.focusDetached = false;
+    chrome.debugger.sendCommand = async (...args) => {
+      if (args[1] === 'Emulation.setFocusEmulationEnabled' && !args[2].enabled) throw new Error('Simulated cleanup failure');
+      return focusCleanupCommand(...args);
+    };
+    chrome.debugger.detach = async (...args) => {
+      await focusCleanupDetach(...args);
+      focusDetached = true;
+    };
+    void 0;
+  `);
+  try {
+    await call('press_key', { tabId: agentTab, key: 'Escape' });
+    assert.equal(await evaluate(worker, 'focusDetached'), true);
+  } finally {
+    await evaluate(worker, 'chrome.debugger.sendCommand = focusCleanupCommand; chrome.debugger.detach = focusCleanupDetach;');
+  }
+  await call('read_page', { tabId: agentTab });
+  console.log('PASS failed focus cleanup detaches and the next read reattaches');
+  await evaluate(agentPage, `(() => {
+    const button = document.createElement('button');
+    button.id = 'queued-click-probe';
+    button.textContent = 'Original button';
+    document.body.append(button);
+    window.queuedScriptRan = false;
+    window.replacementClicks = 0;
+  })()`);
+  await evaluate(worker, `
+    globalThis.beforeQueuedClick = chrome.debugger.sendCommand;
+    globalThis.clickProbeStarted = new Promise(resolve => { globalThis.notifyClickProbe = resolve; });
+    globalThis.clickProbeGate = new Promise(resolve => { globalThis.releaseClickProbe = resolve; });
+    chrome.debugger.sendCommand = async (...args) => {
+      if (args[1] === 'Runtime.callFunctionOn' && args[2].functionDeclaration.includes('queued-click-probe')) {
+        notifyClickProbe();
+        await clickProbeGate;
+      }
+      return beforeQueuedClick(...args);
+    };
+    void 0;
+  `);
+  const queuedProbe = client.callTool({ name: 'click', arguments: { tabId: agentTab, selector: '#queued-click-probe' } });
+  let queuedEvaluation;
+  try {
+    await Promise.race([evaluate(worker, 'clickProbeStarted'), queuedProbe.then(() => assert.fail('Click finished before its element check'))]);
+    queuedEvaluation = client.callTool({ name: 'evaluate', arguments: { tabId: agentTab, expression: 'window.queuedScriptRan = true' } });
+    await stateWhere(`s => s.agent?.tabId === ${JSON.stringify(agentTab)} && s.agent.action === 'running JavaScript'`);
+    assert.equal(await evaluate(agentPage, 'queuedScriptRan'), false);
+    await evaluate(agentPage, `(() => {
+      const button = document.querySelector('#queued-click-probe');
+      const replacement = button.cloneNode(true);
+      replacement.addEventListener('click', () => replacementClicks++);
+      button.replaceWith(replacement);
+    })()`);
+    await evaluate(worker, 'releaseClickProbe()');
+    assert.equal((await queuedProbe).isError, true);
+    assert.equal((await queuedEvaluation).isError, undefined);
+    assert.deepEqual(await evaluate(agentPage, '({ queuedScriptRan, replacementClicks })'), { queuedScriptRan: true, replacementClicks: 0 });
+  } finally {
+    await evaluate(worker, 'releaseClickProbe(); chrome.debugger.sendCommand = beforeQueuedClick;');
+    await Promise.allSettled([queuedProbe, queuedEvaluation]);
+  }
+  console.log('PASS scripts wait for input and a click refuses a replaced element');
+  await evaluate(worker, `
+    globalThis.sendBeforeClickCheck = chrome.debugger.sendCommand;
+    globalThis.queryBeforeClickCheck = chrome.tabs.query;
+    let checkedTarget;
+    chrome.debugger.sendCommand = async (...args) => {
+      const result = await sendBeforeClickCheck(...args);
+      if (args[1] === 'Runtime.callFunctionOn' && args[2].functionDeclaration.includes('queued-click-probe')) checkedTarget = args[0];
+      if (args[1] === 'Input.dispatchMouseEvent') checkedTarget = undefined;
+      return result;
+    };
+    chrome.tabs.query = async (...args) => {
+      if (checkedTarget) {
+        const target = checkedTarget;
+        checkedTarget = undefined;
+        await sendBeforeClickCheck(target, 'Runtime.evaluate', {
+          expression: "document.querySelector('#queued-click-probe').replaceWith(document.querySelector('#queued-click-probe').cloneNode(true))",
+        });
+      }
+      return queryBeforeClickCheck(...args);
+    };
+    void 0;
+  `);
+  try {
+    await call('click', { tabId: agentTab, selector: '#queued-click-probe' });
+    assert.equal(await evaluate(agentPage, 'replacementClicks'), 1);
+  } finally {
+    await evaluate(worker, 'chrome.tabs.query = queryBeforeClickCheck; chrome.debugger.sendCommand = sendBeforeClickCheck;');
+  }
+  console.log('PASS click targets the checked element without another tab lookup');
+  await evaluate(agentPage, `(() => {
+    document.documentElement.style.scrollBehavior = 'smooth';
+    const button = document.createElement('button');
+    button.id = 'scrolled-control';
+    button.textContent = 'Offscreen';
+    button.style.cssText = 'display: block; margin-top: ' + window.innerHeight * 2 + 'px';
+    button.onclick = () => { window.scrolledClicks = (window.scrolledClicks ?? 0) + 1; };
+    document.body.append(button);
+  })()`);
+  await call('click', { tabId: agentTab, selector: '#scrolled-control' });
+  assert.equal(await evaluate(agentPage, 'window.scrolledClicks'), 1);
+  await evaluate(agentPage, `document.querySelector('#scrolled-control').remove(); document.documentElement.style.scrollBehavior = '';`);
+  console.log('PASS click reaches an offscreen control on a smooth-scrolling page');
+
+  await evaluate(worker, `
+    globalThis.realEvalCommand = chrome.debugger.sendCommand;
+    globalThis.realEvalTimer = setTimeout;
+    globalThis.evalStarted = new Promise(resolve => { globalThis.notifyEvalStarted = resolve; });
+    chrome.debugger.sendCommand = (...args) => {
+      if (args[1] === 'Runtime.evaluate' && args[2].expression.includes('pendingAgentEvaluation')) {
+        globalThis.evalDelay = args[2].timeout;
+        notifyEvalStarted();
+      }
+      return realEvalCommand(...args);
+    };
+    globalThis.setTimeout = (callback, delay, ...args) => {
+      if (evalDelay !== undefined && delay === evalDelay) {
+        evalDelay = undefined;
+        globalThis.expireEvaluation = callback;
+        return realEvalTimer(() => {}, delay);
+      }
+      return realEvalTimer(callback, delay, ...args);
+    };
+    globalThis.evalDelay = undefined;
+    void 0;
+  `);
+  const beforeEval = await evaluate(agentPage, 'counter');
+  const stalledEvaluation = client.callTool({ name: 'evaluate', arguments: {
+    tabId: agentTab,
+    expression: 'new Promise(function pendingAgentEvaluation(resolve) { window.finishAgentEvaluation = () => { delete window.finishAgentEvaluation; counter *= 2; resolve(); }; })',
+  } });
+  let clickAfterExpiry;
+  try {
+    await Promise.race([evaluate(worker, 'evalStarted'), stalledEvaluation.then(() => assert.fail('Evaluation finished before its promise resolved'))]);
+    clickAfterExpiry = client.callTool({ name: 'click', arguments: { tabId: agentTab, selector: '#count' } });
+    await stateWhere(`s => s.agent?.tabId === ${JSON.stringify(agentTab)} && s.agent.action === 'clicking #count'`);
+    await evaluate(worker, 'expireEvaluation()');
+    const expired = await stalledEvaluation;
+    assert.equal(expired.isError, true);
+    assert.match(expired.content[0].text, /request expired/);
+    const refused = await client.callTool({ name: 'click', arguments: { tabId: agentTab, selector: '#count' } });
+    assert.match(refused.content[0].text, /evaluation is still pending/);
+    assert.equal(await evaluate(agentPage, 'counter'), beforeEval);
+    await evaluate(agentPage, 'window.finishAgentEvaluation()');
+    const clicked = await clickAfterExpiry;
+    assert.equal(clicked.isError, undefined, clicked.content[0].text);
+    assert.equal(await evaluate(agentPage, 'counter'), 2 * beforeEval + 1);
+    await evaluate(agentPage, `counter = ${beforeEval}`);
+  } finally {
+    await evaluate(agentPage, 'window.finishAgentEvaluation?.()');
+    await evaluate(worker, 'chrome.debugger.sendCommand = realEvalCommand; globalThis.setTimeout = realEvalTimer;');
+    await Promise.allSettled([stalledEvaluation, clickAfterExpiry]);
+  }
+  console.log('PASS an expired evaluation finishes its pending page work before a queued click');
+  await call('activate_tab', { tabId: agentTab });
+  await nativeActive(base + '/agent');
+  await rpc('activate', mine);
+  await nativeActive(base + '/mine');
+  assert.equal(await evaluate(agentPage, 'document.hasFocus()'), false, 'the agent tab loses focus again when the user leaves it');
   console.log("PASS click, type, press_key, screenshot and read_page work in the agent's tab while it is hidden");
   x11('type', 'e');
   await draftIs('abcde');
   assert.equal(await evaluate(myPage, "document.activeElement.id + ' ' + document.hasFocus() + ' ' + document.visibilityState"), 'draft true visible');
   console.log('PASS your keystrokes kept reaching your draft while the agent worked');
+  const listed = JSON.parse((await call('list_tabs')).content[0].text);
+  const draftTab = listed.find((tab) => tab.url === base + '/mine');
+  assert.ok(draftTab?.active, 'MCP lists the visible draft');
+  const target = { tabId: draftTab.id };
+  for (const [name, input] of [
+    ['click', { selector: '#draft' }],
+    ['type', { text: 'agent text' }],
+    ['press_key', { key: 'Enter' }],
+    ['evaluate', { expression: 'document.activeElement.blur()' }],
+    ['navigate', { url: base + '/other' }],
+    ['close_tab', {}],
+  ]) {
+    const refused = await client.callTool({ name, arguments: { ...target, ...input } });
+    assert.equal(refused.isError, true, name);
+    assert.match(refused.content[0].text, /This tab is visible/, name);
+  }
+  await call('type', { ...target, selector: '#draft', text: 'approved', clear: true, allowVisibleTab: true });
+  await draftIs('approved');
+  x11('type', 'f');
+  await draftIs('approvedf');
+  await yours('refused operations on a visible tab');
+  console.log('PASS MCP leaves the visible draft alone unless explicitly allowed to act on it');
+
+  const race = JSON.parse((await call('open_tab', { url: base + '/switch-race' })).content[0].text).tabId;
+  const racePage = await attach((await findTarget((tab) => tab.type === 'page' && tab.url === base + '/switch-race')).targetId);
+  await loaded(racePage, base + '/switch-race');
+  await evaluate(worker, `
+    globalThis.originalAttach = chrome.debugger.attach;
+    globalThis.attachStarted = new Promise(resolve => { globalThis.notifyAttach = resolve; });
+    globalThis.attachGate = new Promise(resolve => { globalThis.releaseAttach = resolve; });
+    chrome.debugger.attach = async (...args) => { notifyAttach(); await attachGate; return originalAttach(...args); };
+    void 0;
+  `);
+  const pendingClick = client.callTool({ name: 'click', arguments: { tabId: race, selector: '#count' } });
+  let approvedRead;
+  try {
+    await Promise.race([
+      evaluate(worker, 'attachStarted'),
+      pendingClick.then((result) => assert.fail(`Click finished before debugger attach: ${result.content[0]?.text}`)),
+    ]);
+    await rpc('activate', race);
+    await stateWhere(`s => s.spaces.find(sp => sp.id === s.activeSpaceId).activeTabId === ${JSON.stringify(race)}`);
+    await evaluate(racePage, `new Promise(resolve => {
+      const visible = () => {
+        if (document.visibilityState !== 'visible') return;
+        document.removeEventListener('visibilitychange', visible);
+        resolve(true);
+      };
+      document.addEventListener('visibilitychange', visible);
+      visible();
+    })`);
+    approvedRead = client.callTool({ name: 'evaluate', arguments: { tabId: race, expression: 'document.title', allowVisibleTab: true } });
+    await stateWhere(`s => s.agent?.action === 'running JavaScript' && s.agent.tabId === ${JSON.stringify(race)}`);
+    await evaluate(worker, 'releaseAttach()');
+    const [result, approved] = await Promise.all([pendingClick, approvedRead]);
+    assert.equal(result.isError, true, 'the pending click must stop when its tab becomes visible');
+    assert.match(result.content[0].text, /This tab is visible/);
+    assert.equal(await evaluate(racePage, 'counter'), 0);
+    assert.equal(approved.isError, undefined, approved.content[0]?.text);
+    assert.equal(approved.content[0].text, 'Agent page');
+  } finally {
+    await evaluate(worker, 'releaseAttach(); chrome.debugger.attach = originalAttach;');
+    await Promise.allSettled([pendingClick, approvedRead]);
+    await rpc('activate', mine);
+    await yours('the pending click');
+  }
+  console.log('PASS a pending click stops after activation while an explicitly allowed call still works');
+
+  for (const [name, args, api, method, match] of [
+    ['evaluate', { expression: 'nativeGuardSentinel++' }, 'debugger', 'sendCommand', 'args[1] === "Runtime.evaluate"'],
+    ['click', { selector: '#count' }, 'debugger', 'sendCommand', 'args[1] === "Input.dispatchMouseEvent"'],
+    ['type', { text: 'blocked' }, 'debugger', 'sendCommand', 'args[1] === "Input.insertText"'],
+    ['press_key', { key: 'Escape' }, 'debugger', 'sendCommand', 'args[1] === "Input.dispatchKeyEvent"'],
+    ['navigate', { url: base + '/blocked' }, 'tabs', 'update', 'args[1]?.url !== undefined'],
+    ['navigate', { action: 'reload' }, 'tabs', 'reload', 'true'],
+    ['navigate', { action: 'back' }, 'tabs', 'goBack', 'true'],
+    ['navigate', { action: 'forward' }, 'tabs', 'goForward', 'true'],
+    ['close_tab', {}, 'tabs', 'remove', 'true'],
+  ]) {
+    await evaluate(racePage, 'window.nativeGuardSentinel = 0; document.querySelector("#field").focus()');
+    await evaluate(worker, `
+      globalThis.guardNamespace = chrome[${JSON.stringify(api)}];
+      globalThis.guardMethod = ${JSON.stringify(method)};
+      globalThis.originalGuardMethod = guardNamespace[guardMethod];
+      globalThis.guardStarted = new Promise(resolve => { globalThis.notifyGuard = resolve; });
+      globalThis.guardGate = new Promise(resolve => { globalThis.releaseGuard = resolve; });
+      guardNamespace[guardMethod] = async (...args) => {
+        if (${match}) { notifyGuard(); await guardGate; }
+        return originalGuardMethod(...args);
+      };
+      void 0;
+    `);
+    const pending = client.callTool({ name, arguments: { tabId: race, ...args } });
+    const split = name === 'close_tab';
+    try {
+      await Promise.race([
+        evaluate(worker, 'guardStarted'),
+        pending.then((result) => assert.fail(`${name} finished before native dispatch: ${result.content[0]?.text}`)),
+      ]);
+      if (split) await rpc('splitWith', race);
+      else await rpc('activate', race);
+      if (split) {
+        await stateWhere('s => !!s.spaces.find(sp => sp.id === s.activeSpaceId).split');
+        await rpc('activate', mine);
+      }
+      waitingFor = 'the pending target to become visible in Chromium';
+      while (!await evaluate(worker, `chrome.tabs.query({}).then(tabs => {
+        const race = tabs.find(tab => tab.url === ${JSON.stringify(base + '/switch-race')});
+        if (!race) return false;
+        return ${split} ? !race.active && race.splitViewId >= 0 &&
+          tabs.some(tab => tab.active && tab.windowId === race.windowId && tab.splitViewId === race.splitViewId) : race.active;
+      })`)) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      await evaluate(worker, 'releaseGuard()');
+      const refused = await pending;
+      assert.equal(refused.isError, true, name);
+      assert.match(refused.content[0].text, /requires an inactive, hidden Chromium tab/, name);
+      assert.deepEqual(await evaluate(racePage, '[nativeGuardSentinel, counter, keys.length, document.querySelector("#field").value, location.href]'),
+        [0, 0, 0, '', base + '/switch-race']);
+    } finally {
+      await evaluate(worker, 'releaseGuard(); guardNamespace[guardMethod] = originalGuardMethod;');
+      await Promise.allSettled([pending]);
+    }
+    if (!split) {
+      await rpc('activate', mine);
+      await yours('native visibility refusal');
+    }
+  }
+  console.log('PASS Chromium refuses commands dispatched after activation, including close on the inactive split pane');
+
+  await stateWhere('s => !!s.spaces.find(sp => sp.id === s.activeSpaceId).split');
+  const panes = JSON.parse((await call('list_tabs')).content[0].text).filter((tab) => tab.active);
+  assert.deepEqual(new Set(panes.map((tab) => tab.id)), new Set([mine, race]));
+  for (const { id } of panes) {
+    const refused = await client.callTool({ name: 'press_key', arguments: { tabId: id, key: 'Enter' } });
+    assert.equal(refused.isError, true, 'the visible split pane is protected');
+    assert.match(refused.content[0].text, /This tab is visible/);
+  }
+  waitingFor = 'Chromium to show the draft and the agent tab in one split';
+  while (!await evaluate(worker, `chrome.tabs.query({}).then(tabs => {
+    const mine = tabs.find(tab => tab.url === ${JSON.stringify(base + '/mine')});
+    const race = tabs.find(tab => tab.url === ${JSON.stringify(base + '/switch-race')});
+    return mine?.splitViewId >= 0 && mine.splitViewId === race?.splitViewId;
+  })`)) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  await evaluate(worker, `
+    globalThis.realUnsplit = chrome.tabs.unsplit;
+    globalThis.unsplitStarted = new Promise(resolve => { globalThis.notifyUnsplit = resolve; });
+    globalThis.unsplitGate = new Promise(resolve => { globalThis.releaseUnsplit = resolve; });
+    chrome.tabs.unsplit = async (...args) => { notifyUnsplit(); await unsplitGate; return realUnsplit(...args); };
+    void 0;
+  `);
+  try {
+    await rpc('exitSplit');
+    await stateWhere('s => !s.spaces.find(sp => sp.id === s.activeSpaceId).split');
+    await evaluate(worker, 'unsplitStarted');
+    const inactiveUrl = await evaluate(worker, `chrome.tabs.query({}).then(tabs => {
+      const active = tabs.find(tab => tab.active && tab.url?.startsWith(${JSON.stringify(base)}));
+      if (!active || !(active.splitViewId >= 0)) return;
+      return tabs.find(tab => !tab.active && tab.windowId === active.windowId && tab.splitViewId === active.splitViewId)?.url;
+    })`);
+    assert.ok(inactiveUrl === base + '/mine' || inactiveUrl === base + '/switch-race', 'native split still shows the inactive pane');
+    const tabId = inactiveUrl === base + '/mine' ? mine : race;
+    const refused = await client.callTool({ name: 'close_tab', arguments: { tabId } });
+    assert.equal(refused.isError, true);
+    assert.match(refused.content[0].text, /This tab is visible/);
+  } finally {
+    await evaluate(worker, 'releaseUnsplit(); chrome.tabs.unsplit = realUnsplit;');
+  }
+  await rpc('activate', mine);
+  await yours('unapproved input to both split panes');
+  console.log('PASS both panes are protected, including while Chromium still shows the old split');
+
+  await evaluate(worker, `(async () => {
+    globalThis.realUpdate = chrome.tabs.update;
+    globalThis.switchStarted = new Promise(resolve => { globalThis.notifySwitch = resolve; });
+    globalThis.switchGate = new Promise(resolve => { globalThis.releaseSwitch = resolve; });
+    const raceId = (await chrome.tabs.query({})).find(tab => tab.url === ${JSON.stringify(base + '/switch-race')}).id;
+    chrome.tabs.update = async (...args) => {
+      if (args[0] === raceId && args[1]?.active) { notifySwitch(); await switchGate; }
+      return realUpdate(...args);
+    };
+  })()`);
+  try {
+    await rpc('activate', race);
+    await evaluate(worker, 'switchStarted');
+    assert.equal(await evaluate(myPage, 'document.visibilityState'), 'visible', 'Chromium still shows the draft');
+    const refused = await client.callTool({ name: 'close_tab', arguments: { tabId: mine } });
+    assert.equal(refused.isError, true, 'the actual visible draft is protected while Chromium switches tabs');
+    assert.match(refused.content[0].text, /This tab is visible/);
+    assert.equal(await evaluate(myPage, "document.querySelector('#draft').value"), 'approvedf');
+  } finally {
+    await evaluate(worker, 'releaseSwitch(); chrome.tabs.update = realUpdate;');
+    await rpc('activate', mine);
+    await yours('the delayed Chromium switch');
+  }
+  await nativeActive(base + '/mine');
+  await call('close_tab', { tabId: race });
+  console.log('PASS the visible draft remains protected while Chromium catches up with the sidebar');
   if (artifacts) await fs.writeFile(path.join(artifacts, 'agent-screenshot.png'), Buffer.from(shot.content[0].data, 'base64'));
 
   // Tab sleep may discard an agent tab the bridge isn't attached to: one it opened and hasn't used
@@ -541,6 +1060,34 @@ try {
     })`,
   );
   assert.equal(discardedLoginGone, true, 'Chromium discarded the agent sign-in tab');
+  await evaluate(worker, `
+    globalThis.readClock = Date.now;
+    globalThis.readGetTab = chrome.tabs.get;
+    globalThis.readLookup = new Promise(resolve => { globalThis.notifyReadLookup = resolve; });
+    globalThis.readGate = new Promise(resolve => { globalThis.releaseRead = resolve; });
+    chrome.tabs.get = async (...args) => {
+      const tab = await readGetTab(...args);
+      if (tab.discarded && tab.url === ${JSON.stringify(base + '/login?discard')}) {
+        notifyReadLookup();
+        await readGate;
+      }
+      return tab;
+    };
+    void 0;
+  `);
+  const expiredRead = client.callTool({ name: 'read_page', arguments: { tabId: discardedLogin } });
+  try {
+    await Promise.race([evaluate(worker, 'readLookup'), expiredRead.then(() => assert.fail('Read finished before its tab lookup'))]);
+    await evaluate(worker, 'Date.now = () => Number.MAX_SAFE_INTEGER; releaseRead();');
+    const failure = await expiredRead;
+    assert.equal(failure.isError, true);
+    assert.match(failure.content[0].text, /request expired/);
+    assert.equal(await evaluate(worker, `chrome.tabs.query({}).then(tabs => tabs.find(tab => tab.url === ${JSON.stringify(base + '/login?discard')})?.discarded)`), true);
+  } finally {
+    await evaluate(worker, 'Date.now = readClock; releaseRead(); chrome.tabs.get = readGetTab;');
+    await Promise.allSettled([expiredRead]);
+  }
+  console.log('PASS an expired read leaves its discarded tab asleep');
   const otherAfterDiscard = await call('evaluate', {
     tabId: discardedLogin,
     expression: "location.pathname + location.search + ' ' + document.querySelector('h1')?.textContent + ' ' + (document.documentElement.dataset.otherExtension ?? null)",
@@ -549,6 +1096,296 @@ try {
   console.log('PASS a discarded agent tab comes back without other extensions');
   await call('close_tab', { tabId: discardedLogin });
   await stateWhere(`s => !s.tabs[${JSON.stringify(discardedLogin)}]`);
+
+  const transferUrl = base + '/agent?read-transfer';
+  const transferredReadTab = JSON.parse((await call('open_tab', { url: transferUrl })).content[0].text).tabId;
+  await evaluate(worker, `
+    globalThis.getBeforeTransfer = chrome.tabs.get;
+    globalThis.transferLookup = new Promise(resolve => { globalThis.notifyTransferLookup = resolve; });
+    globalThis.transferGate = new Promise(resolve => { globalThis.releaseTransferLookup = resolve; });
+    let interceptedTransfer = false;
+    chrome.tabs.get = async (...args) => {
+      const tab = await getBeforeTransfer(...args);
+      if (!interceptedTransfer && tab.url === ${JSON.stringify(transferUrl)}) {
+        interceptedTransfer = true;
+        notifyTransferLookup();
+        await transferGate;
+      }
+      return tab;
+    };
+    void 0;
+  `);
+  const transferredRead = client.callTool({ name: 'read_page', arguments: { tabId: transferredReadTab } });
+  let readWindow;
+  try {
+    await Promise.race([evaluate(worker, 'transferLookup'), transferredRead.then(() => assert.fail('Read finished before transfer'))]);
+    readWindow = await rpc('openFlechinha', undefined, transferredReadTab);
+    await stateWhere(`s => !s.tabs[${JSON.stringify(transferredReadTab)}]`);
+    await evaluate(worker, 'releaseTransferLookup()');
+    const refused = await transferredRead;
+    assert.equal(refused.isError, true);
+    assert.match(refused.content[0].text, /Tab ownership changed/);
+    assert.equal(await evaluate(worker, `chrome.tabs.query({ windowId: ${readWindow} }).then(tabs => tabs.some(t => t.url === ${JSON.stringify(transferUrl)}))`), true);
+  } finally {
+    await evaluate(worker, 'releaseTransferLookup(); chrome.tabs.get = getBeforeTransfer;');
+    await Promise.allSettled([transferredRead]);
+    if (readWindow !== undefined) await evaluate(worker, `chrome.windows.remove(${readWindow}).catch(() => undefined)`);
+  }
+  console.log('PASS a delayed read refuses a tab transferred to a Flechinha');
+
+  await evaluate(worker, `
+    globalThis.createBeforeClose = chrome.tabs.create;
+    globalThis.creatingBeforeClose = new Promise(resolve => { globalThis.notifyCloseCreation = resolve; });
+    globalThis.closeCreationGate = new Promise(resolve => { globalThis.releaseCloseCreation = resolve; });
+    chrome.tabs.create = async (options) => {
+      if (options.active !== false) return createBeforeClose(options);
+      notifyCloseCreation();
+      await closeCreationGate;
+      const tab = await createBeforeClose(options);
+      globalThis.createdBeforeClose = tab.id;
+      return tab;
+    };
+    void 0;
+  `);
+  const setupUrl = base + '/agent?closing-during-setup';
+  const pendingOpen = client.callTool({ name: 'open_tab', arguments: { url: setupUrl } });
+  let closeWhileOpening;
+  try {
+    await Promise.race([evaluate(worker, 'creatingBeforeClose'), pendingOpen.then(() => assert.fail('Open finished before native creation'))]);
+    const pending = await stateWhere(`s => Object.values(s.tabs).some(t => t.url === ${JSON.stringify(setupUrl)})`);
+    const pinned = Object.values(pending.tabs).find(tab => tab.url === setupUrl).id;
+    await rpc('togglePin', pinned);
+    await stateWhere(`s => !s.tabs[${JSON.stringify(pinned)}].agent`);
+    closeWhileOpening = client.callTool({ name: 'close_tab', arguments: { tabId: pinned } });
+    await stateWhere(`s => s.agent?.tabId === ${JSON.stringify(pinned)} && s.agent.action === 'closing a tab'`);
+    await evaluate(worker, 'releaseCloseCreation()');
+    const closed = await closeWhileOpening;
+    assert.equal(closed.isError, undefined, closed.content[0].text);
+    await pendingOpen;
+    assert.equal(await evaluate(worker, 'chrome.tabs.query({}).then(tabs => tabs.some(tab => tab.id === createdBeforeClose))'), false);
+    await stateWhere(`s => !!s.tabs[${JSON.stringify(pinned)}]`);
+  } finally {
+    await evaluate(worker, 'releaseCloseCreation(); chrome.tabs.create = createBeforeClose;');
+    await Promise.allSettled([pendingOpen, closeWhileOpening]);
+  }
+  console.log('PASS closing a pinned tab waits for native setup and unloads it');
+  await evaluate(worker, `
+    globalThis.setupClock = Date.now;
+    globalThis.setupMark = chrome.flechaPrivate.setAgentTab;
+    globalThis.setupMarked = new Promise(resolve => { globalThis.notifySetupMark = resolve; });
+    globalThis.setupGate = new Promise(resolve => { globalThis.releaseSetup = resolve; });
+    chrome.flechaPrivate.setAgentTab = async (id, enabled) => {
+      if (enabled) {
+        globalThis.expiredSetupId = id;
+        notifySetupMark();
+        await setupGate;
+      }
+      return setupMark(id, enabled);
+    };
+    void 0;
+  `);
+  const expiredUrl = base + '/agent?expired-setup';
+  const expiresDuringSetup = client.callTool({ name: 'open_tab', arguments: { url: expiredUrl } });
+  let expiredReader;
+  try {
+    await Promise.race([evaluate(worker, 'setupMarked'), expiresDuringSetup.then(() => assert.fail('Open finished before marking the new tab'))]);
+    const opening = await stateWhere(`s => Object.values(s.tabs).some(t => t.url === ${JSON.stringify(expiredUrl)})`);
+    const tabId = Object.values(opening.tabs).find((tab) => tab.url === expiredUrl).id;
+    expiredReader = client.callTool({ name: 'read_page', arguments: { tabId } });
+    await stateWhere(`s => s.agent?.tabId === ${JSON.stringify(tabId)} && s.agent.action === 'reading the page'`);
+    await evaluate(worker, 'Date.now = () => Number.MAX_SAFE_INTEGER; releaseSetup();');
+    for (const failure of await Promise.all([expiresDuringSetup, expiredReader])) {
+      assert.equal(failure.isError, true);
+      assert.match(failure.content[0].text, /request expired/);
+    }
+    await evaluate(worker, 'Date.now = setupClock;');
+    assert.equal(await evaluate(worker, 'chrome.tabs.query({}).then(tabs => tabs.some(tab => tab.id === expiredSetupId))'), false);
+    assert.ok(!JSON.parse((await call('list_tabs')).content[0].text).some((tab) => tab.id === tabId));
+  } finally {
+    await evaluate(worker, 'Date.now = setupClock; releaseSetup(); chrome.flechaPrivate.setAgentTab = setupMark;');
+    await Promise.allSettled([expiresDuringSetup, expiredReader]);
+  }
+  console.log('PASS expired open and read requests leave no unfinished agent tab');
+
+  const setupPath = '/agent?expired-before-navigation';
+  const beforeNavigation = base + setupPath;
+  await evaluate(worker, `
+    globalThis.beforeSetupUpdate = chrome.tabs.update;
+    globalThis.beforeSetupClock = Date.now;
+    chrome.tabs.update = (id, properties, backgroundOnly, deadline) => {
+      if (properties.url !== ${JSON.stringify(beforeNavigation)}) return beforeSetupUpdate(id, properties);
+      if (!Number.isFinite(deadline)) throw new Error('Missing setup navigation deadline');
+      Date.now = () => Number.MAX_SAFE_INTEGER;
+      return beforeSetupUpdate(id, properties, backgroundOnly, 0);
+    };
+    void 0;
+  `);
+  try {
+    const refused = await client.callTool({ name: 'open_tab', arguments: { url: beforeNavigation } });
+    assert.equal(refused.isError, true);
+    assert.match(refused.content[0].text, /request expired/);
+    assert.equal(requestedUrls.has(setupPath), false);
+    await evaluate(worker, 'Date.now = beforeSetupClock;');
+    assert.ok(!JSON.parse((await call('list_tabs')).content[0].text).some((tab) => tab.url === beforeNavigation));
+  } finally {
+    await evaluate(worker, 'Date.now = beforeSetupClock; chrome.tabs.update = beforeSetupUpdate;');
+  }
+  console.log('PASS expired setup navigation never requests its URL');
+
+  const sharedUrl = base + '/agent?shared-setup-retry';
+  await evaluate(worker, `
+    globalThis.beforeSharedUpdate = chrome.tabs.update;
+    globalThis.firstSharedNavigation = new Promise(resolve => { globalThis.notifySharedNavigation = resolve; });
+    globalThis.sharedNavigationGate = new Promise(resolve => { globalThis.releaseSharedNavigation = resolve; });
+    globalThis.sharedDeadlines = [];
+    chrome.tabs.update = async (id, properties, backgroundOnly, deadline) => {
+      if (properties.url !== ${JSON.stringify(sharedUrl)}) return beforeSharedUpdate(id, properties);
+      if (!Number.isFinite(deadline)) throw new Error('Missing shared setup deadline');
+      sharedDeadlines.push(deadline);
+      if (sharedDeadlines.length === 1) {
+        notifySharedNavigation();
+        await sharedNavigationGate;
+        return beforeSharedUpdate(id, properties, backgroundOnly, 0);
+      }
+      return beforeSharedUpdate(id, properties, backgroundOnly, deadline);
+    };
+    void 0;
+  `);
+  const sharedOpen = client.callTool({ name: 'open_tab', arguments: { url: sharedUrl } });
+  let sharedRead;
+  try {
+    await Promise.race([evaluate(worker, 'firstSharedNavigation'), sharedOpen.then(() => assert.fail('Open finished before guarded navigation'))]);
+    const opening = await stateWhere(`s => Object.values(s.tabs).some(t => t.url === ${JSON.stringify(sharedUrl)})`);
+    const tabId = Object.values(opening.tabs).find((tab) => tab.url === sharedUrl).id;
+    sharedRead = client.callTool({ name: 'read_page', arguments: { tabId } });
+    await stateWhere(`s => s.agent?.tabId === ${JSON.stringify(tabId)} && s.agent.action === 'reading the page'`);
+    await evaluate(worker, 'releaseSharedNavigation()');
+    for (const result of await Promise.all([sharedOpen, sharedRead])) {
+      assert.equal(result.isError, undefined, result.content[0].text);
+    }
+    const deadlines = await evaluate(worker, 'sharedDeadlines');
+    assert.equal(deadlines.length, 2);
+    assert.ok(deadlines[1] > deadlines[0]);
+    await call('close_tab', { tabId });
+  } finally {
+    await evaluate(worker, 'releaseSharedNavigation(); chrome.tabs.update = beforeSharedUpdate;');
+    await Promise.allSettled([sharedOpen, sharedRead]);
+  }
+  console.log('PASS a reader joining during dispatch can keep shared setup alive');
+
+  const lateUrl = base + '/agent?expired-after-navigation';
+  await evaluate(worker, `
+    globalThis.openClock = Date.now;
+    globalThis.openUpdate = chrome.tabs.update;
+    globalThis.openNavigated = new Promise(resolve => { globalThis.notifyOpenNavigated = resolve; });
+    globalThis.openGate = new Promise(resolve => { globalThis.releaseOpen = resolve; });
+    chrome.tabs.update = async (...args) => {
+      const tab = await openUpdate(...args);
+      if (args[1]?.url === ${JSON.stringify(lateUrl)}) {
+        notifyOpenNavigated();
+        await openGate;
+      }
+      return tab;
+    };
+    void 0;
+  `);
+  const lateOpen = client.callTool({ name: 'open_tab', arguments: { url: lateUrl } });
+  try {
+    await Promise.race([evaluate(worker, 'openNavigated'), lateOpen.then(() => assert.fail('Open finished before expiry'))]);
+    await evaluate(worker, 'Date.now = () => Number.MAX_SAFE_INTEGER; releaseOpen();');
+    const expired = await lateOpen;
+    assert.equal(expired.isError, true);
+    assert.match(expired.content[0].text, /request expired/);
+    await stateWhere(`s => !Object.values(s.tabs).some(t => t.url === ${JSON.stringify(lateUrl)})`);
+    assert.equal(await evaluate(worker, `chrome.tabs.query({}).then(tabs => tabs.some(t => [t.url, t.pendingUrl].includes(${JSON.stringify(lateUrl)})))`), false);
+  } finally {
+    await evaluate(worker, 'Date.now = openClock; releaseOpen(); chrome.tabs.update = openUpdate;');
+    await Promise.allSettled([lateOpen]);
+  }
+  console.log('PASS an expired open rolls back a live tab after navigation starts');
+
+  const closingUrl = base + '/agent?refuse-close';
+  const closing = JSON.parse((await call('open_tab', { url: closingUrl })).content[0].text).tabId;
+  await rpc('activate', closing);
+  await stateWhere(`s => s.spaces.find(sp => sp.id === s.activeSpaceId).activeTabId === ${JSON.stringify(closing)}`);
+  const tooLong = await client.callTool({ name: 'wait_for', arguments: { tabId: closing, timeoutMs: 2_147_483_647 } });
+  assert.match(tooLong.content[0].text, /timeoutMs/);
+  await evaluate(worker, `
+    globalThis.closeClock = Date.now;
+    globalThis.getBeforeClose = chrome.tabs.get;
+    let closeLookup = true;
+    chrome.tabs.get = async (...args) => {
+      const tab = await getBeforeClose(...args);
+      if (closeLookup && tab.url === ${JSON.stringify(closingUrl)}) {
+        closeLookup = false;
+        Date.now = () => Number.MAX_SAFE_INTEGER;
+      }
+      return tab;
+    };
+    void 0;
+  `);
+  try {
+    const closeExpired = await client.callTool({ name: 'close_tab', arguments: { tabId: closing, allowVisibleTab: true } });
+    assert.equal(closeExpired.isError, true);
+    assert.match(closeExpired.content[0].text, /request expired/);
+  } finally {
+    await evaluate(worker, 'chrome.tabs.get = getBeforeClose; Date.now = closeClock;');
+  }
+  await nativeActive(closingUrl);
+  console.log('PASS an approved close checks its deadline after looking up the native tab');
+
+  await evaluate(worker, `
+    globalThis.updateBeforeExpiry = chrome.tabs.update;
+    globalThis.removeBeforeExpiry = chrome.tabs.remove;
+    globalThis.expiredActivations = [];
+    globalThis.watchExpiredActivation = ({ tabId }) => expiredActivations.push(tabId);
+    chrome.tabs.onActivated.addListener(watchExpiredActivation);
+    chrome.tabs.update = (id, properties, backgroundOnly, deadline) => {
+      if (properties.url !== ${JSON.stringify(base + '/expired-navigation')}) return updateBeforeExpiry(id, properties);
+      if (!Number.isFinite(deadline)) throw new Error('Missing native navigation deadline');
+      return updateBeforeExpiry(id, properties, backgroundOnly, 0);
+    };
+    chrome.tabs.remove = (id, backgroundOnly, deadline, replacement) => {
+      if (!Number.isFinite(deadline)) return removeBeforeExpiry(id);
+      if (!Number.isInteger(replacement)) throw new Error('Missing native replacement tab');
+      return removeBeforeExpiry(id, backgroundOnly, 0, replacement);
+    };
+    void 0;
+  `);
+  try {
+    for (const [name, args] of [
+      ['navigate', { url: base + '/expired-navigation' }],
+      ['close_tab', {}],
+    ]) {
+      const result = await client.callTool({ name, arguments: { tabId: closing, allowVisibleTab: true, ...args } });
+      assert.equal(result.isError, true, name);
+      assert.match(result.content[0].text, /request expired/, name);
+      await nativeActive(closingUrl);
+    }
+    assert.deepEqual(await evaluate(worker, 'expiredActivations'), [], 'an expired visible close never switches tabs');
+  } finally {
+    await evaluate(worker, 'chrome.tabs.update = updateBeforeExpiry; chrome.tabs.remove = removeBeforeExpiry; chrome.tabs.onActivated.removeListener(watchExpiredActivation);');
+  }
+  console.log('PASS Chromium refuses native navigation and removal with expired deadlines');
+
+  await evaluate(worker, `(async () => {
+    const target = (await chrome.tabs.query({})).find(tab => tab.url === ${JSON.stringify(closingUrl)}).id;
+    globalThis.beforeRefusedRemove = chrome.tabs.remove;
+    chrome.tabs.remove = (...args) => args[0] === target
+      ? Promise.reject(new Error('Injected tab removal refusal')) : beforeRefusedRemove(...args);
+  })()`);
+  try {
+    const refused = await client.callTool({ name: 'close_tab', arguments: { tabId: closing, allowVisibleTab: true } });
+    assert.equal(refused.isError, true);
+    assert.match(refused.content[0].text, /Injected tab removal refusal/);
+    await call('read_page', { tabId: closing });
+    assert.equal(await evaluate(worker, `chrome.tabs.query({}).then(tabs => tabs.filter(t => t.url === ${JSON.stringify(closingUrl)}).length)`), 1);
+  } finally {
+    await evaluate(worker, 'chrome.tabs.remove = beforeRefusedRemove;');
+  }
+  await call('close_tab', { tabId: closing, allowVisibleTab: true });
+  await rpc('activate', mine);
+  console.log('PASS an approved close reports removal failure and retains the original tab');
 
   // Taken from the agent, the tab is yours: its next page runs your extensions again.
   await rpc('togglePin', agentLogin);
@@ -610,6 +1447,10 @@ try {
 
   await client.close();
   // The deadline stays armed through the cleanup, so a browser that hangs on its way out is killed.
+  waitingFor = 'the test browser to close';
+  const browserExited = once(browser, 'exit');
+  await send('Browser.close');
+  await browserExited;
   await cleanUp();
   finished = true;
   clearTimeout(watchdog);
