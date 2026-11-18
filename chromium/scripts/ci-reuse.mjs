@@ -71,7 +71,9 @@ export async function runNativeCommand(command, args, { cwd, env, deadline, sign
     if (terminationFailure) throw terminationFailure;
     signal?.throwIfAborted();
     if (expired) throw timeoutError();
-    if (result.code !== 0) throw Object.assign(new Error(`Native command failed: ${result.code ?? result.signal}`), { signal: result.signal });
+    if (result.code !== 0) {
+      throw Object.assign(new Error(`Native command failed: ${result.code ?? result.signal}`), { signal: result.signal, stdout });
+    }
     return stdout;
   } finally {
     clearTimeout(timer);
@@ -167,10 +169,16 @@ export async function* findReusableArtifacts(options, api) {
     if (!artifact.workflow_run || artifact.expired || runId === currentRun || seen.has(runId)) continue;
     seen.add(runId);
     const endpoint = `${actions}/runs/${runId}`;
-    const run = await api(endpoint);
-    if (!trustedRun(run, { repository, branch, currentRun })) continue;
-    // Finish reading the run before ranking its portable, native and checkpoint artifacts.
-    let artifacts = await Array.fromAsync(listArtifacts(`${endpoint}/artifacts`, options, api));
+    let run, artifacts;
+    try {
+      run = await api(endpoint);
+      if (!trustedRun(run, { repository, branch, currentRun })) continue;
+      // Finish reading the run before ranking its portable, native and checkpoint artifacts.
+      artifacts = await Array.fromAsync(listArtifacts(`${endpoint}/artifacts`, options, api));
+    } catch (error) {
+      if (error?.status === 404) continue;
+      throw error;
+    }
     for (;;) {
       const candidate = reusableArtifact(artifacts, platform, key, releaseName);
       if (!candidate) break;
@@ -185,7 +193,19 @@ export async function downloadReusableTree(root, options, restore,
   if (!/^[\w.-]+\/[\w.-]+$/.test(options.repository || '') || !options.branch || !/^\d+$/.test(options.currentRun || '')) {
     throw new Error('Missing GitHub context for native checkpoint reuse.');
   }
-  const candidates = findReusableArtifacts(options, async endpoint => JSON.parse(await gh(['api', endpoint])));
+  const candidates = findReusableArtifacts(options, async endpoint => {
+    if (!endpoint.includes('/actions/runs/')) return JSON.parse(await gh(['api', endpoint]));
+    try {
+      const response = await gh(['api', endpoint, '--include']);
+      // The CLI prints the status and headers before the JSON payload.
+      return JSON.parse(response.replace(/^HTTP\/.*?\r?\n\r?\n/s, ''));
+    } catch (error) {
+      if (/^HTTP\/\S+ 404\b/.test(error?.stdout || '')) {
+        throw Object.assign(new Error('The nightly run disappeared during discovery.', { cause: error }), { status: 404 });
+      }
+      throw error;
+    }
+  });
   const cleanup = directory => options.cleanup ? options.cleanup(directory) : removeNativeTree(directory,
     { deadline: options.cleanupDeadline, signal: options.signal });
   for (;;) {

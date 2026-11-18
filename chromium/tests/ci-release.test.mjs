@@ -429,19 +429,21 @@ test('recovery searches trusted nightly runs and skips expired or superseded che
         { name: releaseName }, { name: 'checkpoint-linux-x64-2', expired: true }, { name: 'checkpoint-linux-x64-1' },
       ], total_count: 7 };
     }
+    if (endpoint.includes('/runs/4/artifacts?')) throw Object.assign(new Error('Run removed'), { status: 404 });
+    if (endpoint.includes('/runs/3/artifacts?')) return { artifacts: [{ name: 'native-linux-x64-native-key' }], total_count: 1 };
     if (endpoint.endsWith('page=1')) return { artifacts: ['10', ...rejected.keys()].map(id =>
-      ({ name: 'native-linux-x64-native-key', workflow_run: { id } })), total_count: 6 };
-    if (endpoint.endsWith('page=2')) return { artifacts: [
-      { name: 'native-linux-x64-native-key', workflow_run: { id: 5 } },
-    ], total_count: 6 };
+      ({ name: 'native-linux-x64-native-key', workflow_run: { id } })), total_count: 8 };
+    if (endpoint.endsWith('page=2')) return { artifacts: [5, 4, 3].map(id =>
+      ({ name: 'native-linux-x64-native-key', workflow_run: { id } })), total_count: 8 };
     const id = endpoint.split('/').at(-1);
     return run(Number(id), rejected.get(id));
   });
   assert.deepEqual((await candidates.next()).value, { run: '5', sha: 'sha-5', name: releaseName, archive: 'Flecha-linux-x64.tar.gz' });
   assert.equal((await candidates.next()).value.name, 'native-linux-x64-native-key');
   assert.equal((await candidates.next()).value.name, 'checkpoint-linux-x64-1');
+  assert.equal((await candidates.next()).value.run, '3');
   assert.equal((await candidates.next()).done, true);
-  assert.equal(requests.length, 9);
+  assert.equal(requests.length, 13);
   assert.equal(reusableArtifact([{ name: 'reuse-linux-x64-other-key-1' }, { name: 'checkpoint-linux-x64-1' }], options.platform, options.key), undefined);
   assert.deepEqual(reusableArtifact([{ name: 'native-linux-x64-native-key' }], options.platform, options.key),
     { name: 'native-linux-x64-native-key', archive: 'native.tar.gz' });
@@ -656,11 +658,14 @@ test('the publisher uses the active default-branch build’s platform catalog an
   const nativeKey = 'a'.repeat(64);
   const artifact = `release-${platform}-${nativeKey}`;
   const sha = 'b'.repeat(40);
-  const run = { id: 11, status: 'in_progress', head_sha: sha, path: '.github/workflows/nightly-release.yml',
+  const run = { id: 11, run_attempt: 2, status: 'in_progress', head_sha: sha, path: '.github/workflows/nightly-release.yml',
     head_branch: branch, head_repository: { full_name: repository }, event: 'schedule' };
-  const inputs = { repository, branch, currentRun: '12', run: '11', platform, artifact };
-  const readRun = (overrides = {}) => args => {
+  const inputs = { repository, branch, currentRun: '12', run: '11', attempt: '2', platform, artifact, artifactId: '22' };
+  const readRun = (overrides = {}, upload = {}) => args => {
     if (args[1] === `repos/${repository}/actions/runs/11`) return JSON.stringify({ ...run, ...overrides });
+    if (args[1] === `repos/${repository}/actions/artifacts/22`) {
+      return JSON.stringify({ id: 22, name: artifact, workflow_run: { id: 11 }, ...upload });
+    }
     if (args.at(-1) === `repos/${repository}/contents/chromium/build/ci-platforms.json?ref=${sha}`) {
       return JSON.stringify([{ platform }]);
     }
@@ -668,15 +673,22 @@ test('the publisher uses the active default-branch build’s platform catalog an
     return '158.0.8127.2\n';
   };
   assert.deepEqual(publicationSource(inputs, readRun()), { sha, chromium: '158.0.8127.2', nativeKey });
-  assert.deepEqual(publicationSource({ ...inputs, artifact: `${artifact}-${'c'.repeat(64)}` }, readRun()),
+  const portable = `${artifact}-${'c'.repeat(64)}`;
+  assert.deepEqual(publicationSource({ ...inputs, artifact: portable }, readRun({}, { name: portable })),
     { sha, chromium: '158.0.8127.2', nativeKey });
   assert.throws(() => publicationSource({ ...inputs, platform: 'linux-other', artifact: `release-linux-other-${nativeKey}` },
-    readRun()), /Unknown release platform/);
+    readRun({}, { name: `release-linux-other-${nativeKey}` })), /Unknown release platform/);
   for (const untrusted of [{ head_repository: { full_name: 'other/repo' } }, { head_branch: 'other' },
     { event: 'pull_request' }, { path: '.github/workflows/ci.yml' }, { id: 13 }]) {
     assert.throws(() => publicationSource(inputs, readRun(untrusted)), /default-branch nightly/);
   }
   assert.throws(() => publicationSource({ ...inputs, artifact: 'release-windows-x64-*' }, readRun()), /Invalid nightly/);
+  for (const obsolete of [{ run_attempt: 3 }, { status: 'completed', conclusion: 'cancelled' }]) {
+    assert.throws(() => publicationSource(inputs, readRun(obsolete)), /cancelled or superseded/);
+  }
+  for (const wrong of [{ id: 23 }, { workflow_run: { id: 12 } }, { name: portable }, { expired: true }]) {
+    assert.throws(() => publicationSource(inputs, readRun({}, wrong)), /does not match/);
+  }
 });
 
 test('a portable release reuses the verified browser with the current shell and host', async t => {
@@ -759,6 +771,13 @@ test('a platform joins its run release at the source commit and lists its checks
     const { gh, writes } = fakeGh({ created, assets: ['Flecha-windows-x64.zip', 'windows-x64-SHA256SUMS'] });
     publishAssets(options, gh);
     assert.deepEqual(writes, [upload, uploadChecksums]);
+  }
+  {
+    const { gh, writes } = fakeGh();
+    assert.throws(() => publishAssets(options, gh, () => {
+      if (writes.some(args => args.includes('--clobber'))) throw new Error('Source attempt superseded');
+    }), /Source attempt superseded/);
+    assert.deepEqual(writes, [upload]);
   }
 
   const interrupted = fakeGh({ failUpload: true });

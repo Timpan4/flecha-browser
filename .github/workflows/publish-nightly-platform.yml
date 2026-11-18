@@ -8,12 +8,20 @@ on:
         description: Nightly build run ID
         type: string
         required: true
+      build_attempt:
+        description: Nightly build attempt number
+        type: string
+        required: true
       platform:
         description: Packaged platform
         type: string
         required: true
       artifact:
-        description: Artifact holding the platform package and checksums
+        description: Name of the artifact holding the package and checksums
+        type: string
+        required: true
+      artifact_id:
+        description: ID of the uploaded artifact
         type: string
         required: true
 
@@ -38,11 +46,20 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 26
+      - uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.build_run }}
+          artifact-ids: ${{ inputs.artifact_id }}
+          merge-multiple: true
+          path: release
       - name: Verify this platform and add it to the nightly prerelease
         env:
           GH_TOKEN: ${{ github.token }}
           FLECHA_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           FLECHA_BUILD_RUN: ${{ inputs.build_run }}
+          FLECHA_BUILD_ATTEMPT: ${{ inputs.build_attempt }}
           FLECHA_PLATFORM: ${{ inputs.platform }}
           FLECHA_PACKAGE_ARTIFACT: ${{ inputs.artifact }}
+          FLECHA_PACKAGE_ARTIFACT_ID: ${{ inputs.artifact_id }}
         run: node chromium/scripts/ci-publish.mjs

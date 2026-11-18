@@ -29,6 +29,7 @@ jobs:
     name: ${{ matrix.platform }} stage ${{ inputs.stage }}
     outputs:
       incomplete: ${{ steps.checkpoint.outputs.complete == 'false' }}
+      publisher: ${{ steps.publisher.outputs.run-id }}
     strategy:
       fail-fast: false
       matrix:
@@ -100,6 +101,7 @@ jobs:
           export FLECHA_DISK="$RUNNER_WORKSPACE/flecha-chromium"
           node chromium/scripts/ci-release.mjs build
       - name: Upload completed platform package
+        id: package
         if: steps.prepare.outputs.package != '' || steps.compile.outputs.package != ''
         uses: actions/upload-artifact@v7
         with:
@@ -117,11 +119,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           PACKAGE_ARTIFACT: ${{ steps.prepare.outputs.package || steps.compile.outputs.package }}
+          PACKAGE_ID: ${{ steps.package.outputs.artifact-id }}
           RELEASE_PLATFORM: ${{ matrix.platform }}
         run: |
           run_id=$(gh api --method POST "repos/$GITHUB_REPOSITORY/actions/workflows/publish-nightly-platform.yml/dispatches" \
             -H 'X-GitHub-Api-Version: 2026-03-10' -f "ref=$DEFAULT_BRANCH" \
             -f "inputs[build_run]=$GITHUB_RUN_ID" -f "inputs[platform]=$RELEASE_PLATFORM" \
+            -f "inputs[build_attempt]=$GITHUB_RUN_ATTEMPT" -f "inputs[artifact_id]=$PACKAGE_ID" \
             -f "inputs[artifact]=$PACKAGE_ARTIFACT" --jq '.workflow_run_id')
           if ! [[ "$run_id" =~ ^[0-9]+$ ]]; then
             echo '::error::The publisher did not return a workflow run ID.'
@@ -182,12 +186,24 @@ jobs:
       - name: Report an unfinished final stage
         if: inputs.last && steps.checkpoint.outputs.complete == 'false'
         run: exit 1
+
+  confirm-publication:
+    needs: build
+    if: ${{ !cancelled() && needs.build.outputs.publisher != '' }}
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PUBLISH_RUN_ID: ${{ needs.build.outputs.publisher }}
+    steps:
       - name: Confirm publication succeeded
-        if: ${{ !cancelled() && steps.publisher.outputs.run-id != '' }}
-        # Queueing and publication share the existing one-hour upload allowance.
+        # Give the watcher the existing upload allowance independently of the native runner.
         timeout-minutes: 60
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PUBLISH_RUN_ID: ${{ steps.publisher.outputs.run-id }}
-        shell: bash
         run: gh run watch "$PUBLISH_RUN_ID" --repo "$GITHUB_REPOSITORY" --compact --exit-status
+      - name: Cancel an unfinished publisher after a failed wait
+        if: ${{ failure() || cancelled() }}
+        continue-on-error: true
+        run: |
+          status=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PUBLISH_RUN_ID" --jq '.status')
+          if [ "$status" != "completed" ]; then
+            gh run cancel "$PUBLISH_RUN_ID" --repo "$GITHUB_REPOSITORY"
+          fi
