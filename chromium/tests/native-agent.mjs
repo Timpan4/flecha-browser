@@ -272,6 +272,12 @@ try {
 
   // Fail the browser APIs at their boundary: MCP must report failure and leave no blank native tab.
   const worker = await attach((await findTarget((t) => t.type === 'service_worker' && t.url.startsWith(extension))).targetId);
+  const nativeActive = async (url) => {
+    waitingFor = `Chromium to show ${url}`;
+    while (!await evaluate(worker, `chrome.tabs.query({ active: true }).then(tabs => tabs.some(tab => tab.url === ${JSON.stringify(url)}))`)) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  };
   await evaluate(worker, `
     globalThis.originalMark = chrome.flechaPrivate.setAgentTab;
     globalThis.originalUpdate = chrome.tabs.update;
@@ -429,6 +435,32 @@ try {
     assert.equal(await evaluate(agentPage, "document.querySelector('#date').value"), '2026-11-17', property);
     await evaluate(agentPage, `document.querySelector('#date')[${JSON.stringify(property)}] = false`);
   }
+  await evaluate(agentPage, `(() => {
+    const field = document.querySelector('#field');
+    field.value = 'keep';
+    const redirected = document.createElement('input');
+    redirected.id = 'redirected';
+    redirected.addEventListener('focus', () => field.focus());
+    const email = document.createElement('input');
+    email.id = 'email';
+    email.type = 'email';
+    email.maxLength = 8;
+    email.value = 'old@exam';
+    email.addEventListener('beforeinput', event => { window.trustedEmailInput = event.isTrusted; });
+    document.body.append(redirected, email);
+    field.focus();
+  })()`);
+  const redirected = await client.callTool({ name: 'type', arguments: { tabId: agentTab, selector: '#redirected', text: 'wrong', clear: true } });
+  assert.equal(redirected.isError, true, 'typing must stop when focus moves to another field');
+  assert.equal(await evaluate(agentPage, "document.querySelector('#field').value"), 'keep');
+  await call('type', { tabId: agentTab, selector: '#email', text: 'new@example.test', clear: true });
+  assert.deepEqual(await evaluate(agentPage, "({ value: document.querySelector('#email').value, trusted: window.trustedEmailInput })"),
+    { value: 'new@exam', trusted: true });
+  await call('activate_tab', { tabId: agentTab });
+  await nativeActive(base + '/agent');
+  await rpc('activate', mine);
+  await nativeActive(base + '/mine');
+  assert.equal(await evaluate(agentPage, 'document.hasFocus()'), false, 'the agent tab loses focus again when the user leaves it');
   console.log("PASS click, type, press_key, screenshot and read_page work in the agent's tab while it is hidden");
   x11('type', 'e');
   await draftIs('abcde');
@@ -511,10 +543,33 @@ try {
     assert.equal(refused.isError, true, 'the visible split pane is protected');
     assert.match(refused.content[0].text, /This tab is visible/);
   }
-  await rpc('exitSplit');
+  await evaluate(worker, `
+    globalThis.realUnsplit = chrome.tabs.unsplit;
+    globalThis.unsplitStarted = new Promise(resolve => { globalThis.notifyUnsplit = resolve; });
+    globalThis.unsplitGate = new Promise(resolve => { globalThis.releaseUnsplit = resolve; });
+    chrome.tabs.unsplit = async (...args) => { notifyUnsplit(); await unsplitGate; return realUnsplit(...args); };
+    void 0;
+  `);
+  try {
+    await rpc('exitSplit');
+    await stateWhere('s => !s.spaces.find(sp => sp.id === s.activeSpaceId).split');
+    await evaluate(worker, 'unsplitStarted');
+    const inactiveUrl = await evaluate(worker, `chrome.tabs.query({}).then(tabs => {
+      const active = tabs.find(tab => tab.active && tab.url?.startsWith(${JSON.stringify(base)}));
+      if (!active || !(active.splitViewId >= 0)) return;
+      return tabs.find(tab => !tab.active && tab.windowId === active.windowId && tab.splitViewId === active.splitViewId)?.url;
+    })`);
+    assert.ok(inactiveUrl === base + '/mine' || inactiveUrl === base + '/switch-race', 'native split still shows the inactive pane');
+    const tabId = inactiveUrl === base + '/mine' ? mine : race;
+    const refused = await client.callTool({ name: 'close_tab', arguments: { tabId } });
+    assert.equal(refused.isError, true);
+    assert.match(refused.content[0].text, /This tab is visible/);
+  } finally {
+    await evaluate(worker, 'releaseUnsplit(); chrome.tabs.unsplit = realUnsplit;');
+  }
   await rpc('activate', mine);
   await yours('unapproved input to both split panes');
-  console.log('PASS both panes in a split are protected from unapproved input');
+  console.log('PASS both panes are protected, including while Chromium still shows the old split');
 
   await evaluate(worker, `(async () => {
     globalThis.realUpdate = chrome.tabs.update;
@@ -539,6 +594,7 @@ try {
     await rpc('activate', mine);
     await yours('the delayed Chromium switch');
   }
+  await nativeActive(base + '/mine');
   await call('close_tab', { tabId: race });
   console.log('PASS the visible draft remains protected while Chromium catches up with the sidebar');
   if (artifacts) await fs.writeFile(path.join(artifacts, 'agent-screenshot.png'), Buffer.from(shot.content[0].data, 'base64'));

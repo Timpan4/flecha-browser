@@ -1435,9 +1435,28 @@ async function start() {
       },
       currentChromeTab: (id) => live.get(id),
       activate: (id) => void store.activate(id),
-      close: (id) => {
+      close: async (id, chromeId, checkBackground) => {
+        if (checkBackground) {
+          // A background tab needs no placeholder or foreground switch before removal.
+          await checkBackground();
+          if (chromeId !== undefined) {
+            ours.add(chromeId);
+            try {
+              await chrome.tabs.remove(chromeId);
+            } catch (error) {
+              ours.delete(chromeId);
+              throw error;
+            }
+            if (live.get(id) !== chromeId) return;
+            live.delete(id);
+            livePartition.delete(id);
+            rememberLive();
+          }
+          store.closeTab(id);
+          return;
+        }
         store.closeTab(id);
-        void unload([id]);
+        await unload([id]);
       },
     },
     agentTabsChanged: async () => void (await tabSleep?.shownChanged()),

@@ -29,7 +29,7 @@ export interface NativeHostContext {
     chromeTab(tabId: string): Promise<number | undefined>;
     currentChromeTab(tabId: string): number | undefined;
     activate(tabId: string): void;
-    close(tabId: string): void;
+    close(tabId: string, chromeId: number | undefined, checkBackground?: () => Promise<boolean>): Promise<void>;
   };
   /** The agent started or stopped working in a tab (`agentTabsInUse` changed): tab sleep wakes it and lets it be. Settles once woken. */
   agentTabsChanged(): Promise<void>;
@@ -302,8 +302,6 @@ export function registerNativeHost(ctx: NativeHostContext) {
     showActivity(tabId, action);
     const chromeId = await ctx.tabs.chromeTab(tabId);
     if (chromeId === undefined) throw new Error(`Tab ${tabId} couldn’t be opened`);
-    // A discarded tab needs nothing more: attaching the debugger brings its page back
-    // (native-agent.mjs checks it).
     return { chromeId };
   }
 
@@ -318,12 +316,12 @@ export function registerNativeHost(ctx: NativeHostContext) {
     let visibleInChrome = false;
     if (chromeId !== undefined) {
       // The Store can switch before Chromium finishes showing the replacement tab.
-      const tab = await chrome.tabs.get(chromeId);
+      const tabs = await chrome.tabs.query({});
+      const tab = tabs.find((candidate) => candidate.id === chromeId);
+      if (!tab) throw new Error('The Chromium tab has closed.');
       const split = tab.splitViewId;
-      const peers = !tab.active && split !== undefined && split >= 0
-        ? await chrome.tabs.query({ windowId: tab.windowId, active: true })
-        : [];
-      visibleInChrome = tab.active || peers.some((peer) => peer.splitViewId === split);
+      visibleInChrome = tab.active || (split !== undefined && split >= 0 &&
+        tabs.some((peer) => peer.active && peer.windowId === tab.windowId && peer.splitViewId === split));
       requireBackgroundTab(tabId, allowVisibleTab, visibleInChrome);
     }
     if (!store.state.tabs[tabId] || ctx.tabs.currentChromeTab(tabId) !== chromeId) {
@@ -359,9 +357,10 @@ export function registerNativeHost(ctx: NativeHostContext) {
     },
     close_tab: async ({ tabId, allowVisibleTab }) => {
       if (!store.state.tabs[tabId]) return fail(`No tab with id ${tabId}`);
-      await checkEditable(tabId, ctx.tabs.currentChromeTab(tabId), allowVisibleTab);
+      const chromeId = ctx.tabs.currentChromeTab(tabId);
+      if (allowVisibleTab === true) await checkEditable(tabId, chromeId, allowVisibleTab);
+      await ctx.tabs.close(tabId, chromeId, allowVisibleTab === true ? undefined : () => checkEditable(tabId, chromeId, allowVisibleTab));
       showActivity(tabId, 'closing a tab');
-      ctx.tabs.close(tabId);
       return text('ok');
     },
     navigate: async ({ tabId, url, action, allowVisibleTab }) => {
@@ -401,55 +400,66 @@ export function registerNativeHost(ctx: NativeHostContext) {
     },
     click: async ({ tabId, selector, allowVisibleTab }) => {
       const t = await editTarget(tabId, `clicking ${selector}`, allowVisibleTab);
-      const point = (await evaluate(t, centerOf(String(selector)))) as { x: number; y: number } | undefined;
-      if (!point) return fail(`No visible element matches ${selector}`);
-      const send = await debuggerFor(t);
-      await Promise.all(['mousePressed', 'mouseReleased'].map((type) =>
-        send('Input.dispatchMouseEvent', { type, x: point.x, y: point.y, button: 'left', clickCount: 1 }),
-      ));
+      const clicked = await withInput(t, async () => {
+        const point = (await evaluate(t, centerOf(String(selector)))) as { x: number; y: number } | undefined;
+        if (!point) return false;
+        const send = await debuggerFor(t);
+        await Promise.all(['mousePressed', 'mouseReleased'].map((type) =>
+          send('Input.dispatchMouseEvent', { type, x: point.x, y: point.y, button: 'left', clickCount: 1 }),
+        ));
+        return true;
+      });
+      if (!clicked) return fail(`No visible element matches ${selector}`);
       await settle(t.chromeId);
       return text({ clicked: selector, url: (await chrome.tabs.get(t.chromeId)).url });
     },
     type: async ({ tabId, selector, text: value, clear, submit, allowVisibleTab }) => {
       const t = await editTarget(tabId, `typing into ${selector ?? 'the page'}`, allowVisibleTab);
       const input = String(value);
-      let replaced = false;
-      if (selector) {
-        const result = await evaluate(
-          t,
-          `(() => {
-            const el = document.querySelector(${JSON.stringify(selector)});
-            if (!el) return 'missing';
-            if (el.matches(':disabled') || ((el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) && el.readOnly)) return 'readonly';
-            el.scrollIntoView({ block: 'center' });
-            el.focus();
-            if (${!!clear} && 'value' in el && (${input === ''} || (el instanceof HTMLInputElement && el.selectionStart === null))) {
-              const previous = el.value;
-              const replacement = ${JSON.stringify(input)};
-              el.value = replacement;
-              if (el.value !== replacement) { el.value = previous; return 'invalid'; }
-              el.dispatchEvent(new Event('input', { bubbles: true }));
-              return 'replaced';
-            } else if (${!!clear} && (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) {
-              el.select();
-            }
-            return 'focused';
-          })()`,
-        );
-        if (result === 'missing') return fail(`No element matches ${selector}`);
-        if (result === 'readonly') return fail(`The field matching ${selector} is read-only or disabled`);
-        if (result === 'invalid') return fail(`The field matching ${selector} rejected the replacement value`);
-        replaced = result === 'replaced';
-      }
-      // Select for replacement first. A tab switch before insertion leaves the original text intact.
-      if (!replaced) await debug(t, 'Input.insertText', { text: input });
-      if (submit) await pressKey(t, 'Enter');
+      const problem = await withInput(t, async () => {
+        let replaced = false;
+        if (selector) {
+          const result = await evaluate(
+            t,
+            `(() => {
+              const el = document.querySelector(${JSON.stringify(selector)});
+              if (!el) return 'missing';
+              if (el.matches(':disabled') || ((el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) && el.readOnly)) return 'readonly';
+              el.scrollIntoView({ block: 'center' });
+              el.focus();
+              if (document.activeElement !== el) return 'unfocused';
+              if (${!!clear} && el instanceof HTMLInputElement && /^(date|datetime-local|month|time|week)$/.test(el.type)) {
+                const previous = el.value;
+                const replacement = ${JSON.stringify(input)};
+                el.value = replacement;
+                if (el.value !== replacement) { el.value = previous; return 'invalid'; }
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                return 'replaced';
+              }
+              if (${!!clear} && (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) el.select();
+              return document.activeElement === el ? 'focused' : 'unfocused';
+            })()`,
+          );
+          if (result === 'missing') return `No element matches ${selector}`;
+          if (result === 'readonly') return `The field matching ${selector} is read-only or disabled`;
+          if (result === 'unfocused') return `The field matching ${selector} could not hold focus`;
+          if (result === 'invalid') return `The field matching ${selector} rejected the replacement value`;
+          replaced = result === 'replaced';
+        }
+        // Select for replacement first so a tab switch before insertion preserves the original text.
+        if (!replaced) {
+          if (selector && clear && input === '') await pressKey(t, 'Backspace');
+          else await debug(t, 'Input.insertText', { text: input });
+        }
+        if (submit) await pressKey(t, 'Enter');
+      });
+      if (problem) return fail(problem);
       await settle(t.chromeId);
       return text('ok');
     },
     press_key: async ({ tabId, key, allowVisibleTab }) => {
       const t = await editTarget(tabId, `pressing ${key}`, allowVisibleTab);
-      await pressKey(t, String(key));
+      await withInput(t, () => pressKey(t, String(key)));
       await settle(t.chromeId);
       return text('ok');
     },
@@ -555,6 +565,12 @@ export function registerNativeHost(ctx: NativeHostContext) {
       return Promise.resolve();
     }
     pending = (async () => {
+      const { discarded } = await chrome.tabs.get(chromeId);
+      // Reload a discarded page in place, without activating its tab.
+      if (discarded) {
+        await chrome.tabs.reload(chromeId);
+        await settle(chromeId);
+      }
       await chrome.debugger.attach({ tabId: chromeId }, '1.3');
       keepAttached(chromeId);
       consoleLogs.set(chromeId, []);
@@ -581,24 +597,43 @@ export function registerNativeHost(ctx: NativeHostContext) {
     return pending;
   }
 
+  function sendDebug(chromeId: number, method: string, params?: object) {
+    return chrome.debugger.sendCommand({ tabId: chromeId }, method, params).catch(async (error: unknown) => {
+      throw await attachRefused(chromeId, error);
+    });
+  }
+
   async function debuggerFor({ chromeId, checkEditable }: PageTarget) {
     // Attach is shared. Permission to edit belongs to each tool request.
     await attach(chromeId);
-    // Chromium also lets go of a tab when another extension's frame loads in it mid-command.
-    const send = (method: string, params?: object) => chrome.debugger.sendCommand({ tabId: chromeId }, method, params).catch(async (error: unknown) => {
-      throw await attachRefused(chromeId, error);
-    });
-    if (checkEditable && !await checkEditable()) {
-      // Let background input behave as focused without changing the user's native focus.
-      await send('Emulation.setFocusEmulationEnabled', { enabled: true });
+    await checkEditable?.();
+    return (method: string, params?: object) => sendDebug(chromeId, method, params);
+  }
+
+  const inputTail = new Map<number, Promise<void>>();
+
+  async function withInput<Result>(tab: PageTarget, action: () => Promise<Result>): Promise<Result> {
+    const { chromeId, checkEditable } = tab;
+    // Input operations on one page share its focus and selection.
+    const run = (inputTail.get(chromeId) ?? Promise.resolve()).then(async () => {
+      await attach(chromeId);
+      const emulateFocus = await checkEditable?.() === false;
+      if (emulateFocus) await sendDebug(chromeId, 'Emulation.setFocusEmulationEnabled', { enabled: true });
       try {
-        await checkEditable();
-      } catch (error) {
-        await send('Emulation.setFocusEmulationEnabled', { enabled: false }).catch(() => undefined);
-        throw error;
+        return await action();
+      } finally {
+        if (emulateFocus) {
+          await sendDebug(chromeId, 'Emulation.setFocusEmulationEnabled', { enabled: false }).catch(() => undefined);
+        }
       }
+    });
+    const tail = run.then(() => undefined, () => undefined);
+    inputTail.set(chromeId, tail);
+    try {
+      return await run;
+    } finally {
+      if (inputTail.get(chromeId) === tail) inputTail.delete(chromeId);
     }
-    return send;
   }
 
   async function debug(tab: PageTarget, method: string, params?: object) {
