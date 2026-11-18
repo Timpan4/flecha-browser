@@ -24,10 +24,10 @@ export interface NativeHostContext {
   broadcastState(): void;
   tabs: {
     /** Opens an address in a new background Today tab, in the agent's folder; returns its id. */
-    open(url: string): string;
+    open(url: string, requireCurrent: () => void): string;
     /** The Chromium tab showing a Flecha tab, opened (in the background) if it has none yet. */
     chromeTab(tabId: string, requireCurrent: () => void): Promise<number | undefined>;
-    discardUnopenedAgentTab(tabId: string): void;
+    finishOpen(tabId: string, expired: boolean): Promise<void>;
     currentChromeTab(tabId: string): number | undefined;
     activate(tabId: string): void;
     close(tabId: string, allowVisible: boolean, check: (chromeId: number | undefined) => Promise<void>): Promise<void>;
@@ -291,7 +291,7 @@ export function registerNativeHost(ctx: NativeHostContext) {
     try {
       requireCurrent();
       if (!Object.hasOwn(tools, name)) throw new Error(`Unknown agent tool: ${name}`);
-      return await tools[name](args, requireCurrent);
+      return await tools[name](args, requireCurrent, deadline);
     } catch (err) {
       return fail(err instanceof Error ? err.message : String(err));
     }
@@ -305,6 +305,12 @@ export function registerNativeHost(ctx: NativeHostContext) {
     requireCurrent: () => void;
   };
 
+  function requireOwnership(tabId: string, chromeId: number | undefined) {
+    if (!store.state.tabs[tabId] || ctx.tabs.currentChromeTab(tabId) !== chromeId) {
+      throw new Error('Tab ownership changed before the agent action could run.');
+    }
+  }
+
   /**
    * The tool's tab with its Chromium tab, after telling the sidebar. It stays where it is: tools
    * drive tabs through chrome.debugger, which needs no tab on screen and no window focus.
@@ -316,7 +322,12 @@ export function registerNativeHost(ctx: NativeHostContext) {
     const chromeId = await ctx.tabs.chromeTab(tabId, requireCurrent);
     requireCurrent();
     if (chromeId === undefined) throw new Error(`Tab ${tabId} couldn’t be opened`);
-    return { chromeId, requireCurrent };
+    const requireTarget = () => {
+      requireCurrent();
+      requireOwnership(tabId, chromeId);
+    };
+    requireTarget();
+    return { chromeId, requireCurrent: requireTarget };
   }
 
   function requireBackgroundTab(tabId: string, allowVisibleTab: unknown, visibleInChrome = false) {
@@ -340,47 +351,56 @@ export function registerNativeHost(ctx: NativeHostContext) {
         tabs.some((peer) => peer.active && peer.windowId === tab.windowId && peer.splitViewId === split));
       requireBackgroundTab(tabId, allowVisibleTab, visibleInChrome);
     }
-    if (!store.state.tabs[tabId] || ctx.tabs.currentChromeTab(tabId) !== chromeId) {
-      throw new Error('Tab ownership changed before the agent action could run.');
-    }
+    requireOwnership(tabId, chromeId);
     return { visible: visibleInChrome, discarded };
   }
 
   async function editTarget(tabId: string, action: string, allowVisibleTab: unknown, requireCurrent: () => void): Promise<PageTarget> {
     requireBackgroundTab(tabId, allowVisibleTab);
     const page = await target(tabId, action, requireCurrent);
+    const requireEditable = () => {
+      page.requireCurrent();
+      requireBackgroundTab(tabId, allowVisibleTab);
+    };
     return {
       chromeId: page.chromeId,
       backgroundOnly: allowVisibleTab !== true,
-      requireCurrent,
+      requireCurrent: requireEditable,
       checkEditable: async () => {
-        requireCurrent();
+        requireEditable();
         const state = await checkEditable(tabId, page.chromeId, allowVisibleTab);
-        requireCurrent();
+        requireEditable();
         return state;
       },
     };
   }
 
-  const tools: { [Name in AgentToolName]: (args: AgentToolArgs[Name], requireCurrent: () => void) => Promise<AgentResult> } = {
+  const tools: { [Name in AgentToolName]: (args: AgentToolArgs[Name], requireCurrent: () => void, deadline?: number) => Promise<AgentResult> } = {
     list_tabs: async () => {
       showActivity(undefined, 'listing tabs');
       return text(listTabs());
     },
     open_tab: async ({ url }, requireCurrent) => {
-      const tabId = ctx.tabs.open(String(url));
+      const tabId = ctx.tabs.open(String(url), requireCurrent);
       showActivity(tabId, 'opening a tab');
-      let chromeId: number | undefined;
+      let expired = false;
       try {
-        chromeId = await ctx.tabs.chromeTab(tabId, requireCurrent);
+        const chromeId = await ctx.tabs.chromeTab(tabId, requireCurrent);
+        if (chromeId === undefined) throw new Error(`Tab ${tabId} couldn’t be opened`);
+        requireCurrent();
+        await settle(chromeId);
+        requireCurrent();
+        const tab = await chrome.tabs.get(chromeId);
+        requireCurrent();
+        requireOwnership(tabId, chromeId);
+        return text({ tabId, url: tab.pendingUrl || tab.url || url });
       } catch (error) {
         try { requireCurrent(); }
-        catch { ctx.tabs.discardUnopenedAgentTab(tabId); }
+        catch { expired = true; }
         throw error;
+      } finally {
+        await ctx.tabs.finishOpen(tabId, expired);
       }
-      if (chromeId !== undefined) await settle(chromeId);
-      const tab = chromeId !== undefined ? await chrome.tabs.get(chromeId).catch(() => undefined) : undefined;
-      return text({ tabId, url: tab?.pendingUrl || tab?.url || url });
     },
     activate_tab: async ({ tabId }) => {
       if (!store.state.tabs[tabId]) return fail(`No tab with id ${tabId}`);
@@ -402,7 +422,7 @@ export function registerNativeHost(ctx: NativeHostContext) {
       const t = await editTarget(tabId, url ? `opening ${url}` : (action ?? 'navigating'), allowVisibleTab, requireCurrent);
       return withMutation(t, async () => {
         await t.checkEditable?.();
-        requireCurrent();
+        t.requireCurrent();
         const backgroundOnly = allowVisibleTab !== true;
         if (url) await chrome.tabs.update(t.chromeId, { url }, backgroundOnly);
         else if (action === 'reload') await chrome.tabs.reload(t.chromeId, {}, backgroundOnly);
@@ -445,17 +465,16 @@ export function registerNativeHost(ctx: NativeHostContext) {
     },
     click: async ({ tabId, selector, allowVisibleTab }, requireCurrent) => {
       const t = await editTarget(tabId, `clicking ${selector}`, allowVisibleTab, requireCurrent);
-      const clicked = await withInput(t, () => withElement(t, selector, async (element) => {
+      const clicked = await withInput(t, (send) => withElement(t.chromeId, send, selector, async (element) => {
         const point = (await element(`
           if (!el.isConnected || el !== document.querySelector(${JSON.stringify(selector)})) return;
-          el.scrollIntoView({ block: 'center', inline: 'center' });
+          el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
           const rect = el.getBoundingClientRect();
           const x = Math.round(rect.left + rect.width / 2);
           const y = Math.round(rect.top + rect.height / 2);
           if (rect.width && rect.height && el.contains(document.elementFromPoint(x, y))) return { x, y };
         `)) as { x: number; y: number } | undefined;
         if (!point) return false;
-        const send = await debuggerFor(t);
         const mouse = { ...point, button: 'left', clickCount: 1 };
         await send('Input.dispatchMouseEvent', { ...mouse, type: 'mousePressed' }, { ...mouse, type: 'mouseReleased' });
         return true;
@@ -467,14 +486,16 @@ export function registerNativeHost(ctx: NativeHostContext) {
     type: async ({ tabId, selector, text: value, clear, submit, allowVisibleTab }, requireCurrent) => {
       const t = await editTarget(tabId, `typing into ${selector ?? 'the page'}`, allowVisibleTab, requireCurrent);
       const input = value;
-      const typeInto = async (element?: ElementCall) => {
+      const typeInto = async (send: SendDebug, element?: ElementCall) => {
+        const holdsFocus = `return el.isConnected && document.activeElement === el &&
+          el === document.querySelector(${JSON.stringify(selector)});`;
         let replaced = false;
         if (element) {
           const result = await element(`
               const uneditable = () => el.matches(':disabled') ||
                 ((el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) && el.readOnly);
               if (uneditable()) return 'readonly';
-              el.scrollIntoView({ block: 'center' });
+              el.scrollIntoView({ block: 'center', behavior: 'instant' });
               el.focus();
               if (document.activeElement !== el) return 'unfocused';
               if (uneditable()) return 'readonly';
@@ -511,23 +532,22 @@ export function registerNativeHost(ctx: NativeHostContext) {
         }
         // Select for replacement first so a tab switch before insertion preserves the original text.
         if (!replaced) {
-          if (element && !await element('return el.isConnected && document.activeElement === el;')) {
+          if (element && !await element(holdsFocus)) {
             return `The field matching ${selector} could not hold focus`;
           }
-          const send = await debuggerFor(t);
           if (selector && clear && input === '') await dispatchKey(send, 'Backspace');
           else await send('Input.insertText', { text: input });
         }
         if (submit) {
-          if (element && !await element('return el.isConnected && document.activeElement === el;')) {
+          if (element && !await element(holdsFocus)) {
             return `The field matching ${selector} lost focus before Enter`;
           }
-          await dispatchKey(await debuggerFor(t), 'Enter');
+          await dispatchKey(send, 'Enter');
         }
       };
-      const problem = await withInput(t, async () => {
-        if (!selector) return typeInto();
-        const result = await withElement(t, selector, typeInto);
+      const problem = await withInput(t, async (send) => {
+        if (!selector) return typeInto(send);
+        const result = await withElement(t.chromeId, send, selector, (element) => typeInto(send, element));
         return result === null ? `No element matches ${selector}` : result;
       });
       if (problem) return fail(problem);
@@ -536,13 +556,13 @@ export function registerNativeHost(ctx: NativeHostContext) {
     },
     press_key: async ({ tabId, key, allowVisibleTab }, requireCurrent) => {
       const t = await editTarget(tabId, `pressing ${key}`, allowVisibleTab, requireCurrent);
-      await withInput(t, async () => dispatchKey(await debuggerFor(t), String(key)));
+      await withInput(t, (send) => dispatchKey(send, key));
       await settle(t.chromeId);
       return text('ok');
     },
-    evaluate: async ({ tabId, expression, allowVisibleTab }, requireCurrent) => {
+    evaluate: async ({ tabId, expression, allowVisibleTab }, requireCurrent, deadline) => {
       const t = await editTarget(tabId, 'running JavaScript', allowVisibleTab, requireCurrent);
-      const result = await withMutation(t, () => evaluate(t, expression));
+      const result = await withMutation(t, () => evaluateMutation(t, expression, deadline));
       return text(result === undefined ? 'undefined' : result);
     },
     wait_for: async ({ tabId, selector, timeoutMs = 10000 }, requireCurrent) => {
@@ -569,6 +589,7 @@ export function registerNativeHost(ctx: NativeHostContext) {
   const DEBUG_IDLE = 120_000;
   const attached = new Map<number, ReturnType<typeof setTimeout>>();
   const attaching = new Map<number, Promise<void>>();
+  const detaching = new Map<number, Promise<void>>();
   const waking = new Map<number, Promise<void>>();
   const consoleLogs = new Map<number, Array<{ level: string; message: string; source: string; time: number }>>();
 
@@ -692,6 +713,11 @@ export function registerNativeHost(ctx: NativeHostContext) {
 
   async function attachTarget({ chromeId, backgroundOnly, checkEditable, requireCurrent }: PageTarget) {
     requireCurrent();
+    const detach = detaching.get(chromeId);
+    if (detach) {
+      await detach;
+      requireCurrent();
+    }
     if (!attached.has(chromeId) && !attaching.has(chromeId)) {
       let wake = waking.get(chromeId);
       if (!wake) {
@@ -718,6 +744,10 @@ export function registerNativeHost(ctx: NativeHostContext) {
     // Attach is shared. Permission to edit belongs to each tool request.
     await attachTarget(tab);
     await tab.checkEditable?.();
+    return sender(tab);
+  }
+
+  function sender(tab: PageTarget): SendDebug {
     return (method, params, releaseParams) => {
       tab.requireCurrent();
       const { backgroundOnly } = tab;
@@ -744,7 +774,7 @@ export function registerNativeHost(ctx: NativeHostContext) {
     }
   }
 
-  async function withInput<Result>(tab: PageTarget, action: () => Promise<Result>): Promise<Result> {
+  async function withInput<Result>(tab: PageTarget, action: (send: SendDebug) => Promise<Result>): Promise<Result> {
     const { chromeId, checkEditable } = tab;
     return withMutation(tab, async () => {
       await attachTarget(tab);
@@ -754,7 +784,7 @@ export function registerNativeHost(ctx: NativeHostContext) {
           tab.requireCurrent();
           await sendDebug(chromeId, 'Emulation.setFocusEmulationEnabled', { enabled: true }, { backgroundOnly: tab.backgroundOnly });
         }
-        return await action();
+        return await action(sender(tab));
       } finally {
         if (emulateFocus) {
           try {
@@ -781,12 +811,51 @@ export function registerNativeHost(ctx: NativeHostContext) {
     return evaluateWith(await debuggerFor(tab), expression);
   }
 
-  async function evaluateWith(send: SendDebug, expression: string): Promise<unknown> {
+  async function evaluateMutation(tab: PageTarget, expression: string, deadline?: number): Promise<unknown> {
+    const send = await debuggerFor(tab);
+    if (deadline === undefined) return evaluateWith(send, expression);
+    tab.requireCurrent();
+    const remaining = deadline - Date.now();
+    const expiry = new Error('The agent request expired.');
+    if (remaining <= 0) throw expiry;
+    const command = evaluateWith(send, expression, remaining);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(expiry), remaining);
+    });
+    try {
+      return await Promise.race([command, timeout]);
+    } catch (error) {
+      if (error !== expiry) throw error;
+      const { chromeId } = tab;
+      // Drop the pending protocol request before another mutation can use this tab.
+      const detach = chrome.debugger.detach({ tabId: chromeId }).then(
+        () => forget(chromeId),
+        (error: unknown) => {
+          if (!(error instanceof Error) || !error.message.startsWith('Debugger is not attached')) throw error;
+          forget(chromeId);
+        },
+      ).finally(() => detaching.delete(chromeId));
+      detaching.set(chromeId, detach);
+      try {
+        await detach;
+      } catch {
+        // A live session may still complete this command. Keep the queue until then.
+        await command.catch(() => undefined);
+      }
+      throw expiry;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async function evaluateWith(send: SendDebug, expression: string, timeout?: number): Promise<unknown> {
     const result = await send('Runtime.evaluate', {
       expression,
       awaitPromise: true,
       returnByValue: true,
       userGesture: true,
+      timeout,
     });
     return evaluationResult(result)?.value;
   }
@@ -801,19 +870,19 @@ export function registerNativeHost(ctx: NativeHostContext) {
 
   type ElementCall = (body: string) => Promise<unknown>;
 
-  async function withElement<Result>(tab: PageTarget, selector: string, action: (call: ElementCall) => Promise<Result>): Promise<Result | null> {
-    const objectId = evaluationResult(await debug(tab, 'Runtime.evaluate', {
+  async function withElement<Result>(chromeId: number, send: SendDebug, selector: string, action: (call: ElementCall) => Promise<Result>): Promise<Result | null> {
+    const objectId = evaluationResult(await send('Runtime.evaluate', {
       expression: `document.querySelector(${JSON.stringify(selector)})`,
       returnByValue: false,
     }))?.objectId;
     if (!objectId) return null;
-    const call: ElementCall = async (body) => evaluationResult(await debug(tab, 'Runtime.callFunctionOn', {
+    const call: ElementCall = async (body) => evaluationResult(await send('Runtime.callFunctionOn', {
       objectId, functionDeclaration: `function() { const el = this; ${body} }`, returnByValue: true, userGesture: true,
     }))?.value;
     try {
       return await action(call);
     } finally {
-      await sendDebug(tab.chromeId, 'Runtime.releaseObject', { objectId }).catch(() => undefined);
+      await sendDebug(chromeId, 'Runtime.releaseObject', { objectId }).catch(() => undefined);
     }
   }
 

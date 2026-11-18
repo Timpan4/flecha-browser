@@ -1440,6 +1440,29 @@ async function start() {
   // Boosts, environments, local servers, the responsive view, console errors and ad blocking.
   features = registerFeatures({ store, broadcastState: sendState, liveTabId: (id) => live.get(id), activeChromeTabId: () => activeChromeId() });
 
+  const pendingAgentOpens = new Map<string, () => void>();
+
+  async function removeAgentTab(id: string, chromeId: number, allowVisible: boolean, beforeRemove: () => void) {
+    try {
+      if (allowVisible) {
+        const tab = await chrome.tabs.get(chromeId);
+        if (tab.active) await showPlaceholder(tab.windowId);
+      }
+      beforeRemove();
+      ours.add(chromeId);
+      if (allowVisible) await chrome.tabs.remove(chromeId);
+      else await chrome.tabs.remove(chromeId, true);
+    } catch (error) {
+      ours.delete(chromeId);
+      if (allowVisible) sync();
+      throw error;
+    }
+    if (live.get(id) !== chromeId) throw new Error('Tab ownership changed while closing the agent target.');
+    live.delete(id);
+    livePartition.delete(id);
+    rememberLive();
+  }
+
   // Imports and the coding-agent bridge, through Flecha's native messaging host. Both are
   // about your regular Spaces, so incognito windows have neither.
   if (!incognito) nativeHost = registerNativeHost({
@@ -1447,16 +1470,38 @@ async function start() {
     canIsolate,
     broadcastState: sendState,
     tabs: {
-      open: (url) => addTab(resolveInput(url, store.state.searchEngine), { activate: false, agent: true }).id,
+      open: (url, requireCurrent) => {
+        const { id } = addTab(resolveInput(url, store.state.searchEngine), { activate: false, agent: true });
+        pendingAgentOpens.set(id, requireCurrent);
+        return id;
+      },
       chromeTab: async (id, requireCurrent) => {
         await syncing;
         requireCurrent();
+        if (pendingAgentOpens.get(id) !== requireCurrent) pendingAgentOpens.delete(id);
         const pending = tabSetups.get(id);
         if (pending) return joinTabSetup(pending, requireCurrent);
         return live.get(id) ?? (store.state.tabs[id] ? openChromeTab(id, false, store.locate(id)?.windowId ?? store.focusedWindowId, requireCurrent) : undefined);
       },
-      discardUnopenedAgentTab: (id) => {
-        if (store.state.tabs[id]?.agent && !tabSetups.has(id) && !live.has(id) && store.windowShowing(id) === undefined) store.closeTab(id);
+      finishOpen: async (id, expired) => {
+        if (!pendingAgentOpens.delete(id) || !expired) return;
+        const untouched = () => {
+          const tab = store.state.tabs[id];
+          return tab?.agent && tab.unseen && !tabSetups.has(id) && store.windowShowing(id) === undefined;
+        };
+        if (!untouched()) return;
+        const chromeId = live.get(id);
+        if (chromeId !== undefined) {
+          try {
+            await removeAgentTab(id, chromeId, false, () => {
+              if (!untouched() || live.get(id) !== chromeId) throw new Error('Tab ownership changed during open rollback.');
+            });
+          } catch (error) {
+            console.warn('Flecha shell: could not roll back the agent tab', error);
+            return;
+          }
+        }
+        if (untouched()) store.closeTab(id, { archive: false });
       },
       currentChromeTab: (id) => live.get(id),
       activate: (id) => void store.activate(id),
@@ -1465,29 +1510,15 @@ async function start() {
         const chromeId = setup ? await setup.promise : live.get(id);
         if (setup?.transferred) throw new Error('Tab transferred during setup.');
         await check(chromeId);
-        if (!store.state.tabs[id] || live.get(id) !== chromeId || tabSetups.has(id)) {
-          throw new Error('Tab ownership changed while closing the agent target.');
-        }
-        if (!allowVisible) {
-          // A background tab needs no placeholder or foreground switch before removal.
-          if (chromeId !== undefined) {
-            ours.add(chromeId);
-            try {
-              await chrome.tabs.remove(chromeId, true);
-            } catch (error) {
-              ours.delete(chromeId);
-              throw error;
-            }
-            if (live.get(id) !== chromeId) throw new Error('Tab ownership changed while closing the agent target.');
-            live.delete(id);
-            livePartition.delete(id);
-            rememberLive();
+        const requireOwner = () => {
+          if (!store.state.tabs[id] || live.get(id) !== chromeId || tabSetups.has(id)) {
+            throw new Error('Tab ownership changed while closing the agent target.');
           }
-          store.closeTab(id);
-          return;
-        }
+        };
+        requireOwner();
+        pendingAgentOpens.delete(id);
+        if (chromeId !== undefined) await removeAgentTab(id, chromeId, allowVisible, requireOwner);
         store.closeTab(id);
-        await unload([id]);
       },
     },
     agentTabsChanged: async () => void (await tabSleep?.shownChanged()),

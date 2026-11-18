@@ -622,6 +622,102 @@ try {
     await Promise.allSettled([queuedProbe, queuedEvaluation]);
   }
   console.log('PASS scripts wait for input and a click refuses a replaced element');
+  await evaluate(worker, `
+    globalThis.sendBeforeClickCheck = chrome.debugger.sendCommand;
+    globalThis.queryBeforeClickCheck = chrome.tabs.query;
+    let checkedTarget;
+    chrome.debugger.sendCommand = async (...args) => {
+      const result = await sendBeforeClickCheck(...args);
+      if (args[1] === 'Runtime.callFunctionOn' && args[2].functionDeclaration.includes('queued-click-probe')) checkedTarget = args[0];
+      if (args[1] === 'Input.dispatchMouseEvent') checkedTarget = undefined;
+      return result;
+    };
+    chrome.tabs.query = async (...args) => {
+      if (checkedTarget) {
+        const target = checkedTarget;
+        checkedTarget = undefined;
+        await sendBeforeClickCheck(target, 'Runtime.evaluate', {
+          expression: "document.querySelector('#queued-click-probe').replaceWith(document.querySelector('#queued-click-probe').cloneNode(true))",
+        });
+      }
+      return queryBeforeClickCheck(...args);
+    };
+    void 0;
+  `);
+  try {
+    await call('click', { tabId: agentTab, selector: '#queued-click-probe' });
+    assert.equal(await evaluate(agentPage, 'replacementClicks'), 1);
+  } finally {
+    await evaluate(worker, 'chrome.tabs.query = queryBeforeClickCheck; chrome.debugger.sendCommand = sendBeforeClickCheck;');
+  }
+  console.log('PASS click targets the checked element without another tab lookup');
+  await evaluate(agentPage, `(() => {
+    document.documentElement.style.scrollBehavior = 'smooth';
+    const button = document.createElement('button');
+    button.id = 'scrolled-control';
+    button.textContent = 'Offscreen';
+    button.style.cssText = 'display: block; margin-top: ' + window.innerHeight * 2 + 'px';
+    button.onclick = () => { window.scrolledClicks = (window.scrolledClicks ?? 0) + 1; };
+    document.body.append(button);
+  })()`);
+  await call('click', { tabId: agentTab, selector: '#scrolled-control' });
+  assert.equal(await evaluate(agentPage, 'window.scrolledClicks'), 1);
+  await evaluate(agentPage, `document.querySelector('#scrolled-control').remove(); document.documentElement.style.scrollBehavior = '';`);
+  console.log('PASS click reaches an offscreen control on a smooth-scrolling page');
+
+  await evaluate(worker, `
+    globalThis.realEvalCommand = chrome.debugger.sendCommand;
+    globalThis.realEvalDetach = chrome.debugger.detach;
+    globalThis.realEvalTimer = setTimeout;
+    globalThis.evalStarted = new Promise(resolve => { globalThis.notifyEvalStarted = resolve; });
+    globalThis.evalDetaching = new Promise(resolve => { globalThis.notifyEvalDetaching = resolve; });
+    globalThis.evalDetachGate = new Promise(resolve => { globalThis.releaseEvalDetach = resolve; });
+    chrome.debugger.sendCommand = (...args) => {
+      if (args[1] === 'Runtime.evaluate' && args[2].expression.includes('pendingAgentEvaluation')) {
+        globalThis.evalDelay = args[2].timeout;
+        notifyEvalStarted();
+      }
+      return realEvalCommand(...args);
+    };
+    globalThis.setTimeout = (callback, delay, ...args) => {
+      if (evalDelay !== undefined && delay === evalDelay) {
+        evalDelay = undefined;
+        globalThis.expireEvaluation = callback;
+        return realEvalTimer(() => {}, delay);
+      }
+      return realEvalTimer(callback, delay, ...args);
+    };
+    globalThis.evalDelay = undefined;
+    chrome.debugger.detach = async (...args) => {
+      notifyEvalDetaching();
+      await evalDetachGate;
+      return realEvalDetach(...args);
+    };
+    void 0;
+  `);
+  const stalledEvaluation = client.callTool({
+    name: 'evaluate', arguments: { tabId: agentTab, expression: 'new Promise(function pendingAgentEvaluation() {})' },
+  });
+  let clickAfterExpiry;
+  try {
+    await Promise.race([evaluate(worker, 'evalStarted'), stalledEvaluation.then(() => assert.fail('Evaluation finished before its promise resolved'))]);
+    await evaluate(worker, 'expireEvaluation()');
+    await evaluate(worker, 'evalDetaching');
+    const before = await evaluate(agentPage, 'counter');
+    clickAfterExpiry = client.callTool({ name: 'click', arguments: { tabId: agentTab, selector: '#count' } });
+    await stateWhere(`s => s.agent?.tabId === ${JSON.stringify(agentTab)} && s.agent.action === 'clicking #count'`);
+    assert.equal(await evaluate(agentPage, 'counter'), before);
+    await evaluate(worker, 'releaseEvalDetach()');
+    const [expired, clicked] = await Promise.all([stalledEvaluation, clickAfterExpiry]);
+    assert.match(expired.content[0].text, /request expired/);
+    assert.equal(clicked.isError, undefined, clicked.content[0].text);
+    assert.equal(await evaluate(agentPage, 'counter'), before + 1);
+    await evaluate(agentPage, `counter = ${before}`);
+  } finally {
+    await evaluate(worker, 'releaseEvalDetach(); chrome.debugger.detach = realEvalDetach; chrome.debugger.sendCommand = realEvalCommand; globalThis.setTimeout = realEvalTimer;');
+    await Promise.allSettled([stalledEvaluation, clickAfterExpiry]);
+  }
+  console.log('PASS an expired evaluation detaches and releases the tab for the next click');
   await call('activate_tab', { tabId: agentTab });
   await nativeActive(base + '/agent');
   await rpc('activate', mine);
@@ -986,6 +1082,42 @@ try {
   await call('close_tab', { tabId: discardedLogin });
   await stateWhere(`s => !s.tabs[${JSON.stringify(discardedLogin)}]`);
 
+  const transferUrl = base + '/agent?read-transfer';
+  const transferredReadTab = JSON.parse((await call('open_tab', { url: transferUrl })).content[0].text).tabId;
+  await evaluate(worker, `
+    globalThis.getBeforeTransfer = chrome.tabs.get;
+    globalThis.transferLookup = new Promise(resolve => { globalThis.notifyTransferLookup = resolve; });
+    globalThis.transferGate = new Promise(resolve => { globalThis.releaseTransferLookup = resolve; });
+    let interceptedTransfer = false;
+    chrome.tabs.get = async (...args) => {
+      const tab = await getBeforeTransfer(...args);
+      if (!interceptedTransfer && tab.url === ${JSON.stringify(transferUrl)}) {
+        interceptedTransfer = true;
+        notifyTransferLookup();
+        await transferGate;
+      }
+      return tab;
+    };
+    void 0;
+  `);
+  const transferredRead = client.callTool({ name: 'read_page', arguments: { tabId: transferredReadTab } });
+  let readWindow;
+  try {
+    await Promise.race([evaluate(worker, 'transferLookup'), transferredRead.then(() => assert.fail('Read finished before transfer'))]);
+    readWindow = await rpc('openFlechinha', undefined, transferredReadTab);
+    await stateWhere(`s => !s.tabs[${JSON.stringify(transferredReadTab)}]`);
+    await evaluate(worker, 'releaseTransferLookup()');
+    const refused = await transferredRead;
+    assert.equal(refused.isError, true);
+    assert.match(refused.content[0].text, /Tab ownership changed/);
+    assert.equal(await evaluate(worker, `chrome.tabs.query({ windowId: ${readWindow} }).then(tabs => tabs.some(t => t.url === ${JSON.stringify(transferUrl)}))`), true);
+  } finally {
+    await evaluate(worker, 'releaseTransferLookup(); chrome.tabs.get = getBeforeTransfer;');
+    await Promise.allSettled([transferredRead]);
+    if (readWindow !== undefined) await evaluate(worker, `chrome.windows.remove(${readWindow}).catch(() => undefined)`);
+  }
+  console.log('PASS a delayed read refuses a tab transferred to a Flechinha');
+
   await evaluate(worker, `
     globalThis.createBeforeClose = chrome.tabs.create;
     globalThis.creatingBeforeClose = new Promise(resolve => { globalThis.notifyCloseCreation = resolve; });
@@ -1052,6 +1184,60 @@ try {
     await Promise.allSettled([expiresDuringSetup]);
   }
   console.log('PASS an expired open removes its unfinished agent tab');
+
+  const lateUrl = base + '/agent?expired-after-navigation';
+  await evaluate(worker, `
+    globalThis.openClock = Date.now;
+    globalThis.openUpdate = chrome.tabs.update;
+    globalThis.openNavigated = new Promise(resolve => { globalThis.notifyOpenNavigated = resolve; });
+    globalThis.openGate = new Promise(resolve => { globalThis.releaseOpen = resolve; });
+    chrome.tabs.update = async (...args) => {
+      const tab = await openUpdate(...args);
+      if (args[1]?.url === ${JSON.stringify(lateUrl)}) {
+        notifyOpenNavigated();
+        await openGate;
+      }
+      return tab;
+    };
+    void 0;
+  `);
+  const lateOpen = client.callTool({ name: 'open_tab', arguments: { url: lateUrl } });
+  try {
+    await Promise.race([evaluate(worker, 'openNavigated'), lateOpen.then(() => assert.fail('Open finished before expiry'))]);
+    await evaluate(worker, 'Date.now = () => Number.MAX_SAFE_INTEGER; releaseOpen();');
+    const expired = await lateOpen;
+    assert.equal(expired.isError, true);
+    assert.match(expired.content[0].text, /request expired/);
+    await stateWhere(`s => !Object.values(s.tabs).some(t => t.url === ${JSON.stringify(lateUrl)})`);
+    assert.equal(await evaluate(worker, `chrome.tabs.query({}).then(tabs => tabs.some(t => [t.url, t.pendingUrl].includes(${JSON.stringify(lateUrl)})))`), false);
+  } finally {
+    await evaluate(worker, 'Date.now = openClock; releaseOpen(); chrome.tabs.update = openUpdate;');
+    await Promise.allSettled([lateOpen]);
+  }
+  console.log('PASS an expired open rolls back a live tab after navigation starts');
+
+  const closingUrl = base + '/agent?refuse-close';
+  const closing = JSON.parse((await call('open_tab', { url: closingUrl })).content[0].text).tabId;
+  await rpc('activate', closing);
+  await stateWhere(`s => s.spaces.find(sp => sp.id === s.activeSpaceId).activeTabId === ${JSON.stringify(closing)}`);
+  await evaluate(worker, `(async () => {
+    const target = (await chrome.tabs.query({})).find(tab => tab.url === ${JSON.stringify(closingUrl)}).id;
+    globalThis.beforeRefusedRemove = chrome.tabs.remove;
+    chrome.tabs.remove = (...args) => args[0] === target
+      ? Promise.reject(new Error('Injected tab removal refusal')) : beforeRefusedRemove(...args);
+  })()`);
+  try {
+    const refused = await client.callTool({ name: 'close_tab', arguments: { tabId: closing, allowVisibleTab: true } });
+    assert.equal(refused.isError, true);
+    assert.match(refused.content[0].text, /Injected tab removal refusal/);
+    await call('read_page', { tabId: closing });
+    assert.equal(await evaluate(worker, `chrome.tabs.query({}).then(tabs => tabs.filter(t => t.url === ${JSON.stringify(closingUrl)}).length)`), 1);
+  } finally {
+    await evaluate(worker, 'chrome.tabs.remove = beforeRefusedRemove;');
+  }
+  await call('close_tab', { tabId: closing, allowVisibleTab: true });
+  await rpc('activate', mine);
+  console.log('PASS an approved close reports removal failure and retains the original tab');
 
   // Taken from the agent, the tab is yours: its next page runs your extensions again.
   await rpc('togglePin', agentLogin);

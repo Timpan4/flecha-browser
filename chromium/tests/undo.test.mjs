@@ -16,6 +16,16 @@ function twoWindows() {
 const urls = (store, ids) => ids.map((id) => store.state.tabs[id]?.url);
 const today = (store, windowId, spaceId) => store.state.windows.find((w) => w.id === windowId).spaces[spaceId]?.today ?? [];
 
+test('rolling back an unopened agent tab preserves the archive', () => {
+  const { store } = twoWindows();
+  store.closeTab(store.addTab('https://example.com/closed').id);
+  const previous = structuredClone(store.state.archive);
+  const pending = store.addTab('https://example.com/pending', { agent: true, activate: false });
+  store.closeTab(pending.id, { archive: false });
+  assert.equal(store.state.tabs[pending.id], undefined);
+  assert.deepEqual(store.state.archive, previous);
+});
+
 test('undoing a Space deletion brings back the Space, its folders and tabs, and where each window was', () => {
   const { store, first, second, personal, work } = twoWindows();
   const third = store.newSpace(false).id;
