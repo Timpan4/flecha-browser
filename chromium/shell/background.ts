@@ -18,6 +18,7 @@ import { describe as describeEnvironment } from './lib/environments';
 import type { BrowserState, DropTarget, SearchEngineId, UiState } from '../shared/types';
 import { asWindow, broadcast, broadcastTo, call, callerWindow, connected, handle, listen, onConnect, statePages } from './hub';
 import { changedFields, OpenTabSnapshot } from './stateUpdates';
+import { LiveTabs } from './liveTabs';
 import type { MenuRun } from './protocol';
 import type { MenuEntry } from './settingsUi';
 import { openSettings, registerSettings } from './settingsHandlers';
@@ -42,7 +43,7 @@ const ARCHIVE_ALARM = 'archive-stale';
 /** Help: the project's page (README.md's own clone URL). */
 const HELP_URL = 'https://github.com/lucianodiisouza/flecha-browser#readme';
 
-const live = new Map<string, number>();
+const live = new LiveTabs();
 const flechaIdFor = (chromeId: number) => [...live].find(([, c]) => c === chromeId)?.[0];
 /** Chromium tabs we're closing ourselves, so their events aren't taken as the user's. */
 const ours = new Set<number>();
@@ -1498,7 +1499,7 @@ async function start() {
     windowId: here,
     unload: (ids) => void unload(ids),
     broadcastState: sendState,
-    isOpen: (id) => live.has(id),
+    liveTabs: live,
     load: (id, url) => {
       const chromeId = live.get(id);
       if (chromeId !== undefined) void chrome.tabs.update(chromeId, { url });

@@ -10,6 +10,7 @@ import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { parseArgs, promisify } from 'node:util';
+import { applyStateUpdate } from '../shell/stateUpdates.ts';
 
 const exec = promisify(execFile);
 const extension = 'chrome-extension://abdiaepfgbbhdjaecjipmaailijaaide/';
@@ -19,20 +20,11 @@ const tabsPerSpace = 8;
 const settleMs = 3000; // Same settling window as the reference performance harness.
 const idleMs = 10_000;
 const pollMs = 20; // Same document readiness poll as the reference performance harness.
+const disposalGraceMs = 5_000; // Independent grace period requested in the benchmark review.
 // Same watchdog default as native-workflows.mjs. Applied to each run, including both launches.
 const watchdogMs = Number(process.env.FLECHA_HARNESS_TIMEOUT_MS) || 10 * 60 * 1000;
 const abort = new AbortController();
 
-const { values: args } = parseArgs({
-  options: {
-    chrome: { type: 'string' },
-    'shell-dir': { type: 'string', default: fileURLToPath(new URL('../shell/dist', import.meta.url)) },
-    'compare-shell-dir': { type: 'string' },
-    out: { type: 'string' },
-    runs: { type: 'string', default: '3' },
-    help: { type: 'boolean' },
-  },
-});
 function temporaryEnvironment(profile, display) {
   const env = { ...process.env, HOME: path.join(profile, 'home'), DISPLAY: display };
   for (const key of ['WAYLAND_DISPLAY', 'CHROME_CONFIG_HOME', 'HELIUM_CONFIG_HOME', '__PYVENV_LAUNCHER__']) delete env[key];
@@ -107,6 +99,20 @@ async function groupMembers(group) {
   return (await liveProcesses()).filter((entry) => entry.group === group);
 }
 
+export async function waitForBrowserProcesses(initialPids, findRemaining, signal = AbortSignal.timeout(disposalGraceMs)) {
+  let remaining = initialPids;
+  try {
+    while (remaining.length) {
+      signal.throwIfAborted();
+      remaining = await untilAborted(findRemaining(signal), signal);
+      if (remaining.length) await delay(pollMs, undefined, { signal });
+    }
+  } catch (error) {
+    if (!signal.aborted) throw error;
+    throw new Error(`Chromium cleanup timed out. Last observed PIDs: ${remaining.join(', ')}`, { cause: error });
+  }
+}
+
 class Browser {
   #nextId = 0;
   #pending = new Map();
@@ -125,6 +131,7 @@ class Browser {
       '--disable-background-networking', '--no-proxy-server',
       '--host-resolver-rules=MAP *.test 127.0.0.1, MAP * ~NOTFOUND',
     ], { env, cwd: profile, detached: true, stdio: ['ignore', 'ignore', 'inherit', 'pipe', 'pipe'] });
+    this.child = child;
     this.pid = child.pid;
     this.stopped = stopped;
     this.input = child.stdio[3];
@@ -277,17 +284,22 @@ class Browser {
   }
 
   async dispose() {
-    killGroup(this.pid);
-    await this.stopped;
     if (!this.pid) return;
+    killGroup(this.pid);
+    // A stuck process may never emit 'exit' or close its end of the CDP pipes.
+    this.child.unref();
+    this.input.destroy();
+    this.child.stdio[4].destroy();
+    this.#fail(new Error('Chromium disposed'));
     // Crashpad daemonizes into a new process group. Its database path is
     // below this launch's private config directory, even on failure.
-    for (;;) {
+    await waitForBrowserProcesses([this.pid], async (signal) => {
       const live = await liveProcesses();
       const crashpad = await Promise.all(live.filter(({ command }) => command === 'chrome_crashpad').map(async ({ pid }) => {
         const args = (await procFile(`${pid}/cmdline`))?.split('\0');
         return args?.some((arg) => arg.startsWith(this.crashDatabasePrefix)) ? pid : undefined;
       }));
+      signal.throwIfAborted();
       const owned = crashpad.filter(Boolean);
       for (const pid of owned) {
         try {
@@ -296,16 +308,15 @@ class Browser {
           if (error.code !== 'ESRCH') throw error;
         }
       }
-      if (!owned.length && !live.some(({ group }) => group === this.pid)) return;
-      await delay(pollMs);
-    }
+      return [...new Set([...live.filter(({ group }) => group === this.pid).map(({ pid }) => pid), ...owned])];
+    });
   }
 }
 
 // Same port protocol as the sidebar, with state waits kept in the frame so
 // switch samples do not include a Node-side polling interval.
-const instrument = `(() => {
-  const port = chrome.runtime.connect({ name: 'flecha' });
+function instrument(portName, applyUpdate) {
+  const port = chrome.runtime.connect({ name: portName });
   const calls = new Map();
   const waiters = new Set();
   let id = 0;
@@ -317,10 +328,11 @@ const instrument = `(() => {
       if (message.error) call?.reject(new Error(message.error));
       else call?.resolve(message.value);
     }
-    if (message.type === 'event' && message.name === 'state') {
-      state = message.args[0];
-      for (const check of waiters) check();
-    }
+    if (message.type !== 'event') return;
+    if (message.name === 'state') state = message.args[0];
+    else if (message.name === 'state-update' && state) state = applyUpdate(state, message.args[0]);
+    else return;
+    for (const check of waiters) check();
   });
   const rpc = (name, ...args) => new Promise((resolve, reject) => {
     calls.set(++id, { resolve, reject });
@@ -337,7 +349,11 @@ const instrument = `(() => {
   });
   globalThis.perfBench = { rpc, wait };
   port.postMessage({ type: 'cmd', name: 'ready', args: [] });
-})()`;
+}
+
+export function sidebarInstrument(portName) {
+  return `(${instrument.toString()})(${JSON.stringify(portName)}, ${applyStateUpdate.toString()})`;
+}
 
 async function startup(browser) {
   const version = await browser.send('Browser.getVersion');
@@ -360,10 +376,10 @@ function sleep(browser, ms) {
   return delay(ms, undefined, { signal: browser.signal });
 }
 
-async function workloadTabs(browser, frame, port) {
+async function workloadTabs(browser, frame, port, statePort) {
   const rpc = (name, ...args) => browser.evaluate(frame, `perfBench.rpc(...${JSON.stringify([name, ...args])})`);
   const waitState = (predicate) => browser.evaluate(frame, `perfBench.wait(${predicate})`);
-  await browser.evaluate(frame, instrument);
+  await browser.evaluate(frame, sidebarInstrument(statePort));
   await rpc('finishOnboarding');
   await waitState('s => s.onboarded');
   const tabs = [];
@@ -578,7 +594,7 @@ async function adblockSample(browser, rpc, frame, port, site, enabled) {
   return { styleRecalcMs, rendererPssKiB: sumMemory(matching).pssKiB, rendererPids: [...rendererPids], fixture };
 }
 
-async function run({ binary, shellDir, profile, display, port, ticksPerSecond, pair }) {
+async function run({ binary, shellDir, statePort, profile, display, port, ticksPerSecond, pair }) {
   const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(watchdogMs)]);
   const env = temporaryEnvironment(profile, display);
   await fs.mkdir(env.HOME);
@@ -589,13 +605,15 @@ async function run({ binary, shellDir, profile, display, port, ticksPerSecond, p
     browser = new Browser(binary, shellDir, profile, env, signal);
     const cold = await startup(browser);
     await browser.close();
-    await browser.dispose();
+    const coldBrowser = browser;
+    browser = undefined;
+    await coldBrowser.dispose();
 
     phase = 'warm startup';
     browser = new Browser(binary, shellDir, profile, env, signal);
     const warm = await startup(browser);
     phase = 'tab workload and switching';
-    const { samples, rpc } = await workloadTabs(browser, warm.frame, port);
+    const { samples, rpc } = await workloadTabs(browser, warm.frame, port, statePort);
     phase = 'multi-tab idle and memory';
     const shellPids = await browser.rendererPids(warm.frame);
     const kinds = await processKinds(browser, shellPids);
@@ -634,7 +652,7 @@ async function run({ binary, shellDir, profile, display, port, ticksPerSecond, p
   }
 }
 
-async function bundle(shellDir) {
+export async function bundle(shellDir) {
   const root = await fs.realpath(shellDir);
   const manifest = JSON.parse(await fs.readFile(path.join(root, 'manifest.json'), 'utf8'));
   const files = (await fs.readdir(root, { recursive: true, withFileTypes: true }))
@@ -643,13 +661,19 @@ async function bundle(shellDir) {
     .sort();
   const totals = { jsBytes: 0, cssBytes: 0 };
   const contents = {};
+  let statePort = 'flecha';
   for (const name of files) {
     const bytes = await fs.readFile(path.join(root, name));
+    // The legacy worker silently ignores unknown ports, so detect support from the
+    // actual bundle before connecting. Only the legacy shell needs full snapshots.
+    if (name === manifest.background?.service_worker && /['"]flecha-sidebar['"]/.test(bytes.toString('utf8'))) {
+      statePort = 'flecha-sidebar';
+    }
     totals[name.endsWith('.js') ? 'jsBytes' : 'cssBytes'] += bytes.length;
     contents[name] = { bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') };
   }
   assert.ok(totals.jsBytes > 0 && totals.cssBytes > 0, `Incomplete shell bundle: ${root}`);
-  return { dir: root, manifestVersion: manifest.version, ...totals, files: contents };
+  return { dir: root, manifestVersion: manifest.version, statePort, ...totals, files: contents };
 }
 
 function stats(samples) {
@@ -722,7 +746,7 @@ async function startDisplay(resources, signal) {
   return `:${display}`;
 }
 
-async function main() {
+async function main(args) {
   assert.equal(process.platform, 'linux', 'Linux /proc is required for RSS, PSS and idle counters');
   assert.ok(args.chrome, 'Pass --chrome <Flecha Chromium binary> (see --help)');
   const count = Number(args.runs);
@@ -776,7 +800,8 @@ async function main() {
         const profile = await fs.mkdtemp(path.join(resources.root, 'profile-'));
         console.error(`[perf] Run ${pair + 1}/${count}, shell ${label}`);
         try {
-          const result = await run({ binary, shellDir: variants[label].dir, profile, display, port, ticksPerSecond, pair });
+          const { dir: shellDir, statePort } = variants[label];
+          const result = await run({ binary, shellDir, statePort, profile, display, port, ticksPerSecond, pair });
           report.runs.push({ pair: pair + 1, variant: label, ...result });
         } finally {
           await fs.rm(profile, { recursive: true, force: true });
@@ -830,14 +855,26 @@ async function main() {
   }
 }
 
-if (args.help) {
-  console.log(`Usage: node chromium/tests/perf-bench.mjs --chrome <Flecha Chromium binary>
+if (import.meta.main) {
+  const { values: args } = parseArgs({
+    options: {
+      chrome: { type: 'string' },
+      'shell-dir': { type: 'string', default: fileURLToPath(new URL('../shell/dist', import.meta.url)) },
+      'compare-shell-dir': { type: 'string' },
+      out: { type: 'string' },
+      runs: { type: 'string', default: '3' },
+      help: { type: 'boolean' },
+    },
+  });
+  if (args.help) {
+    console.log(`Usage: node chromium/tests/perf-bench.mjs --chrome <Flecha Chromium binary>
   [--shell-dir <built shell>] [--compare-shell-dir <built shell B>]
   [--runs <count per shell, default 3>] [--out <report.json>]
 
 Runs on a private Xvfb display with a fresh profile per run. Each pair reverses
 the preceding pair's shell order (A B, B A, ...). Reports JSON on stdout unless
 --out is supplied. FLECHA_HARNESS_TIMEOUT_MS overrides the native test watchdog.`);
-} else {
-  await main();
+  } else {
+    await main(args);
+  }
 }

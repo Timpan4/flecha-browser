@@ -54,7 +54,7 @@ let frameState: { sidebar: chrome.flechaPrivate.SidebarMode; overlay: boolean; s
 let resizing: number | undefined;
 const windowId = surface === 'window' && framed ? chrome.flechaPrivate.getWindowId() : undefined;
 let appliedFrame: { background: string; sidebarWidth: number; sidebar: chrome.flechaPrivate.SidebarMode; overlay: boolean } | undefined;
-let appliedFullscreen: boolean | undefined;
+let appliedFullscreen: { value: boolean } | undefined;
 function applyFrame() {
   if (!windowId || !frameState || !lastState) return;
   const background = spaceTint(lastState.tint, systemDark.matches);
@@ -64,11 +64,15 @@ function applyFrame() {
   if (!appliedFrame || appliedFrame.background !== background || appliedFrame.sidebarWidth !== sidebarWidth ||
       appliedFrame.sidebar !== frame.sidebar || appliedFrame.overlay !== frame.overlay) {
     const next = appliedFrame = { ...frame, background, sidebarWidth };
-    void windowId.then(id => chrome.flechaPrivate.setFrame(next, id));
+    void windowId.then(id => chrome.flechaPrivate.setFrame(next, id)).catch(() => {
+      if (appliedFrame === next) appliedFrame = undefined;
+    });
   }
-  if (appliedFullscreen !== sidebarInPageFullscreen && typeof chrome.flechaPrivate.setSidebarInPageFullscreen === 'function') {
-    appliedFullscreen = sidebarInPageFullscreen;
-    void windowId.then(id => chrome.flechaPrivate.setSidebarInPageFullscreen(sidebarInPageFullscreen, id));
+  if (appliedFullscreen?.value !== sidebarInPageFullscreen && typeof chrome.flechaPrivate.setSidebarInPageFullscreen === 'function') {
+    const next = appliedFullscreen = { value: sidebarInPageFullscreen };
+    void windowId.then(id => chrome.flechaPrivate.setSidebarInPageFullscreen(next.value, id)).catch(() => {
+      if (appliedFullscreen === next) appliedFullscreen = undefined;
+    });
   }
 }
 on('frame', (state) => {

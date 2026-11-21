@@ -26,9 +26,20 @@ test('cosmetic CSS keeps independent selectors, cross-list exceptions and site e
   await buildAdblock(out, { cache: path.join(out, 'cache'), download: url =>
     response(subscription(url, url === LISTS.easylist ? list : privacy)) });
   assert.equal(await fs.readFile(path.join(out, 'rules/cosmetic.css'), 'utf8'),
-    '.ad{display:none!important}.unsupported:unknown(){display:none!important}[data-text="two words"]{display:none!important}');
+    '.ad{display:none!important}\n.unsupported:unknown(){display:none!important}\n[data-text="two words"]{display:none!important}');
   assert.deepEqual(JSON.parse(await fs.readFile(path.join(out, 'rules/cosmetic-exclude.json'))),
     ['*://site.example/*', '*://*.site.example/*']);
+});
+
+test('a selector after an unterminated string still gets its own cosmetic rule and line', async t => {
+  const out = await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-cosmetic-'));
+  t.after(() => fs.rm(out, { recursive: true, force: true }));
+  const escaped = String.raw`[data-ad="escaped\" quote"]/* unmatched ' in comment */`;
+  const list = ['/network', `##${escaped}`, '##[data-ad="unterminated]', '##.next-ad'].join('\n');
+  await buildAdblock(out, { cache: path.join(out, 'cache'), download: url =>
+    response(subscription(url, url === LISTS.easylist ? list : '/tracker')) });
+  assert.equal(await fs.readFile(path.join(out, 'rules/cosmetic.css'), 'utf8'),
+    `${escaped}{display:none!important}\n.next-ad{display:none!important}`);
 });
 
 test('reverse download completion preserves EasyList priority, rule IDs and the shared budget', async t => {

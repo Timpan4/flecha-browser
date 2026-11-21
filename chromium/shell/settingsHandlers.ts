@@ -8,6 +8,7 @@ import type { Store } from '../shared/store';
 import { applySettings, renewAgentToken, settingsView } from './lib/settingsCore';
 import { TabManager, type AskOptions, type TabsMenuRequest, type TabsMenuRun } from './lib/tabManager';
 import { broadcast, handle, settingsOpen } from './hub';
+import type { LiveTabs } from './liveTabs';
 
 export interface SettingsContext {
   store: Store;
@@ -17,8 +18,8 @@ export interface SettingsContext {
   unload(tabIds: string[]): void;
   /** Sends every page the new state, as after any change from the sidebar. */
   broadcastState(): void;
-  /** Whether a Flecha tab has a live Chromium tab. Without it, Tabs & Spaces shows every tab as closed. */
-  isOpen?(tabId: string): boolean;
+  /** Open Chromium tabs, including those still being set up. */
+  liveTabs: LiveTabs;
   /** Navigates a Flecha tab's live Chromium tab. Without it, the tab is unloaded and reopens at the new address. */
   load?(tabId: string, url: string): void;
   /** The agent bridge's address while it runs (nativeHost.ts). */
@@ -59,7 +60,7 @@ export function registerSettings(ctx: SettingsContext) {
     });
 
   const tabs = new TabManager(store, () => ctx.windowId?.(), {
-    isOpen: (tabId) => ctx.isOpen?.(tabId) ?? false,
+    isOpen: (tabId) => ctx.liveTabs.has(tabId),
     load: (tabId, url) => (ctx.load ? ctx.load(tabId, url) : ctx.unload([tabId])),
     destroyView: (tabId) => ctx.unload([tabId]),
     show: (tabId) => {
@@ -76,6 +77,7 @@ export function registerSettings(ctx: SettingsContext) {
     push: (view) => broadcast('settings:tabs', view),
     hasView: settingsOpen,
   });
+  ctx.liveTabs.onMembershipChange = () => tabs.refresh();
 
   // The download folder and "ask where to save" are Chromium's prefs (patch 0058); the Store
   // keeps a copy for Settings to show.
