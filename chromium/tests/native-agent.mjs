@@ -1414,8 +1414,8 @@ try {
     globalThis.placeholderGate = new Promise(resolve => { globalThis.releasePlaceholder = resolve; });
     globalThis.bothCloseLookups = new Promise(resolve => { globalThis.notifyBothCloseLookups = resolve; });
     globalThis.placeholderCreateCount = 0;
-    globalThis.failedClosePlaceholderRemoved = undefined;
-    globalThis.observeFailedCloseRemoval = undefined;
+    globalThis.failedClosePlaceholderId = undefined;
+    globalThis.failedCloseRemoval = undefined;
     let closeLookups = 0;
     chrome.tabs.create = async (options) => {
       if (options.active !== false || options.url) return placeholderApis[0](options);
@@ -1423,14 +1423,7 @@ try {
       notifyPlaceholderStarted();
       await placeholderGate;
       const placeholder = await placeholderApis[0](options);
-      failedClosePlaceholderRemoved = new Promise(resolve => {
-        observeFailedCloseRemoval = (id) => {
-          if (id !== placeholder.id) return;
-          chrome.tabs.onRemoved.removeListener(observeFailedCloseRemoval);
-          resolve(id);
-        };
-        chrome.tabs.onRemoved.addListener(observeFailedCloseRemoval);
-      });
+      failedClosePlaceholderId = placeholder.id;
       return placeholder;
     };
     chrome.tabs.get = async (id) => {
@@ -1438,8 +1431,12 @@ try {
       if (id === target && ++closeLookups === 2) notifyBothCloseLookups();
       return tab;
     };
-    chrome.tabs.remove = (...args) => args[0] === target
-      ? Promise.reject(new Error('Injected concurrent close refusal')) : placeholderApis[2](...args);
+    chrome.tabs.remove = (...args) => {
+      if (args[0] === target) return Promise.reject(new Error('Injected concurrent close refusal'));
+      const removal = placeholderApis[2](...args);
+      if (args[0] === failedClosePlaceholderId) failedCloseRemoval = removal;
+      return removal;
+    };
   })()`);
   const firstClose = client.callTool({ name: 'close_tab', arguments: { tabId: closing, allowVisibleTab: true } });
   let secondClose;
@@ -1453,16 +1450,17 @@ try {
       assert.match(refusal.content[0].text, /Injected concurrent close refusal/);
     }
     assert.equal(await evaluate(worker, 'placeholderCreateCount'), 1);
-    const removedId = await evaluate(worker, 'failedClosePlaceholderRemoved');
-    assert.ok(Number.isInteger(removedId));
-    assert.equal(await evaluate(worker, `chrome.tabs.query({}).then(tabs => tabs.some(tab => tab.id === ${removedId}))`), false);
+    // A page read waits for shell sync, which should have queued replacement removal.
+    await call('read_page', { tabId: closing });
+    const placeholderId = await evaluate(worker, 'failedClosePlaceholderId');
+    assert.ok(Number.isInteger(placeholderId));
+    assert.equal(await evaluate(worker, 'failedCloseRemoval !== undefined'), true, `Shell sync did not remove replacement tab ${placeholderId}`);
+    await evaluate(worker, 'failedCloseRemoval');
+    assert.equal(await evaluate(worker, `chrome.tabs.query({}).then(tabs => tabs.some(tab => tab.id === ${placeholderId}))`), false,
+      `Replacement tab ${placeholderId} remained after removal`);
     await nativeActive(closingUrl);
   } finally {
-    await evaluate(worker, `
-      releasePlaceholder();
-      [chrome.tabs.create, chrome.tabs.get, chrome.tabs.remove] = placeholderApis;
-      if (observeFailedCloseRemoval) chrome.tabs.onRemoved.removeListener(observeFailedCloseRemoval);
-    `);
+    await evaluate(worker, 'releasePlaceholder(); [chrome.tabs.create, chrome.tabs.get, chrome.tabs.remove] = placeholderApis;');
     await Promise.allSettled([firstClose, secondClose]);
   }
   console.log('PASS simultaneous failed closes share and remove one replacement tab');
