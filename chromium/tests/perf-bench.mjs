@@ -10,7 +10,6 @@ import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { parseArgs, promisify } from 'node:util';
-import { applyStateUpdate } from '../shell/stateUpdates.ts';
 
 const exec = promisify(execFile);
 const extension = 'chrome-extension://abdiaepfgbbhdjaecjipmaailijaaide/';
@@ -351,6 +350,17 @@ function instrument(portName, applyUpdate) {
   port.postMessage({ type: 'cmd', name: 'ready', args: [] });
 }
 
+// Mirrors the sidebar's wire reducer in stateUpdates.ts and runs inside the benchmark page.
+function applyStateUpdate(state, update) {
+  const next = { ...state, ...update.fields };
+  for (const key of update.cleared) Reflect.deleteProperty(next, key);
+  if (update.removed.length || Object.keys(update.tabs).length) {
+    next.tabs = { ...state.tabs, ...update.tabs };
+    for (const id of update.removed) delete next.tabs[id];
+  }
+  return next;
+}
+
 export function sidebarInstrument(portName) {
   return `(${instrument.toString()})(${JSON.stringify(portName)}, ${applyStateUpdate.toString()})`;
 }
@@ -600,6 +610,7 @@ async function run({ binary, shellDir, statePort, profile, display, port, ticksP
   await fs.mkdir(env.HOME);
   await fs.mkdir(env.XDG_RUNTIME_DIR, { mode: 0o700 });
   let browser;
+  let primaryError;
   let phase = 'cold startup';
   try {
     browser = new Browser(binary, shellDir, profile, env, signal);
@@ -646,9 +657,17 @@ async function run({ binary, shellDir, statePort, profile, display, port, ticksP
     await browser.close();
     return { version: cold.version, cold: cold.timings, warm: warm.timings, switches: samples, idle, memory, adblock };
   } catch (error) {
-    throw new Error(`Benchmark failed during ${phase}: ${error.message}`, { cause: error });
+    primaryError = new Error(`Benchmark failed during ${phase}: ${error.message}`, { cause: error });
+    throw primaryError;
   } finally {
-    await browser?.dispose();
+    try {
+      await browser?.dispose();
+    } catch (cleanupError) {
+      if (primaryError) {
+        throw new AggregateError([primaryError, cleanupError], `Benchmark failed during ${phase} and browser cleanup failed`);
+      }
+      throw cleanupError;
+    }
   }
 }
 
@@ -855,7 +874,7 @@ async function main(args) {
   }
 }
 
-if (import.meta.main) {
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const { values: args } = parseArgs({
     options: {
       chrome: { type: 'string' },

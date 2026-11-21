@@ -52,11 +52,17 @@ on('site-icons', (icons: Record<string, string>) => {
 let frameState: { sidebar: chrome.flechaPrivate.SidebarMode; overlay: boolean; sidebarInPageFullscreen: boolean } | undefined;
 /** The width the sidebar is being dragged to, until the saved state has it. */
 let resizing: number | undefined;
-const windowId = surface === 'window' && framed ? chrome.flechaPrivate.getWindowId() : undefined;
+let windowId: Promise<number> | undefined;
+function getWindowId() {
+  return windowId ??= chrome.flechaPrivate.getWindowId().catch(error => {
+    windowId = undefined;
+    throw error;
+  });
+}
 let appliedFrame: { background: string; sidebarWidth: number; sidebar: chrome.flechaPrivate.SidebarMode; overlay: boolean } | undefined;
 let appliedFullscreen: { value: boolean } | undefined;
 function applyFrame() {
-  if (!windowId || !frameState || !lastState) return;
+  if (surface !== 'window' || !framed || !frameState || !lastState) return;
   const background = spaceTint(lastState.tint, systemDark.matches);
   const sidebarWidth = resizing ?? lastState.sidebarWidth ?? SIDEBAR_DEFAULT_WIDTH;
   const { sidebarInPageFullscreen, ...frame } = frameState;
@@ -64,13 +70,13 @@ function applyFrame() {
   if (!appliedFrame || appliedFrame.background !== background || appliedFrame.sidebarWidth !== sidebarWidth ||
       appliedFrame.sidebar !== frame.sidebar || appliedFrame.overlay !== frame.overlay) {
     const next = appliedFrame = { ...frame, background, sidebarWidth };
-    void windowId.then(id => chrome.flechaPrivate.setFrame(next, id)).catch(() => {
+    void getWindowId().then(id => chrome.flechaPrivate.setFrame(next, id)).catch(() => {
       if (appliedFrame === next) appliedFrame = undefined;
     });
   }
   if (appliedFullscreen?.value !== sidebarInPageFullscreen && typeof chrome.flechaPrivate.setSidebarInPageFullscreen === 'function') {
     const next = appliedFullscreen = { value: sidebarInPageFullscreen };
-    void windowId.then(id => chrome.flechaPrivate.setSidebarInPageFullscreen(next.value, id)).catch(() => {
+    void getWindowId().then(id => chrome.flechaPrivate.setSidebarInPageFullscreen(next.value, id)).catch(() => {
       if (appliedFullscreen === next) appliedFullscreen = undefined;
     });
   }

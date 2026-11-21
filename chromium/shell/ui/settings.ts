@@ -26,8 +26,8 @@ for (const el of document.querySelectorAll<HTMLElement>('i[data-icon]')) el.repl
 
 let lastShown = 'general';
 const lazyPanes = new Map([
-  ['tabs-spaces', lazySettingsPane(() => import('./tabsPane.js').then(m => m.setupTabsPane(icon)))],
-  ['video', lazySettingsPane(() => import('./vsrPane.js').then(m => m.setupVsrPane(api)))],
+  ['tabs-spaces', lazySettingsPane(() => import('./tabsPane.js'), m => m.setupTabsPane(icon))],
+  ['video', lazySettingsPane(() => import('./vsrPane.js'), m => m.setupVsrPane(api))],
 ]);
 
 function showPane(name: string) {

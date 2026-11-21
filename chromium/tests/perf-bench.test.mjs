@@ -1,10 +1,19 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { runInNewContext } from 'node:vm';
 import { bundle, sidebarInstrument, waitForBrowserProcesses } from './perf-bench.mjs';
+
+test('the benchmark CLI prints usage without TypeScript flags', () => {
+  const stdout = execFileSync(process.execPath, ['chromium/tests/perf-bench.mjs', '--help'], {
+    encoding: 'utf8',
+    env: { ...process.env, NODE_OPTIONS: '' },
+  });
+  assert.match(stdout, /^Usage: node chromium\/tests\/perf-bench\.mjs --chrome /);
+});
 
 test('the benchmark uses legacy snapshots or sidebar deltas according to the bundled worker', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-perf-shell-'));

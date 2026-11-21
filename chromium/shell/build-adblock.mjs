@@ -283,12 +283,13 @@ function convertList(text) {
   return { rules, genericHide, hideExceptions, exemptSites };
 }
 
-function selectorHasClosedStringsAndComments(selector) {
+function selectorHasBalancedSyntax(selector) {
   let quote;
+  const closers = [];
   for (let i = 0; i < selector.length; i++) {
     const char = selector[i];
     if (char === '\\') {
-      i++; // An escaped quote or slash does not start or end a string or comment.
+      i++; // Escaped characters do not affect selector structure.
     } else if (quote) {
       if (char === quote) quote = undefined;
     } else if (char === '"' || char === "'") {
@@ -297,9 +298,13 @@ function selectorHasClosedStringsAndComments(selector) {
       const end = selector.indexOf('*/', i + 2);
       if (end === -1) return false;
       i = end + 1;
+    } else if (char === '[' || char === '(') {
+      closers.push(char === '[' ? ']' : ')');
+    } else if (char === ']' || char === ')') {
+      if (closers.pop() !== char) return false;
     }
   }
-  return quote === undefined;
+  return quote === undefined && closers.length === 0;
 }
 
 /** Writes dist/rules. Exported for build.mjs; also runs on its own. */
@@ -332,10 +337,9 @@ export async function buildAdblock(out, { refresh = false, cache = cacheDir, dow
   // One rule per selector: a selector Chromium doesn't know drops only its own rule, and Blink
   // files each rule under its id, class or tag. Inside :is() lists every selector was checked
   // against every element on each style recalc (perf findings, 2026-10-26).
-  // A newline ends a bad string token, but a surrounding attribute or function
-  // can still consume later rules. Omit selectors with broken strings or comments.
+  // Unclosed strings, comments, attributes or functions can consume later rules.
   const selectors = [...hide].filter((s) =>
-    !hideExceptions.has(s) && !s.includes('{') && !s.includes('}') && selectorHasClosedStringsAndComments(s));
+    !hideExceptions.has(s) && !s.includes('{') && !s.includes('}') && selectorHasBalancedSyntax(s));
   // A trailing backslash must not escape the opening brace and consume the next rule.
   const rules = selectors.map((s) => s + (s.endsWith('\\') ? ' ' : '') + '{display:none!important}');
   fs.writeFileSync(path.join(rulesDir, 'cosmetic.css'), rules.join('\n'));

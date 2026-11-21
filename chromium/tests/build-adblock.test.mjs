@@ -31,11 +31,14 @@ test('cosmetic CSS keeps independent selectors, cross-list exceptions and site e
     ['*://site.example/*', '*://*.site.example/*']);
 });
 
-test('a selector after an unterminated string still gets its own cosmetic rule and line', async t => {
+test('malformed cosmetic selectors cannot consume the next rule', async t => {
   const out = await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-cosmetic-'));
   t.after(() => fs.rm(out, { recursive: true, force: true }));
-  const escaped = String.raw`[data-ad="escaped\" quote"]/* unmatched ' in comment */`;
-  const list = ['/network', `##${escaped}`, '##[data-ad="unterminated]', '##.next-ad'].join('\n');
+  const escaped = String.raw`:is([data-ad="escaped\" quote ] )"], .ad\[\()/* unmatched ' [ ( */`;
+  const list = [
+    '/network', `##${escaped}`, '##[data-ad="unterminated]', '##.ad/* unterminated',
+    '##[data-ad=test', '##:is(.ad', '##.ad]', '##.ad)', '##:is([data-ad=test)]', '##.next-ad',
+  ].join('\n');
   await buildAdblock(out, { cache: path.join(out, 'cache'), download: url =>
     response(subscription(url, url === LISTS.easylist ? list : '/tracker')) });
   assert.equal(await fs.readFile(path.join(out, 'rules/cosmetic.css'), 'utf8'),

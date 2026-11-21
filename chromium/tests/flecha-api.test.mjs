@@ -23,13 +23,18 @@ test('the toolbar overrides the surface and only state consumers use the sidebar
   ]) assert.equal(portForPage(path, surface), expected);
 });
 
-test('native frame and fullscreen failures retry without dropping newer requests', async t => {
+test('native frame and fullscreen recover from lookup and request failures', async t => {
   const calls = { frame: [], fullscreen: [] };
-  const request = (kind, value) => {
+  const request = (kind, value, id) => {
+    assert.equal(id, 41);
     const response = Promise.withResolvers();
     calls[kind].push({ value, ...response });
     return response.promise;
   };
+  const firstLookup = Promise.withResolvers();
+  const getWindowId = t.mock.fn(async () => 41);
+  // windowUi independently looks up its window ID when the module loads.
+  getWindowId.mock.mockImplementationOnce(() => firstLookup.promise, 1);
   let receive;
   globalThis.location = { pathname: '/window.html' };
   globalThis.document = { documentElement: { dataset: { surface: 'window' }, style: { setProperty() {} } } };
@@ -38,9 +43,9 @@ test('native frame and fullscreen failures retry without dropping newer requests
   globalThis.chrome = {
     runtime: { connect: () => ({ onMessage: { addListener: listener => { receive = listener; } } }) },
     flechaPrivate: {
-      getWindowId: async () => 41,
-      setFrame: value => request('frame', value.overlay),
-      setSidebarInPageFullscreen: value => request('fullscreen', value),
+      getWindowId,
+      setFrame: (value, id) => request('frame', value.overlay, id),
+      setSidebarInPageFullscreen: (value, id) => request('fullscreen', value, id),
     },
   };
   t.mock.method(globalThis, 'setInterval', () => {});
@@ -48,6 +53,18 @@ test('native frame and fullscreen failures retry without dropping newer requests
   const emit = (name, value) => receive({ type: 'event', name, args: [value] });
   const frame = (enabled) => emit('frame', { sidebar: 'docked', overlay: enabled, sidebarInPageFullscreen: enabled });
   emit('state', { tint: '#ffffff', sidebarWidth: 260 });
+  await t.test('both calls share a fresh window ID lookup after rejection', async () => {
+    frame(false);
+    assert.equal(getWindowId.mock.callCount(), 2);
+    firstLookup.reject(new Error('Window ID unavailable'));
+    await setImmediate();
+    assert.deepEqual(calls, { frame: [], fullscreen: [] });
+    frame(false);
+    await setImmediate();
+    assert.equal(getWindowId.mock.callCount(), 3);
+    assert.equal(calls.frame.length, 1);
+    assert.equal(calls.fullscreen.length, 1);
+  });
   frame(false);
   await setImmediate();
   for (const kind of Object.values(calls)) {
