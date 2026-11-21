@@ -3,5 +3,5 @@ declare namespace chrome.tabs {
   function reload(tabId: number, properties: ReloadProperties, backgroundOnly: boolean, deadline?: number): Promise<void>;
   function goBack(tabId: number, backgroundOnly: boolean, deadline?: number): Promise<void>;
   function goForward(tabId: number, backgroundOnly: boolean, deadline?: number): Promise<void>;
-  function remove(tabId: number, backgroundOnly: boolean, deadline?: number, replacementTabId?: number): Promise<void>;
+  function remove(tabId: number, backgroundOnly: boolean, deadline?: number, replacementTabId?: number, expectedWindowId?: number): Promise<void>;
 }

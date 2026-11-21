@@ -428,12 +428,29 @@ try {
     await evaluate(agentPage, "({ counter, field: document.querySelector('#field').value, keys: keys.filter(k => k === 'Enter' || k === 'Escape') })"),
     { counter: 1, field: 'from the agent', keys: ['Enter', 'Escape'] },
   );
-  await evaluate(agentPage, `window.dateChanges = []; document.body.addEventListener('change', event => {
-    if (event.target.id === 'date') dateChanges.push(event.target.value);
-  }); void 0;`);
+  await evaluate(agentPage, `(() => {
+    const date = document.querySelector('#date');
+    const { get, set } = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+    let tracked = date.value;
+    Object.defineProperty(date, 'value', {
+      get,
+      set(value) {
+        set.call(this, value);
+        tracked = this.value;
+      },
+    });
+    window.dateChanges = [];
+    document.body.addEventListener('change', event => {
+      if (event.target === date && date.value !== tracked) {
+        tracked = date.value;
+        dateChanges.push(tracked);
+      }
+    });
+  })()`);
   for (let i = 0; i < 2; i++) await call('type', { tabId: agentTab, selector: '#date', text: '2026-11-17', clear: true });
   assert.deepEqual(await evaluate(agentPage, "({ value: document.querySelector('#date').value, changes: dateChanges })"),
     { value: '2026-11-17', changes: ['2026-11-17'] });
+  console.log('PASS date replacement reaches a value-tracking change handler once');
   for (const property of ['readOnly', 'disabled']) {
     await evaluate(agentPage, `document.querySelector('#date')[${JSON.stringify(property)}] = true`);
     const refused = await client.callTool({ name: 'type', arguments: { tabId: agentTab, selector: '#date', text: '2026-12-01', clear: true } });
@@ -575,6 +592,28 @@ try {
     }
   }
   console.log('PASS both halves of a failed input gesture settle before focus cleanup');
+  await evaluate(agentPage, `
+    globalThis.nativeKeyReleases = [];
+    addEventListener('keyup', event => nativeKeyReleases.push([event.key, event.isTrusted]));
+    void 0;
+  `);
+  await evaluate(worker, `
+    globalThis.beforeNativeGesture = chrome.debugger.sendCommand;
+    chrome.debugger.sendCommand = (...args) => {
+      if (args[1] === 'Input.dispatchKeyEvent') args[2] = { ...args[2], modifiers: 'invalid' };
+      return beforeNativeGesture(...args);
+    };
+    void 0;
+  `);
+  try {
+    const failedPress = await client.callTool({ name: 'press_key', arguments: { tabId: agentTab, key: 'Escape' } });
+    assert.equal(failedPress.isError, true);
+    assert.match(failedPress.content[0].text, /Invalid parameters/i);
+    assert.deepEqual(await evaluate(agentPage, 'nativeKeyReleases'), [['Escape', true]]);
+  } finally {
+    await evaluate(worker, 'chrome.debugger.sendCommand = beforeNativeGesture;');
+  }
+  console.log('PASS Chromium delivers a trusted key release when the paired press fails');
   await evaluate(worker, `
     globalThis.focusCleanupCommand = chrome.debugger.sendCommand;
     globalThis.focusCleanupDetach = chrome.debugger.detach;
@@ -1133,6 +1172,40 @@ try {
   }
   console.log('PASS a delayed read refuses a tab transferred to a Flechinha');
 
+  const closeTransferUrl = base + '/agent?close-transfer';
+  const closeTransferTab = JSON.parse((await call('open_tab', { url: closeTransferUrl })).content[0].text).tabId;
+  await evaluate(worker, `(async () => {
+    globalThis.closeTransferNativeId = (await chrome.tabs.query({})).find(tab => tab.url === ${JSON.stringify(closeTransferUrl)}).id;
+    globalThis.beforeCloseTransfer = chrome.tabs.remove;
+    globalThis.closeTransferReached = new Promise(resolve => { globalThis.notifyCloseTransfer = resolve; });
+    globalThis.closeTransferGate = new Promise(resolve => { globalThis.releaseCloseTransfer = resolve; });
+    chrome.tabs.remove = async (...args) => {
+      if (args[0] === closeTransferNativeId) {
+        if (!Number.isInteger(args[4])) throw new Error('Missing expected window for removal');
+        notifyCloseTransfer();
+        await closeTransferGate;
+      }
+      return beforeCloseTransfer(...args);
+    };
+  })()`);
+  const closeTransfer = client.callTool({ name: 'close_tab', arguments: { tabId: closeTransferTab, allowVisibleTab: true } });
+  let closeTransferWindow;
+  try {
+    await Promise.race([evaluate(worker, 'closeTransferReached'), closeTransfer.then(() => assert.fail('Close finished before transfer'))]);
+    closeTransferWindow = await rpc('openFlechinha', undefined, closeTransferTab);
+    await stateWhere(`s => !s.tabs[${JSON.stringify(closeTransferTab)}]`);
+    await evaluate(worker, 'releaseCloseTransfer()');
+    const refused = await closeTransfer;
+    assert.equal(refused.isError, true);
+    assert.match(refused.content[0].text, /Tab ownership changed/);
+    assert.equal(await evaluate(worker, 'chrome.tabs.get(closeTransferNativeId).then(tab => tab.windowId)'), closeTransferWindow);
+  } finally {
+    await evaluate(worker, 'releaseCloseTransfer(); chrome.tabs.remove = beforeCloseTransfer;');
+    await Promise.allSettled([closeTransfer]);
+    if (closeTransferWindow !== undefined) await evaluate(worker, `chrome.windows.remove(${closeTransferWindow}).catch(() => undefined)`);
+  }
+  console.log('PASS Chromium refuses a close dispatched after the tab moves to a Flechinha');
+
   await evaluate(worker, `
     globalThis.createBeforeClose = chrome.tabs.create;
     globalThis.creatingBeforeClose = new Promise(resolve => { globalThis.notifyCloseCreation = resolve; });
@@ -1334,6 +1407,49 @@ try {
   await nativeActive(closingUrl);
   console.log('PASS an approved close checks its deadline after looking up the native tab');
 
+  await evaluate(worker, `(async () => {
+    const target = (await chrome.tabs.query({})).find(tab => tab.url === ${JSON.stringify(closingUrl)}).id;
+    globalThis.placeholderApis = [chrome.tabs.create, chrome.tabs.get, chrome.tabs.remove];
+    globalThis.placeholderStarted = new Promise(resolve => { globalThis.notifyPlaceholderStarted = resolve; });
+    globalThis.placeholderGate = new Promise(resolve => { globalThis.releasePlaceholder = resolve; });
+    globalThis.bothCloseLookups = new Promise(resolve => { globalThis.notifyBothCloseLookups = resolve; });
+    globalThis.placeholderCreateCount = 0;
+    let closeLookups = 0;
+    chrome.tabs.create = async (options) => {
+      if (options.active === false && !options.url) {
+        placeholderCreateCount++;
+        notifyPlaceholderStarted();
+        await placeholderGate;
+      }
+      return placeholderApis[0](options);
+    };
+    chrome.tabs.get = async (id) => {
+      const tab = await placeholderApis[1](id);
+      if (id === target && ++closeLookups === 2) notifyBothCloseLookups();
+      return tab;
+    };
+    chrome.tabs.remove = (...args) => args[0] === target
+      ? Promise.reject(new Error('Injected concurrent close refusal')) : placeholderApis[2](...args);
+  })()`);
+  const firstClose = client.callTool({ name: 'close_tab', arguments: { tabId: closing, allowVisibleTab: true } });
+  let secondClose;
+  try {
+    await Promise.race([evaluate(worker, 'placeholderStarted'), firstClose.then(() => assert.fail('Close did not create a replacement'))]);
+    secondClose = client.callTool({ name: 'close_tab', arguments: { tabId: closing, allowVisibleTab: true } });
+    await Promise.race([evaluate(worker, 'bothCloseLookups'), secondClose.then(() => assert.fail('Close did not reach its lookup'))]);
+    await evaluate(worker, 'releasePlaceholder()');
+    for (const refusal of await Promise.all([firstClose, secondClose])) {
+      assert.equal(refusal.isError, true);
+      assert.match(refusal.content[0].text, /Injected concurrent close refusal/);
+    }
+    assert.equal(await evaluate(worker, 'placeholderCreateCount'), 1);
+    await nativeActive(closingUrl);
+  } finally {
+    await evaluate(worker, 'releasePlaceholder(); [chrome.tabs.create, chrome.tabs.get, chrome.tabs.remove] = placeholderApis;');
+    await Promise.allSettled([firstClose, secondClose]);
+  }
+  console.log('PASS simultaneous approved closes share one replacement tab');
+
   await evaluate(worker, `
     globalThis.updateBeforeExpiry = chrome.tabs.update;
     globalThis.removeBeforeExpiry = chrome.tabs.remove;
@@ -1345,10 +1461,10 @@ try {
       if (!Number.isFinite(deadline)) throw new Error('Missing native navigation deadline');
       return updateBeforeExpiry(id, properties, backgroundOnly, 0);
     };
-    chrome.tabs.remove = (id, backgroundOnly, deadline, replacement) => {
+    chrome.tabs.remove = (id, backgroundOnly, deadline, replacement, expectedWindow) => {
       if (!Number.isFinite(deadline)) return removeBeforeExpiry(id);
       if (!Number.isInteger(replacement)) throw new Error('Missing native replacement tab');
-      return removeBeforeExpiry(id, backgroundOnly, 0, replacement);
+      return removeBeforeExpiry(id, backgroundOnly, 0, replacement, expectedWindow);
     };
     void 0;
   `);

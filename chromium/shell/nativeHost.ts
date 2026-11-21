@@ -294,7 +294,7 @@ export function registerNativeHost(ctx: NativeHostContext) {
 
   type UseTab = {
     signal: AbortSignal;
-    deadline?: number;
+    deadline: number;
     requireCurrent(): void;
     tab(chromeId: number, signal?: AbortSignal): Promise<void>;
     assertOpen?: () => void;
@@ -305,23 +305,25 @@ export function registerNativeHost(ctx: NativeHostContext) {
   const pendingDebuggerResets = new Map<number, Promise<void>>();
   const tabClosures = new WeakMap<TabInfo, symbol>();
 
-  async function runTool<Name extends AgentToolName>(name: Name, args: AgentToolArgs[Name], deadline?: number): Promise<AgentResult> {
+  async function runTool<Name extends AgentToolName>(name: Name, args: AgentToolArgs[Name], hostDeadline?: number): Promise<AgentResult> {
     const commands = new Set<Promise<unknown>>();
     const pendingReplies = new Set<Promise<unknown>>();
     let work: Promise<AgentResult> | undefined;
     let runningTab: number | undefined;
     let unlock: (() => void) | undefined;
     const timeout = toolTimeout('timeoutMs' in args ? args.timeoutMs : undefined);
+    const now = Date.now();
+    const deadline = Math.min(now + timeout, hostDeadline ?? Infinity);
     try {
-      const remaining = deadline === undefined ? timeout : Math.min(timeout, deadline - Date.now());
-      if (remaining <= 0) throw new Error('The agent request expired.');
+      const remaining = deadline - now;
+      if (!Number.isFinite(remaining) || remaining <= 0) throw new Error('The agent request expired.');
       return await withDeadline(remaining, (signal) => {
         const use: UseTab = {
           signal,
           deadline,
           requireCurrent() {
             signal.throwIfAborted();
-            if (deadline !== undefined && Date.now() >= deadline) throw new Error('The agent request expired.');
+            if (Date.now() >= deadline) throw new Error('The agent request expired.');
           },
           async tab(chromeId, deadline = signal) {
             deadline.throwIfAborted();
@@ -352,7 +354,7 @@ export function registerNativeHost(ctx: NativeHostContext) {
               use.assertOpen?.();
             }
             const target = { tabId: runningTab };
-            const guard = cleanup ? undefined : options ?? (deadline === undefined ? undefined : { deadline });
+            const guard = cleanup ? undefined : options ?? { deadline };
             const reply = guard ? nativeDebugger.sendCommand(target, method, params, guard) : chrome.debugger.sendCommand(target, method, params);
             pendingReplies.add(reply);
             const replied = () => pendingReplies.delete(reply);
@@ -394,7 +396,7 @@ export function registerNativeHost(ctx: NativeHostContext) {
     chromeId: number;
     use: UseTab;
     backgroundOnly?: boolean;
-    deadline?: number;
+    deadline: number;
     checkEditable?: () => Promise<EditableState>;
     requireCurrent: () => void;
   };
@@ -940,7 +942,7 @@ export function registerNativeHost(ctx: NativeHostContext) {
     return (method, params, releaseParams) => {
       tab.requireCurrent();
       const { backgroundOnly, deadline, use } = tab;
-      const options = backgroundOnly || deadline !== undefined || releaseParams ? { backgroundOnly, deadline, releaseParams } : undefined;
+      const options = { backgroundOnly, deadline, releaseParams };
       return use.command(method, params, use.signal, false, options, documentLeft).catch(async (error: unknown) => {
         throw await attachRefused(tab.chromeId, error, use.signal);
       });
@@ -993,15 +995,15 @@ export function registerNativeHost(ctx: NativeHostContext) {
       await debuggerFor(tab);
       const send = sender(tab, left);
       tab.requireCurrent();
-      const remaining = deadline === undefined ? undefined : deadline - Date.now();
-      if (remaining !== undefined && remaining <= 0) throw new Error('The agent request expired.');
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new Error('The agent request expired.');
       evaluating.set(chromeId, state);
       let timer: ReturnType<typeof setTimeout> | undefined;
       const markExpired = () => { state.expired = true; };
       tab.use.signal.addEventListener('abort', markExpired, { once: true });
       try {
         const command = evaluateWith(send, expression, remaining);
-        if (remaining !== undefined) timer = setTimeout(expire, remaining);
+        timer = setTimeout(expire, remaining);
         return await command;
       } finally {
         tab.use.signal.removeEventListener('abort', markExpired);

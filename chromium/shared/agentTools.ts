@@ -67,7 +67,7 @@ export const AGENT_TOOLS = {
     inputSchema: { tabId, level: z.enum(['error', 'warning', 'info', 'debug']).optional(), limit: z.number().optional() },
   },
   click: {
-    description: 'Click the element matching a CSS selector, with a real mouse event.',
+    description: 'Send a real mouse click at the position of the element matching a CSS selector. Page changes can move the target before dispatch.',
     inputSchema: { tabId, allowVisibleTab, selector: z.string() },
   },
   type: {
@@ -76,7 +76,7 @@ export const AGENT_TOOLS = {
   },
   press_key: { description: 'Press a key such as Enter, Tab, Escape or ArrowDown in a tab.', inputSchema: { tabId, allowVisibleTab, key: z.string() } },
   evaluate: {
-    description: "Run JavaScript in a tab's page and return the result (promises are awaited, values are JSON-serialized). If an evaluation times out while a promise is pending, further edits wait for it to finish or for the page to unload.",
+    description: "Run JavaScript in a tab's page and return the result (promises are awaited, values are JSON-serialized). If an evaluation times out while a promise is pending, retry other operations on that tab after the evaluation settles or the page unloads.",
     inputSchema: { tabId, allowVisibleTab, expression: z.string() },
   },
   wait_for: {

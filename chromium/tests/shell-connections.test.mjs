@@ -792,6 +792,7 @@ test('the agent restores focus, replays idle logs, and recovers a stalled debugg
   let diagnosingRefusal = false;
   let detachPending;
   let evaluationError;
+  const evaluationDeadlines = [];
   const inputFailures = new Map();
   let pendingNavigation = Promise.withResolvers();
   const idleMessage = { type: 'error', args: [{ value: 'Logged while idle' }] };
@@ -845,6 +846,7 @@ test('the agent restores focus, replays idle logs, and recovers a stalled debugg
         }
         if (method === 'Log.disable') logEnabled = false;
         if (method === 'Runtime.evaluate') {
+          evaluationDeadlines.push(options?.deadline);
           if (refusedEvaluation) throw new Error('Cannot attach to this target');
           await readPending?.promise;
           if (evaluationError) return { exceptionDetails: { text: evaluationError } };
@@ -894,6 +896,7 @@ test('the agent restores focus, replays idle logs, and recovers a stalled debugg
   t.mock.timers.tick(59_000);
   await nextTurn();
   assert.equal(host.agentTabsInUse().has(tab.id), true, 'a tool retains its debugger while the host still waits');
+  assert.equal(Number.isFinite(evaluationDeadlines[0]), true, 'a legacy tool message still bounds native dispatch');
   assert.equal(emulatedFocus, false, 'reading a page never emulates focus');
   readPending.resolve();
   await nextTurn();

@@ -192,7 +192,7 @@ index c1378ee..26b4700 100644
 
  // Implements the debugger.getTargets() extension function.
 diff --git a/chrome/browser/extensions/api/tabs/tabs_api.cc b/chrome/browser/extensions/api/tabs/tabs_api.cc
-index a63c327..542acb6 100644
+index a63c327..4834e28 100644
 --- a/chrome/browser/extensions/api/tabs/tabs_api.cc
 +++ b/chrome/browser/extensions/api/tabs/tabs_api.cc
 @@ -12,6 +12,7 @@
@@ -255,19 +255,21 @@ index a63c327..542acb6 100644
    web_contents->GetController().Reload(
        bypass_cache ? content::ReloadType::BYPASSING_CACHE
                     : content::ReloadType::NORMAL,
-@@ -2008,16 +2040,21 @@ ExtensionFunction::ResponseAction TabsRemoveFunction::Run() {
+@@ -2008,16 +2040,24 @@ ExtensionFunction::ResponseAction TabsRemoveFunction::Run() {
    EXTENSION_FUNCTION_VALIDATE(params);
 
    std::string error;
 +  const bool background_only = params->background_only.value_or(false);
    if (params->tab_ids.as_integers) {
-+    if (background_only || params->deadline || params->replacement_tab_id) {
++    if (background_only || params->deadline || params->replacement_tab_id ||
++        params->expected_window_id) {
 +      return RespondNow(Error("A guarded removal requires one tab ID."));
 +    }
      std::vector<int>& tab_ids = *params->tab_ids.as_integers;
      for (int tab_id : tab_ids) {
 -      if (!RemoveTab(tab_id, &error)) {
-+      if (!RemoveTab(tab_id, false, std::nullopt, std::nullopt, &error)) {
++      if (!RemoveTab(tab_id, false, std::nullopt, std::nullopt, std::nullopt,
++                     &error)) {
          return RespondNow(Error(std::move(error)));
        }
      }
@@ -275,30 +277,36 @@ index a63c327..542acb6 100644
      EXTENSION_FUNCTION_VALIDATE(params->tab_ids.as_integer);
 -    if (!RemoveTab(*params->tab_ids.as_integer, &error)) {
 +    if (!RemoveTab(*params->tab_ids.as_integer, background_only,
-+                   params->deadline, params->replacement_tab_id, &error)) {
++                   params->deadline, params->replacement_tab_id,
++                   params->expected_window_id, &error)) {
        return RespondNow(Error(std::move(error)));
      }
    }
-@@ -2033,7 +2070,11 @@ ExtensionFunction::ResponseAction TabsRemoveFunction::Run() {
+@@ -2033,7 +2073,12 @@ ExtensionFunction::ResponseAction TabsRemoveFunction::Run() {
    return RespondLater();
  }
 
 -bool TabsRemoveFunction::RemoveTab(int tab_id, std::string* error) {
 +bool TabsRemoveFunction::RemoveTab(int tab_id,
-+                                   bool background_only,
-+                                   std::optional<double> deadline,
-+                                   std::optional<int> replacement_tab_id,
-+                                   std::string* error) {
++                                  bool background_only,
++                                  std::optional<double> deadline,
++                                  std::optional<int> replacement_tab_id,
++                                  std::optional<int> expected_window_id,
++                                  std::string* error) {
    WindowController* window = nullptr;
    content::WebContents* contents = nullptr;
    if (!tabs_util::GetTabById(tab_id, browser_context(),
-@@ -2069,6 +2110,39 @@ bool TabsRemoveFunction::RemoveTab(int tab_id, std::string* error) {
+@@ -2069,6 +2114,43 @@ bool TabsRemoveFunction::RemoveTab(int tab_id, std::string* error) {
                             /*new_url=*/std::string(), js_callstack());
  #endif
 
 +  if (const char* guard_error =
 +          AgentCommandError(contents, background_only, deadline)) {
 +    *error = guard_error;
++    return false;
++  }
++  if (expected_window_id && window->GetWindowId() != *expected_window_id) {
++    *error = "Tab ownership changed while closing the agent target.";
 +    return false;
 +  }
 +
@@ -332,7 +340,7 @@ index a63c327..542acb6 100644
    // The tab might not immediately close after calling Close() below, so we
    // should wait until WebContentsDestroyed is called before responding.
    web_contents_destroyed_observers_.push_back(
-@@ -2080,6 +2154,14 @@ bool TabsRemoveFunction::RemoveTab(int tab_id, std::string* error) {
+@@ -2080,6 +2162,14 @@ bool TabsRemoveFunction::RemoveTab(int tab_id, std::string* error) {
    AddRef();
    remaining_tabs_count_++;
 
@@ -347,7 +355,7 @@ index a63c327..542acb6 100644
    // There's a chance that the tab is being dragged, or we're in some other
    // nested event loop. This code path ensures that the tab is safely closed
    // under such circumstances, whereas |TabStripModel::CloseWebContentsAt()|
-@@ -3133,6 +3215,12 @@ ExtensionFunction::ResponseAction TabsGoForwardFunction::Run() {
+@@ -3133,6 +3223,12 @@ ExtensionFunction::ResponseAction TabsGoForwardFunction::Run() {
      return RespondNow(Error(std::move(error)));
    }
 
@@ -360,7 +368,7 @@ index a63c327..542acb6 100644
    content::NavigationController& controller = web_contents->GetController();
    if (!controller.CanGoForward()) {
      return RespondNow(Error(tabs_constants::kNotFoundNextPageError));
-@@ -3155,6 +3243,12 @@ ExtensionFunction::ResponseAction TabsGoBackFunction::Run() {
+@@ -3155,6 +3251,12 @@ ExtensionFunction::ResponseAction TabsGoBackFunction::Run() {
      return RespondNow(Error(std::move(error)));
    }
 
@@ -374,10 +382,10 @@ index a63c327..542acb6 100644
    if (!controller.CanGoBack()) {
      return RespondNow(Error(tabs_constants::kNotFoundNextPageError));
 diff --git a/chrome/browser/extensions/api/tabs/tabs_api.h b/chrome/browser/extensions/api/tabs/tabs_api.h
-index 85f383e..07912e1 100644
+index 85f383e..a6758a5 100644
 --- a/chrome/browser/extensions/api/tabs/tabs_api.h
 +++ b/chrome/browser/extensions/api/tabs/tabs_api.h
-@@ -207,7 +207,11 @@ class TabsRemoveFunction : public ExtensionFunction {
+@@ -207,7 +207,12 @@ class TabsRemoveFunction : public ExtensionFunction {
   private:
    ~TabsRemoveFunction() override;
    ResponseAction Run() override;
@@ -386,6 +394,7 @@ index 85f383e..07912e1 100644
 +                 bool background_only,
 +                 std::optional<double> deadline,
 +                 std::optional<int> replacement_tab_id,
++                 std::optional<int> expected_window_id,
 +                 std::string* error);
 
    int remaining_tabs_count_ = 0;
@@ -425,7 +434,7 @@ index 7261b8e..25bf60d 100644
          ],
          "returns_async": {
 diff --git a/chrome/common/extensions/api/tabs.json b/chrome/common/extensions/api/tabs.json
-index dbd3c25..343f5ef 100644
+index dbd3c25..ed2b88b 100644
 --- a/chrome/common/extensions/api/tabs.json
 +++ b/chrome/common/extensions/api/tabs.json
 @@ -693,6 +693,18 @@
@@ -466,7 +475,7 @@ index dbd3c25..343f5ef 100644
            }
          ],
          "returns_async": {"name": "callback", "optional": true, "parameters": []}
-@@ -787,6 +811,25 @@
+@@ -787,6 +811,32 @@
                {"type": "integer", "minimum": 0},
                {"type": "array", "items": {"type": "integer", "minimum": 0}}
              ]
@@ -489,10 +498,17 @@ index dbd3c25..343f5ef 100644
 +            "minimum": 0,
 +            "optional": true,
 +            "description": "If the tab being closed is active, activate this tab in its window after the removal checks pass."
++          },
++          {
++            "type": "integer",
++            "name": "expectedWindowId",
++            "minimum": 0,
++            "optional": true,
++            "description": "Refuses removal if the target tab has moved to a different window."
            }
          ],
          "returns_async": {"name": "callback", "optional": true, "parameters": []}
-@@ -1141,6 +1184,18 @@
+@@ -1141,6 +1191,18 @@
              "optional": true,
              "minimum": 0,
              "description": "The ID of the tab to navigate forward; defaults to the selected tab of the current window."
@@ -511,7 +527,7 @@ index dbd3c25..343f5ef 100644
            }
          ],
          "returns_async": {
-@@ -1160,6 +1215,18 @@
+@@ -1160,6 +1222,18 @@
              "optional": true,
              "minimum": 0,
              "description": "The ID of the tab to navigate back; defaults to the selected tab of the current window."

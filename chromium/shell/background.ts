@@ -609,14 +609,26 @@ async function start() {
   // The tabs that were open before the background (re)started.
   const partitionsKnown = Promise.all([...live].map(([id, chromeId]) => learnPartition(id, chromeId)));
 
+  const placeholderCreations = new Map<number, { created: Promise<number>; active: boolean }>();
   async function makePlaceholder(chromeWindowId: number, active = true) {
+    const pending = placeholderCreations.get(chromeWindowId);
+    if (pending) {
+      const id = await pending.created;
+      if (active && !pending.active) await showPlaceholder(chromeWindowId);
+      return id;
+    }
     creating++;
-    try {
+    const created = (async () => {
       const id = (await chrome.tabs.create({ windowId: chromeWindowId, active })).id!;
       placeholders.set(chromeWindowId, id);
       return id;
+    })();
+    placeholderCreations.set(chromeWindowId, { created, active });
+    try {
+      return await created;
     } finally {
       creating--;
+      placeholderCreations.delete(chromeWindowId);
     }
   }
 
@@ -1683,15 +1695,14 @@ async function start() {
 
   async function removeAgentTab(id: string, chromeId: number, allowVisible: boolean, beforeRemove: () => void, deadline?: number) {
     try {
-      let replacement: number | undefined;
-      if (allowVisible) {
-        const tab = await chrome.tabs.get(chromeId);
-        beforeRemove();
-        if (tab.active) replacement = placeholders.get(tab.windowId) ?? await makePlaceholder(tab.windowId, false);
-      }
+      const tab = await chrome.tabs.get(chromeId);
+      beforeRemove();
+      const replacement = allowVisible && tab.active
+        ? placeholders.get(tab.windowId) ?? await makePlaceholder(tab.windowId, false)
+        : undefined;
       beforeRemove();
       ours.add(chromeId);
-      await chrome.tabs.remove(chromeId, !allowVisible, deadline, replacement);
+      await chrome.tabs.remove(chromeId, !allowVisible, deadline, replacement, tab.windowId);
     } catch (error) {
       ours.delete(chromeId);
       if (allowVisible) sync();
