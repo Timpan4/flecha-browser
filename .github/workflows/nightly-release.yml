@@ -28,6 +28,11 @@ jobs:
           node-version: 26
           cache: npm
       - run: npm ci
+      - uses: actions/cache@v6
+        with:
+          path: chromium/shell/.cache/adblock
+          key: adblock-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: adblock-${{ runner.os }}-
       - run: npm run shell:build
       - run: npm run host:build
       - id: platforms

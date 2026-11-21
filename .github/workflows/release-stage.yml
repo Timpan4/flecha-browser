@@ -19,6 +19,9 @@ on:
       incomplete:
         description: The stage needs another Chromium build job.
         value: ${{ jobs.build.outputs.incomplete }}
+      published:
+        description: The monitor confirmed that the publisher succeeded.
+        value: ${{ jobs.confirm-publication.outputs.published }}
 
 permissions:
   contents: read
@@ -28,9 +31,11 @@ jobs:
   build:
     name: ${{ matrix.platform }} stage ${{ inputs.stage }}
     outputs:
-      incomplete: ${{ steps.checkpoint.outputs.complete == 'false' }}
+      incomplete: ${{ steps.handoff.outputs.incomplete }}
       artifact: ${{ format('{0}-attempt-{1}', steps.portable.outputs.package || steps.compile.outputs.package, github.run_attempt) }}
       artifact-id: ${{ steps.package.outputs.artifact-id }}
+      build-attempt: ${{ steps.handoff.outputs.build-attempt }}
+      build-id: ${{ job.check_run_id }}
       platform: ${{ matrix.platform }}
     strategy:
       fail-fast: false
@@ -119,7 +124,7 @@ jobs:
         env:
           FLECHA_DEPS_ROOT: ${{ steps.pin.outputs.chromium != '' && 'chromium-deps' || '' }}
         run: node chromium/scripts/ci-release.mjs dependencies
-      - name: Prepare Chromium source and toolchains
+      - name: Prepare Chromium source and toolchains, falling back to a cold checkpoint on low disk
         id: prepare
         if: inputs.stage == 0 && steps.portable.outputs.package == ''
         env:
@@ -161,6 +166,7 @@ jobs:
         if: steps.portable.outputs.package == '' && steps.compile.outputs.package == ''
         run: node chromium/scripts/ci-release.mjs checkpoint
       - uses: actions/upload-artifact@v7
+        id: checkpoint-upload
         if: steps.checkpoint.outputs.complete == 'false'
         with:
           name: checkpoint-${{ matrix.platform }}-${{ inputs.stage }}
@@ -169,6 +175,22 @@ jobs:
           if-no-files-found: error
           overwrite: true
           retention-days: 35
+      - name: Require an uploaded checkpoint or package
+        id: handoff
+        shell: bash
+        env:
+          CHECKPOINT_ID: ${{ steps.checkpoint-upload.outputs.artifact-id }}
+          PACKAGE_ID: ${{ steps.package.outputs.artifact-id }}
+        run: |
+          if [[ -n "$CHECKPOINT_ID" && -z "$PACKAGE_ID" ]]; then
+            echo 'incomplete=true' >> "$GITHUB_OUTPUT"
+          elif [[ -n "$PACKAGE_ID" && -z "$CHECKPOINT_ID" ]]; then
+            echo 'incomplete=false' >> "$GITHUB_OUTPUT"
+            echo "build-attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+          else
+            echo '::error::Expected exactly one uploaded checkpoint or package.'
+            exit 1
+          fi
       - name: Index resumable native checkpoint after successful upload
         if: steps.checkpoint.outputs.reuse-key != ''
         continue-on-error: true
@@ -214,8 +236,12 @@ jobs:
   confirm-publication:
     name: Monitor ${{ needs.build.outputs.platform }} publication
     needs: build
-    if: needs.build.result == 'success' && needs.build.outputs.artifact-id != ''
+    if: needs.build.result == 'success' && needs.build.outputs.incomplete != 'true'
     runs-on: ubuntu-24.04
+    # 120 minutes for the watch, plus dispatch and cancellation time.
+    timeout-minutes: 130
+    outputs:
+      published: ${{ steps.watch.outputs.published }}
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -224,15 +250,23 @@ jobs:
         shell: bash
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          INCOMPLETE: ${{ needs.build.outputs.incomplete }}
           PACKAGE_ARTIFACT: ${{ needs.build.outputs.artifact }}
           PACKAGE_ID: ${{ needs.build.outputs.artifact-id }}
+          BUILD_ATTEMPT: ${{ needs.build.outputs.build-attempt }}
+          BUILD_ID: ${{ needs.build.outputs.build-id }}
           RELEASE_PLATFORM: ${{ needs.build.outputs.platform }}
           MONITOR_ID: ${{ job.check_run_id }}
         run: |
+          if [[ "$INCOMPLETE" != false || -z "$PACKAGE_ID" || -z "$BUILD_ATTEMPT" || -z "$BUILD_ID" ]]; then
+            echo '::error::Missing package handoff from the build job.'
+            exit 1
+          fi
           run_id=$(gh api --method POST "repos/$GITHUB_REPOSITORY/actions/workflows/publish-nightly-platform.yml/dispatches" \
             -H 'X-GitHub-Api-Version: 2026-03-10' -f "ref=$DEFAULT_BRANCH" \
             -f "inputs[build_run]=$GITHUB_RUN_ID" -f "inputs[platform]=$RELEASE_PLATFORM" \
-            -f "inputs[build_attempt]=$GITHUB_RUN_ATTEMPT" -f "inputs[artifact_id]=$PACKAGE_ID" \
+            -f "inputs[build_attempt]=$BUILD_ATTEMPT" -f "inputs[build_id]=$BUILD_ID" \
+            -f "inputs[monitor_attempt]=$GITHUB_RUN_ATTEMPT" -f "inputs[artifact_id]=$PACKAGE_ID" \
             -f "inputs[monitor_id]=$MONITOR_ID" \
             -f "inputs[artifact]=$PACKAGE_ARTIFACT" --jq '.workflow_run_id')
           if ! [[ "$run_id" =~ ^[0-9]+$ ]]; then
@@ -241,11 +275,14 @@ jobs:
           fi
           printf 'run-id=%s\n' "$run_id" >> "$GITHUB_OUTPUT"
       - name: Confirm publication succeeded
+        id: watch
         # One publisher allowance to queue and one to download, verify and publish.
         timeout-minutes: 120
         env:
           PUBLISH_RUN_ID: ${{ steps.publisher.outputs.run-id }}
-        run: gh run watch "$PUBLISH_RUN_ID" --repo "$GITHUB_REPOSITORY" --compact --exit-status
+        run: |
+          gh run watch "$PUBLISH_RUN_ID" --repo "$GITHUB_REPOSITORY" --compact --exit-status
+          echo 'published=true' >> "$GITHUB_OUTPUT"
       - name: Cancel an unfinished publisher after a failed wait
         if: ${{ (failure() || cancelled()) && steps.publisher.outputs.run-id != '' }}
         env:

@@ -8,9 +8,9 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { canCompileWarmTree, checkpointPath, checkIdentity, compile, installLinuxDependencies, configureReleaseTree, depotRevision, extractPortable, packagePortable, prepareNativeTree, preserveNativeOutputs, releaseConfiguration, repackPortableCandidate, saveCheckpoint, restoreCheckpoint, restorePortableRuntime, validateReusableTree } from '../scripts/ci-release.mjs';
+import { checkpointPath, checkIdentity, compile, installLinuxDependencies, configureReleaseTree, depotRevision, extractPortable, packagePortable, prepareNativeTree, preserveNativeOutputs, releaseConfiguration, repackPortableCandidate, saveCheckpoint, restoreCheckpoint, restorePortableRuntime, validateReusableTree } from '../scripts/ci-release.mjs';
 import { createReuseBudget, downloadReusableTree, findReusableArtifacts, nativeKey, removeNativeTree, runNativeCommand, stopWindowsTree, withoutGitHubTokens } from '../scripts/ci-reuse.mjs';
-import { publicationSource, publishAssets, verifyRelease } from '../scripts/ci-publish.mjs';
+import { publicationSource, publishAssets, reconcileAssets, verifyRelease } from '../scripts/ci-publish.mjs';
 
 // Fixture transfers put their already-extracted files in the download directory.
 function restoreFixture(root, options, restore, gh) {
@@ -55,7 +55,9 @@ test('required preparation time preserves optional reuse time across candidate p
 
 test('reuse stops signal-resistant descendants before deadline fallback or cancellation returns', async t => {
   assert.equal(await runNativeCommand(process.execPath, ['-e', 'process.stdout.write("captured output")'], { capture: true }), 'captured output');
-  for (const outcome of ['deadline', 'cancellation']) {
+  const outcomes = ['deadline', 'cancellation'];
+  if (process.platform !== 'win32') outcomes.push('compile deadline');
+  for (const outcome of outcomes) {
     await t.test(outcome, async t => {
       const root = await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-reuse-process-'));
       const controller = new AbortController();
@@ -70,7 +72,7 @@ test('reuse stops signal-resistant descendants before deadline fallback or cance
       })();
       const descendant = `
         process.on('SIGTERM', () => {});
-        process.on('SIGINT', () => {});
+        process.on('SIGINT', () => { require('node:fs').writeFileSync(process.argv[1], 'interrupted'); });
         process.on('message', () => {});
         process.send('ready');
       `;
@@ -79,7 +81,7 @@ test('reuse stops signal-resistant descendants before deadline fallback or cance
         const fs = require('node:fs');
         process.on('SIGTERM', () => {});
         process.on('SIGINT', () => {});
-        const descendant = spawn(process.execPath, ['-e', ${JSON.stringify(descendant)}], { stdio: ['ignore', 1, 2, 'ipc'] });
+        const descendant = spawn(process.execPath, ['-e', ${JSON.stringify(descendant)}, process.argv[1] + '.sigint'], { stdio: ['ignore', 1, 2, 'ipc'] });
         descendant.on('message', () => {
           fs.writeFileSync(process.argv[1] + '.tmp', String(descendant.pid));
           fs.renameSync(process.argv[1] + '.tmp', process.argv[1]);
@@ -88,13 +90,28 @@ test('reuse stops signal-resistant descendants before deadline fallback or cance
       // The inherited stdout pipe stays open until the descendant is stopped too.
       const privileged = process.platform === 'linux' && process.env.GITHUB_ACTIONS === 'true';
       let settled = false;
-      const result = runNativeCommand(privileged ? 'sudo' : process.execPath,
+      const hour = 60 * 60 * 1000;
+      const command = outcome === 'compile deadline' ? compile(process.execPath, ['-e', fixture, readyFile],
+        { signal: controller.signal, milliseconds: hour }) : runNativeCommand(privileged ? 'sudo' : process.execPath,
         [...(privileged ? ['-n', process.execPath] : []), '-e', fixture, readyFile], {
         capture: true, signal: controller.signal, deadline: outcome === 'deadline' ? Date.now() + 60 * 60 * 1000 : undefined,
-      }).then(() => assert.fail('Reuse must stop'), error => error).finally(() => { settled = true; });
+      });
+      const result = command.catch(error => error).finally(() => { settled = true; });
       await Promise.race([ready, result.then(error => { throw error; })]);
       const reason = new Error('User cancelled reuse');
-      if (outcome === 'deadline') t.mock.timers.tick(60 * 60 * 1000);
+      if (outcome === 'compile deadline') {
+        const interrupted = (async () => {
+          for await (const event of fs.watch(root, { signal: controller.signal })) {
+            if (event.filename === 'ready.sigint') return;
+          }
+        })();
+        t.mock.timers.tick(hour);
+        await interrupted;
+        assert.equal(settled, false, 'the descendant holds stdout open during the grace period');
+        t.mock.timers.tick(7500); // GitHub runner's SIGINT grace.
+        assert.equal(await result, false, 'compilation released its pipes and requested a checkpoint');
+        return;
+      } else if (outcome === 'deadline') t.mock.timers.tick(hour);
       else {
         t.mock.timers.tick(60 * 60 * 1000);
         assert.equal(settled, false, 'Required preparation has no optional reuse timer');
@@ -678,13 +695,6 @@ test('Linux dependency checks install only when needed and observe the same stag
   }
 });
 
-test('warm compilation requires a remaining compile window and room for the verified input checkpoint', () => {
-  const checkpointBytes = 700;
-  assert.equal(canCompileWarmTree(0, checkpointBytes, checkpointBytes), false);
-  assert.equal(canCompileWarmTree(1, checkpointBytes, checkpointBytes - 1), false);
-  assert.equal(canCompileWarmTree(1, checkpointBytes, checkpointBytes), true);
-});
-
 test('the release workflow uploads fast hits and runs native setup on misses, while cold stage zero checkpoints', async () => {
   const workflow = await fs.readFile(new URL('../../.github/workflows/release-stage.yml', import.meta.url), 'utf8');
   const steps = workflow.split(/^      - /m).slice(1);
@@ -707,6 +717,33 @@ test('the release workflow uploads fast hits and runs native setup on misses, wh
   const deletion = step('name: Delete superseded checkpoint');
   assert.match(deletion, /if: inputs.stage != 0 && !inputs.last && steps.checkpoint.outputs.complete == 'false'/);
   assert.match(deletion, /artifacts\?name=\$PREVIOUS_NAME/);
+});
+
+test('package handoff requires exactly one upload and publication metadata precedes extraction', async t => {
+  const workflows = new URL('../../.github/workflows/', import.meta.url);
+  const stage = await fs.readFile(new URL('release-stage.yml', workflows), 'utf8');
+  const publish = await fs.readFile(new URL('publish-nightly-platform.yml', workflows), 'utf8');
+  assert.match(publish, /run: node chromium\/scripts\/ci-publish\.mjs preflight\s+- uses: actions\/download-artifact@/);
+  assert.match(stage, /inputs\[build_attempt\]=\$BUILD_ATTEMPT/);
+  assert.match(stage, /inputs\[monitor_attempt\]=\$GITHUB_RUN_ATTEMPT/);
+  const platform = await fs.readFile(new URL('release-platform.yml', workflows), 'utf8');
+  assert.match(platform, /!contains\(needs\.\*\.outputs\.published, 'true'\)/);
+  if (process.platform === 'win32') return; // The Bash step uses POSIX output paths.
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-handoff-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const output = path.join(dir, 'outputs');
+  const handoff = stage.split('id: handoff\n')[1].split('\n      - ')[0].split('run: |\n')[1];
+  for (const [checkpoint, pkg, expected] of [['7', '', 'incomplete=true\n'], ['', '8', 'incomplete=false\nbuild-attempt=1\n'],
+    ['', '', undefined], ['7', '8', undefined]]) {
+    await fs.writeFile(output, '');
+    const invoke = () => execFileSync('bash', ['-e', '-c', handoff], { env: { ...process.env,
+      GITHUB_OUTPUT: output, GITHUB_RUN_ATTEMPT: '1', CHECKPOINT_ID: checkpoint, PACKAGE_ID: pkg } });
+    if (expected === undefined) assert.throws(invoke, { status: 1 });
+    else {
+      invoke();
+      assert.equal(await fs.readFile(output, 'utf8'), expected);
+    }
+  }
 });
 
 test('portable discovery checks exact attempt, rerun index, and legacy names, including empty results', async () => {
@@ -779,13 +816,17 @@ test('the publisher uses the active default-branch build’s platform catalog an
   const sha = 'b'.repeat(40);
   const run = { id: 11, run_attempt: 2, status: 'in_progress', head_sha: sha, path: '.github/workflows/nightly-release.yml',
     head_branch: branch, head_repository: { full_name: repository }, event: 'schedule' };
-  const inputs = { repository, branch, currentRun: '12', run: '11', attempt: '2', platform, artifact, artifactId: '22', monitorId: '33' };
-  const readRun = (overrides = {}, upload = {}, job = {}) => args => {
-    if (args[1] === `repos/${repository}/actions/jobs/33`) return JSON.stringify({ name: `Monitor ${platform} publication`,
+  const inputs = { repository, branch, currentRun: '12', run: '11', buildAttempt: '2', monitorAttempt: '2',
+    buildId: '32', platform, artifact, artifactId: '22', monitorId: '33' };
+  const readRun = (overrides = {}, upload = {}, job = {}, build = {}) => args => {
+    if (args[1] === `repos/${repository}/actions/jobs/33`) return JSON.stringify({ id: 33, head_sha: sha, name: `build-1 / Monitor ${platform} publication`,
       run_id: 11, run_attempt: 2, status: 'in_progress', steps: [], ...job });
+    if (args[1] === `repos/${repository}/actions/jobs/32`) return JSON.stringify({ id: 32, head_sha: sha, name: `build-1 / ${platform} stage 1`,
+      run_id: 11, run_attempt: 2, status: 'completed', conclusion: 'success',
+      steps: [{ name: 'Upload completed platform package', conclusion: 'success' }], ...build });
     if (args[1] === `repos/${repository}/actions/runs/11`) return JSON.stringify({ ...run, ...overrides });
     if (args[1] === `repos/${repository}/actions/artifacts/22`) {
-      return JSON.stringify({ id: 22, name: artifact, workflow_run: { id: 11 }, ...upload });
+      return JSON.stringify({ id: 22, name: artifact, workflow_run: { id: 11, head_sha: sha }, ...upload });
     }
     if (args.at(-1) === `repos/${repository}/contents/chromium/build/ci-platforms.json?ref=${sha}`) {
       return JSON.stringify([{ platform }]);
@@ -808,12 +849,21 @@ test('the publisher uses the active default-branch build’s platform catalog an
     assert.throws(() => publicationSource(inputs, readRun(obsolete)), /cancelled or superseded/);
   }
   const old = `${base}-attempt-1`;
+  const rerun = { ...inputs, buildAttempt: '1', artifact: old };
+  assert.deepEqual(publicationSource(rerun, readRun({}, { name: old }, {}, { run_attempt: 1 })),
+    { sha, chromium: '158.0.8127.2', nativeKey });
+  for (const build of [{ run_attempt: 2 }, { conclusion: 'failure' }, { head_sha: 'wrong' }, { id: 34 }, { run_id: 12 },
+    { name: 'another stage / linux-x64 stage 1' }, { steps: [{ name: 'Upload completed platform package', conclusion: 'skipped' }] }]) {
+    assert.throws(() => publicationSource(rerun, readRun({}, { name: old }, {}, { run_attempt: 1, ...build })), /producing build job/);
+  }
+  assert.throws(() => publicationSource({ ...inputs, buildAttempt: '3', artifact: base + '-attempt-3' }, readRun()), /Invalid nightly/);
   assert.throws(() => publicationSource(inputs, readRun({}, { name: old })), /does not match/);
   assert.throws(() => publicationSource({ ...inputs, artifact: old }, readRun({}, { name: old })), /Invalid nightly/);
   for (const job of [{ run_attempt: 1 }, { run_id: 13 }, { status: 'completed' }, { steps: [{ conclusion: 'cancelled' }] }]) {
     assert.throws(() => publicationSource(inputs, readRun({}, {}, job)), /inactive or cancelling/);
   }
-  for (const wrong of [{ id: 23 }, { workflow_run: { id: 12 } }, { name: portable }, { expired: true }]) {
+  for (const wrong of [{ id: 23 }, { workflow_run: { id: 12 } }, { workflow_run: { id: 11, head_sha: 'wrong' } },
+    { name: portable }, { expired: true }]) {
     assert.throws(() => publicationSource(inputs, readRun({}, wrong)), /does not match/);
   }
 });
@@ -937,54 +987,75 @@ test('a portable release reuses the verified browser with the current shell and 
   });
 });
 
-test('a platform joins its run release at the source commit and lists its checksums only after its other files', () => {
-  const options = { repository: 'owner/repo', tag: 'nightly-1', sha: 'source', title: 'Nightly', notes: 'notes.md',
-    files: ['dir/Flecha-linux-x64.tar.gz', 'dir/linux-x64.json'], checksums: 'dir/linux-x64-SHA256SUMS' };
-  const upload = ['release', 'upload', 'nightly-1', 'dir/Flecha-linux-x64.tar.gz', 'dir/linux-x64.json', '--repo', 'owner/repo', '--clobber'];
-  const uploadChecksums = ['release', 'upload', 'nightly-1', 'dir/linux-x64-SHA256SUMS', '--repo', 'owner/repo'];
-  const fakeGh = ({ created = true, exists = true, tagSha = 'source', assets = [], failUpload = false, failChecksums = false } = {}) => {
+test('publication writes the marker last and reconciles only this publisher attempt by asset ID', () => {
+  const repository = 'owner/repo';
+  const marker = 'linux-x64-SHA256SUMS';
+  const owner = 'Nightly publisher 50 attempt 2';
+  const options = { repository, tag: 'nightly-1', sha: 'source', title: 'Nightly', notes: 'notes.md', owner,
+    files: ['dir/Flecha-linux-x64.tar.gz', 'dir/linux-x64.json'], checksums: 'dir/' + marker };
+  const dataNames = options.files.map(file => path.basename(file));
+  function fixture({ created = true, exists = true, tagSha = 'source', failFile, supersedeOn } = {}) {
+    const assets = [{ id: 1, name: marker, label: 'previous attempt' }, { id: 2, name: 'windows-x64-SHA256SUMS', label: 'other' }];
     const writes = [];
+    let nextId = 3;
+    let current = true;
+    let journal;
     const gh = args => {
-      if (args[1] === 'create') { if (!created) throw new Error('already exists'); return ''; }
-      if (args[1] === 'view') { if (!exists) throw new Error('not found'); return JSON.stringify({ assets: assets.map(name => ({ name })) }); }
-      if (args[0] === 'api') return JSON.stringify({ object: { type: 'commit', sha: tagSha } });
-      writes.push(args);
-      if (failUpload && args.includes('--clobber')) throw new Error('upload interrupted');
-      if (failChecksums && args[1] === 'upload' && !args.includes('--clobber')) throw new Error('checksum upload interrupted');
-      return '';
+      if (args[1] === 'create') {
+        if (!created) throw new Error('already exists');
+      } else if (args[1] === 'upload') {
+        for (const file of args.slice(3, args.indexOf('--repo'))) {
+          const [name, label] = path.basename(file).split('#');
+          assert.equal(label, `${name} (${owner})`);
+          assert.equal(args.includes('--clobber'), name !== marker);
+          writes.push('upload ' + name);
+          assets.push({ name, label, id: nextId++ });
+          if (name === supersedeOn) current = false;
+          if (name === failFile) throw new Error('upload interrupted');
+        }
+      } else if (args[1] === '--method') {
+        assert.equal(args[2], 'DELETE');
+        const index = assets.findIndex(asset => args[3] === 'repos/owner/repo/releases/assets/' + asset.id);
+        assert.notEqual(index, -1);
+        writes.push('delete ' + assets[index].name);
+        assets.splice(index, 1);
+      } else if (args[1] === 'repos/owner/repo/releases/tags/nightly-1') {
+        if (!exists) throw new Error('not found');
+        return JSON.stringify({ id: 6, assets });
+      } else if (args[1] === 'repos/owner/repo/git/ref/tags/nightly-1') {
+        return JSON.stringify({ object: { type: 'commit', sha: tagSha } });
+      } else {
+        assert.deepEqual(args, ['api', 'repos/owner/repo/releases/6/assets', '--paginate', '--slurp']);
+        return JSON.stringify([assets]);
+      }
     };
-    return { gh, writes };
-  };
-
+    const publish = () => publishAssets(options, gh, () => {
+      if (!current) throw new Error('Source attempt superseded');
+    }, id => { journal = id; });
+    return { writes, assets, publish, cancel: () => reconcileAssets(repository, journal, owner, marker, gh) };
+  }
   for (const created of [true, false]) {
-    const { gh, writes } = fakeGh({ created, assets: ['Flecha-windows-x64.zip', 'windows-x64-SHA256SUMS'] });
-    publishAssets(options, gh);
-    assert.deepEqual(writes, [upload, uploadChecksums]);
+    const successful = fixture({ created });
+    successful.publish();
+    assert.deepEqual(successful.writes, ['delete ' + marker, ...[...dataNames, marker].map(name => 'upload ' + name)]);
+    // The workflow cancellation step runs even if the publishing process already returned.
+    successful.assets.find(asset => asset.name === dataNames[0]).label = 'later publisher';
+    successful.cancel();
+    assert.deepEqual(successful.assets.map(asset => asset.label), ['other', 'later publisher']);
+    assert.deepEqual(successful.writes.slice(-2), ['delete ' + marker, 'delete ' + dataNames[1]]);
+    successful.cancel(); // A repeated reconciliation finds no remaining owned assets.
   }
-  {
-    const { gh, writes } = fakeGh();
-    assert.throws(() => publishAssets(options, gh, () => {
-      if (writes.some(args => args.includes('--clobber'))) throw new Error('Source attempt superseded');
-    }), /Source attempt superseded/);
-    assert.deepEqual(writes, [upload]);
+  for (const name of [dataNames[0], marker]) {
+    for (const failure of ['failFile', 'supersedeOn']) {
+      const interrupted = fixture({ [failure]: name });
+      assert.throws(interrupted.publish, failure === 'failFile' ? /upload interrupted/ : /Source attempt superseded/);
+      assert.deepEqual(interrupted.assets.map(asset => asset.label), ['other']);
+      if (name === marker) assert.deepEqual(interrupted.writes.slice(-3),
+        [marker, ...dataNames].map(name => 'delete ' + name));
+    }
   }
-
-  const interrupted = fakeGh({ failUpload: true });
-  assert.throws(() => publishAssets(options, interrupted.gh), /upload interrupted/);
-  assert.deepEqual(interrupted.writes, [upload]);
-
-  // A failed checksum upload can leave an unfinished asset under the marker's name.
-  const deleteChecksums = ['release', 'delete-asset', 'nightly-1', 'linux-x64-SHA256SUMS', '--repo', 'owner/repo', '--yes'];
-  const unfinished = fakeGh({ failChecksums: true });
-  assert.throws(() => publishAssets(options, unfinished.gh), /checksum upload interrupted/);
-  assert.deepEqual(unfinished.writes, [upload, uploadChecksums, deleteChecksums]);
-
-  const retry = fakeGh({ created: false, assets: ['Flecha-linux-x64.tar.gz', 'linux-x64-SHA256SUMS'] });
-  publishAssets(options, retry.gh);
-  assert.deepEqual(retry.writes, [deleteChecksums, upload, uploadChecksums]);
-
-  const moved = fakeGh({ created: false, tagSha: 'other' });
-  assert.throws(() => publishAssets(options, moved.gh), /does not point to source/);
+  const moved = fixture({ created: false, tagSha: 'other' });
+  assert.throws(moved.publish, /does not point to source/);
   assert.deepEqual(moved.writes, []);
-  assert.throws(() => publishAssets(options, fakeGh({ created: false, exists: false }).gh), /already exists/);
+  assert.throws(fixture({ created: false, exists: false }).publish, /already exists/);
 });

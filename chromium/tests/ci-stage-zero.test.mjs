@@ -40,7 +40,9 @@ test('Linux stage zero falls through to a warm native tree on miss and emits a v
     await fs.writeFile(runtime, '#!/bin/sh\nexec node "$@"\n', { mode: 0o755 });
     await fs.writeFile(path.join(dir, 'LICENSE'), 'Node license');
     const preload = path.join(dir, 'runtime.mjs');
-    await fs.writeFile(preload, "Object.defineProperty(process, 'execPath', { value: process.env.FIXTURE_NODE });");
+    await fs.writeFile(preload, `import fs from 'node:fs/promises';
+      Object.defineProperty(process, 'execPath', { value: process.env.FIXTURE_NODE });
+      if (process.env.FIXTURE_LOW_DISK) fs.statfs = async () => ({ bsize: 1, bavail: 0 });`);
     await fs.writeFile(path.join(bin, 'gh'), `#!/usr/bin/env node
       const fs = require('node:fs');
       const [op, endpoint] = process.argv.slice(2);
@@ -56,16 +58,15 @@ test('Linux stage zero falls through to a warm native tree on miss and emits a v
         }
       } else throw Error('unexpected GitHub request');
     `, { mode: 0o755 });
-    const stage = async (mode, artifact = '') => {
+    const stage = async (mode, artifact = '', extraEnv = {}) => {
       await fs.writeFile(output, '');
       const zip = path.join(dir, mode + '.zip');
-      if (artifact) execFileSync('7z', ['a', '-tzip', zip, ...await fs.readdir(seed)], { cwd: seed });
       execFileSync(process.execPath, ['--import', preload, path.join(root, 'chromium/scripts/ci-release.mjs'), mode], {
         cwd: root, env: { ...process.env, GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted', RUNNER_WORKSPACE: workspace,
           GITHUB_REPOSITORY: 'owner/repo', GITHUB_RUN_ID: '2', GITHUB_RUN_NUMBER: '2', GITHUB_OUTPUT: output,
           FLECHA_DEFAULT_BRANCH: 'main', FLECHA_REUSE_BUDGET_MINUTES: '60', FLECHA_STAGE_STARTED: String(Date.now()),
           ImageOS: 'ubuntu24', ImageVersion: 'fixture', FIXTURE_ARTIFACT: artifact, FIXTURE_NODE: runtime, FIXTURE_LOG: log,
-          FIXTURE_ZIP: zip, PATH: bin + path.delimiter + process.env.PATH },
+          FIXTURE_ZIP: zip, PATH: bin + path.delimiter + process.env.PATH, ...extraEnv },
       });
       return fs.readFile(output, 'utf8');
     };
@@ -82,14 +83,48 @@ test('Linux stage zero falls through to a warm native tree on miss and emits a v
     await fs.writeFile(path.join(tree, 'state.json'), JSON.stringify({ ...source, complete: false }));
     const checkpoint = checkpointPath(seed, 'native');
     saveCheckpoint(tree, checkpoint, false);
+    execFileSync('7z', ['a', '-tzip', path.join(dir, 'prepare.zip'), path.basename(checkpoint)], { cwd: seed });
+    await fs.rm(checkpoint);
+    const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+    await fs.writeFile(path.join(bin, 'git'), `#!/bin/sh
+      case "$1:$2" in init:*/depot_tools|-C:*/depot_tools) exit 0;; esac
+      exec "${realGit}" "$@"
+    `, { mode: 0o755 });
+    await fs.writeFile(path.join(bin, 'python3'), `#!/bin/sh
+      case "$1:$2" in
+        */ninja.py:*) kill -TERM "$PPID"; exit 0;;
+        */gclient.py:sync) mkdir -p src/buildtools/linux64 src/chrome/app/theme/chromium && cp "$FIXTURE_GN" src/buildtools/linux64/gn;;
+        */gclient.py:runhooks) exit 0;;
+        *) exit 1;;
+      esac
+    `, { mode: 0o755 });
     assert.equal(await stage('prepare', 'native-linux-x64-' + key), 'compile=true\n');
     const restored = JSON.parse(await fs.readFile(path.join(work, 'state.json')));
     assert.equal(restored.sha, sha);
     assert.equal(restored.reusedFrom.archive, path.basename(checkpoint));
+    await assert.rejects(stage('build'), error => error.status !== 0 && /Build cancelled/.test(error.stderr));
+    await fs.rm(work, { recursive: true }); // A rerun starts on a fresh runner.
+    assert.equal(await stage('prepare', 'native-linux-x64-' + key), 'compile=true\n');
+    assert.deepEqual(JSON.parse(await fs.readFile(path.join(work, 'state.json'))), restored);
+    assert.equal((await fs.readFile(log, 'utf8')).split('/artifacts/7/zip').length - 1, 2);
     await fs.rm(work, { recursive: true });
-    assert.ok((await fs.stat(checkpoint)).size > 0, 'the verified input survives an interrupted stage zero');
 
-    await fs.rm(checkpoint);
+    // A warm tree without room for its measured checkpoint must yield to cold preparation.
+    for (const subdir of ['patches', 'branding/mac', 'branding/logo']) {
+      await fs.mkdir(path.join(root, 'chromium', subdir), { recursive: true });
+    }
+    await fs.writeFile(path.join(root, 'chromium/branding/BRANDING'), 'test');
+    assert.equal(await stage('prepare', 'native-linux-x64-' + key, { FIXTURE_LOW_DISK: 'true',
+      FIXTURE_GN: path.join(tree, 'src/buildtools/linux64/gn') }), 'compile=false\n');
+    const handoff = await stage('checkpoint');
+    assert.match(handoff, /^complete=false$/m);
+    const handedOff = path.join(dir, 'cold-checkpoint');
+    await fs.mkdir(handedOff);
+    execFileSync('tar', ['-xf', path.join(root, /^archive=(.+)$/m.exec(handoff)[1]), '-C', handedOff]);
+    const cold = JSON.parse(await fs.readFile(path.join(handedOff, 'state.json')));
+    assert.equal(cold.sha, sha);
+    assert.equal(cold.reusedFrom, undefined);
+    await fs.rm(work, { recursive: true });
     await fs.writeFile(path.join(tree, 'chrome'), 'verified browser', { mode: 0o755 });
     const name = 'Flecha-linux-x64.tar.gz';
     execFileSync('tar', ['-czf', path.join(seed, name), '-C', tree, 'chrome']);
@@ -98,6 +133,7 @@ test('Linux stage zero falls through to a warm native tree on miss and emits a v
       const digest = createHash('sha256').update(await fs.readFile(path.join(seed, file))).digest('hex');
       await fs.appendFile(path.join(seed, 'linux-x64-SHA256SUMS'), digest + '  ' + file + '\n');
     }
+    execFileSync('7z', ['a', '-tzip', path.join(dir, 'portable.zip'), ...await fs.readdir(seed)], { cwd: seed });
     assert.equal(await stage('portable', artifact), 'package=' + artifact.replace(/-attempt-1$/, '') + '\n');
     const release = path.join(root, 'release');
     await verifyRelease(release, [{ platform: 'linux-x64' }], { ...source, sha });

@@ -13,7 +13,7 @@
 // approximated. Plain `||host^` filters are merged into requestDomains lists, which keeps the
 // rule count far under Chromium's guaranteed 30,000 static rules.
 import fs from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { writeManifest } from './build-version.mjs';
@@ -52,10 +52,31 @@ const TYPES = {
 /** Options that don't change what's matched here. */
 const IGNORED = new Set(['important', 'all', 'webrtc']);
 
-function checkedText(text) {
-  if (!/^\[Adblock Plus[^\]\r\n]*\]/.test(text)) throw new Error('not a filter list');
-  // A header alone can be left by an interrupted download. Check for a usable
-  // network filter before replacing a good cache; full conversion happens in list order.
+// The unsigned easylist.to subscriptions are assembled from named source files.
+// EasyList's last include can be empty; EasyPrivacy's ends with exception rules.
+const lastSection = {
+  easylist: '! *** easylist:easylist_adult/adult_allowlist_popup.txt ***',
+  easyprivacy: '! *** easylist:easyprivacy/easyprivacy_allowlist_international.txt ***',
+};
+
+function checkedText(id, text) {
+  if (!/^\[Adblock Plus[^\]\r\n]*\]\r?\n/.test(text)) throw new Error('not a filter list');
+  if (!new RegExp('^! Title: ' + id + '\\r?$', 'mi').test(text)) throw new Error('wrong filter list title');
+  const checksumLine = /^![ \t]*checksum[ \t]*:[^\r\n]*/im.exec(text);
+  if (checksumLine) {
+    // ABP addChecksum normalizes CR and blank lines and omits the checksum line.
+    const normalized = text.replaceAll('\r', '').replace(/\n+/g, '\n').replace(/^![ \t]*checksum[ \t]*:[^\n]*\n?/im, '');
+    const checksum = createHash('md5').update(normalized).digest('base64').replace(/=+$/, '');
+    if (checksum !== checksumLine[0].split(':')[1].trim()) throw new Error('ABP checksum mismatch');
+  } else {
+    const section = '\n' + lastSection[id] + '\n';
+    const lines = text.replaceAll('\r\n', '\n');
+    const last = lines.lastIndexOf(section);
+    if (last < 0 || !lines.endsWith('\n') ||
+        (id === 'easyprivacy' && !/^@@/m.test(lines.slice(last + section.length)))) {
+      throw new Error('incomplete final filter list section');
+    }
+  }
   for (const [line] of text.matchAll(/[^\r\n]+/g)) {
     if (convertList(line).rules.length) return text;
   }
@@ -65,19 +86,30 @@ function checkedText(text) {
 async function fetchList(id, url, refresh, cache, download) {
   const file = path.join(cache, `${id}.txt`);
   const stat = fs.statSync(file, { throwIfNoEntry: false });
-  const cached = () => checkedText(fs.readFileSync(file, 'utf8'));
+  const cached = () => checkedText(id, fs.readFileSync(file, 'utf8'));
   if (stat && !refresh && Date.now() - stat.mtimeMs < MAX_AGE_MS) {
     try { return cached(); } catch (error) { console.warn(`adblock: invalid cached ${id}: ${error.message}`); }
   }
   let text;
   try {
-    const res = await download(url, { signal: AbortSignal.timeout(30000) });
+    // Content-Length describes the wire representation. Request the original bytes.
+    const res = await download(url, { headers: { 'Accept-Encoding': 'identity' }, signal: AbortSignal.timeout(30000) });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    text = checkedText(await res.text());
+    const bytes = await res.arrayBuffer();
+    const length = res.headers.get('content-length');
+    if (length !== null && (res.headers.has('content-encoding') && res.headers.get('content-encoding') !== 'identity' ||
+        !/^\d+$/.test(length) || BigInt(length) !== BigInt(bytes.byteLength))) {
+      throw new Error('could not verify Content-Length');
+    }
+    text = checkedText(id, new TextDecoder('utf-8', { fatal: true }).decode(bytes));
   } catch (err) {
     if (stat) {
+      let fallback;
+      try { fallback = cached(); } catch (cacheError) {
+        throw new AggregateError([err, cacheError], `adblock: could not refresh ${id} (${err.message}); invalid cache (${cacheError.message})`);
+      }
       console.warn(`adblock: couldn't refresh ${id} (${err.message}); using the cached copy`);
-      return cached();
+      return fallback;
     }
     throw new Error(`adblock: could not download ${id} and no cache exists`, { cause: err });
   }

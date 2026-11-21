@@ -66,7 +66,7 @@ export async function stopWindowsTree(pid, env, {
 
 // Hosted native trees are disposable. Force-stop their process group at the owner deadline,
 // then wait for inherited pipes to close before allowing cleanup or another attempt.
-export async function runNativeCommand(command, args, { cwd, env, deadline, signal, capture = false, interrupt = false, stdoutFile } = {}) {
+export async function runNativeCommand(command, args, { cwd, env, deadline, signal, capture = false, interruptGraceMs, stdoutFile } = {}) {
   signal?.throwIfAborted();
   const timeoutError = () => Object.assign(new Error('Native reuse reached its deadline.'), { code: 'ETIMEDOUT' });
   if (deadline !== undefined && deadline <= Date.now()) throw timeoutError();
@@ -105,10 +105,25 @@ export async function runNativeCommand(command, args, { cwd, env, deadline, sign
         throw error;
       }
     } else {
-      try { process.kill(-child.pid, interrupt ? 'SIGINT' : 'SIGKILL'); } catch (error) {
-        if (error.code === 'ESRCH') return false;
-        throw error;
+      const signalGroup = name => {
+        try { process.kill(-child.pid, name); return true; } catch (error) {
+          if (error.code === 'ESRCH') return false;
+          throw error;
+        }
+      };
+      if (expired && interruptGraceMs !== undefined && !signal?.aborted) {
+        if (!signalGroup('SIGINT')) return false;
+        let grace;
+        try {
+          await Promise.race([completion, new Promise(resolve => { grace = setTimeout(resolve, interruptGraceMs); })]);
+        } finally {
+          clearTimeout(grace);
+        }
+        // Ninja can exit before a compiler that still owns its outputs or pipes.
+        signalGroup('SIGKILL');
+        return true;
       }
+      return signalGroup('SIGKILL');
     }
     return true;
   };
@@ -293,11 +308,15 @@ async function downloadArtifact(candidate, directory, options) {
   // Windows and macOS ship bsdtar. Ubuntu ships Info-ZIP. Write only the
   // expected regular files, never ZIP-supplied paths, modes or symlinks.
   const linux = process.platform === 'linux';
-  const tool = linux ? 'unzip' : process.platform === 'win32' ? path.join(process.env.SystemRoot, 'System32/tar.exe') : 'tar';
+  let tool = 'tar';
+  if (linux) tool = 'unzip';
+  else if (process.platform === 'win32') tool = path.join(process.env.SystemRoot, 'System32/tar.exe');
   const names = (await runNativeCommand(tool, linux ? ['-Z1', zip] : ['-tf', zip],
     { ...command, env, capture: true })).trimEnd().split(/\r?\n/);
-  const expected = options.portableOnly ? [candidate.archive, options.platform + '.json', options.platform + '-SHA256SUMS'] :
-    [names.includes(candidate.archive) ? candidate.archive : candidate.archive.replace(/\.gz$/, '.zst')];
+  let expected;
+  if (options.portableOnly) expected = [candidate.archive, options.platform + '.json', options.platform + '-SHA256SUMS'];
+  else if (names.includes(candidate.archive)) expected = [candidate.archive];
+  else expected = [candidate.archive.replace(/\.gz$/, '.zst')];
   if (names.length !== expected.length || !expected.every(name => names.includes(name))) throw new Error('Unexpected reuse artifact contents.');
   for (const name of expected) {
     await runNativeCommand(tool, linux ? ['-p', zip, name] : ['-xOf', zip, name],

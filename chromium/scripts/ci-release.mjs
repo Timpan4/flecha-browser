@@ -104,8 +104,13 @@ export function checkpointPath(directory, name) {
 
 function checkpointArgs(archive, writing) {
   // -I means different things in GNU tar and macOS bsdtar.
-  const compression = archive.endsWith('.tar.zst')
-    ? ['--use-compress-program', writing ? 'zstd -T0' : mac ? 'zstd -d' : 'zstd'] : ['-z'];
+  let compression = ['-z'];
+  if (archive.endsWith('.tar.zst')) {
+    let program = 'zstd';
+    if (writing) program = 'zstd -T0';
+    else if (mac) program = 'zstd -d';
+    compression = ['--use-compress-program', program];
+  }
   return [...(windows ? ['--force-local'] : []), ...(writing ? ['--format=pax'] : []),
     ...compression, writing ? '-cf' : '-xf', archive.replaceAll(path.sep, '/')];
 }
@@ -170,11 +175,6 @@ export async function installLinuxDependencies(cwd, { env, signal, deadline }, r
   await run('bash', [script, '--quick-check'], options);
 }
 
-export function canCompileWarmTree(remaining, checkpointBytes, freeBytes) {
-  // Reserve the measured size of the verified input for another checkpoint.
-  return remaining > 0 && freeBytes >= checkpointBytes;
-}
-
 async function withStageCancellation(operation) {
   const controller = new AbortController();
   const cancel = () => controller.abort(new Error('Build cancelled.'));
@@ -188,7 +188,7 @@ async function withStageCancellation(operation) {
   }
 }
 
-export async function restoreCheckpoint(work, archive, { create = true, deadline, signal } = {}) {
+export async function restoreCheckpoint(work, archive, { create = true, retainArchive = false, deadline, signal } = {}) {
   // Older artifacts contain gzip. The artifact name stays stable across codecs.
   if (archive.endsWith('.tar.gz')) {
     const zstd = archive.slice(0, -3) + '.zst';
@@ -205,19 +205,20 @@ export async function restoreCheckpoint(work, archive, { create = true, deadline
   const { size } = await fs.stat(archive);
   if (deadline === undefined) execFileSync(checkpointTar, args, { cwd: work, env, stdio: 'inherit' });
   else await runNativeCommand(checkpointTar, args, { cwd: work, env, deadline, signal });
-  await fs.rm(archive);
+  if (!retainArchive) await fs.rm(archive);
   return { size, name: path.basename(archive) };
 }
 
 export async function compile(command, args, { cwd, env, milliseconds, signal }) {
   try {
-    await runNativeCommand(command, args, { cwd, env, signal, interrupt: true,
+    // GitHub's runner allows 7500 ms for SIGINT. Keep that grace within the handoff reserve.
+    await runNativeCommand(command, args, { cwd, env, signal, interruptGraceMs: Math.min(7500, nativeUploadReserveMilliseconds),
       deadline: milliseconds === undefined ? undefined : Date.now() + milliseconds });
     return true;
   } catch (error) {
     signal?.throwIfAborted();
     if (error.code === 'ETIMEDOUT') return false;
-    if (error.exitCode != null) throw new Error(`Chromium build failed: ${error.exitCode}`, { cause: error });
+    if (Number.isInteger(error.exitCode)) throw new Error(`Chromium build failed: ${error.exitCode}`, { cause: error });
     throw error;
   }
 }
@@ -409,7 +410,6 @@ async function main() {
     const stage = path.join(work, 'portable');
     const portableOnly = mode === 'portable';
     const releaseName = portableOnly ? packageArtifact(key) : undefined;
-    let checkpointBytes;
     const reused = await downloadReusableTree(root, { repository: process.env.GITHUB_REPOSITORY,
       branch: process.env.FLECHA_DEFAULT_BRANCH, currentRun: process.env.GITHUB_RUN_ID, platform, key, work, releaseName, portableOnly,
       get deadline() { return budget.deadline; }, signal,
@@ -423,10 +423,15 @@ async function main() {
           metadata: (directory, args) => writePackageMetadata(directory, key, args, candidate, reuseSignal) });
         return;
       }
-      const restored = await restoreCheckpoint(work, archive, { create: false, deadline: budget.deadline, signal });
-      checkpointBytes = restored.size;
+      const restored = await restoreCheckpoint(work, archive, { create: false, retainArchive: true, deadline: budget.deadline, signal });
       await validateReusableTree(work, { ...identity, sha: candidate.sha, nativeKey: key });
       await configure({ ...candidate, archive: restored.name });
+      // Reject inside the restore transaction. Its owner releases both the candidate
+      // tree and download before trying a smaller candidate or preparing from scratch.
+      const disks = await Promise.all([work, root].map(directory => fs.statfs(directory)));
+      if (Math.min(...disks.map(disk => disk.bsize * disk.bavail)) < restored.size) {
+        throw new Error('Insufficient space to checkpoint this warm build.');
+      }
     });
     if (portableOnly) {
       if (reused) await output('package', releaseName);
@@ -436,10 +441,9 @@ async function main() {
     if (!reused) {
       await prepareNativeTree({ work, depot, src, configuration, run: prepareRun, chromium, signal });
       await configure();
+      await output('compile', 'false');
     } else {
-      const disks = await Promise.all([work, root].map(directory => fs.statfs(directory)));
-      const freeBytes = Math.min(...disks.map(disk => disk.bsize * disk.bavail));
-      await output('compile', String(canCompileWarmTree(remainingStageTime(), checkpointBytes, freeBytes)));
+      await output('compile', String(remainingStageTime() > 0));
     }
     showDisk();
     return;
