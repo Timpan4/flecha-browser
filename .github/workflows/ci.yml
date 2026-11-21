@@ -47,6 +47,7 @@ jobs:
         with:
           path: chromium/shell/.cache/adblock
           key: adblock-ci-${{ runner.os }}-${{ steps.adblock-cache.outputs.bucket }}
+          restore-keys: adblock-ci-${{ runner.os }}-
       - run: npm run shell:build
       - run: npm run host:build
       # Patches are left out: their context lines keep Chromium's own trailing spaces.
@@ -90,11 +91,13 @@ jobs:
         with:
           path: chromium/shell/.cache/adblock
           key: adblock-ci-${{ runner.os }}-${{ steps.adblock-cache.outputs.bucket }}
+          restore-keys: adblock-ci-${{ runner.os }}-
       - uses: actions/cache@v6
         if: runner.os != 'Linux'
         with:
           path: chromium/shell/.cache/adblock
           key: adblock-ci-${{ runner.os }}-${{ steps.adblock-cache.outputs.bucket }}
+          restore-keys: adblock-ci-${{ runner.os }}-
       - run: npm run shell:build
       - run: npm run host:build
 

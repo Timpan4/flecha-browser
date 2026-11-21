@@ -221,6 +221,7 @@ export function trustedRun(run, { repository, branch, currentRun }) {
 async function* listArtifacts(endpoint, options, api, name) {
   let visited = 0;
   for (let page = 1; ; page++) {
+    options.signal?.throwIfAborted();
     if (options.deadline !== undefined && Date.now() >= options.deadline) throw new Error('Native reuse reached the stage deadline.');
     // GitHub documents 100 as the maximum artifacts page size.
     const filter = name === undefined ? '' : `name=${encodeURIComponent(name)}&`;
@@ -235,6 +236,13 @@ async function* listArtifacts(endpoint, options, api, name) {
 export async function* findReusableArtifacts(options, api) {
   const { repository, branch, currentRun, platform, key, releaseName } = options;
   const actions = `repos/${repository}/actions`;
+  const runArtifacts = async (id, name) => {
+    try {
+      return await Array.fromAsync(listArtifacts(`${actions}/runs/${id}/artifacts`, options, api, name));
+    } catch (error) {
+      if (error.status !== 404) throw error;
+    }
+  };
   const runs = new Map();
   const source = async artifact => {
     const id = String(artifact.workflow_run?.id);
@@ -248,42 +256,59 @@ export async function* findReusableArtifacts(options, api) {
     return runs.get(id);
   };
   if (options.portableOnly) {
-    // Find job-scoped packages through the exact-name index. Keep the exact-name
-    // lookups for older artifacts that predate producer binding.
     const packages = releaseName + '-packages';
     const reruns = releaseName + '-reruns';
+    const prefix = releaseName + '-attempt-';
+    const packageAttempt = name => {
+      if (!name.startsWith(prefix)) return 0;
+      const match = /^([1-9]\d*)-job-[1-9]\d*$/.exec(name.slice(prefix.length));
+      return match ? Number(match[1]) : 0;
+    };
+    const scanned = new Set();
+    const candidateFor = run => ({ run: String(run.id), sha: run.head_sha,
+      archive: `Flecha-${platform}.${platform.startsWith('windows-') ? 'zip' : 'tar.gz'}` });
+    const jobPackages = async function* (run) {
+      const candidate = candidateFor(run);
+      if (scanned.has(candidate.run)) return;
+      scanned.add(candidate.run);
+      const artifacts = await runArtifacts(candidate.run);
+      if (!artifacts) return;
+      const uploads = artifacts.filter(upload => !upload.expired)
+        .map(upload => ({ upload, attempt: packageAttempt(upload.name) }))
+        .filter(({ attempt }) => attempt > 0 && attempt <= run.run_attempt)
+        .sort((a, b) => b.attempt - a.attempt);
+      for (const { upload } of uploads) yield { ...candidate, id: upload.id, name: upload.name };
+    };
+
+    // Try the exact index and legacy names before scanning for unindexed packages.
     for (const name of [packages, releaseName + '-attempt-1', reruns, releaseName]) {
       for await (const artifact of listArtifacts(`${actions}/artifacts`, options, api, name)) {
         if (artifact.name !== name) continue;
         const run = await source(artifact);
         if (!run) continue;
-        const id = String(run.id);
-        const candidate = { run: id, sha: run.head_sha,
-          archive: `Flecha-${platform}.${platform.startsWith('windows-') ? 'zip' : 'tar.gz'}` };
         if (name === packages) {
-          const prefix = releaseName + '-attempt-';
-          const uploads = [];
-          for await (const upload of listArtifacts(`${actions}/runs/${id}/artifacts`, options, api)) {
-            if (upload.expired || !upload.name.startsWith(prefix)) continue;
-            const match = /^([1-9]\d*)-job-[1-9]\d*$/.exec(upload.name.slice(prefix.length));
-            if (match && Number(match[1]) <= run.run_attempt) uploads.push({ upload, attempt: Number(match[1]) });
-          }
-          for (const { upload } of uploads.sort((a, b) => b.attempt - a.attempt)) {
-            yield { ...candidate, id: upload.id, name: upload.name };
-          }
+          yield* jobPackages(run);
           continue;
         }
+        const candidate = candidateFor(run);
         if (name !== reruns) {
           yield { ...candidate, id: artifact.id, name };
           continue;
         }
         for (let attempt = run.run_attempt; attempt > 1; attempt--) {
           const scoped = `${releaseName}-attempt-${attempt}`;
-          for await (const upload of listArtifacts(`${actions}/runs/${id}/artifacts`, options, api, scoped)) {
+          const uploads = await runArtifacts(candidate.run, scoped);
+          if (!uploads) break;
+          for (const upload of uploads) {
             if (upload.name === scoped && !upload.expired) yield { ...candidate, id: upload.id, name: scoped };
           }
         }
       }
+    }
+    for await (const artifact of listArtifacts(`${actions}/artifacts`, options, api)) {
+      if (!packageAttempt(artifact.name) || scanned.has(String(artifact.workflow_run?.id))) continue;
+      const run = await source(artifact);
+      if (run) yield* jobPackages(run);
     }
     return;
   }
@@ -303,13 +328,8 @@ export async function* findReusableArtifacts(options, api) {
     const run = await source(artifact);
     if (!run) continue;
     indexed.add(artifact.workflow_run.id);
-    let artifacts;
-    try {
-      artifacts = await Array.fromAsync(listArtifacts(`${actions}/runs/${run.id}/artifacts`, options, api));
-    } catch (error) {
-      if (error.status === 404) continue;
-      throw error;
-    }
+    const artifacts = await runArtifacts(run.id);
+    if (!artifacts) continue;
     for (const candidate of indexedCheckpoints(artifacts, platform, key)) {
       yield { ...candidate, run: String(run.id), sha: run.head_sha };
     }

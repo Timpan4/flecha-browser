@@ -760,7 +760,7 @@ test('package handoff requires exactly one upload and publication metadata prece
   }
 });
 
-test('portable discovery uses exact repository queries and finds job-scoped and legacy packages', async () => {
+test('portable discovery tries exact repository queries before its prefix fallback', async () => {
   const options = { portableOnly: true, repository: 'owner/repo', branch: 'main', currentRun: '10',
     platform: 'linux-x64', releaseName: 'release-linux-x64-key-layout' };
   for (const format of ['none', 'legacy', 'job-scoped']) {
@@ -777,17 +777,68 @@ test('portable discovery uses exact repository queries and finds job-scoped and 
           .map((suffix, id) => ({ id, name: options.releaseName + suffix, expired: id === 4 }));
         return { artifacts, total_count: artifacts.length };
       }
-      assert.ok(name, 'Repository-wide portable queries require an exact name');
       names.push(name);
+      if (!name) return { artifacts: [], total_count: 0 };
       const exists = format === 'legacy' && (name.endsWith('-reruns') || name.endsWith('-attempt-2')) ||
         format === 'job-scoped' && name.endsWith('-packages');
       return { artifacts: exists ? [{ name, workflow_run: { id: 9 } }] : [], total_count: Number(exists) };
     }));
     assert.deepEqual(names, ['-packages', '-attempt-1', '-reruns', ...(format === 'legacy' ? ['-attempt-3', '-attempt-2'] : []), '']
-      .map(suffix => options.releaseName + suffix));
+      .map(suffix => options.releaseName + suffix).concat(null));
     const expected = { none: [], legacy: ['-attempt-2'], 'job-scoped': suffixes };
     assert.deepEqual(candidates.map(c => c.name), expected[format].map(suffix => options.releaseName + suffix));
   }
+});
+
+test('portable discovery skips a deleted indexed run and finds an older package', async () => {
+  const repository = 'owner/repo';
+  const releaseName = 'release-linux-x64-key-layout';
+  const options = { portableOnly: true, repository, branch: 'main', currentRun: '10', platform: 'linux-x64', releaseName };
+  for (const [index, name] of [
+    [releaseName + '-packages', releaseName + '-attempt-2-job-70'],
+    [releaseName + '-reruns', releaseName + '-attempt-2'],
+  ]) {
+    let deletedListings = 0;
+    const candidates = findReusableArtifacts(options, endpoint => {
+      const url = new URL('https://api.github.com/' + endpoint);
+      if (url.pathname.endsWith('/actions/artifacts')) {
+        const artifacts = url.searchParams.get('name') === index ? [9, 8].map(id => ({ name: index, workflow_run: { id } })) : [];
+        return { artifacts, total_count: artifacts.length };
+      }
+      if (url.pathname.endsWith('/runs/9/artifacts')) {
+        deletedListings++;
+        throw Object.assign(new Error('run deleted'), { status: 404 });
+      }
+      if (url.pathname.endsWith('/runs/8/artifacts')) return { artifacts: [{ id: 80, name }], total_count: 1 };
+      const id = Number(url.pathname.split('/').at(-1));
+      assert.ok(id === 8 || id === 9, endpoint);
+      return { id, run_attempt: id === 9 ? 3 : 2, head_sha: `sha-${id}`, head_repository: { full_name: repository },
+        path: '.github/workflows/nightly-release.yml', head_branch: 'main', event: 'schedule' };
+    });
+    assert.deepEqual((await candidates.next()).value, { id: 80, name, run: '8', sha: 'sha-8', archive: 'Flecha-linux-x64.tar.gz' });
+    assert.equal(deletedListings, 1);
+  }
+});
+
+test('portable discovery finds a job-scoped package without an index and ignores untrusted runs', async () => {
+  const repository = 'owner/repo';
+  const releaseName = 'release-linux-x64-key-layout';
+  const name = releaseName + '-attempt-2-job-70';
+  const options = { portableOnly: true, repository, branch: 'main', currentRun: '10', platform: 'linux-x64', releaseName };
+  const candidates = await Array.fromAsync(findReusableArtifacts(options, endpoint => {
+    const url = new URL('https://api.github.com/' + endpoint);
+    if (url.pathname.endsWith('/actions/artifacts')) {
+      if (url.searchParams.has('name')) return { artifacts: [], total_count: 0 };
+      const id = url.searchParams.get('page') === '1' ? 9 : 8;
+      return { artifacts: [{ name, workflow_run: { id } }], total_count: 2 };
+    }
+    if (url.pathname.endsWith('/runs/8/artifacts')) return { artifacts: [{ id: 80, name }], total_count: 1 };
+    const id = Number(url.pathname.split('/').at(-1));
+    assert.ok(id === 8 || id === 9, endpoint);
+    return { id, run_attempt: 2, head_sha: `sha-${id}`, head_repository: { full_name: repository },
+      path: '.github/workflows/nightly-release.yml', head_branch: id === 8 ? 'main' : 'feature', event: 'schedule' };
+  }));
+  assert.deepEqual(candidates, [{ id: 80, name, run: '8', sha: 'sha-8', archive: 'Flecha-linux-x64.tar.gz' }]);
 });
 
 test('an intentional compilation deadline creates a checkpoint outcome', async () => {

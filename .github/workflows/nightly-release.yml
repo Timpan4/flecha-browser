@@ -35,6 +35,7 @@ jobs:
         with:
           path: chromium/shell/.cache/adblock
           key: adblock-nightly-${{ runner.os }}-${{ steps.adblock-cache.outputs.bucket }}
+          restore-keys: adblock-nightly-${{ runner.os }}-
       - run: npm run shell:build
       - run: npm run host:build
       - id: platforms

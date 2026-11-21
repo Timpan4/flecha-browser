@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { once } from 'node:events';
 import fs from 'node:fs/promises';
+import { createServer, get } from 'node:http';
 import path from 'node:path';
 import os from 'node:os';
 import { Readable } from 'node:stream';
@@ -103,4 +105,72 @@ test('compressed wire data is decoded and a truncated gzip refresh retains the v
   }
   await assert.rejects(buildAdblock(out, { cache: path.join(out, 'empty-cache'), download: truncated }),
     error => error.cause?.code === 'Z_BUF_ERROR');
+});
+
+test('wire data exceeding Content-Length is rejected before reading more chunks', async t => {
+  const out = await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-rules-length-'));
+  t.after(() => fs.rm(out, { recursive: true, force: true }));
+  const download = () => Object.assign({
+    async *[Symbol.asyncIterator]() {
+      yield Buffer.from('oversized chunk');
+      assert.fail('must stop reading once Content-Length is exceeded');
+    },
+  }, { statusCode: 200, headers: { 'content-length': '1' } });
+  await assert.rejects(buildAdblock(out, { cache: path.join(out, 'cache'), download }),
+    error => error.cause?.message === 'response exceeded Content-Length');
+});
+
+test('a relative redirect reaches the local server and a partial refresh keeps the validated cache', async t => {
+  const out = await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-rules-transport-'));
+  t.after(() => fs.rm(out, { recursive: true, force: true }));
+  const cache = path.join(out, 'cache');
+  const original = subscription(LISTS.easylist, '/cached-rule');
+  const requests = [];
+  let truncate = false;
+  const server = createServer((req, res) => {
+    requests.push(req.url);
+    if (req.url === '/easylist/easylist.txt') {
+      res.writeHead(302, { Location: '../updates/easylist.txt' }).end();
+    } else if (req.url === '/updates/easylist.txt' && truncate) {
+      const partial = subscription(LISTS.easylist, '/partial-rule');
+      const complete = partial + '/another-rule\n';
+      res.writeHead(200, { 'Content-Length': Buffer.byteLength(complete) });
+      res.write(partial, () => res.destroy());
+    } else {
+      const body = req.url === '/updates/easylist.txt' ? original : subscription(LISTS.easyprivacy, '/privacy');
+      res.writeHead(200, { 'Content-Length': Buffer.byteLength(body) }).end(body);
+    }
+  });
+  t.after(() => new Promise(resolve => {
+    server.close(resolve);
+    server.closeAllConnections();
+  }));
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const signals = new Map();
+  // Route the HTTPS URLs to a local HTTP transport without relaxing redirect validation.
+  const download = (url, options) => new Promise((resolve, reject) => {
+    const { pathname } = new URL(url);
+    signals.set(pathname, options.signal);
+    get({ ...options, hostname: '127.0.0.1', port: server.address().port, path: pathname }, resolve).once('error', reject);
+  });
+
+  const file = path.join(cache, 'easylist.txt');
+  await buildAdblock(out, { cache, download });
+  assert.equal(await fs.readFile(file, 'utf8'), original);
+  assert.equal(signals.get('/easylist/easylist.txt'), signals.get('/updates/easylist.txt'));
+
+  truncate = true;
+  const warnings = t.mock.method(console, 'warn', () => {});
+  await buildAdblock(out, { cache, refresh: true, download });
+  assert.deepEqual(requests.filter(url => url.endsWith('/easylist.txt')), [
+    '/easylist/easylist.txt', '/updates/easylist.txt', '/easylist/easylist.txt', '/updates/easylist.txt',
+  ]);
+  assert.equal(signals.get('/easylist/easylist.txt'), signals.get('/updates/easylist.txt'));
+  assert.deepEqual(warnings.mock.calls.map(call => call.arguments[0]), [
+    "adblock: couldn't refresh easylist (aborted); using the cached copy",
+  ]);
+  assert.equal(await fs.readFile(file, 'utf8'), original);
+  const [rule] = JSON.parse(await fs.readFile(path.join(out, 'rules/easylist.json'), 'utf8'));
+  assert.equal(rule.condition.urlFilter, '/cached-rule');
 });

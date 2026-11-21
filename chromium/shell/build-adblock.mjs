@@ -16,7 +16,6 @@ import fs from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { get } from 'node:https';
 import path from 'node:path';
-import { buffer } from 'node:stream/consumers';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { brotliDecompress, gunzip, inflate } from 'node:zlib';
@@ -65,9 +64,44 @@ const decompress = new Map([
   ['deflate', promisify(inflate)],
   ['br', promisify(brotliDecompress)],
 ]);
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+// https://fetch.spec.whatwg.org/#http-redirect-fetch
+const MAX_REDIRECTS = 20;
 
 function requestList(url, options) {
   return new Promise((resolve, reject) => get(url, options, resolve).once('error', reject));
+}
+
+async function downloadList(url, download, options) {
+  for (let redirects = 0; ; redirects++) {
+    options.signal.throwIfAborted();
+    const res = await download(url, options);
+    if (!REDIRECT_STATUSES.has(res.statusCode) || res.headers.location === undefined) return res;
+    res.destroy();
+    if (redirects === MAX_REDIRECTS) throw new Error('too many HTTP redirects');
+    const target = new URL(res.headers.location, url);
+    if (target.protocol !== 'https:') throw new Error('filter list redirect requires HTTPS');
+    url = target.href;
+  }
+}
+
+async function readWireBytes(res, length) {
+  if (length !== undefined && !/^\d+$/.test(length)) {
+    res.destroy();
+    throw new Error('could not verify Content-Length');
+  }
+  const expected = length === undefined ? undefined : BigInt(length);
+  const chunks = [];
+  let received = 0;
+  for await (const chunk of res) {
+    received += chunk.byteLength;
+    if (expected !== undefined && BigInt(received) > expected) {
+      throw new Error('response exceeded Content-Length');
+    }
+    chunks.push(chunk);
+  }
+  if (expected !== undefined && BigInt(received) !== expected) throw new Error('could not verify Content-Length');
+  return Buffer.concat(chunks, received);
 }
 
 function checkedText(id, bytes, requireChecksum = false) {
@@ -98,7 +132,7 @@ async function fetchList(id, url, refresh, cache, download) {
   }
   let text;
   try {
-    const res = await download(url, { headers: { 'Accept-Encoding': 'gzip' }, signal: AbortSignal.timeout(30000) });
+    const res = await downloadList(url, download, { headers: { 'Accept-Encoding': 'gzip' }, signal: AbortSignal.timeout(30000) });
     if (res.statusCode !== 200) {
       res.destroy();
       throw new Error(`HTTP ${res.statusCode}`);
@@ -110,11 +144,8 @@ async function fetchList(id, url, refresh, cache, download) {
       res.destroy();
       throw new Error(`unsupported Content-Encoding: ${encoding}`);
     }
-    const bytes = await buffer(res);
     const length = res.headers['content-length'];
-    if (length !== undefined && (!/^\d+$/.test(length) || BigInt(length) !== BigInt(bytes.byteLength))) {
-      throw new Error('could not verify Content-Length');
-    }
+    const bytes = await readWireBytes(res, length);
     text = checkedText(id, decode ? await decode(bytes) : bytes, !decode && length === undefined);
   } catch (err) {
     if (stat) {
