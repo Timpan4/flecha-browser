@@ -792,6 +792,7 @@ test('the agent restores focus, replays idle logs, and recovers a stalled debugg
   let diagnosingRefusal = false;
   let detachPending;
   let evaluationError;
+  const evaluationDeadlines = [];
   const inputFailures = new Map();
   let pendingNavigation = Promise.withResolvers();
   const idleMessage = { type: 'error', args: [{ value: 'Logged while idle' }] };
@@ -799,6 +800,7 @@ test('the agent restores focus, replays idle logs, and recovers a stalled debugg
     runtime: { connectNative: () => port },
     tabs: {
       onRemoved: event(),
+      query: async () => [tab],
       get: () => {
         if (!pendingTabRead) return Promise.resolve(tab);
         waitingForTabRead = true;
@@ -821,7 +823,7 @@ test('the agent restores focus, replays idle logs, and recovers a stalled debugg
         calls.push(['detach', tabId]);
         await detachPending?.promise;
       },
-      async sendCommand(_tab, method, params) {
+      async sendCommand(_tab, method, params, options) {
         if (method === 'Emulation.setFocusEmulationEnabled') emulatedFocus = params.enabled;
         if (method === 'Runtime.enable') {
           await setupPending?.promise;
@@ -844,16 +846,26 @@ test('the agent restores focus, replays idle logs, and recovers a stalled debugg
         }
         if (method === 'Log.disable') logEnabled = false;
         if (method === 'Runtime.evaluate') {
+          evaluationDeadlines.push(options?.deadline);
           if (refusedEvaluation) throw new Error('Cannot attach to this target');
           await readPending?.promise;
           if (evaluationError) return { exceptionDetails: { text: evaluationError } };
+          if (params.returnByValue === false) return { result: { objectId: 'fixture button' } };
           return { result: { value: 'fixture body' } };
         }
         if (method === 'Input.dispatchKeyEvent') {
-          calls.push([params.type]);
-          if (inputFailures.has(params.type)) throw new Error(inputFailures.get(params.type));
-          if (params.type === 'rawKeyDown') await keyDown?.promise;
-          if (params.type === 'keyUp') await keyUp?.promise;
+          assert.equal(emulatedFocus, true);
+          const dispatch = async ({ type }, pending) => {
+            calls.push([type]);
+            if (inputFailures.has(type)) throw new Error(inputFailures.get(type));
+            await pending?.promise;
+          };
+          const replies = await Promise.allSettled([
+            dispatch(params, keyDown),
+            dispatch(options.releaseParams, keyUp),
+          ]);
+          const failure = replies.find(({ status }) => status === 'rejected');
+          if (failure) throw failure.reason;
         }
       },
     },
@@ -863,13 +875,17 @@ test('the agent restores focus, replays idle logs, and recovers a stalled debugg
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const store = new Store({ load: () => undefined, save: () => {} });
   store.state.agent = { enabled: true };
-  const phone = store.addTab(tab.url).id;
+  const phone = store.addTab(tab.url, { activate: false }).id;
   let liveId = tab.id;
   assert.equal(await hold(tab.id, 'responsive'), true);
   const host = registerNativeHost({ store, broadcastState() {}, agentTabsChanged() {}, tabs: {
     chromeTab: async () => tab.id,
-    liveId: () => liveId,
-    close(id) { store.closeTab(id); liveId = undefined; },
+    currentChromeTab: () => liveId,
+    async close(id, { check }) {
+      await check(liveId);
+      store.closeTab(id);
+      liveId = undefined;
+    },
   } });
   readPending = Promise.withResolvers();
   port.onMessage.emit({ type: 'tool', id: 23, name: 'read_page', args: { tabId: phone } });
@@ -879,11 +895,13 @@ test('the agent restores focus, replays idle logs, and recovers a stalled debugg
   await nextTurn();
   t.mock.timers.tick(59_000);
   await nextTurn();
-  assert.equal(emulatedFocus, true, 'a tool retains its debugger while the host still waits');
+  assert.equal(host.agentTabsInUse().has(tab.id), true, 'a tool retains its debugger while the host still waits');
+  assert.equal(Number.isFinite(evaluationDeadlines[0]), true, 'a legacy tool message still bounds native dispatch');
+  assert.equal(emulatedFocus, false, 'reading a page never emulates focus');
   readPending.resolve();
   await nextTurn();
   assert.match(results.find(({ type }) => type === 'toolResult').result.content[0].text, /fixture body/);
-  assert.equal(emulatedFocus, true);
+  assert.equal(emulatedFocus, false);
   t.mock.timers.tick(120_000);
   await nextTurn();
   assert.equal(emulatedFocus, false);
@@ -958,7 +976,7 @@ test('the agent restores focus, replays idle logs, and recovers a stalled debugg
   keyDown = Promise.withResolvers();
   port.onMessage.emit({ type: 'tool', id: 31, name: 'press_key', args: { tabId: phone, key: 'Escape' } });
   await nextTurn();
-  assert.deepEqual(calls.at(-1), ['rawKeyDown']);
+  assert.deepEqual(calls.slice(-2), [['rawKeyDown'], ['keyUp']]);
   t.mock.timers.tick(60_000);
   await nextTurn();
   assert.deepEqual(calls.at(-1), ['keyUp']);
@@ -967,11 +985,11 @@ test('the agent restores focus, replays idle logs, and recovers a stalled debugg
   await nextTurn();
 
   readPending = Promise.withResolvers();
-  port.onMessage.emit({ type: 'tool', id: 34, name: 'evaluate', args: { tabId: phone, expression: 'new Promise(() => {})' } });
+  port.onMessage.emit({ type: 'tool', id: 34, name: 'read_page', args: { tabId: phone } });
   await nextTurn();
   t.mock.timers.tick(60_000);
   await nextTurn();
-  assert.match(results.find(({ id }) => id === 34).result.content[0].text, /didn’t answer evaluate within 60s/);
+  assert.match(results.find(({ id }) => id === 34).result.content[0].text, /didn’t answer read_page within 60s/);
   t.mock.timers.tick(59_999);
   port.onMessage.emit({ type: 'tool', id: 35, name: 'console_logs', args: { tabId: phone } });
   await nextTurn();
@@ -982,7 +1000,7 @@ test('the agent restores focus, replays idle logs, and recovers a stalled debugg
   t.mock.timers.tick(100);
   await nextTurn();
   assert.equal(results.find(({ id }) => id === 35)?.result.isError, undefined);
-  assert.ok(results.some(({ id }) => id === 35), 'a new tool runs even though the original evaluation never settles');
+  assert.ok(results.some(({ id }) => id === 35), 'a new tool runs even though the original read never settles');
 
   assert.equal(await hold(tab.id, 'responsive'), true);
   disableRuntime = Promise.withResolvers();
@@ -1148,7 +1166,7 @@ test('the agent restores focus, replays idle logs, and recovers a stalled debugg
   port.onMessage.emit({ type: 'tool', id: 101, name: 'press_key', args: { tabId: phone, key: 'Escape' } });
   await nextTurn();
   assert.deepEqual(calls.slice(-2), [['rawKeyDown'], ['keyUp']]);
-  assert.match(results.find(({ id }) => id === 101)?.result.content[0].text ?? '', /Press failed before release stalled/);
+  assert.equal(results.some(({ id }) => id === 101), false, 'the native reply waits for both halves of the gesture');
   port.onMessage.emit({ type: 'tool', id: 102, name: 'console_logs', args: { tabId: phone } });
   await nextTurn();
   assert.equal(results.some(({ id }) => id === 102), false, 'the failed press keeps the tab locked while release is pending');
@@ -1157,6 +1175,7 @@ test('the agent restores focus, replays idle logs, and recovers a stalled debugg
     t.mock.timers.tick(60_000);
     await nextTurn();
   }
+  assert.match(results.find(({ id }) => id === 101)?.result.content[0].text ?? '', /didn’t answer press_key within 60s/);
   assert.ok(results.some(({ id, result }) => id === 102 && result.isError));
   assert.deepEqual(calls.at(-1), ['detach', tab.id]);
   port.onMessage.emit({ type: 'tool', id: 103, name: 'console_logs', args: { tabId: phone } });
@@ -1180,13 +1199,13 @@ test('the agent restores focus, replays idle logs, and recovers a stalled debugg
 
   readPending = Promise.withResolvers();
   detachPending = Promise.withResolvers();
-  port.onMessage.emit({ type: 'tool', id: 58, name: 'evaluate', args: { tabId: phone, expression: 'fixture' } });
+  port.onMessage.emit({ type: 'tool', id: 58, name: 'read_page', args: { tabId: phone } });
   await nextTurn();
   for (const _ of [1, 2]) {
     t.mock.timers.tick(60_000);
     await nextTurn();
   }
-  assert.match(results.find(({ id }) => id === 58).result.content[0].text, /didn’t answer evaluate within 60s/);
+  assert.match(results.find(({ id }) => id === 58).result.content[0].text, /didn’t answer read_page within 60s/);
   assert.deepEqual(calls.at(-1), ['detach', tab.id]);
   port.onMessage.emit({ type: 'tool', id: 59, name: 'console_logs', args: { tabId: phone } });
   await nextTurn();
@@ -1205,7 +1224,7 @@ test('the agent restores focus, replays idle logs, and recovers a stalled debugg
 
   readPending = Promise.withResolvers();
   detachPending = Promise.withResolvers();
-  port.onMessage.emit({ type: 'tool', id: 61, name: 'evaluate', args: { tabId: phone, expression: 'fixture' } });
+  port.onMessage.emit({ type: 'tool', id: 61, name: 'read_page', args: { tabId: phone } });
   await nextTurn();
   for (const _ of [1, 2]) {
     t.mock.timers.tick(60_000);

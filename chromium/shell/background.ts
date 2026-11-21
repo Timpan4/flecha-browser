@@ -86,7 +86,8 @@ async function start() {
       };
   const store = new Store(persistence);
   /** Physical tabs can be mapped before they are ready; consumers share their pending setup. */
-  const tabSetups = new Map<string, { promise: Promise<number>; transferred: boolean }>();
+  type TabSetup = { promise: Promise<number>; transferred: boolean; requests?: Map<() => void, number | undefined> };
+  const tabSetups = new Map<string, TabSetup>();
   let nativeHost: ReturnType<typeof registerNativeHost> | undefined;
   let features: Features | undefined;
   // Asked of macOS on start and whenever a window takes focus (the user may have changed it in System Settings).
@@ -376,12 +377,39 @@ async function start() {
     await chrome.flechaPrivate.setAgentTab(chromeId, true);
   }
   /** Starts setup once per logical tab, before its first asynchronous operation can yield. */
-  function setupTab(id: string, setup: () => Promise<number>): Promise<number> {
+  function joinTabSetup(setup: TabSetup, requireCurrent?: () => void, deadline?: number) {
+    if (requireCurrent) setup.requests?.set(requireCurrent, deadline);
+    else setup.requests = undefined;
+    return setup.promise;
+  }
+
+  function setupTab(id: string, setup: (setupDeadline: () => number | undefined) => Promise<number>, requireCurrent?: () => void, deadline?: number): Promise<number> {
     const pending = tabSetups.get(id);
-    if (pending) return pending.promise;
-    const entry = {
+    if (pending) return joinTabSetup(pending, requireCurrent, deadline);
+    const agentAtStart = store.state.tabs[id]?.agent === true;
+    const entry: TabSetup = {
       transferred: false,
-      promise: Promise.resolve().then(setup).finally(() => {
+      requests: requireCurrent ? new Map([[requireCurrent, deadline]]) : undefined,
+      promise: Promise.resolve().then(() => setup(() => {
+        const tab = store.state.tabs[id];
+        if (!tab) throw new Error('Tab closed during setup.');
+        if (!entry.requests || store.windowShowing(id) !== undefined) return;
+        if (agentAtStart && !tab.agent) return;
+        // The latest live deadline keeps shared setup available to every remaining consumer.
+        let latest: number | undefined;
+        let expired: unknown;
+        for (const [request, requestDeadline] of entry.requests) {
+          try {
+            request();
+            if (requestDeadline === undefined) return;
+            latest = Math.max(latest ?? requestDeadline, requestDeadline);
+          } catch (error) {
+            expired = error;
+          }
+        }
+        if (latest === undefined) throw expired;
+        return latest;
+      })).finally(() => {
         if (tabSetups.get(id) === entry) tabSetups.delete(id);
       }),
     };
@@ -389,7 +417,8 @@ async function start() {
     return entry.promise;
   }
   /** Marks before navigating, and leaves a tab taken by the user to its new owner. */
-  async function prepareChromeTab(id: string, chromeId: number, url?: string, active?: boolean) {
+  async function prepareChromeTab(id: string, chromeId: number, url?: string, active?: boolean, setupDeadline?: () => number | undefined) {
+    setupDeadline?.();
     const agent = !!store.state.tabs[id]?.agent;
     await markAgentTab(id, chromeId);
     if (tabSetups.get(id)?.transferred) {
@@ -401,12 +430,28 @@ async function start() {
     if (agent && !store.state.tabs[id].agent) {
       await chrome.flechaPrivate.setAgentTab(chromeId, false);
     }
-    if (url) await chrome.tabs.update(chromeId, { url, ...(active === undefined ? {} : { active }) });
+    let deadline = setupDeadline?.();
+    if (!url) return;
+    const properties = { url, ...(active === undefined ? {} : { active }) };
+    while (true) {
+      try {
+        if (deadline === undefined) await chrome.tabs.update(chromeId, properties);
+        else await chrome.tabs.update(chromeId, properties, false, deadline);
+        return;
+      } catch (error) {
+        if (deadline === undefined || !(error instanceof Error) || error.message !== 'The agent request expired.') throw error;
+        if (live.get(id) !== chromeId) throw new Error('Tab ownership changed during setup');
+        // A consumer may have joined while Chromium was processing the expired navigation.
+        const nextDeadline = setupDeadline?.();
+        if (nextDeadline !== undefined && nextDeadline <= deadline) throw error;
+        deadline = nextDeadline;
+      }
+    }
   }
   /** A window's start tab follows the same readiness and failure rules as a newly created tab. */
   function adoptChromeTab(id: string, chromeId: number, url?: string, active?: boolean) {
     const pending = tabSetups.get(id);
-    if (pending) return pending.promise;
+    if (pending) return joinTabSetup(pending);
     // Startup can visit several blank tabs in one turn; reserve the first before yielding.
     live.set(id, chromeId);
     return setupTab(id, async () => {
@@ -437,8 +482,9 @@ async function start() {
     void chrome.flechaPrivate.setAgentTab(chromeId, false).catch(() => undefined);
   }
 
-  function openChromeTab(id: string, active: boolean, windowId: string) {
-    return setupTab(id, async () => {
+  function openChromeTab(id: string, active: boolean, windowId: string, requireCurrent?: () => void, deadline?: number) {
+    return setupTab(id, async (requireSetupCurrent) => {
+      requireSetupCurrent();
       const tab = store.state.tabs[id];
       if (!tab) throw new Error('Tab closed before setup');
       const partition = partitionFor(id);
@@ -449,13 +495,14 @@ async function start() {
       let chromeId: number | undefined;
       try {
         const options = { windowId: await chromeWindowFor(windowId), url: agent ? 'about:blank' : url, active };
+        requireSetupCurrent();
         // A Space with separate cookies and logins: its own storage partition (patch 0034).
         chromeId = partition
           ? await chrome.flechaPrivate.createTab({ ...options, partition })
           : (await chrome.tabs.create(options)).id!;
         live.set(id, chromeId);
         livePartition.set(id, partition);
-        if (agent) await prepareChromeTab(id, chromeId, url);
+        if (agent) await prepareChromeTab(id, chromeId, url, undefined, requireSetupCurrent);
         if (tab.muted) void chrome.tabs.update(chromeId, { muted: true });
         rememberLive();
         return chromeId;
@@ -465,7 +512,7 @@ async function start() {
       } finally {
         creating--;
       }
-    });
+    }, requireCurrent, deadline);
   }
 
   /**
@@ -562,12 +609,26 @@ async function start() {
   // The tabs that were open before the background (re)started.
   const partitionsKnown = Promise.all([...live].map(([id, chromeId]) => learnPartition(id, chromeId)));
 
-  async function makePlaceholder(chromeWindowId: number) {
+  const placeholderCreations = new Map<number, { created: Promise<number>; active: boolean }>();
+  async function makePlaceholder(chromeWindowId: number, active = true) {
+    const pending = placeholderCreations.get(chromeWindowId);
+    if (pending) {
+      const id = await pending.created;
+      if (active && !pending.active) await showPlaceholder(chromeWindowId);
+      return id;
+    }
     creating++;
+    const created = (async () => {
+      const id = (await chrome.tabs.create({ windowId: chromeWindowId, active })).id!;
+      placeholders.set(chromeWindowId, id);
+      return id;
+    })();
+    placeholderCreations.set(chromeWindowId, { created, active });
     try {
-      placeholders.set(chromeWindowId, (await chrome.tabs.create({ windowId: chromeWindowId, active: true })).id!);
+      return await created;
     } finally {
       creating--;
+      placeholderCreations.delete(chromeWindowId);
     }
   }
 
@@ -1630,6 +1691,29 @@ async function start() {
   // Boosts, environments, local servers, the responsive view, console errors and ad blocking.
   features = registerFeatures({ store, broadcastState: sendState, liveTabId: (id) => live.get(id), activeChromeTabId: () => activeChromeId(), windowId: here });
 
+  const pendingAgentOpens = new Map<string, () => void>();
+
+  async function removeAgentTab(id: string, chromeId: number, allowVisible: boolean, beforeRemove: () => void, deadline?: number) {
+    try {
+      const tab = await chrome.tabs.get(chromeId);
+      beforeRemove();
+      const replacement = allowVisible && tab.active
+        ? placeholders.get(tab.windowId) ?? await makePlaceholder(tab.windowId, false)
+        : undefined;
+      beforeRemove();
+      ours.add(chromeId);
+      await chrome.tabs.remove(chromeId, !allowVisible, deadline, replacement, tab.windowId);
+    } catch (error) {
+      ours.delete(chromeId);
+      if (allowVisible) sync();
+      throw error;
+    }
+    if (live.get(id) !== chromeId) throw new Error('Tab ownership changed while closing the agent target.');
+    live.delete(id);
+    livePartition.delete(id);
+    rememberLive();
+  }
+
   // Imports and the coding-agent bridge, through Flecha's native messaging host. Both are
   // about your regular Spaces, so incognito windows have neither.
   if (!incognito) nativeHost = registerNativeHost({
@@ -1637,18 +1721,60 @@ async function start() {
     canIsolate,
     broadcastState: sendState,
     tabs: {
-      open: (url) => addTab(resolveInput(url, store.state.searchEngine), { activate: false, agent: true }).id,
-      chromeTab: async (id) => {
-        await syncing;
-        const pending = tabSetups.get(id);
-        if (pending) return pending.promise;
-        return live.get(id) ?? (store.state.tabs[id] ? openChromeTab(id, false, store.locate(id)?.windowId ?? store.focusedWindowId) : undefined);
+      open: (url, requireCurrent) => {
+        const { id } = addTab(resolveInput(url, store.state.searchEngine), { activate: false, agent: true });
+        pendingAgentOpens.set(id, requireCurrent);
+        return id;
       },
-      liveId: (id) => live.get(id),
+      chromeTab: async (id, requireCurrent, deadline) => {
+        await syncing;
+        requireCurrent();
+        const pending = tabSetups.get(id);
+        const chromeId = pending
+          ? await joinTabSetup(pending, requireCurrent, deadline)
+          : live.get(id) ?? (store.state.tabs[id] ? await openChromeTab(id, false, store.locate(id)?.windowId ?? store.focusedWindowId, requireCurrent, deadline) : undefined);
+        requireCurrent();
+        if (chromeId !== undefined && store.state.tabs[id] && live.get(id) === chromeId &&
+            pendingAgentOpens.get(id) !== requireCurrent) pendingAgentOpens.delete(id);
+        return chromeId;
+      },
+      finishOpen: async (id, expired) => {
+        if (!pendingAgentOpens.delete(id) || !expired) return;
+        const untouched = () => {
+          const tab = store.state.tabs[id];
+          return tab?.agent && tab.unseen && !tabSetups.has(id) && store.windowShowing(id) === undefined;
+        };
+        if (!untouched()) return;
+        const chromeId = live.get(id);
+        if (chromeId !== undefined) {
+          try {
+            await removeAgentTab(id, chromeId, false, () => {
+              if (!untouched() || live.get(id) !== chromeId) throw new Error('Tab ownership changed during open rollback.');
+            });
+          } catch (error) {
+            console.warn('Flecha shell: could not roll back the agent tab', error);
+            return;
+          }
+        }
+        if (untouched()) store.closeTab(id, { archive: false });
+      },
+      currentChromeTab: (id) => live.get(id),
       activate: (id) => void store.activate(id),
-      close: (id) => {
+      close: async (id, { allowVisible, check, requireCurrent, deadline }) => {
+        const setup = tabSetups.get(id);
+        const chromeId = setup ? await setup.promise : live.get(id);
+        if (setup?.transferred) throw new Error('Tab transferred during setup.');
+        await check(chromeId);
+        const requireOwner = () => {
+          requireCurrent();
+          if (!store.state.tabs[id] || live.get(id) !== chromeId || tabSetups.has(id)) {
+            throw new Error('Tab ownership changed while closing the agent target.');
+          }
+        };
+        requireOwner();
+        if (chromeId !== undefined) await removeAgentTab(id, chromeId, allowVisible, requireOwner, deadline);
+        pendingAgentOpens.delete(id);
         store.closeTab(id);
-        void unload([id]);
       },
     },
     agentTabsChanged: async () => void (await tabSleep?.shownChanged()),

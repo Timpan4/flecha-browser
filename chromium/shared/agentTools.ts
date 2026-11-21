@@ -32,10 +32,11 @@ export const fail = (message: string): AgentResult => ({ content: [{ type: 'text
  * would be the same one for each.
  */
 const tabId = z.string().describe('Flecha tab id, from open_tab or list_tabs');
+const allowVisibleTab = z.boolean().optional().describe('Set to true only when the user asks you to act on a tab they are viewing.');
 
 /**
- * Every tool a coding agent gets, by name. They all work in the background: no tool but
- * activate_tab changes which tab the user sees or where their keystrokes go.
+ * Tools work in the background by default. Activating a tab and editing a visible
+ * page are explicit operations.
  */
 export const AGENT_TOOLS = {
   list_tabs: {
@@ -51,10 +52,10 @@ export const AGENT_TOOLS = {
     description: "Switch the user's view to a tab. Only when the user asks to see it: the other tools don't need the tab on screen.",
     inputSchema: { tabId: z.string() },
   },
-  close_tab: { description: 'Close a tab (pinned tabs and favorites are unloaded instead).', inputSchema: { tabId: z.string() } },
+  close_tab: { description: 'Close a tab (pinned tabs and favorites are unloaded instead).', inputSchema: { tabId, allowVisibleTab } },
   navigate: {
     description: 'Load a URL in a tab, or go back/forward/reload, and wait for the page to settle.',
-    inputSchema: { tabId, url: z.string().optional(), action: z.enum(['back', 'forward', 'reload']).optional() },
+    inputSchema: { tabId, allowVisibleTab, url: z.string().optional(), action: z.enum(['back', 'forward', 'reload']).optional() },
   },
   read_page: {
     description: "Read a tab's content: visible text (default), full HTML, or its links.",
@@ -66,17 +67,17 @@ export const AGENT_TOOLS = {
     inputSchema: { tabId, level: z.enum(['error', 'warning', 'info', 'debug']).optional(), limit: z.number().optional() },
   },
   click: {
-    description: 'Click the element matching a CSS selector, with a real mouse event.',
-    inputSchema: { tabId, selector: z.string() },
+    description: 'Send a real mouse click at the position of the element matching a CSS selector. Page changes can move the target before dispatch.',
+    inputSchema: { tabId, allowVisibleTab, selector: z.string() },
   },
   type: {
     description: 'Type text into the element matching a selector (or the focused one), optionally clearing it first and pressing Enter.',
-    inputSchema: { tabId, selector: z.string().optional(), text: z.string(), clear: z.boolean().optional(), submit: z.boolean().optional() },
+    inputSchema: { tabId, allowVisibleTab, selector: z.string().optional(), text: z.string(), clear: z.boolean().optional(), submit: z.boolean().optional() },
   },
-  press_key: { description: 'Press a key such as Enter, Tab, Escape or ArrowDown in a tab.', inputSchema: { tabId, key: z.string() } },
+  press_key: { description: 'Press a key such as Enter, Tab, Escape or ArrowDown in a tab.', inputSchema: { tabId, allowVisibleTab, key: z.string() } },
   evaluate: {
-    description: "Run JavaScript in a tab's page and return the result (promises are awaited, values are JSON-serialized).",
-    inputSchema: { tabId, expression: z.string() },
+    description: "Run JavaScript in a tab's page and return the result (promises are awaited, values are JSON-serialized). If an evaluation times out while a promise is pending, retry page reads, edits, or navigation after the evaluation settles or the page unloads. You can still activate or close the tab.",
+    inputSchema: { tabId, allowVisibleTab, expression: z.string() },
   },
   wait_for: {
     description: 'Wait until an element matching a selector exists (or the page finishes loading when no selector is given).',
@@ -85,3 +86,8 @@ export const AGENT_TOOLS = {
 } as const;
 
 export type AgentToolName = keyof typeof AGENT_TOOLS;
+export type AgentToolArgs = {
+  [Name in AgentToolName]: (typeof AGENT_TOOLS)[Name] extends { inputSchema: infer Shape extends z.ZodRawShape }
+    ? z.infer<z.ZodObject<Shape>>
+    : Record<string, never>;
+};
