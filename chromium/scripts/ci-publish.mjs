@@ -124,7 +124,7 @@ function currentSourceRun({ repository, branch, currentRun, run, monitorAttempt,
 export function publicationSource(input, gh) {
   const { repository, branch, run, buildAttempt, buildId, monitorAttempt, platform, artifact, artifactId, monitorId } = input;
   const prefix = `release-${platform}-`;
-  const suffix = `-attempt-${buildAttempt}`;
+  const suffix = `-attempt-${buildAttempt}-job-${buildId}`;
   const keys = artifact?.startsWith(prefix) && artifact.endsWith(suffix) && artifact.slice(prefix.length, -suffix.length);
   const match = /^([a-f0-9]{64})(?:-[a-f0-9]{64})?$/.exec(keys || '');
   if (!repository || !branch || ![run, buildAttempt, buildId, monitorAttempt, artifactId, monitorId].every(id => /^[1-9]\d*$/.test(id || '')) ||

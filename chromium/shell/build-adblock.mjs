@@ -14,13 +14,21 @@
 // rule count far under Chromium's guaranteed 30,000 static rules.
 import fs from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
+import { get } from 'node:https';
 import path from 'node:path';
+import { buffer } from 'node:stream/consumers';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
+import { brotliDecompress, gunzip, inflate } from 'node:zlib';
 import { writeManifest } from './build-version.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const cacheDir = path.join(here, '.cache', 'adblock');
 const MAX_AGE_MS = 4 * 24 * 60 * 60 * 1000;
+
+export function adblockCacheBucket() {
+  return Math.floor(Date.now() / MAX_AGE_MS);
+}
 
 export const LISTS = {
   easylist: 'https://easylist.to/easylist/easylist.txt',
@@ -52,15 +60,19 @@ const TYPES = {
 /** Options that don't change what's matched here. */
 const IGNORED = new Set(['important', 'all', 'webrtc']);
 
-// The unsigned easylist.to subscriptions are assembled from named source files.
-// EasyList's last include can be empty; EasyPrivacy's ends with exception rules.
-const lastSection = {
-  easylist: '! *** easylist:easylist_adult/adult_allowlist_popup.txt ***',
-  easyprivacy: '! *** easylist:easyprivacy/easyprivacy_allowlist_international.txt ***',
-};
+const decompress = new Map([
+  ['gzip', promisify(gunzip)],
+  ['deflate', promisify(inflate)],
+  ['br', promisify(brotliDecompress)],
+]);
 
-function checkedText(id, text) {
-  if (!/^\[Adblock Plus[^\]\r\n]*\]\r?\n/.test(text)) throw new Error('not a filter list');
+function requestList(url, options) {
+  return new Promise((resolve, reject) => get(url, options, resolve).once('error', reject));
+}
+
+function checkedText(id, bytes, requireChecksum = false) {
+  const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  if (!/^\[Adblock Plus(?: \d+(?:\.\d+)*)?\]\r?\n/.test(text)) throw new Error('not a filter list');
   if (!new RegExp('^! Title: ' + id + '\\r?$', 'mi').test(text)) throw new Error('wrong filter list title');
   const checksumLine = /^![ \t]*checksum[ \t]*:[^\r\n]*/im.exec(text);
   if (checksumLine) {
@@ -68,14 +80,8 @@ function checkedText(id, text) {
     const normalized = text.replaceAll('\r', '').replace(/\n+/g, '\n').replace(/^![ \t]*checksum[ \t]*:[^\n]*\n?/im, '');
     const checksum = createHash('md5').update(normalized).digest('base64').replace(/=+$/, '');
     if (checksum !== checksumLine[0].split(':')[1].trim()) throw new Error('ABP checksum mismatch');
-  } else {
-    const section = '\n' + lastSection[id] + '\n';
-    const lines = text.replaceAll('\r\n', '\n');
-    const last = lines.lastIndexOf(section);
-    if (last < 0 || !lines.endsWith('\n') ||
-        (id === 'easyprivacy' && !/^@@/m.test(lines.slice(last + section.length)))) {
-      throw new Error('incomplete final filter list section');
-    }
+  } else if (requireChecksum) {
+    throw new Error('filter list has no verifiable length, compression framing or ABP checksum');
   }
   for (const [line] of text.matchAll(/[^\r\n]+/g)) {
     if (convertList(line).rules.length) return text;
@@ -86,22 +92,30 @@ function checkedText(id, text) {
 async function fetchList(id, url, refresh, cache, download) {
   const file = path.join(cache, `${id}.txt`);
   const stat = fs.statSync(file, { throwIfNoEntry: false });
-  const cached = () => checkedText(id, fs.readFileSync(file, 'utf8'));
+  const cached = () => checkedText(id, fs.readFileSync(file));
   if (stat && !refresh && Date.now() - stat.mtimeMs < MAX_AGE_MS) {
     try { return cached(); } catch (error) { console.warn(`adblock: invalid cached ${id}: ${error.message}`); }
   }
   let text;
   try {
-    // Content-Length describes the wire representation. Request the original bytes.
-    const res = await download(url, { headers: { 'Accept-Encoding': 'identity' }, signal: AbortSignal.timeout(30000) });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const bytes = await res.arrayBuffer();
-    const length = res.headers.get('content-length');
-    if (length !== null && (res.headers.has('content-encoding') && res.headers.get('content-encoding') !== 'identity' ||
-        !/^\d+$/.test(length) || BigInt(length) !== BigInt(bytes.byteLength))) {
+    const res = await download(url, { headers: { 'Accept-Encoding': 'gzip' }, signal: AbortSignal.timeout(30000) });
+    if (res.statusCode !== 200) {
+      res.destroy();
+      throw new Error(`HTTP ${res.statusCode}`);
+    }
+    // Read the wire bytes. Strict zlib defaults require complete compression framing.
+    const encoding = res.headers['content-encoding']?.trim().toLowerCase() ?? 'identity';
+    const decode = decompress.get(encoding);
+    if (encoding !== 'identity' && !decode) {
+      res.destroy();
+      throw new Error(`unsupported Content-Encoding: ${encoding}`);
+    }
+    const bytes = await buffer(res);
+    const length = res.headers['content-length'];
+    if (length !== undefined && (!/^\d+$/.test(length) || BigInt(length) !== BigInt(bytes.byteLength))) {
       throw new Error('could not verify Content-Length');
     }
-    text = checkedText(id, new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+    text = checkedText(id, decode ? await decode(bytes) : bytes, !decode && length === undefined);
   } catch (err) {
     if (stat) {
       let fallback;
@@ -238,7 +252,7 @@ function convertList(text) {
 }
 
 /** Writes dist/rules. Exported for build.mjs; also runs on its own. */
-export async function buildAdblock(out, { refresh = false, cache = cacheDir, download = fetch } = {}) {
+export async function buildAdblock(out, { refresh = false, cache = cacheDir, download = requestList } = {}) {
   const rulesDir = path.join(out, 'rules');
   fs.mkdirSync(rulesDir, { recursive: true });
   const hide = new Set();

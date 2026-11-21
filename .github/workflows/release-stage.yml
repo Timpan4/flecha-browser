@@ -32,7 +32,7 @@ jobs:
     name: ${{ matrix.platform }} stage ${{ inputs.stage }}
     outputs:
       incomplete: ${{ steps.handoff.outputs.incomplete }}
-      artifact: ${{ format('{0}-attempt-{1}', steps.portable.outputs.package || steps.compile.outputs.package, github.run_attempt) }}
+      artifact: ${{ format('{0}-attempt-{1}-job-{2}', steps.portable.outputs.package || steps.compile.outputs.package, github.run_attempt, job.check_run_id) }}
       artifact-id: ${{ steps.package.outputs.artifact-id }}
       build-attempt: ${{ steps.handoff.outputs.build-attempt }}
       build-id: ${{ job.check_run_id }}
@@ -145,18 +145,18 @@ jobs:
         if: steps.portable.outputs.package != '' || steps.compile.outputs.package != ''
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ format('{0}-attempt-{1}', steps.portable.outputs.package || steps.compile.outputs.package, github.run_attempt) }}
+          name: ${{ format('{0}-attempt-{1}-job-{2}', steps.portable.outputs.package || steps.compile.outputs.package, github.run_attempt, job.check_run_id) }}
           path: release/*
           overwrite: true
           if-no-files-found: error
           compression-level: 0
           retention-days: 35
-      - name: Index a rerun package for exact-name reuse lookup
-        if: github.run_attempt != '1' && runner.os != 'macOS' && steps.package.outputs.artifact-id != ''
+      - name: Index the package for exact-name reuse lookup
+        if: runner.os != 'macOS' && steps.package.outputs.artifact-id != ''
         continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ steps.portable.outputs.package || steps.compile.outputs.package }}-reruns
+          name: ${{ steps.portable.outputs.package || steps.compile.outputs.package }}-packages
           path: release/${{ matrix.platform }}.json
           overwrite: true
           if-no-files-found: error

@@ -25,7 +25,7 @@ on:
         type: string
         required: true
       artifact:
-        description: Attempt-scoped name of the package and checksum artifact
+        description: Attempt- and job-scoped name of the package and checksum artifact
         type: string
         required: true
       artifact_id:
@@ -49,7 +49,7 @@ jobs:
   publish:
     if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-24.04
-    # Use the same one-hour upload allowance as the native release stages.
+    # Reserve the last ten minutes for reconciliation.
     timeout-minutes: 60
     env:
       FLECHA_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
@@ -75,14 +75,30 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: node chromium/scripts/ci-publish.mjs preflight
       - uses: actions/download-artifact@v8
+        timeout-minutes: 50
         with:
           github-token: ${{ github.token }}
           run-id: ${{ inputs.build_run }}
           artifact-ids: ${{ inputs.artifact_id }}
           merge-multiple: true
           path: release
+      - name: Reserve reconciliation time before publishing
+        id: publication-window
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLISHER_JOB: ${{ job.check_run_id }}
+        run: |
+          started=$(gh api "repos/$GITHUB_REPOSITORY/actions/jobs/$PUBLISHER_JOB" --jq '.started_at')
+          started_at=$(date -d "$started" +%s)
+          minutes=$(( (started_at + 50 * 60 - $(date +%s)) / 60 ))
+          if (( minutes <= 0 )); then
+            echo '::error::Preflight and download exhausted the publication window.'
+            exit 1
+          fi
+          echo "minutes=$minutes" >> "$GITHUB_OUTPUT"
       - name: Verify this platform and add it to the nightly prerelease
         id: publish
+        timeout-minutes: ${{ fromJSON(steps.publication-window.outputs.minutes) }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: node chromium/scripts/ci-publish.mjs

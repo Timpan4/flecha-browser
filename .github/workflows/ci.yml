@@ -37,15 +37,16 @@ jobs:
       - run: npm run typecheck
       - run: npm run typecheck:tsrs
       - run: npm test
-      # Node 24's HTTP client can abort while downloading the adblock lists.
       - uses: actions/setup-node@v7
         with:
           node-version: 26
+      - name: Compute the adblock cache bucket
+        id: adblock-cache
+        run: node --input-type=module -e "import { adblockCacheBucket } from './chromium/shell/build-adblock.mjs'; console.log('bucket=' + adblockCacheBucket())" >> "$GITHUB_OUTPUT"
       - uses: actions/cache@v6
         with:
           path: chromium/shell/.cache/adblock
-          key: adblock-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: adblock-${{ runner.os }}-
+          key: adblock-ci-${{ runner.os }}-${{ steps.adblock-cache.outputs.bucket }}
       - run: npm run shell:build
       - run: npm run host:build
       # Patches are left out: their context lines keep Chromium's own trailing spaces.
@@ -79,12 +80,21 @@ jobs:
         shell: bash
         run: chromium/scripts/check-patches.sh
       - run: npm ci
-      - run: node --test chromium/tests/ci-release.test.mjs chromium/tests/ci-setup.test.mjs chromium/tests/ci-stage-zero.test.mjs
-      - uses: actions/cache@v6
+      - run: node --test chromium/tests/ci-release.test.mjs chromium/tests/ci-setup.test.mjs chromium/tests/ci-stage-zero.test.mjs chromium/tests/build-adblock.test.mjs
+      - name: Compute the adblock cache bucket
+        id: adblock-cache
+        shell: bash
+        run: node --input-type=module -e "import { adblockCacheBucket } from './chromium/shell/build-adblock.mjs'; console.log('bucket=' + adblockCacheBucket())" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v6
+        if: runner.os == 'Linux'
         with:
           path: chromium/shell/.cache/adblock
-          key: adblock-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: adblock-${{ runner.os }}-
+          key: adblock-ci-${{ runner.os }}-${{ steps.adblock-cache.outputs.bucket }}
+      - uses: actions/cache@v6
+        if: runner.os != 'Linux'
+        with:
+          path: chromium/shell/.cache/adblock
+          key: adblock-ci-${{ runner.os }}-${{ steps.adblock-cache.outputs.bucket }}
       - run: npm run shell:build
       - run: npm run host:build
 

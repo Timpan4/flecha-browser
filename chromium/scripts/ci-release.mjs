@@ -188,7 +188,7 @@ async function withStageCancellation(operation) {
   }
 }
 
-export async function restoreCheckpoint(work, archive, { create = true, retainArchive = false, deadline, signal } = {}) {
+export async function restoreCheckpoint(work, archive, { create = true, deadline, signal } = {}) {
   // Older artifacts contain gzip. The artifact name stays stable across codecs.
   if (archive.endsWith('.tar.gz')) {
     const zstd = archive.slice(0, -3) + '.zst';
@@ -205,7 +205,7 @@ export async function restoreCheckpoint(work, archive, { create = true, retainAr
   const { size } = await fs.stat(archive);
   if (deadline === undefined) execFileSync(checkpointTar, args, { cwd: work, env, stdio: 'inherit' });
   else await runNativeCommand(checkpointTar, args, { cwd: work, env, deadline, signal });
-  if (!retainArchive) await fs.rm(archive);
+  await fs.rm(archive);
   return { size, name: path.basename(archive) };
 }
 
@@ -423,11 +423,11 @@ async function main() {
           metadata: (directory, args) => writePackageMetadata(directory, key, args, candidate, reuseSignal) });
         return;
       }
-      const restored = await restoreCheckpoint(work, archive, { create: false, retainArchive: true, deadline: budget.deadline, signal });
+      const restored = await restoreCheckpoint(work, archive, { create: false, deadline: budget.deadline, signal });
       await validateReusableTree(work, { ...identity, sha: candidate.sha, nativeKey: key });
       await configure({ ...candidate, archive: restored.name });
-      // Reject inside the restore transaction. Its owner releases both the candidate
-      // tree and download before trying a smaller candidate or preparing from scratch.
+      // Extraction has removed the local archive. Reject inside the restore transaction
+      // so its owner releases the tree before trying another candidate or preparing from scratch.
       const disks = await Promise.all([work, root].map(directory => fs.statfs(directory)));
       if (Math.min(...disks.map(disk => disk.bsize * disk.bavail)) < restored.size) {
         throw new Error('Insufficient space to checkpoint this warm build.');

@@ -85,6 +85,7 @@ export async function runNativeCommand(command, args, { cwd, env, deadline, sign
   child.stderr.pipe(process.stderr, { end: false });
   let expired = false;
   let stopping;
+  let finishGrace;
   let terminationFailure;
   let rejectCompletion;
   const completion = new Promise((resolve, reject) => {
@@ -115,9 +116,13 @@ export async function runNativeCommand(command, args, { cwd, env, deadline, sign
         if (!signalGroup('SIGINT')) return false;
         let grace;
         try {
-          await Promise.race([completion, new Promise(resolve => { grace = setTimeout(resolve, interruptGraceMs); })]);
+          await Promise.race([completion, new Promise(resolve => {
+            finishGrace = resolve;
+            grace = setTimeout(resolve, interruptGraceMs);
+          })]);
         } finally {
           clearTimeout(grace);
+          finishGrace = undefined;
         }
         // Ninja can exit before a compiler that still owns its outputs or pipes.
         signalGroup('SIGKILL');
@@ -128,6 +133,7 @@ export async function runNativeCommand(command, args, { cwd, env, deadline, sign
     return true;
   };
   const stop = () => {
+    if (signal?.aborted) finishGrace?.();
     stopping ??= killTree().catch(cause => {
       // No fallback may modify the tree if stopping its previous owner failed.
       child.unref();
@@ -242,10 +248,11 @@ export async function* findReusableArtifacts(options, api) {
     return runs.get(id);
   };
   if (options.portableOnly) {
-    // Attempt 1 is directly searchable. A small index on later attempts lets
-    // discovery find rerun packages without scanning unrelated artifacts.
+    // Find job-scoped packages through the exact-name index. Keep the exact-name
+    // lookups for older artifacts that predate producer binding.
+    const packages = releaseName + '-packages';
     const reruns = releaseName + '-reruns';
-    for (const name of [releaseName + '-attempt-1', reruns, releaseName]) {
+    for (const name of [packages, releaseName + '-attempt-1', reruns, releaseName]) {
       for await (const artifact of listArtifacts(`${actions}/artifacts`, options, api, name)) {
         if (artifact.name !== name) continue;
         const run = await source(artifact);
@@ -253,6 +260,19 @@ export async function* findReusableArtifacts(options, api) {
         const id = String(run.id);
         const candidate = { run: id, sha: run.head_sha,
           archive: `Flecha-${platform}.${platform.startsWith('windows-') ? 'zip' : 'tar.gz'}` };
+        if (name === packages) {
+          const prefix = releaseName + '-attempt-';
+          const uploads = [];
+          for await (const upload of listArtifacts(`${actions}/runs/${id}/artifacts`, options, api)) {
+            if (upload.expired || !upload.name.startsWith(prefix)) continue;
+            const match = /^([1-9]\d*)-job-[1-9]\d*$/.exec(upload.name.slice(prefix.length));
+            if (match && Number(match[1]) <= run.run_attempt) uploads.push({ upload, attempt: Number(match[1]) });
+          }
+          for (const { upload } of uploads.sort((a, b) => b.attempt - a.attempt)) {
+            yield { ...candidate, id: upload.id, name: upload.name };
+          }
+          continue;
+        }
         if (name !== reruns) {
           yield { ...candidate, id: artifact.id, name };
           continue;

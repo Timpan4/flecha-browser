@@ -8,6 +8,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { setImmediate } from 'node:timers/promises';
 import { checkpointPath, checkIdentity, compile, installLinuxDependencies, configureReleaseTree, depotRevision, extractPortable, packagePortable, prepareNativeTree, preserveNativeOutputs, releaseConfiguration, repackPortableCandidate, saveCheckpoint, restoreCheckpoint, restorePortableRuntime, validateReusableTree } from '../scripts/ci-release.mjs';
 import { createReuseBudget, downloadReusableTree, findReusableArtifacts, nativeKey, removeNativeTree, runNativeCommand, stopWindowsTree, withoutGitHubTokens } from '../scripts/ci-reuse.mjs';
 import { publicationSource, publishAssets, reconcileAssets, verifyRelease } from '../scripts/ci-publish.mjs';
@@ -56,7 +57,7 @@ test('required preparation time preserves optional reuse time across candidate p
 test('reuse stops signal-resistant descendants before deadline fallback or cancellation returns', async t => {
   assert.equal(await runNativeCommand(process.execPath, ['-e', 'process.stdout.write("captured output")'], { capture: true }), 'captured output');
   const outcomes = ['deadline', 'cancellation'];
-  if (process.platform !== 'win32') outcomes.push('compile deadline');
+  if (process.platform !== 'win32') outcomes.push('compile deadline', 'abort during compile interrupt grace');
   for (const outcome of outcomes) {
     await t.test(outcome, async t => {
       const root = await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-reuse-process-'));
@@ -91,7 +92,8 @@ test('reuse stops signal-resistant descendants before deadline fallback or cance
       const privileged = process.platform === 'linux' && process.env.GITHUB_ACTIONS === 'true';
       let settled = false;
       const hour = 60 * 60 * 1000;
-      const command = outcome === 'compile deadline' ? compile(process.execPath, ['-e', fixture, readyFile],
+      const compiling = outcome.startsWith('compile') || outcome === 'abort during compile interrupt grace';
+      const command = compiling ? compile(process.execPath, ['-e', fixture, readyFile],
         { signal: controller.signal, milliseconds: hour }) : runNativeCommand(privileged ? 'sudo' : process.execPath,
         [...(privileged ? ['-n', process.execPath] : []), '-e', fixture, readyFile], {
         capture: true, signal: controller.signal, deadline: outcome === 'deadline' ? Date.now() + 60 * 60 * 1000 : undefined,
@@ -99,7 +101,7 @@ test('reuse stops signal-resistant descendants before deadline fallback or cance
       const result = command.catch(error => error).finally(() => { settled = true; });
       await Promise.race([ready, result.then(error => { throw error; })]);
       const reason = new Error('User cancelled reuse');
-      if (outcome === 'compile deadline') {
+      if (compiling) {
         const interrupted = (async () => {
           for await (const event of fs.watch(root, { signal: controller.signal })) {
             if (event.filename === 'ready.sigint') return;
@@ -108,6 +110,18 @@ test('reuse stops signal-resistant descendants before deadline fallback or cance
         t.mock.timers.tick(hour);
         await interrupted;
         assert.equal(settled, false, 'the descendant holds stdout open during the grace period');
+        if (outcome === 'abort during compile interrupt grace') {
+          const send = process.kill;
+          const kill = t.mock.method(process, 'kill', (pid, signal) => send(pid, signal));
+          controller.abort(reason);
+          await setImmediate();
+          const escalated = kill.mock.calls.some(({ arguments: [pid, signal] }) => pid < 0 && signal === 'SIGKILL');
+          // Drain the timers and process even if a regression made escalation wait.
+          t.mock.timers.tick(7500);
+          assert.equal(await result, reason);
+          assert.ok(escalated, 'abort must kill the process group before the grace clock advances');
+          return;
+        }
         t.mock.timers.tick(7500); // GitHub runner's SIGINT grace.
         assert.equal(await result, false, 'compilation released its pipes and requested a checkpoint');
         return;
@@ -746,23 +760,33 @@ test('package handoff requires exactly one upload and publication metadata prece
   }
 });
 
-test('portable discovery checks exact attempt, rerun index, and legacy names, including empty results', async () => {
+test('portable discovery uses exact repository queries and finds job-scoped and legacy packages', async () => {
   const options = { portableOnly: true, repository: 'owner/repo', branch: 'main', currentRun: '10',
     platform: 'linux-x64', releaseName: 'release-linux-x64-key-layout' };
-  for (const indexed of [false, true]) {
+  for (const format of ['none', 'legacy', 'job-scoped']) {
     const names = [];
+    const suffixes = ['-attempt-3-job-91', '-attempt-2-job-78'];
     const candidates = await Array.fromAsync(findReusableArtifacts(options, endpoint => {
       const url = new URL('https://api.github.com/' + endpoint);
       if (url.pathname.endsWith('/runs/9')) return { id: 9, run_attempt: 3, head_sha: 'sha', head_repository: { full_name: 'owner/repo' },
         path: '.github/workflows/nightly-release.yml', head_branch: 'main', event: 'schedule' };
       const name = url.searchParams.get('name');
-      assert.ok(name, 'Every portable artifact query must supply its exact name');
+      if (url.pathname.endsWith('/runs/9/artifacts') && !name) {
+        assert.equal(format, 'job-scoped');
+        const artifacts = ['-packages', suffixes[1], '-attempt-5-job-92', suffixes[0], '-attempt-1-job-69']
+          .map((suffix, id) => ({ id, name: options.releaseName + suffix, expired: id === 4 }));
+        return { artifacts, total_count: artifacts.length };
+      }
+      assert.ok(name, 'Repository-wide portable queries require an exact name');
       names.push(name);
-      const exists = indexed && (name.endsWith('-reruns') || name.endsWith('-attempt-2'));
+      const exists = format === 'legacy' && (name.endsWith('-reruns') || name.endsWith('-attempt-2')) ||
+        format === 'job-scoped' && name.endsWith('-packages');
       return { artifacts: exists ? [{ name, workflow_run: { id: 9 } }] : [], total_count: Number(exists) };
     }));
-    assert.deepEqual(names, ['-attempt-1', '-reruns', ...(indexed ? ['-attempt-3', '-attempt-2'] : []), ''].map(s => options.releaseName + s));
-    assert.deepEqual(candidates.map(c => c.name), indexed ? [options.releaseName + '-attempt-2'] : []);
+    assert.deepEqual(names, ['-packages', '-attempt-1', '-reruns', ...(format === 'legacy' ? ['-attempt-3', '-attempt-2'] : []), '']
+      .map(suffix => options.releaseName + suffix));
+    const expected = { none: [], legacy: ['-attempt-2'], 'job-scoped': suffixes };
+    assert.deepEqual(candidates.map(c => c.name), expected[format].map(suffix => options.releaseName + suffix));
   }
 });
 
@@ -812,21 +836,29 @@ test('the publisher uses the active default-branch build’s platform catalog an
   const platform = 'linux-x64';
   const nativeKey = 'a'.repeat(64);
   const base = `release-${platform}-${nativeKey}`;
-  const artifact = `${base}-attempt-2`;
+  const artifact = `${base}-attempt-2-job-32`;
+  const secondArtifact = `${base}-attempt-2-job-34`;
   const sha = 'b'.repeat(40);
   const run = { id: 11, run_attempt: 2, status: 'in_progress', head_sha: sha, path: '.github/workflows/nightly-release.yml',
     head_branch: branch, head_repository: { full_name: repository }, event: 'schedule' };
   const inputs = { repository, branch, currentRun: '12', run: '11', buildAttempt: '2', monitorAttempt: '2',
     buildId: '32', platform, artifact, artifactId: '22', monitorId: '33' };
   const readRun = (overrides = {}, upload = {}, job = {}, build = {}) => args => {
+    if (args[1] === `repos/${repository}/actions/jobs/35`) return JSON.stringify({ id: 35, head_sha: sha, name: `build-2 / Monitor ${platform} publication`,
+      run_id: 11, run_attempt: 2, status: 'in_progress', steps: [] });
     if (args[1] === `repos/${repository}/actions/jobs/33`) return JSON.stringify({ id: 33, head_sha: sha, name: `build-1 / Monitor ${platform} publication`,
       run_id: 11, run_attempt: 2, status: 'in_progress', steps: [], ...job });
-    if (args[1] === `repos/${repository}/actions/jobs/32`) return JSON.stringify({ id: 32, head_sha: sha, name: `build-1 / ${platform} stage 1`,
-      run_id: 11, run_attempt: 2, status: 'completed', conclusion: 'success',
-      steps: [{ name: 'Upload completed platform package', conclusion: 'success' }], ...build });
+    for (const [id, stage] of [[32, 1], [34, 2]]) {
+      if (args[1] === `repos/${repository}/actions/jobs/${id}`) return JSON.stringify({ id, head_sha: sha,
+        name: `build-${stage} / ${platform} stage ${stage}`, run_id: 11, run_attempt: 2, status: 'completed', conclusion: 'success',
+        steps: [{ name: 'Upload completed platform package', conclusion: 'success' }], ...build });
+    }
     if (args[1] === `repos/${repository}/actions/runs/11`) return JSON.stringify({ ...run, ...overrides });
     if (args[1] === `repos/${repository}/actions/artifacts/22`) {
       return JSON.stringify({ id: 22, name: artifact, workflow_run: { id: 11, head_sha: sha }, ...upload });
+    }
+    if (args[1] === `repos/${repository}/actions/artifacts/23`) {
+      return JSON.stringify({ id: 23, name: secondArtifact, workflow_run: { id: 11, head_sha: sha } });
     }
     if (args.at(-1) === `repos/${repository}/contents/chromium/build/ci-platforms.json?ref=${sha}`) {
       return JSON.stringify([{ platform }]);
@@ -835,11 +867,17 @@ test('the publisher uses the active default-branch build’s platform catalog an
     return '158.0.8127.2\n';
   };
   assert.deepEqual(publicationSource(inputs, readRun()), { sha, chromium: '158.0.8127.2', nativeKey });
-  const portable = `${base}-${'c'.repeat(64)}-attempt-2`;
+  const second = { ...inputs, buildId: '34', monitorId: '35', artifact: secondArtifact, artifactId: '23' };
+  assert.deepEqual(publicationSource(second, readRun()), { sha, chromium: '158.0.8127.2', nativeKey });
+  assert.throws(() => publicationSource({ ...inputs, artifactId: second.artifactId }, readRun()), /does not match the source nightly upload/);
+  assert.throws(() => publicationSource({ ...second, artifactId: inputs.artifactId }, readRun()), /does not match the source nightly upload/);
+  assert.throws(() => publicationSource({ ...inputs, artifact: second.artifact, artifactId: second.artifactId }, readRun()), /Invalid nightly/);
+  const portable = `${base}-${'c'.repeat(64)}-attempt-2-job-32`;
   assert.deepEqual(publicationSource({ ...inputs, artifact: portable }, readRun({}, { name: portable })),
     { sha, chromium: '158.0.8127.2', nativeKey });
-  assert.throws(() => publicationSource({ ...inputs, platform: 'linux-other', artifact: `release-linux-other-${nativeKey}-attempt-2` },
-    readRun({}, { name: `release-linux-other-${nativeKey}-attempt-2` }, { name: 'Monitor linux-other publication' })), /Unknown release platform/);
+  const unknownPlatform = `release-linux-other-${nativeKey}-attempt-2-job-32`;
+  assert.throws(() => publicationSource({ ...inputs, platform: 'linux-other', artifact: unknownPlatform },
+    readRun({}, { name: unknownPlatform }, { name: 'Monitor linux-other publication' })), /Unknown release platform/);
   for (const untrusted of [{ head_repository: { full_name: 'other/repo' } }, { head_branch: 'other' },
     { event: 'pull_request' }, { path: '.github/workflows/ci.yml' }, { id: 13 }]) {
     assert.throws(() => publicationSource(inputs, readRun(untrusted)), /default-branch nightly/);
@@ -848,7 +886,7 @@ test('the publisher uses the active default-branch build’s platform catalog an
   for (const obsolete of [{ run_attempt: 3 }, { status: 'cancelling' }, { status: 'completed', conclusion: 'cancelled' }]) {
     assert.throws(() => publicationSource(inputs, readRun(obsolete)), /cancelled or superseded/);
   }
-  const old = `${base}-attempt-1`;
+  const old = `${base}-attempt-1-job-32`;
   const rerun = { ...inputs, buildAttempt: '1', artifact: old };
   assert.deepEqual(publicationSource(rerun, readRun({}, { name: old }, {}, { run_attempt: 1 })),
     { sha, chromium: '158.0.8127.2', nativeKey });
@@ -856,7 +894,7 @@ test('the publisher uses the active default-branch build’s platform catalog an
     { name: 'another stage / linux-x64 stage 1' }, { steps: [{ name: 'Upload completed platform package', conclusion: 'skipped' }] }]) {
     assert.throws(() => publicationSource(rerun, readRun({}, { name: old }, {}, { run_attempt: 1, ...build })), /producing build job/);
   }
-  assert.throws(() => publicationSource({ ...inputs, buildAttempt: '3', artifact: base + '-attempt-3' }, readRun()), /Invalid nightly/);
+  assert.throws(() => publicationSource({ ...inputs, buildAttempt: '3', artifact: base + '-attempt-3-job-32' }, readRun()), /Invalid nightly/);
   assert.throws(() => publicationSource(inputs, readRun({}, { name: old })), /does not match/);
   assert.throws(() => publicationSource({ ...inputs, artifact: old }, readRun({}, { name: old })), /Invalid nightly/);
   for (const job of [{ run_attempt: 1 }, { run_id: 13 }, { status: 'completed' }, { steps: [{ conclusion: 'cancelled' }] }]) {
@@ -982,8 +1020,8 @@ test('a portable release reuses the verified browser with the current shell and 
     assert.deepEqual(attempts, ['1', '2']);
     assert.equal(candidate.run, '2');
     assert.equal(await fs.readFile(path.join(dist, 'provenance'), 'utf8'), provenance.args);
-    assert.equal(requests.filter(url => url.includes('/artifacts?')).length, 1);
-    assert.equal(new URL('https://api.github.com/' + requests[0]).searchParams.get('name'), name);
+    assert.deepEqual(requests.filter(url => url.includes('/artifacts?')).map(url =>
+      new URL('https://api.github.com/' + url).searchParams.get('name')), [releaseName + '-packages', name]);
   });
 });
 

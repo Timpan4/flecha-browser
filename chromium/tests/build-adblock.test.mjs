@@ -3,13 +3,17 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import { Readable } from 'node:stream';
+import { brotliCompressSync, deflateSync, gzipSync } from 'node:zlib';
 import { buildAdblock, LISTS } from '../shell/build-adblock.mjs';
 
 function subscription(url, rules) {
-  if (url === LISTS.easylist) return '[Adblock Plus 2.0]\n! Title: EasyList\n' + rules +
-    '\n! *** easylist:easylist_adult/adult_allowlist_popup.txt ***\n';
-  return '[Adblock Plus 1.1]\n! Title: EasyPrivacy\n! *** easylist:easyprivacy/easyprivacy_allowlist_international.txt ***\n' +
-    rules + '\n';
+  const title = url === LISTS.easylist ? 'EasyList' : 'EasyPrivacy';
+  return `[Adblock Plus 2.0]\n! Title: ${title}\n${rules}\n`;
+}
+
+function response(body, headers = { 'content-length': String(Buffer.byteLength(body)) }) {
+  return Object.assign(Readable.from([Buffer.from(body)]), { statusCode: 200, headers });
 }
 
 test('reverse download completion preserves EasyList priority, rule IDs and the shared budget', async t => {
@@ -19,9 +23,9 @@ test('reverse download completion preserves EasyList priority, rule IDs and the 
   const replies = new Map();
   const build = buildAdblock(out, { cache, download: url => new Promise(resolve => replies.set(url, resolve)) });
   assert.deepEqual([...replies.keys()], Object.values(LISTS));
-  replies.get(LISTS.easyprivacy)(new Response(subscription(LISTS.easyprivacy, '/track-one\n@@/allow\n/track-two')));
+  replies.get(LISTS.easyprivacy)(response(subscription(LISTS.easyprivacy, '/track-one\n@@/allow\n/track-two')));
   // Leave room for one EasyPrivacy rule under Chromium's 30,000-rule guarantee.
-  replies.get(LISTS.easylist)(new Response(subscription(LISTS.easylist,
+  replies.get(LISTS.easylist)(response(subscription(LISTS.easylist,
     Array.from({ length: 29999 }, (_, i) => '/advert-' + i).join('\n'))));
   await build;
   const rules = async name => JSON.parse(await fs.readFile(path.join(out, 'rules', name + '.json'), 'utf8'));
@@ -39,15 +43,19 @@ test('failed refresh requires a cached list with supported network rules', async
   const offline = () => { throw new Error('offline'); };
   await assert.rejects(buildAdblock(out, { cache, download: offline }), /no cache exists/);
   const list = url => subscription(url, url === LISTS.easylist ? '||ads.example^\n/banner' : '@@/allow');
-  await buildAdblock(out, { cache, download: url => new Response(list(url)) });
+  await buildAdblock(out, { cache, download: url => response(list(url)) });
   await buildAdblock(out, { cache, refresh: true, download: offline });
-  const prefix = '[Adblock Plus 2.0]\n! Title: EasyList\n||ads.example^\n';
-  for (const invalid of [
-    () => new Response(prefix),
-    () => new Response(list(LISTS.easylist), { headers: { 'Content-Length': String(list(LISTS.easylist).length + 1) } }),
-    () => new Response(list(LISTS.easylist).replace('! Title:', '! Checksum: invalid\n! Title:')),
+  const prefix = subscription(LISTS.easylist, '||ads.example^');
+  for (const [invalid, cause] of [
+    [() => response(prefix, {}), 'no verifiable length'],
+    [() => response(prefix, { 'content-encoding': 'identity', 'content-length': String(Buffer.byteLength(list(LISTS.easylist))) }),
+      'could not verify Content-Length'],
+    [() => response(prefix.replace('! Title:', '! Checksum: invalid\n! Title:')), 'ABP checksum mismatch'],
   ]) {
-    await buildAdblock(out, { cache, refresh: true, download: url => url === LISTS.easylist ? invalid() : new Response(list(url)) });
+    const warnings = t.mock.method(console, 'warn', () => {});
+    await buildAdblock(out, { cache, refresh: true, download: url => url === LISTS.easylist ? invalid() : response(list(url)) });
+    assert.ok(warnings.mock.calls.some(call => call.arguments[0].includes(cause) && call.arguments[0].includes('using the cached copy')));
+    warnings.mock.restore();
     assert.equal(await fs.readFile(path.join(cache, 'easylist.txt'), 'utf8'), list(LISTS.easylist));
     assert.equal(JSON.parse(await fs.readFile(path.join(out, 'rules/easylist.json'))).length, 2);
   }
@@ -55,19 +63,44 @@ test('failed refresh requires a cached list with supported network rules', async
   const warnings = t.mock.method(console, 'warn', () => {});
   await assert.rejects(buildAdblock(out, { cache, download: offline }), error =>
     error instanceof AggregateError && error.message.includes('easyprivacy') && error.errors[0].message === 'offline' &&
-    error.errors[1].message === 'incomplete final filter list section');
+    error.errors[1].message === 'filter list contains no supported network rules');
   assert.ok(!warnings.mock.calls.some(call => call.arguments[0].includes('using the cached copy')));
 });
 
-test('a valid ABP checksum covers normalized UTF-8 and Content-Length covers the original bytes', async t => {
+test('an ABP checksum validates normalized text without a length and identity verifies UTF-8 bytes', async t => {
   const out = await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-signed-rules-'));
   t.after(() => fs.rm(out, { recursive: true, force: true }));
   const signed = '[Adblock Plus 2.0]\r\n! Checksum: z2RKQ5QVHnDHGokvvaKKdg\r\n! Title: EasyList\r\n\r\n||ads.example^\r\n';
   const cache = path.join(out, 'cache');
   await buildAdblock(out, { cache, download: (url, options) => {
-    assert.equal(options.headers['Accept-Encoding'], 'identity');
-    const text = url === LISTS.easylist ? signed : subscription(url, '! précision\n@@/allow');
-    return new Response(text, { headers: { 'Content-Length': String(Buffer.byteLength(text)) } });
+    assert.equal(options.headers['Accept-Encoding'], 'gzip');
+    return url === LISTS.easylist ? response(signed, {}) : response(subscription(url, '! précision\n@@/allow'));
   } });
   assert.equal(await fs.readFile(path.join(cache, 'easylist.txt'), 'utf8'), signed);
+});
+
+test('compressed wire data is decoded and a truncated gzip refresh retains the verified cache', async t => {
+  const out = await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-compressed-rules-'));
+  t.after(() => fs.rm(out, { recursive: true, force: true }));
+  const cache = path.join(out, 'cache');
+  const original = url => subscription(url, '/old-rule');
+  const compressed = (bytes, encoding) => response(bytes, { 'content-encoding': encoding, 'content-length': String(bytes.length) });
+  for (const [encoding, compress] of [['gzip', gzipSync], ['deflate', deflateSync], ['br', brotliCompressSync]]) {
+    await buildAdblock(out, { cache, refresh: true, download: url => compressed(compress(original(url)), encoding) });
+    assert.equal(await fs.readFile(path.join(cache, 'easylist.txt'), 'utf8'), original(LISTS.easylist));
+  }
+
+  const truncated = url => compressed(gzipSync(subscription(url, '/new-rule')).subarray(0, -1), 'gzip');
+  const warnings = t.mock.method(console, 'warn', () => {});
+  await buildAdblock(out, { cache, refresh: true, download: truncated });
+  assert.equal(warnings.mock.calls.length, Object.keys(LISTS).length);
+  assert.ok(warnings.mock.calls.every(call => call.arguments[0].includes('unexpected end of file') &&
+    call.arguments[0].includes('using the cached copy')));
+  for (const [id, url] of Object.entries(LISTS)) {
+    assert.equal(await fs.readFile(path.join(cache, id + '.txt'), 'utf8'), original(url));
+    const [rule] = JSON.parse(await fs.readFile(path.join(out, 'rules', id + '.json'), 'utf8'));
+    assert.equal(rule.condition.urlFilter, '/old-rule');
+  }
+  await assert.rejects(buildAdblock(out, { cache: path.join(out, 'empty-cache'), download: truncated }),
+    error => error.cause?.code === 'Z_BUF_ERROR');
 });

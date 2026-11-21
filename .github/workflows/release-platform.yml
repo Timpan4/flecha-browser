@@ -146,6 +146,8 @@ jobs:
     needs: [source, build-1, build-2, build-3, build-4, build-5, build-6, build-7, build-8, build-9, build-10]
     if: ${{ !cancelled() && !contains(needs.*.outputs.published, 'true') }}
     runs-on: ubuntu-24.04
+    permissions: {}
+    timeout-minutes: 5
     steps:
       - name: Fail if the stage chain stopped without a confirmed publication
         run: exit 1
