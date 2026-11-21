@@ -76,7 +76,7 @@ export const AGENT_TOOLS = {
   },
   press_key: { description: 'Press a key such as Enter, Tab, Escape or ArrowDown in a tab.', inputSchema: { tabId, allowVisibleTab, key: z.string() } },
   evaluate: {
-    description: "Run JavaScript in a tab's page and return the result (promises are awaited, values are JSON-serialized). If an evaluation times out while a promise is pending, retry other operations on that tab after the evaluation settles or the page unloads.",
+    description: "Run JavaScript in a tab's page and return the result (promises are awaited, values are JSON-serialized). If an evaluation times out while a promise is pending, retry page reads, edits, or navigation after the evaluation settles or the page unloads. You can still activate or close the tab.",
     inputSchema: { tabId, allowVisibleTab, expression: z.string() },
   },
   wait_for: {

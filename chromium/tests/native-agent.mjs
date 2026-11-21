@@ -1414,14 +1414,24 @@ try {
     globalThis.placeholderGate = new Promise(resolve => { globalThis.releasePlaceholder = resolve; });
     globalThis.bothCloseLookups = new Promise(resolve => { globalThis.notifyBothCloseLookups = resolve; });
     globalThis.placeholderCreateCount = 0;
+    globalThis.failedClosePlaceholderRemoved = undefined;
+    globalThis.observeFailedCloseRemoval = undefined;
     let closeLookups = 0;
     chrome.tabs.create = async (options) => {
-      if (options.active === false && !options.url) {
-        placeholderCreateCount++;
-        notifyPlaceholderStarted();
-        await placeholderGate;
-      }
-      return placeholderApis[0](options);
+      if (options.active !== false || options.url) return placeholderApis[0](options);
+      placeholderCreateCount++;
+      notifyPlaceholderStarted();
+      await placeholderGate;
+      const placeholder = await placeholderApis[0](options);
+      failedClosePlaceholderRemoved = new Promise(resolve => {
+        observeFailedCloseRemoval = (id) => {
+          if (id !== placeholder.id) return;
+          chrome.tabs.onRemoved.removeListener(observeFailedCloseRemoval);
+          resolve(id);
+        };
+        chrome.tabs.onRemoved.addListener(observeFailedCloseRemoval);
+      });
+      return placeholder;
     };
     chrome.tabs.get = async (id) => {
       const tab = await placeholderApis[1](id);
@@ -1443,12 +1453,19 @@ try {
       assert.match(refusal.content[0].text, /Injected concurrent close refusal/);
     }
     assert.equal(await evaluate(worker, 'placeholderCreateCount'), 1);
+    const removedId = await evaluate(worker, 'failedClosePlaceholderRemoved');
+    assert.ok(Number.isInteger(removedId));
+    assert.equal(await evaluate(worker, `chrome.tabs.query({}).then(tabs => tabs.some(tab => tab.id === ${removedId}))`), false);
     await nativeActive(closingUrl);
   } finally {
-    await evaluate(worker, 'releasePlaceholder(); [chrome.tabs.create, chrome.tabs.get, chrome.tabs.remove] = placeholderApis;');
+    await evaluate(worker, `
+      releasePlaceholder();
+      [chrome.tabs.create, chrome.tabs.get, chrome.tabs.remove] = placeholderApis;
+      if (observeFailedCloseRemoval) chrome.tabs.onRemoved.removeListener(observeFailedCloseRemoval);
+    `);
     await Promise.allSettled([firstClose, secondClose]);
   }
-  console.log('PASS simultaneous approved closes share one replacement tab');
+  console.log('PASS simultaneous failed closes share and remove one replacement tab');
 
   await evaluate(worker, `
     globalThis.updateBeforeExpiry = chrome.tabs.update;
