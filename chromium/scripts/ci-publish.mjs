@@ -71,6 +71,7 @@ export function publishAssets({ repository, tag, sha, title, notes, files, check
   const marker = path.basename(checksums);
   if (release.assets.some(({ name }) => name === marker)) {
     gh(['release', 'delete-asset', tag, marker, '--repo', repository, '--yes']);
+    requireCurrent();
   }
   gh(['release', 'upload', tag, ...files, '--repo', repository, '--clobber']);
   requireCurrent();
@@ -79,28 +80,40 @@ export function publishAssets({ repository, tag, sha, title, notes, files, check
   } catch (error) {
     // A failed upload can leave an empty asset in GitHub's 'starter' state under this name.
     // Remove it so it cannot pass for a finished platform; the original failure is what matters.
-    try { gh(['release', 'delete-asset', tag, marker, '--repo', repository, '--yes']); } catch {}
+    try {
+      requireCurrent();
+      gh(['release', 'delete-asset', tag, marker, '--repo', repository, '--yes']);
+    } catch {}
     throw error;
   }
 }
 
-function currentSourceRun({ repository, branch, currentRun, run, attempt }, gh) {
+function currentSourceRun({ repository, branch, currentRun, run, attempt, platform, monitorId }, gh) {
   const source = JSON.parse(gh(['api', `repos/${repository}/actions/runs/${run}`]));
   if (String(source.id) !== run || !/^[a-f0-9]{40}$/.test(source.head_sha || '') || !trustedRun(source, { repository, branch, currentRun })) {
     throw new Error('The package must come from a default-branch nightly build in this repository.');
   }
-  if (String(source.run_attempt) !== attempt || source.conclusion === 'cancelled') {
+  if (String(source.run_attempt) !== attempt || source.status !== 'in_progress' || source.conclusion != null) {
     throw new Error('The source nightly attempt was cancelled or superseded.');
+  }
+  // The run can still be in_progress while its cancelled monitor winds down.
+  const monitor = JSON.parse(gh(['api', `repos/${repository}/actions/jobs/${monitorId}`]));
+  if (String(monitor.run_id) !== run || String(monitor.run_attempt) !== attempt ||
+      monitor.name?.split(' / ').at(-1) !== `Monitor ${platform} publication` || monitor.status !== 'in_progress' ||
+      monitor.conclusion != null || monitor.steps.some(step => ['cancelled', 'failure', 'timed_out'].includes(step.conclusion) ||
+      (step.name === 'Cancel an unfinished publisher after a failed wait' && step.status === 'in_progress'))) {
+    throw new Error('The source publication monitor is inactive or cancelling.');
   }
   return source;
 }
 
 export function publicationSource(input, gh) {
-  const { repository, branch, run, attempt, platform, artifact, artifactId } = input;
+  const { repository, branch, run, attempt, platform, artifact, artifactId, monitorId } = input;
   const prefix = `release-${platform}-`;
-  const keys = artifact?.startsWith(prefix) && artifact.slice(prefix.length);
+  const suffix = `-attempt-${attempt}`;
+  const keys = artifact?.startsWith(prefix) && artifact.endsWith(suffix) && artifact.slice(prefix.length, -suffix.length);
   const match = /^([a-f0-9]{64})(?:-[a-f0-9]{64})?$/.exec(keys || '');
-  if (!repository || !branch || ![run, attempt, artifactId].every(id => /^[1-9]\d*$/.test(id || '')) || !match) {
+  if (!repository || !branch || ![run, attempt, artifactId, monitorId].every(id => /^[1-9]\d*$/.test(id || '')) || !match) {
     throw new Error('Invalid nightly publication inputs.');
   }
   const { head_sha: sha } = currentSourceRun(input, gh);
@@ -121,10 +134,10 @@ async function main() {
   const root = fileURLToPath(new URL('../..', import.meta.url));
   const { FLECHA_BUILD_RUN: run, FLECHA_DEFAULT_BRANCH: branch, FLECHA_PACKAGE_ARTIFACT: artifact, FLECHA_PLATFORM: platform,
     GITHUB_RUN_ID: currentRun, GITHUB_REPOSITORY: repository, GITHUB_SERVER_URL: server,
-    FLECHA_BUILD_ATTEMPT: attempt, FLECHA_PACKAGE_ARTIFACT_ID: artifactId } = process.env;
+    FLECHA_BUILD_ATTEMPT: attempt, FLECHA_PACKAGE_ARTIFACT_ID: artifactId, FLECHA_MONITOR_ID: monitorId } = process.env;
   if (!currentRun || !server) throw new Error('Missing GitHub release context.');
   const gh = args => execFileSync('gh', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
-  const input = { repository, branch, currentRun, run, attempt, platform, artifact, artifactId };
+  const input = { repository, branch, currentRun, run, attempt, platform, artifact, artifactId, monitorId };
   const source = publicationSource(input, gh);
   const { sha, chromium } = source;
   const dir = path.join(root, 'release');

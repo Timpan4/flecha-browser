@@ -3,8 +3,8 @@
 // stylesheet (cosmetic.css) and the sites exempt from it (cosmetic-exclude.json).
 //
 // The lists are downloaded once and kept in chromium/shell/.cache for a few days, so most builds
-// are offline and quick. Without a network and a cache the rulesets come out empty (and the
-// shell still loads). `node build-adblock.mjs --refresh` downloads them again.
+// are offline and quick. A failed download requires a usable cached copy of that list.
+// `node build-adblock.mjs --refresh` downloads them again.
 //
 // The converter covers the Adblock Plus syntax the lists actually use for network filters:
 // `||host^`, `|` anchors, `*` and `^`, `@@` exceptions, and the options DNR has an equivalent
@@ -13,6 +13,7 @@
 // approximated. Plain `||host^` filters are merged into requestDomains lists, which keeps the
 // rule count far under Chromium's guaranteed 30,000 static rules.
 import fs from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { writeManifest } from './build-version.mjs';
@@ -51,26 +52,44 @@ const TYPES = {
 /** Options that don't change what's matched here. */
 const IGNORED = new Set(['important', 'all', 'webrtc']);
 
-async function fetchList(id, url, refresh) {
-  const file = path.join(cacheDir, `${id}.txt`);
+function checkedText(text) {
+  if (!/^\[Adblock Plus[^\]\r\n]*\]/.test(text)) throw new Error('not a filter list');
+  // A header alone can be left by an interrupted download. Check for a usable
+  // network filter before replacing a good cache; full conversion happens in list order.
+  for (const [line] of text.matchAll(/[^\r\n]+/g)) {
+    if (convertList(line).rules.length) return text;
+  }
+  throw new Error('filter list contains no supported network rules');
+}
+
+async function fetchList(id, url, refresh, cache, download) {
+  const file = path.join(cache, `${id}.txt`);
   const stat = fs.statSync(file, { throwIfNoEntry: false });
-  if (stat && !refresh && Date.now() - stat.mtimeMs < MAX_AGE_MS) return fs.readFileSync(file, 'utf8');
+  const cached = () => checkedText(fs.readFileSync(file, 'utf8'));
+  if (stat && !refresh && Date.now() - stat.mtimeMs < MAX_AGE_MS) {
+    try { return cached(); } catch (error) { console.warn(`adblock: invalid cached ${id}: ${error.message}`); }
+  }
+  let text;
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(30000) });
+    const res = await download(url, { signal: AbortSignal.timeout(30000) });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const text = await res.text();
-    if (!text.includes('[Adblock Plus')) throw new Error('not a filter list');
-    fs.mkdirSync(cacheDir, { recursive: true });
-    fs.writeFileSync(file, text);
-    return text;
+    text = checkedText(await res.text());
   } catch (err) {
     if (stat) {
       console.warn(`adblock: couldn't refresh ${id} (${err.message}); using the cached copy`);
-      return fs.readFileSync(file, 'utf8');
+      return cached();
     }
-    console.warn(`adblock: couldn't download ${id} (${err.message}); its ruleset is empty`);
-    return '';
+    throw new Error(`adblock: could not download ${id} and no cache exists`, { cause: err });
   }
+  fs.mkdirSync(cache, { recursive: true });
+  const temp = file + '.' + randomUUID();
+  try {
+    fs.writeFileSync(temp, text, { flag: 'wx' });
+    fs.renameSync(temp, file);
+  } finally {
+    fs.rmSync(temp, { force: true });
+  }
+  return text;
 }
 
 const isAscii = (s) => /^[\x20-\x7e]*$/.test(s);
@@ -187,7 +206,7 @@ function convertList(text) {
 }
 
 /** Writes dist/rules. Exported for build.mjs; also runs on its own. */
-export async function buildAdblock(out, { refresh = false } = {}) {
+export async function buildAdblock(out, { refresh = false, cache = cacheDir, download = fetch } = {}) {
   const rulesDir = path.join(out, 'rules');
   fs.mkdirSync(rulesDir, { recursive: true });
   const hide = new Set();
@@ -196,8 +215,10 @@ export async function buildAdblock(out, { refresh = false } = {}) {
   let budget = RULE_BUDGET;
   const counts = {};
 
-  for (const [id, url] of Object.entries(LISTS)) {
-    const converted = convertList(await fetchList(id, url, refresh));
+  const lists = await Promise.all(Object.entries(LISTS).map(async ([id, url]) =>
+    [id, await fetchList(id, url, refresh, cache, download)]));
+  for (const [id, text] of lists) {
+    const converted = convertList(text);
     // Exceptions first, so a list cut short for the budget never blocks what it meant to allow.
     const rules = converted.rules.sort((a, b) => b.priority - a.priority).slice(0, Math.max(0, budget));
     if (rules.length < converted.rules.length) console.warn(`adblock: ${id} cut to ${rules.length} of ${converted.rules.length} rules`);

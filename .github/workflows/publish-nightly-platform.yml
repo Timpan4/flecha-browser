@@ -17,11 +17,15 @@ on:
         type: string
         required: true
       artifact:
-        description: Name of the artifact holding the package and checksums
+        description: Attempt-scoped name of the package and checksum artifact
         type: string
         required: true
       artifact_id:
         description: ID of the uploaded artifact
+        type: string
+        required: true
+      monitor_id:
+        description: Job ID of the nightly monitor dispatching this publisher
         type: string
         required: true
 
@@ -42,6 +46,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          # Execute the publisher from its dispatched default-branch revision.
+          # ci-publish reads the catalog and Chromium pin at the verified build SHA.
           persist-credentials: false
       - uses: actions/setup-node@v7
         with:
@@ -62,4 +68,5 @@ jobs:
           FLECHA_PLATFORM: ${{ inputs.platform }}
           FLECHA_PACKAGE_ARTIFACT: ${{ inputs.artifact }}
           FLECHA_PACKAGE_ARTIFACT_ID: ${{ inputs.artifact_id }}
+          FLECHA_MONITOR_ID: ${{ inputs.monitor_id }}
         run: node chromium/scripts/ci-publish.mjs

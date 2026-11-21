@@ -1,14 +1,22 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import nativeFs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { checkIdentity, compile, configureReleaseTree, depotRevision, extractPortable, packagePortable, prepareNativeTree, preserveNativeOutputs, releaseConfiguration, saveCheckpoint, restoreCheckpoint, restorePortableRuntime, validateReusableTree } from '../scripts/ci-release.mjs';
-import { createReuseBudget, downloadReusableTree, findReusableArtifacts, nativeKey, removeNativeTree, reusableArtifact, runNativeCommand, withoutGitHubTokens } from '../scripts/ci-reuse.mjs';
+import { canCompileWarmTree, checkpointPath, checkIdentity, compile, installLinuxDependencies, configureReleaseTree, depotRevision, extractPortable, packagePortable, prepareNativeTree, preserveNativeOutputs, releaseConfiguration, repackPortableCandidate, saveCheckpoint, restoreCheckpoint, restorePortableRuntime, validateReusableTree } from '../scripts/ci-release.mjs';
+import { createReuseBudget, downloadReusableTree, findReusableArtifacts, nativeKey, removeNativeTree, runNativeCommand, stopWindowsTree, withoutGitHubTokens } from '../scripts/ci-reuse.mjs';
 import { publicationSource, publishAssets, verifyRelease } from '../scripts/ci-publish.mjs';
+
+// Fixture transfers put their already-extracted files in the download directory.
+function restoreFixture(root, options, restore, gh) {
+  return downloadReusableTree(root, options, restore, gh,
+    (candidate, directory) => gh(['download', candidate.run, '--name', candidate.name, '--dir', directory]));
+}
 
 test('the owner-selected reuse budget leaves clean preparation time and never exceeds the stage deadline', () => {
   const started = Date.now();
@@ -33,7 +41,7 @@ test('required preparation time preserves optional reuse time across candidate p
   const candidates = findReusableArtifacts(options, endpoint => {
     if (endpoint.includes('/runs/1/artifacts?')) return {
       artifacts: ['native-linux-x64-key', 'reuse-linux-x64-key-1', 'checkpoint-linux-x64-1'].map(name => ({ name })), total_count: 3 };
-    if (endpoint.endsWith('page=1')) return { artifacts: [{ name: 'native-linux-x64-key', workflow_run: { id: 1 } }], total_count: 1 };
+    if (endpoint.endsWith('page=1')) return { artifacts: [{ name: endpoint.includes('name=') ? 'native-linux-x64-key' : 'reuse-linux-x64-key-1', workflow_run: { id: 1 } }], total_count: 1 };
     return { id: 1, head_sha: 'source', head_repository: { full_name: 'owner/repo' },
       path: '.github/workflows/nightly-release.yml', head_branch: 'main', event: 'workflow_dispatch' };
   });
@@ -191,7 +199,7 @@ test('optional reuse rejects unavailable or invalid trees and preserves unowned 
     return fs.copyFile(archive, path.join(args.at(-1), 'native.tar.gz'));
   };
   for (const failure of ['api', 'timeout', 'download', 'restore', 'malformed-state', 'missing-state', 'identity', 'missing-source', 'missing-depot']) {
-    const reused = await downloadReusableTree(root, options, async archive => {
+    const reused = await restoreFixture(root, options, async archive => {
       if (failure === 'restore') {
         await fs.writeFile(path.join(work, 'partial'), 'partial extraction');
         throw new Error('Invalid archive');
@@ -209,15 +217,15 @@ test('optional reuse rejects unavailable or invalid trees and preserves unowned 
     assert.equal((await fs.readdir(root)).some(name => name.startsWith('native-download-')), false);
   }
   const cancelled = Object.assign(new Error('cancelled'), { signal: 'SIGINT' });
-  await assert.rejects(downloadReusableTree(root, options, () => {}, () => { throw cancelled; }), error => error === cancelled);
-  await assert.rejects(downloadReusableTree(root, options, () => { throw cancelled; }, gh()), error => error === cancelled);
+  await assert.rejects(restoreFixture(root, options, () => {}, () => { throw cancelled; }), error => error === cancelled);
+  await assert.rejects(restoreFixture(root, options, () => { throw cancelled; }, gh()), error => error === cancelled);
   assert.equal((await fs.stat(work)).isDirectory(), true);
   await fs.rm(work, { recursive: true });
   for (const name of (await fs.readdir(root)).filter(name => name.startsWith('native-download-'))) {
     await fs.rm(path.join(root, name), { recursive: true });
   }
   const unsafe = Object.assign(new Error('Cannot stop previous attempt'), { code: 'REUSE_TERMINATION_FAILED' });
-  await assert.rejects(downloadReusableTree(root, options, async () => {
+  await assert.rejects(restoreFixture(root, options, async () => {
     await fs.writeFile(path.join(work, 'partial'), 'Previous process may still own this tree');
     throw unsafe;
   }, gh()), error => error === unsafe);
@@ -226,13 +234,13 @@ test('optional reuse rejects unavailable or invalid trees and preserves unowned 
   assert.equal(preserved.length, 1);
   await fs.rm(work, { recursive: true });
   await fs.rm(path.join(root, preserved[0]), { recursive: true });
-  const candidate = await downloadReusableTree(root, options, async archive => {
+  const candidate = await restoreFixture(root, options, async archive => {
     await restoreCheckpoint(work, archive, { create: false });
     await validateReusableTree(work, expected);
   }, gh());
   assert.equal(candidate.run, '1');
   assert.equal(await fs.readFile(path.join(work, 'state.json'), 'utf8'), state);
-  await assert.rejects(downloadReusableTree(root, options, () => assert.fail('Must not restore into a pre-existing tree'), gh()), { code: 'EEXIST' });
+  await assert.rejects(restoreFixture(root, options, () => assert.fail('Must not restore into a pre-existing tree'), gh()), { code: 'EEXIST' });
   assert.equal(await fs.readFile(path.join(work, 'state.json'), 'utf8'), state);
 });
 
@@ -251,7 +259,7 @@ test('restored GN failure falls back to a compatible indexed checkpoint before c
   const archive = path.join(root, 'checkpoint.tar.gz');
   saveCheckpoint(source, archive, false);
   const options = { repository: 'owner/repo', branch: 'main', currentRun: '2', platform: 'linux-x64', key: 'key', work };
-  assert.equal(await downloadReusableTree(root, { ...options, deadline: 0 }, () => assert.fail('No expired restoration'),
+  assert.equal(await restoreFixture(root, { ...options, deadline: 0 }, () => assert.fail('No expired restoration'),
     () => assert.fail('No API call after deadline')), undefined);
   const requests = [];
   const gh = args => {
@@ -265,7 +273,7 @@ test('restored GN failure falls back to a compatible indexed checkpoint before c
     return fs.copyFile(archive, path.join(args.at(-1), name.startsWith('native-') ? 'native.tar.gz' : 'checkpoint.tar.gz'));
   };
   const attempts = [];
-  const candidate = await downloadReusableTree(root, options, async (archive, candidate) => {
+  const candidate = await restoreFixture(root, options, async (archive, candidate) => {
     attempts.push(candidate.name);
     await restoreCheckpoint(work, archive, { create: false });
     await validateReusableTree(work, { ...identity, nativeKey: 'key' });
@@ -298,7 +306,7 @@ test('failed-tree cleanup stops on cancellation or stage expiry before another a
       artifacts: [{ name: 'native-linux-x64-key', workflow_run: { id: 1 } }], total_count: 1,
     } : { id: 1, head_sha: 'source', head_repository: { full_name: 'owner/repo' },
       path: '.github/workflows/nightly-release.yml', head_branch: 'main', event: 'workflow_dispatch' });
-    await assert.rejects(downloadReusableTree(root, options, async () => {
+    await assert.rejects(restoreFixture(root, options, async () => {
       await fs.writeFile(path.join(work, 'partial'), 'owned extraction');
       throw new Error('Extraction failed');
     }, gh), error => outcome === 'deadline' ? error.code === 'ETIMEDOUT' : error === reason);
@@ -400,54 +408,44 @@ test('native checkpoint CLI recovers completed compilation after packaging failu
   assert.equal(await fs.readFile(path.join(restored, 'src/compiled'), 'utf8'), 'completed compilation, packaging failed');
   await fs.rm(output);
   execFileSync(process.execPath, [script, 'native-checkpoint'], { env: { ...env, FLECHA_STAGE_STARTED: '1' } });
-  await assert.rejects(fs.stat(path.join(root, 'native.tar.gz')), { code: 'ENOENT' });
+  await assert.rejects(fs.stat(checkpointPath(root, 'native')), { code: 'ENOENT' });
   await assert.rejects(fs.stat(output), { code: 'ENOENT' });
   execFileSync(process.execPath, [script, 'native-checkpoint'], { env: { ...env,
     FLECHA_STAGE_STARTED: String(Date.now() - (5 - 1) * 60 * 60 * 1000) } });
-  await assert.rejects(fs.stat(path.join(root, 'native.tar.gz')), { code: 'ENOENT' });
+  await assert.rejects(fs.stat(checkpointPath(root, 'native')), { code: 'ENOENT' });
   await assert.rejects(fs.stat(output), { code: 'ENOENT' });
 });
 
 test('recovery searches trusted nightly runs and skips expired or superseded checkpoints', async () => {
-  const releaseName = 'release-linux-x64-native-key-current-layout';
-  const options = { repository: 'owner/repo', branch: 'main', currentRun: '10', platform: 'linux-x64', key: 'native-key', releaseName };
-  const run = (id, overrides = {}) => ({ id, head_sha: `sha-${id}`, head_repository: { full_name: options.repository },
-    path: '.github/workflows/nightly-release.yml', head_branch: 'main', event: 'workflow_dispatch', ...overrides });
+  const options = { repository: 'owner/repo', branch: 'main', currentRun: '10', platform: 'linux-x64', key: 'native-key' };
+  const native = 'native-linux-x64-native-key';
+  const index = 'reuse-linux-x64-native-key-';
   const requests = [];
   const rejected = new Map([
-    ['9', { head_branch: 'feature' }], ['8', { head_repository: { full_name: 'fork/repo' } }],
-    ['7', { event: 'pull_request' }], ['6', { path: '.github/workflows/untrusted.yml' }],
+    [9, { head_branch: 'feature' }], [8, { head_repository: { full_name: 'fork/repo' } }],
+    [7, { event: 'pull_request' }], [6, { path: '.github/workflows/untrusted.yml' }],
   ]);
-  const candidates = findReusableArtifacts(options, endpoint => {
+  const candidates = await Array.fromAsync(findReusableArtifacts(options, endpoint => {
     requests.push(endpoint);
-    if (endpoint.includes('/runs/5/artifacts?')) {
-      if (endpoint.endsWith('page=1')) return { artifacts: [
-        { name: 'native-linux-x64-native-key' }, { name: 'release-linux-x64-native-key-old-layout' },
-        { name: 'reuse-linux-x64-native-key-2' }, { name: 'reuse-linux-x64-native-key-1' },
-      ], total_count: 7 };
-      return { artifacts: [
-        { name: releaseName }, { name: 'checkpoint-linux-x64-2', expired: true }, { name: 'checkpoint-linux-x64-1' },
-      ], total_count: 7 };
+    const url = new URL('https://api.github.com/' + endpoint);
+    if (url.pathname.endsWith('/runs/4/artifacts')) throw Object.assign(new Error('Run removed'), { status: 404 });
+    if (url.pathname.endsWith('/runs/5/artifacts')) {
+      const names = url.searchParams.get('page') === '1' ? [index + '2', index + '1', 'reuse-linux-x64-other-3'] :
+        ['checkpoint-linux-x64-1', 'checkpoint-linux-x64-2', 'checkpoint-linux-x64-3'];
+      return { artifacts: names.map(name => ({ name, expired: name === 'checkpoint-linux-x64-2' })), total_count: 6 };
     }
-    if (endpoint.includes('/runs/4/artifacts?')) throw Object.assign(new Error('Run removed'), { status: 404 });
-    if (endpoint.includes('/runs/3/artifacts?')) return { artifacts: [{ name: 'native-linux-x64-native-key' }], total_count: 1 };
-    if (endpoint.endsWith('page=1')) return { artifacts: ['10', ...rejected.keys()].map(id =>
-      ({ name: 'native-linux-x64-native-key', workflow_run: { id } })), total_count: 8 };
-    if (endpoint.endsWith('page=2')) return { artifacts: [5, 4, 3].map(id =>
-      ({ name: 'native-linux-x64-native-key', workflow_run: { id } })), total_count: 8 };
-    const id = endpoint.split('/').at(-1);
-    return run(Number(id), rejected.get(id));
-  });
-  assert.deepEqual((await candidates.next()).value, { run: '5', sha: 'sha-5', name: releaseName, archive: 'Flecha-linux-x64.tar.gz' });
-  assert.equal((await candidates.next()).value.name, 'native-linux-x64-native-key');
-  assert.equal((await candidates.next()).value.name, 'checkpoint-linux-x64-1');
-  assert.equal((await candidates.next()).value.run, '3');
-  assert.equal((await candidates.next()).done, true);
-  assert.equal(requests.length, 13);
-  assert.equal(reusableArtifact([{ name: 'reuse-linux-x64-other-key-1' }, { name: 'checkpoint-linux-x64-1' }], options.platform, options.key), undefined);
-  assert.deepEqual(reusableArtifact([{ name: 'native-linux-x64-native-key' }], options.platform, options.key),
-    { name: 'native-linux-x64-native-key', archive: 'native.tar.gz' });
-  assert.equal(reusableArtifact([{ name: 'release-macos-arm64-native-key' }], 'macos-arm64', options.key), undefined);
+    if (url.pathname.endsWith('/artifacts')) {
+      const name = url.searchParams.get('name');
+      if (name !== null) assert.equal(name, native);
+      const ids = name ? (url.searchParams.get('page') === '1' ? [10, ...rejected.keys()] : [5, 3]) : [10, ...rejected.keys(), 4, 5];
+      return { artifacts: ids.map(id => ({ name: name || index + '1', workflow_run: { id } })), total_count: 7 };
+    }
+    const id = Number(url.pathname.split('/').at(-1));
+    return { id, head_sha: `sha-${id}`, head_repository: { full_name: options.repository },
+      path: '.github/workflows/nightly-release.yml', head_branch: 'main', event: 'workflow_dispatch', ...rejected.get(id) };
+  }));
+  assert.deepEqual(candidates.map(c => [c.name, c.run]), [[native, '5'], [native, '3'], ['checkpoint-linux-x64-1', '5']]);
+  assert.equal(requests.length, new Set(requests).size);
   assert.equal((await findReusableArtifacts(options, () => ({ artifacts: [], total_count: 0 })).next()).done, true);
 });
 
@@ -514,7 +512,7 @@ test('completed platforms pass through later build and checkpoint CLI stages wit
     const env = { ...process.env, GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted', RUNNER_WORKSPACE: workspace };
     execFileSync(process.execPath, [script, 'build'], { env });
     execFileSync(process.execPath, [script, 'checkpoint'], { env });
-    assert.equal((await fs.stat(path.join(root, 'checkpoint.tar.gz'))).isFile(), true);
+    assert.equal((await fs.stat(checkpointPath(root, 'checkpoint'))).isFile(), true);
     const next = path.join(dir, `${stage} restored workspace`);
     await fs.mkdir(next);
     const restored = path.join(next, 'flecha-chromium');
@@ -528,10 +526,20 @@ test('completed platforms pass through later build and checkpoint CLI stages wit
 test('checkpoint archives restore the tree, and completed checkpoints carry only state', async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'flecha-checkpoint-'));
   t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const script = new URL('../scripts/ci-release.mjs', import.meta.url).href;
+  const withoutZstd = execFileSync(process.execPath, ['--input-type=module', '-e',
+    `import { checkpointPath } from ${JSON.stringify(script)}; console.log(checkpointPath('.', 'checkpoint'));`],
+    { env: { ...process.env, PATH: dir }, encoding: 'utf8' });
+  assert.equal(withoutZstd.trim(), 'checkpoint.tar.gz');
   const work = path.join(dir, 'work tree');
   await fs.mkdir(path.join(work, 'src/out/Release'), { recursive: true });
   await fs.writeFile(path.join(work, 'state.json'), '{"complete":false}');
-  await fs.writeFile(path.join(work, 'src/out/Release/chrome'), 'compiled object');
+  const out = path.join(work, 'src/out/Release');
+  await fs.writeFile(path.join(out, 'chrome'), 'compiled object', { mode: 0o755 });
+  await fs.writeFile(path.join(out, '.ninja_deps'), Buffer.from([0, 255, 10]));
+  await fs.writeFile(path.join(out, '.ninja_log'), '# ninja log v5\n');
+  const modified = new Date('2026-01-02T03:04:05Z');
+  await fs.utimes(path.join(out, 'chrome'), modified, modified);
   for (const complete of [false, true]) {
     const archive = path.join(dir, `checkpoint-${complete}.tar.gz`);
     const restored = path.join(dir, `restored tree-${complete}`);
@@ -554,6 +562,19 @@ test('checkpoint archives restore the tree, and completed checkpoints carry only
         return;
       }
       throw error;
+    }
+    for (const archive of new Set([path.join(dir, 'checkpoint.tar.gz'), checkpointPath(dir, 'checkpoint')])) {
+      saveCheckpoint(work, archive, false);
+      const restored = path.join(dir, 'roundtrip-' + path.extname(archive));
+      await restoreCheckpoint(restored, path.join(dir, 'checkpoint.tar.gz'));
+      const binary = path.join(restored, 'src/out/Release/chrome');
+      const stat = await fs.stat(binary);
+      assert.equal(stat.mtimeMs, modified.getTime());
+      if (process.platform !== 'win32') assert.equal(stat.mode & 0o777, (await fs.stat(path.join(out, 'chrome'))).mode & 0o777);
+      assert.deepEqual(await fs.readFile(path.join(path.dirname(binary), '.ninja_deps')), Buffer.from([0, 255, 10]));
+      assert.equal(await fs.readFile(path.join(path.dirname(binary), '.ninja_log'), 'utf8'), '# ninja log v5\n');
+      assert.equal(await fs.readlink(path.join(restored, 'dangling-link')), await fs.readlink(path.join(work, 'dangling-link')));
+      assert.equal(await fs.readFile(path.join(restored, 'a-forward-link'), 'utf8'), 'compiled object');
     }
     const archive = path.join(dir, 'links-first.tar.gz');
     const restored = path.join(dir, 'restored links');
@@ -611,6 +632,103 @@ test('compilation errors cannot become resumable success', async () => {
     {}), /Chromium build failed: 7/);
 });
 
+test('Windows termination distinguishes a vanished PID from a still-owned live process', async () => {
+  const missing = Object.assign(new Error('process not found'), { code: 'ESRCH' });
+  const exited = Object.assign(new Error('taskkill could not find the process'), { code: 128 });
+  const kill = async (command, args) => {
+    assert.equal(command, 'taskkill');
+    assert.deepEqual(args, ['/PID', '17', '/T', '/F']);
+    throw exited;
+  };
+  const snapshot = () => [17, 18];
+  const gone = () => { throw missing; };
+  assert.equal(await stopWindowsTree(17, {}, { snapshot, exec: kill, probe: gone }), false);
+  await assert.rejects(stopWindowsTree(17, {}, { snapshot, exec: kill, probe: id => id === 18 ? true : gone() }), error => error === exited);
+  const partial = Object.assign(new Error('a member exited before taskkill'), { code: 1, stdout: 'SUCCESS: terminated child' });
+  assert.equal(await stopWindowsTree(17, {}, { snapshot, exec: () => { throw partial; }, probe: gone }), true);
+});
+
+test('Linux dependency checks install only when needed and observe the same stage deadline and cancellation', async () => {
+  const src = '/source';
+  const script = 'build/install-build-deps.sh';
+  const deadline = Date.now();
+  for (const outcome of ['installed', 'missing', 'timeout', 'cancelled']) {
+    const controller = new AbortController();
+    const options = { env: {}, deadline, signal: controller.signal };
+    const calls = [];
+    const install = installLinuxDependencies(src, options, async (command, args, runOptions) => {
+      assert.equal(runOptions.deadline, deadline);
+      assert.equal(runOptions.signal, controller.signal);
+      assert.equal(runOptions.cwd, src);
+      calls.push([command, ...args]);
+      if (command === 'locale') return 'da_DK.utf8\nen_US.utf8\nfr_FR.utf8\nhe_IL.utf8\nzh_TW.utf8';
+      if (outcome !== 'installed' && calls.length === 1) throw Object.assign(new Error('missing'), { exitCode: 1 });
+      if (command === 'sudo' && outcome === 'timeout') throw Object.assign(new Error('stage deadline'), { code: 'ETIMEDOUT' });
+      if (command === 'sudo' && outcome === 'cancelled') {
+        controller.abort(new Error('stage cancelled'));
+        runOptions.signal.throwIfAborted();
+      }
+    });
+    if (outcome === 'timeout') await assert.rejects(install, { code: 'ETIMEDOUT' });
+    else if (outcome === 'cancelled') await assert.rejects(install, /stage cancelled/);
+    else await install;
+    const check = ['bash', script, '--quick-check'];
+    assert.deepEqual(calls, outcome === 'installed' ? [check, ['locale', '-a']] :
+      [check, ['sudo', '-n', 'bash', script, '--no-prompt'], ...(outcome === 'missing' ? [check] : [])]);
+  }
+});
+
+test('warm compilation requires a remaining compile window and room for the verified input checkpoint', () => {
+  const checkpointBytes = 700;
+  assert.equal(canCompileWarmTree(0, checkpointBytes, checkpointBytes), false);
+  assert.equal(canCompileWarmTree(1, checkpointBytes, checkpointBytes - 1), false);
+  assert.equal(canCompileWarmTree(1, checkpointBytes, checkpointBytes), true);
+});
+
+test('the release workflow uploads fast hits and runs native setup on misses, while cold stage zero checkpoints', async () => {
+  const workflow = await fs.readFile(new URL('../../.github/workflows/release-stage.yml', import.meta.url), 'utf8');
+  const steps = workflow.split(/^      - /m).slice(1);
+  const step = start => {
+    const found = steps.find(s => s.startsWith(start));
+    assert.ok(found, start);
+    return found;
+  };
+  const probe = step('name: Try verified portable');
+  assert.match(probe, /if: inputs.stage == 0 && runner.os != 'macOS'/);
+  for (const name of ['name: Reclaim unused', 'uses: actions/setup-python', 'name: Install Chromium Windows SDK',
+    'name: Read Chromium revision', 'name: Verify and install Chromium Linux', 'name: Prepare Chromium source']) {
+    const setup = step(name);
+    assert.ok(steps.indexOf(probe) < steps.indexOf(setup));
+    assert.match(setup, /if: [^\n]*steps\.portable\.outputs\.package == ''/);
+  }
+  assert.match(step('name: Upload completed platform package'), /if: steps.portable.outputs.package != '' \|\| steps.compile.outputs.package != ''/);
+  assert.match(step('name: Save checkpoint'), /if: steps.portable.outputs.package == '' && steps.compile.outputs.package == ''/);
+  assert.match(step('name: Compile and package'), /if: inputs.stage != 0 \|\| steps.prepare.outputs.compile == 'true'/);
+  const deletion = step('name: Delete superseded checkpoint');
+  assert.match(deletion, /if: inputs.stage != 0 && !inputs.last && steps.checkpoint.outputs.complete == 'false'/);
+  assert.match(deletion, /artifacts\?name=\$PREVIOUS_NAME/);
+});
+
+test('portable discovery checks exact attempt, rerun index, and legacy names, including empty results', async () => {
+  const options = { portableOnly: true, repository: 'owner/repo', branch: 'main', currentRun: '10',
+    platform: 'linux-x64', releaseName: 'release-linux-x64-key-layout' };
+  for (const indexed of [false, true]) {
+    const names = [];
+    const candidates = await Array.fromAsync(findReusableArtifacts(options, endpoint => {
+      const url = new URL('https://api.github.com/' + endpoint);
+      if (url.pathname.endsWith('/runs/9')) return { id: 9, run_attempt: 3, head_sha: 'sha', head_repository: { full_name: 'owner/repo' },
+        path: '.github/workflows/nightly-release.yml', head_branch: 'main', event: 'schedule' };
+      const name = url.searchParams.get('name');
+      assert.ok(name, 'Every portable artifact query must supply its exact name');
+      names.push(name);
+      const exists = indexed && (name.endsWith('-reruns') || name.endsWith('-attempt-2'));
+      return { artifacts: exists ? [{ name, workflow_run: { id: 9 } }] : [], total_count: Number(exists) };
+    }));
+    assert.deepEqual(names, ['-attempt-1', '-reruns', ...(indexed ? ['-attempt-3', '-attempt-2'] : []), ''].map(s => options.releaseName + s));
+    assert.deepEqual(candidates.map(c => c.name), indexed ? [options.releaseName + '-attempt-2'] : []);
+  }
+});
+
 test('an intentional compilation deadline creates a checkpoint outcome', async () => {
   // An already-expired deadline exercises handoff without waiting for real compilation.
   assert.equal(await compile(process.execPath, ['-e', 'setInterval(() => {}, 1)'],
@@ -656,12 +774,15 @@ test('the publisher uses the active default-branch build’s platform catalog an
   const branch = 'main';
   const platform = 'linux-x64';
   const nativeKey = 'a'.repeat(64);
-  const artifact = `release-${platform}-${nativeKey}`;
+  const base = `release-${platform}-${nativeKey}`;
+  const artifact = `${base}-attempt-2`;
   const sha = 'b'.repeat(40);
   const run = { id: 11, run_attempt: 2, status: 'in_progress', head_sha: sha, path: '.github/workflows/nightly-release.yml',
     head_branch: branch, head_repository: { full_name: repository }, event: 'schedule' };
-  const inputs = { repository, branch, currentRun: '12', run: '11', attempt: '2', platform, artifact, artifactId: '22' };
-  const readRun = (overrides = {}, upload = {}) => args => {
+  const inputs = { repository, branch, currentRun: '12', run: '11', attempt: '2', platform, artifact, artifactId: '22', monitorId: '33' };
+  const readRun = (overrides = {}, upload = {}, job = {}) => args => {
+    if (args[1] === `repos/${repository}/actions/jobs/33`) return JSON.stringify({ name: `Monitor ${platform} publication`,
+      run_id: 11, run_attempt: 2, status: 'in_progress', steps: [], ...job });
     if (args[1] === `repos/${repository}/actions/runs/11`) return JSON.stringify({ ...run, ...overrides });
     if (args[1] === `repos/${repository}/actions/artifacts/22`) {
       return JSON.stringify({ id: 22, name: artifact, workflow_run: { id: 11 }, ...upload });
@@ -673,18 +794,24 @@ test('the publisher uses the active default-branch build’s platform catalog an
     return '158.0.8127.2\n';
   };
   assert.deepEqual(publicationSource(inputs, readRun()), { sha, chromium: '158.0.8127.2', nativeKey });
-  const portable = `${artifact}-${'c'.repeat(64)}`;
+  const portable = `${base}-${'c'.repeat(64)}-attempt-2`;
   assert.deepEqual(publicationSource({ ...inputs, artifact: portable }, readRun({}, { name: portable })),
     { sha, chromium: '158.0.8127.2', nativeKey });
-  assert.throws(() => publicationSource({ ...inputs, platform: 'linux-other', artifact: `release-linux-other-${nativeKey}` },
-    readRun({}, { name: `release-linux-other-${nativeKey}` })), /Unknown release platform/);
+  assert.throws(() => publicationSource({ ...inputs, platform: 'linux-other', artifact: `release-linux-other-${nativeKey}-attempt-2` },
+    readRun({}, { name: `release-linux-other-${nativeKey}-attempt-2` }, { name: 'Monitor linux-other publication' })), /Unknown release platform/);
   for (const untrusted of [{ head_repository: { full_name: 'other/repo' } }, { head_branch: 'other' },
     { event: 'pull_request' }, { path: '.github/workflows/ci.yml' }, { id: 13 }]) {
     assert.throws(() => publicationSource(inputs, readRun(untrusted)), /default-branch nightly/);
   }
   assert.throws(() => publicationSource({ ...inputs, artifact: 'release-windows-x64-*' }, readRun()), /Invalid nightly/);
-  for (const obsolete of [{ run_attempt: 3 }, { status: 'completed', conclusion: 'cancelled' }]) {
+  for (const obsolete of [{ run_attempt: 3 }, { status: 'cancelling' }, { status: 'completed', conclusion: 'cancelled' }]) {
     assert.throws(() => publicationSource(inputs, readRun(obsolete)), /cancelled or superseded/);
+  }
+  const old = `${base}-attempt-1`;
+  assert.throws(() => publicationSource(inputs, readRun({}, { name: old })), /does not match/);
+  assert.throws(() => publicationSource({ ...inputs, artifact: old }, readRun({}, { name: old })), /Invalid nightly/);
+  for (const job of [{ run_attempt: 1 }, { run_id: 13 }, { status: 'completed' }, { steps: [{ conclusion: 'cancelled' }] }]) {
+    assert.throws(() => publicationSource(inputs, readRun({}, {}, job)), /inactive or cancelling/);
   }
   for (const wrong of [{ id: 23 }, { workflow_run: { id: 12 } }, { name: portable }, { expired: true }]) {
     assert.throws(() => publicationSource(inputs, readRun({}, wrong)), /does not match/);
@@ -746,6 +873,68 @@ test('a portable release reuses the verified browser with the current shell and 
   if (platform === 'linux-x64') {
     for (const file of [exe, launcher]) assert.ok((await fs.stat(path.join(verified, file))).mode & 0o111);
   }
+
+  await t.test('cancellation during shell staging prevents further copies and archiving', async t => {
+    const controller = new AbortController();
+    const reason = new Error('cancel mid-copy');
+    const open = nativeFs.createWriteStream;
+    const hook = t.mock.method(nativeFs, 'createWriteStream', (file, ...options) => {
+      const stream = open(file, ...options);
+      if (file === path.join(stage, 'resources/flecha-shell/frame.js')) {
+        stream.once('pipe', source => source.once('data', () => controller.abort(reason)));
+      }
+      return stream;
+    });
+    syncBuiltinESMExports();
+    try {
+      await assert.rejects(packagePortable(root, stage, path.join(root, 'cancelled-output'),
+        () => assert.fail('must not start archiver'), node, controller.signal), { code: 'ABORT_ERR' });
+      assert.equal(controller.signal.reason, reason);
+      assert.deepEqual(await fs.readdir(path.join(stage, 'native-host')), []);
+    } finally {
+      hook.mock.restore();
+      syncBuiltinESMExports();
+    }
+  });
+
+  await t.test('failed promotion preserves the destination and retries a verified package', async () => {
+    const releaseName = 'release-' + platform + '-native-layout';
+    const name = releaseName + '-attempt-1';
+    const work = path.join(root, 'chromium-work');
+    const dist = path.join(root, 'release');
+    await fs.mkdir(dist);
+    await fs.writeFile(path.join(dist, 'existing'), 'untouched');
+    const options = { portableOnly: true, repository: 'owner/repo', branch: 'main', currentRun: '3', platform, releaseName, work };
+    const requests = [];
+    const attempts = [];
+    const gh = async args => {
+      if (args[0] === 'api') {
+        const url = args[1];
+        requests.push(url);
+        if (url.includes('/artifacts?')) return JSON.stringify({
+          total_count: 2, artifacts: [1, 2].map(id => ({ name, workflow_run: { id } })),
+        });
+        return JSON.stringify({ id: Number(url.split('/').at(-1)), head_sha: provenance.sha, head_repository: { full_name: 'owner/repo' },
+          path: '.github/workflows/nightly-release.yml', head_branch: 'main', event: 'schedule' });
+      }
+      if (attempts.length) {
+        assert.equal(await fs.readFile(path.join(dist, 'existing'), 'utf8'), 'untouched');
+        await fs.rm(dist, { recursive: true });
+      }
+      await fs.cp(release, args.at(-1), { recursive: true });
+    };
+    const candidate = await restoreFixture(root, options, (archive, candidate) => {
+      attempts.push(candidate.run);
+      return repackPortableCandidate({ root, archive, stage: path.join(work, 'stage'), dist, source: provenance,
+        signal: new AbortController().signal, invoke, nodeExecutable: node,
+        metadata: (dir, args) => fs.writeFile(path.join(dir, 'provenance'), args) });
+    }, gh);
+    assert.deepEqual(attempts, ['1', '2']);
+    assert.equal(candidate.run, '2');
+    assert.equal(await fs.readFile(path.join(dist, 'provenance'), 'utf8'), provenance.args);
+    assert.equal(requests.filter(url => url.includes('/artifacts?')).length, 1);
+    assert.equal(new URL('https://api.github.com/' + requests[0]).searchParams.get('name'), name);
+  });
 });
 
 test('a platform joins its run release at the source commit and lists its checksums only after its other files', () => {

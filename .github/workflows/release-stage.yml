@@ -29,7 +29,9 @@ jobs:
     name: ${{ matrix.platform }} stage ${{ inputs.stage }}
     outputs:
       incomplete: ${{ steps.checkpoint.outputs.complete == 'false' }}
-      publisher: ${{ steps.publisher.outputs.run-id }}
+      artifact: ${{ format('{0}-attempt-{1}', steps.portable.outputs.package || steps.compile.outputs.package, github.run_attempt) }}
+      artifact-id: ${{ steps.package.outputs.artifact-id }}
+      platform: ${{ matrix.platform }}
     strategy:
       fail-fast: false
       matrix:
@@ -37,33 +39,19 @@ jobs:
     runs-on: ${{ matrix.runner }}
     env:
       DEPOT_TOOLS_WIN_TOOLCHAIN: '0'
+      FLECHA_STAGE: ${{ inputs.stage }}
+      # Owner-selected total optional reuse budget across both searches.
+      FLECHA_REUSE_BUDGET_MINUTES: '60'
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: Record stage start
         run: node -e "require('node:fs').appendFileSync(process.env.GITHUB_ENV, 'FLECHA_STAGE_STARTED=' + Date.now() + '\n')"
-      - name: Select Xcode before removing unused SDKs
-        if: runner.os == 'macOS'
-        run: sudo xcode-select --switch /Applications/Xcode_26.3.app/Contents/Developer
-      - name: Reclaim unused hosted tooling
-        run: node chromium/scripts/ci-cleanup.mjs
-      - name: Verify selected macOS toolchain survived cleanup
-        if: runner.os == 'macOS'
-        run: |
-          xcodebuild -version
-          xcrun --sdk macosx --show-sdk-version
       - uses: actions/setup-node@v7
         with:
           node-version: 26
           cache: npm
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.11'
-      - name: Install Chromium Windows SDK
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: ./chromium/scripts/ci-windows-sdk.ps1
       - uses: actions/download-artifact@v8
         with:
           name: shell-and-host
@@ -71,6 +59,32 @@ jobs:
       - name: Restore built shell and host
         shell: bash
         run: tar -xzf shell-and-host/shell-and-host.tar.gz
+      - name: Try verified portable package before Chromium setup
+        id: portable
+        if: inputs.stage == 0 && runner.os != 'macOS'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FLECHA_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: node chromium/scripts/ci-release.mjs portable
+      - name: Select Xcode before removing unused SDKs
+        if: runner.os == 'macOS'
+        run: sudo xcode-select --switch /Applications/Xcode_26.3.app/Contents/Developer
+      - name: Reclaim unused hosted tooling
+        if: steps.portable.outputs.package == ''
+        run: node chromium/scripts/ci-cleanup.mjs
+      - name: Verify selected macOS toolchain survived cleanup
+        if: runner.os == 'macOS'
+        run: |
+          xcodebuild -version
+          xcrun --sdk macosx --show-sdk-version
+      - uses: actions/setup-python@v7
+        if: steps.portable.outputs.package == ''
+        with:
+          python-version: '3.11'
+      - name: Install Chromium Windows SDK
+        if: runner.os == 'Windows' && steps.portable.outputs.package == ''
+        shell: pwsh
+        run: ./chromium/scripts/ci-windows-sdk.ps1
       - name: Restore previous checkpoint
         if: inputs.stage != 0
         uses: actions/download-artifact@v8
@@ -83,18 +97,39 @@ jobs:
       - name: Install packaging dependencies
         if: runner.os == 'macOS'
         run: npm ci
+      - name: Read Chromium revision for Linux dependency checks
+        id: pin
+        if: runner.os == 'Linux' && inputs.stage == 0 && steps.portable.outputs.package == ''
+        run: echo "chromium=$(cat chromium/CHROMIUM_VERSION)" >> "$GITHUB_OUTPUT"
+      - name: Check out the pinned dependency installer before source preparation
+        if: steps.pin.outputs.chromium != ''
+        uses: actions/checkout@v7
+        with:
+          repository: chromium/chromium
+          ref: ${{ steps.pin.outputs.chromium }}
+          path: chromium-deps
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /build/install-build-deps.sh
+            /build/install-build-deps.py
+            /build/linux/install-chromeos-fonts.py
+      - name: Verify and install Chromium Linux dependencies within the stage allowance
+        if: runner.os == 'Linux' && steps.portable.outputs.package == ''
+        env:
+          FLECHA_DEPS_ROOT: ${{ steps.pin.outputs.chromium != '' && 'chromium-deps' || '' }}
+        run: node chromium/scripts/ci-release.mjs dependencies
       - name: Prepare Chromium source and toolchains
         id: prepare
-        if: inputs.stage == 0
+        if: inputs.stage == 0 && steps.portable.outputs.package == ''
         env:
           GH_TOKEN: ${{ github.token }}
           FLECHA_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          # Owner-selected total budget for optional reuse before a clean preparation.
-          FLECHA_REUSE_BUDGET_MINUTES: '60'
+          FLECHA_REUSE_SPENT_MS: ${{ steps.portable.outputs.spent-ms }}
         run: node chromium/scripts/ci-release.mjs prepare
       - name: Compile and package
         id: compile
-        if: inputs.stage != 0
+        if: inputs.stage != 0 || steps.prepare.outputs.compile == 'true'
         shell: bash
         run: |
           export CHROMIUM_SRC="$RUNNER_WORKSPACE/flecha-chromium/src"
@@ -102,45 +137,34 @@ jobs:
           node chromium/scripts/ci-release.mjs build
       - name: Upload completed platform package
         id: package
-        if: steps.prepare.outputs.package != '' || steps.compile.outputs.package != ''
+        if: steps.portable.outputs.package != '' || steps.compile.outputs.package != ''
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ steps.prepare.outputs.package || steps.compile.outputs.package }}
+          name: ${{ format('{0}-attempt-{1}', steps.portable.outputs.package || steps.compile.outputs.package, github.run_attempt) }}
           path: release/*
           overwrite: true
           if-no-files-found: error
           compression-level: 0
           retention-days: 35
-      - name: Hand the package to the publisher
-        id: publisher
-        if: steps.prepare.outputs.package != '' || steps.compile.outputs.package != ''
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          PACKAGE_ARTIFACT: ${{ steps.prepare.outputs.package || steps.compile.outputs.package }}
-          PACKAGE_ID: ${{ steps.package.outputs.artifact-id }}
-          RELEASE_PLATFORM: ${{ matrix.platform }}
-        run: |
-          run_id=$(gh api --method POST "repos/$GITHUB_REPOSITORY/actions/workflows/publish-nightly-platform.yml/dispatches" \
-            -H 'X-GitHub-Api-Version: 2026-03-10' -f "ref=$DEFAULT_BRANCH" \
-            -f "inputs[build_run]=$GITHUB_RUN_ID" -f "inputs[platform]=$RELEASE_PLATFORM" \
-            -f "inputs[build_attempt]=$GITHUB_RUN_ATTEMPT" -f "inputs[artifact_id]=$PACKAGE_ID" \
-            -f "inputs[artifact]=$PACKAGE_ARTIFACT" --jq '.workflow_run_id')
-          if ! [[ "$run_id" =~ ^[0-9]+$ ]]; then
-            echo '::error::The publisher did not return a workflow run ID.'
-            exit 1
-          fi
-          printf 'run-id=%s\n' "$run_id" >> "$GITHUB_OUTPUT"
+      - name: Index a rerun package for exact-name reuse lookup
+        if: github.run_attempt != '1' && runner.os != 'macOS' && steps.package.outputs.artifact-id != ''
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.portable.outputs.package || steps.compile.outputs.package }}-reruns
+          path: release/${{ matrix.platform }}.json
+          overwrite: true
+          if-no-files-found: error
+          retention-days: 35
       - name: Save checkpoint
         id: checkpoint
-        if: steps.prepare.outputs.package == '' && steps.compile.outputs.package == ''
+        if: steps.portable.outputs.package == '' && steps.compile.outputs.package == ''
         run: node chromium/scripts/ci-release.mjs checkpoint
       - uses: actions/upload-artifact@v7
         if: steps.checkpoint.outputs.complete == 'false'
         with:
           name: checkpoint-${{ matrix.platform }}-${{ inputs.stage }}
-          path: checkpoint.tar.gz
+          path: ${{ steps.checkpoint.outputs.archive }}
           compression-level: 0
           if-no-files-found: error
           overwrite: true
@@ -162,13 +186,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PREVIOUS_NAME: checkpoint-${{ matrix.platform }}-${{ inputs.previous }}
         run: |
-          artifact_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" --paginate --jq ".artifacts[] | select(.name == \"$PREVIOUS_NAME\") | .id")
+          artifact_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?name=$PREVIOUS_NAME" --paginate --jq ".artifacts[] | select(.name == \"$PREVIOUS_NAME\") | .id")
           if [ -n "$artifact_id" ]; then
             gh api --method DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id"
           fi
       - name: Create optional native snapshot after required release uploads
         id: native
-        if: ${{ !cancelled() && inputs.stage != 0 && (runner.os == 'macOS' || failure()) }}
+        if: ${{ !cancelled() && (inputs.stage != 0 || steps.prepare.outputs.compile == 'true') && (runner.os == 'macOS' || failure()) }}
         continue-on-error: true
         run: node chromium/scripts/ci-release.mjs native-checkpoint
       - name: Preserve native outputs for later nightlies and packaging recovery
@@ -178,7 +202,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: native-${{ matrix.platform }}-${{ steps.native.outputs.native-key }}
-          path: native.tar.gz
+          path: ${{ steps.native.outputs.archive }}
           compression-level: 0
           if-no-files-found: error
           overwrite: true
@@ -188,19 +212,44 @@ jobs:
         run: exit 1
 
   confirm-publication:
+    name: Monitor ${{ needs.build.outputs.platform }} publication
     needs: build
-    if: ${{ !cancelled() && needs.build.outputs.publisher != '' }}
+    if: needs.build.result == 'success' && needs.build.outputs.artifact-id != ''
     runs-on: ubuntu-24.04
     env:
       GH_TOKEN: ${{ github.token }}
-      PUBLISH_RUN_ID: ${{ needs.build.outputs.publisher }}
     steps:
+      - name: Hand the package to the publisher
+        id: publisher
+        shell: bash
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          PACKAGE_ARTIFACT: ${{ needs.build.outputs.artifact }}
+          PACKAGE_ID: ${{ needs.build.outputs.artifact-id }}
+          RELEASE_PLATFORM: ${{ needs.build.outputs.platform }}
+          MONITOR_ID: ${{ job.check_run_id }}
+        run: |
+          run_id=$(gh api --method POST "repos/$GITHUB_REPOSITORY/actions/workflows/publish-nightly-platform.yml/dispatches" \
+            -H 'X-GitHub-Api-Version: 2026-03-10' -f "ref=$DEFAULT_BRANCH" \
+            -f "inputs[build_run]=$GITHUB_RUN_ID" -f "inputs[platform]=$RELEASE_PLATFORM" \
+            -f "inputs[build_attempt]=$GITHUB_RUN_ATTEMPT" -f "inputs[artifact_id]=$PACKAGE_ID" \
+            -f "inputs[monitor_id]=$MONITOR_ID" \
+            -f "inputs[artifact]=$PACKAGE_ARTIFACT" --jq '.workflow_run_id')
+          if ! [[ "$run_id" =~ ^[0-9]+$ ]]; then
+            echo '::error::The publisher did not return a workflow run ID.'
+            exit 1
+          fi
+          printf 'run-id=%s\n' "$run_id" >> "$GITHUB_OUTPUT"
       - name: Confirm publication succeeded
-        # Give the watcher the existing upload allowance independently of the native runner.
-        timeout-minutes: 60
+        # One publisher allowance to queue and one to download, verify and publish.
+        timeout-minutes: 120
+        env:
+          PUBLISH_RUN_ID: ${{ steps.publisher.outputs.run-id }}
         run: gh run watch "$PUBLISH_RUN_ID" --repo "$GITHUB_REPOSITORY" --compact --exit-status
       - name: Cancel an unfinished publisher after a failed wait
-        if: ${{ failure() || cancelled() }}
+        if: ${{ (failure() || cancelled()) && steps.publisher.outputs.run-id != '' }}
+        env:
+          PUBLISH_RUN_ID: ${{ steps.publisher.outputs.run-id }}
         continue-on-error: true
         run: |
           status=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PUBLISH_RUN_ID" --jq '.status')
