@@ -26,6 +26,7 @@ export interface FeaturesContext {
   liveTabId(flechaTabId: string): number | undefined;
   /** The Chromium tab of the active Flecha tab. */
   activeChromeTabId(): number | undefined;
+  windowId(): string;
 }
 
 /** What the background's uiState() reads from the features. */
@@ -44,7 +45,7 @@ export function registerFeatures(ctx: FeaturesContext): Features {
     broadcast('boosts:changed');
     ctx.broadcastState();
   };
-  void boosts.ready().then(ctx.broadcastState);
+  void boosts.ready(ctx.broadcastState).catch((error) => console.warn('Flecha boosts: couldn’t load saved boosts', error));
 
   // ---- local dev servers ----
   const servers = watchLocalServers(() => ctx.broadcastState());
@@ -61,9 +62,9 @@ export function registerFeatures(ctx: FeaturesContext): Features {
   // incognito copy's followed preferences can be out of date (incognito.ts).
   if (!incognito) void setAdBlocking(store.state);
 
-  store.onChange(() => {
-    phone.sync();
-    if (!incognito) void setAdBlocking(store.state);
+  store.onChange((_change, detail) => {
+    if (!detail || (detail.kind === 'metadata' && detail.keys.some(k => k === 'url' || k === 'device'))) phone.sync();
+    if (!detail && !incognito) void setAdBlocking(store.state);
   });
   // A mirror's Chromium tab can open without a Store change (the background opening it on show).
   chrome.tabs.onCreated.addListener(() => setTimeout(phone.sync, 0));
@@ -88,7 +89,7 @@ export function registerFeatures(ctx: FeaturesContext): Features {
     openBoostsFolder: incognito ? boostsInRegularWindow : () => boosts.openPage(),
     'settings:open-boosts': () => boosts.openPage(),
     'boosts:list': () => boosts.list(),
-    'boosts:get': (name: string) => boosts.get(String(name)),
+    'boosts:get': (name: string) => boosts.getCommitted(String(name)),
     'boosts:create': async (host: string, kind: BoostKind) => {
       const name = await boosts.create(String(host), kind);
       if (name) boostsChanged();
@@ -113,7 +114,7 @@ export function registerFeatures(ctx: FeaturesContext): Features {
       void chrome.tabs.update(chromeId, { url: env.switches[0].url });
     },
 
-    toggleResponsive: () => phone.toggle(),
+    toggleResponsive: () => phone.toggle(ctx.windowId()),
 
     // The sidebar's error badge: that tab, with DevTools open.
     showConsole: async (tabId: string) => {

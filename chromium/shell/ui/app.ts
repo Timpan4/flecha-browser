@@ -1,6 +1,7 @@
 import { devSuggestions } from './devCommands.js';
 import { ICONS, type IconName } from './icons.js';
 import { setupOnboarding } from './onboarding.js';
+import { keyedRows, type UseRow } from './keyedRows.js';
 import { SPACE_COLORS, SPACE_EMOJIS } from './spaceChoices.js';
 import { setupWindowControls } from './windowControls.js';
 import { displayKeys } from '../lib/shortcuts';
@@ -8,9 +9,11 @@ import { isMac } from '../lib/platform';
 import { isEnter } from '../lib/keys';
 import { isUndoKey } from '../lib/undo';
 import { spaceDropBefore } from '../lib/spaceOrder';
+import { canDropToSplit, pageSplitTarget } from '../lib/splitDrop';
+import { onReconnect } from '../client';
 import { EMPTY_ACTIONS, EMPTY_TABS, type Match, type ResultKind, displayUrl, historyQuery, inlineCompletion, matchQuality, rank, score } from '../lib/commandBar';
 import { suggestable, suggestionRequests } from '../lib/suggest';
-import { searchUrl } from '../lib/url';
+import { searchUrl, webAddress } from '../lib/url';
 import type { MenuEntry } from '../settingsUi';
 import { importFromBrowser, showPageMenu } from '../windowUi';
 import { SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH } from '../../shared/sidebarWidth';
@@ -26,13 +29,22 @@ declare global {
 }
 
 const api = window.flecha;
-/** Where this page is shown: the Electron window (unset), or the Chromium build's side panel or new tab page. */
-const surface = document.documentElement.dataset.surface as 'panel' | 'newtab' | undefined;
+/** The window frame, side panel or new tab page. */
+const surface = document.documentElement.dataset.surface;
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const DRAG_TYPE = 'application/x-flecha-tab';
 const SPACE_DRAG_TYPE = 'application/x-flecha-space';
+// Allow one missed dragover cycle. HTML schedules each cycle at 350 ms with up to 200 ms jitter.
+const INCOMING_DROP_IDLE_MS = 2 * (350 + 200);
 /** The Space whose button is being dragged: drag events only say what kind of thing it is. */
 let draggedSpace: string | undefined;
+let draggedTab: { id: string; spaceId: string } | undefined;
+let incomingDrop: HTMLElement | undefined;
+let incomingDropTimer: ReturnType<typeof setTimeout> | undefined;
+let pinnedHoverTimer: ReturnType<typeof setTimeout> | undefined;
+let clearDropTarget: (() => void) | undefined;
+let deferredRows = false;
+let externalPinnedDrag = false;
 
 let state: UiState | undefined;
 
@@ -85,10 +97,7 @@ function hueFor(text: string) {
   return hash % 360;
 }
 
-function favicon(tab: TabInfo) {
-  const site = host(tab.url);
-  const letter = () =>
-    h('span', { class: 'favicon letter', style: `--hue: ${hueFor(site)}` }, (site.replace(/^[^a-z0-9]+/i, '')[0] ?? '•').toUpperCase());
+function faviconSource(tab: TabInfo) {
   let hostname = '';
   try {
     hostname = new URL(tab.url).hostname;
@@ -97,16 +106,32 @@ function favicon(tab: TabInfo) {
   }
   // The page's own icon once it has loaded, else the icon Flecha fetched for the site.
   const cached = state?.faviconUrl ? state.faviconUrl.replace('%s', encodeURIComponent(tab.url)) : `favicon://${hostname}`;
-  const src = tab.favicon || (state?.faviconHosts.includes(hostname) ? cached : state?.faviconUrls?.[hostname]);
+  return tab.favicon || (state?.faviconHosts.includes(hostname) ? cached : state?.faviconUrls?.[hostname]);
+}
+
+function favicon(tab: TabInfo, src = faviconSource(tab)) {
+  const site = host(tab.url);
+  const letter = () =>
+    h('span', { class: 'favicon letter', style: `--hue: ${hueFor(site)}` }, (site.replace(/^[^a-z0-9]+/i, '')[0] ?? '•').toUpperCase());
   if (!src) return letter();
   const img = h('img', { class: 'favicon', src, draggable: 'false' }) as HTMLImageElement;
-  img.onerror = () => img.replaceWith(letter());
+  img.onerror = () => {
+    const fallback = letter();
+    if (img.dataset.rowKey) fallback.dataset.rowKey = img.dataset.rowKey;
+    img.replaceWith(fallback);
+  };
   return img;
 }
 
 // ---- rendering ----------------------------------------------------------------
 
 function render(s: UiState) {
+  const previous = state;
+  if (previous && previous.activeSpaceId !== s.activeSpaceId) {
+    clearDropTarget?.();
+    incomingDrop = undefined;
+    externalPinExpansion(false);
+  }
   state = s;
   const space = s.spaces.find((sp) => sp.id === s.activeSpaceId) ?? s.spaces[0];
   const active = space.activeTabId ? s.tabs[space.activeTabId] : undefined;
@@ -119,7 +144,7 @@ function render(s: UiState) {
   if (s.sidebarMode !== 'floating') $('sidebar').classList.remove('peek-leaving');
   $('sidebar-resize').setAttribute('aria-valuenow', String(s.sidebarWidth ?? SIDEBAR_DEFAULT_WIDTH));
   // Shortcuts can be changed in Settings; key caps and tooltips show the current ones.
-  for (const el of document.querySelectorAll<HTMLElement>('[data-shortcut]')) {
+  if (previous?.shortcuts !== s.shortcuts) for (const el of document.querySelectorAll<HTMLElement>('[data-shortcut]')) {
     const keys = s.shortcuts[el.dataset.shortcut!] ?? '';
     if (el.tagName === 'KBD') {
       el.textContent = keys;
@@ -130,22 +155,30 @@ function render(s: UiState) {
   }
   const toggle = $('btn-sidebar');
   toggle.dataset.tip = s.sidebarMode === 'floating' ? 'Keep sidebar open' : 'Hide sidebar';
-  renderUrlbar(s, active);
+  const previousActive = previous?.spaces.find(sp => sp.id === previous.activeSpaceId)?.activeTabId;
+  if (!previous || active?.url !== (previousActive ? previous.tabs[previousActive]?.url : undefined) ||
+      s.environment !== previous.environment || s.shortcuts !== previous.shortcuts) renderUrlbar(s, active);
   renderLoading(s, active);
   // In the Chromium build the sidebar and the new tab page are separate pages: the sidebar
   // never draws the empty state, the new tab page always does.
   renderEmptyState(s, space, surface === 'newtab' || (!active && surface !== 'panel'));
 
-  $('favorites').replaceChildren(
-    ...s.favorites
-      .map((id) => s.tabs[id])
-      .filter(Boolean)
-      .map((tab) => {
-        const el = h('button', { class: `fav${tab.id === space.activeTabId ? ' active' : ''}`, title: tabTitle(tab) }, favicon(tab));
+  const preserveRows = !!draggedTab || !!incomingDrop;
+  if (!preserveRows) keyedRows($('favorites'), use => {
+    for (const id of s.favorites) {
+      const tab = s.tabs[id];
+      if (!tab) continue;
+      const row = use(id, () => {
+        const el = h('button', { class: 'fav' });
         wireTab(el, tab, { zone: 'favorites', beforeTabId: tab.id });
         return el;
-      }),
-  );
+      });
+      row.classList.toggle('active', id === space.activeTabId);
+      const title = tabTitle(tab);
+      if (row.dataset.tip !== title) row.dataset.tip = title;
+      patchTabIcon(row, tab, false);
+    }
+  });
 
   renderLocalServers(s);
   renderAgent(s);
@@ -157,32 +190,45 @@ function render(s: UiState) {
   title.dataset.spaceId = space.id;
   $('space-isolated').hidden = !space.isolated;
 
-  // Re-rendering would throw away a tab or folder name being typed in place.
-  if (!document.querySelector('#scroll [contenteditable="true"]')) {
-    $('pinned').replaceChildren(...space.pinned.map((node) => renderNode(node, space, undefined)));
-    $('today').replaceChildren(...todayRows(s, space));
+  // Keep the native drag source and any name being typed in place.
+  if (!preserveRows && !document.querySelector('#scroll [contenteditable="true"]')) {
+    renderPinned($('pinned'), space.pinned, space);
+    keyedRows($('today'), use => todayRows(s, space, use));
     renderAgentFolder(s, space);
+    deferredRows = false;
+  } else if (incomingDrop) {
+    deferredRows = true;
   }
+  $('pinned-header').hidden = incognito;
+  $('scroll').style.visibility = draggedTab && draggedTab.spaceId !== space.id ? 'hidden' : '';
+  updatePinnedVisibility(space);
+  if (draggedTab) showSplitDrop(draggedTab.id);
 
-  $('spaces').replaceChildren(
-    ...s.spaces.map((sp) =>
-      h(
+  keyedRows($('spaces'), use => {
+    for (const sp of s.spaces) {
+      const row = use(sp.id, () => h(
         'button',
         {
-          class: `space-dot${sp.id === space.id ? ' active' : ''}`,
-          title: sp.name,
+          class: 'space-dot',
           draggable: 'true',
           onclick: () => api.switchSpace(sp.id),
           oncontextmenu: (e: Event) => {
             e.preventDefault();
             api.spaceMenu(sp.id);
           },
-          ...spaceDrag(s, sp.id),
+          ...spaceDrag(sp.id),
         },
-        sp.emoji ? h('span', { class: 'space-emoji' }, sp.emoji) : h('span', { class: 'space-initial' }, sp.name[0]?.toUpperCase() ?? '•'),
-      ),
-    ),
-  );
+        h('span'),
+      ));
+      row.classList.toggle('active', sp.id === space.id);
+      if (row.dataset.tip !== sp.name) row.dataset.tip = sp.name;
+      const label = row.firstElementChild!;
+      const cls = sp.emoji ? 'space-emoji' : 'space-initial';
+      if (label.className !== cls) label.className = cls;
+      const value = sp.emoji || sp.name[0]?.toUpperCase() || '•';
+      if (label.textContent !== value) label.textContent = value;
+    }
+  });
 
   // Tabs opening, closing or renaming in the background keep the selected result selected.
   if (!palette.hidden) refreshPalette();
@@ -190,8 +236,18 @@ function render(s: UiState) {
   if (!sitePanel.hidden) renderSitePanel();
 }
 
+function updatePinnedVisibility(space: Space) {
+  const expanded = !space.pinnedCollapsed || draggedTab?.spaceId === space.id || externalPinnedDrag;
+  $('pinned').hidden = !expanded;
+  $('btn-toggle-pinned').setAttribute('aria-expanded', String(expanded));
+  $('pinned-count').hidden = expanded || !space.pinned.length;
+  $('pinned-count').textContent = String(space.pinned.length);
+}
+
 /** What a blank Space offers: search, the sites you go back to most, and your dev servers. */
 let topSitesFetched = 0;
+let topSitesAttempted = 0;
+let fetchingTopSites = false;
 let topSites: HistoryEntry[] = [];
 function renderEmptyState(s: UiState, space: Space, show: boolean) {
   const empty = $('empty-state');
@@ -202,12 +258,14 @@ function renderEmptyState(s: UiState, space: Space, show: boolean) {
   $('empty-title').textContent = hour < 5 ? 'Up late?' : hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
   $('empty-space').replaceChildren(h('span', { class: 'empty-space-emoji' }, space.emoji ?? ''), h('span', {}, space.name));
   // History changes as you browse, so the tiles are fetched each time the page becomes empty.
-  if (wasHidden || Date.now() - topSitesFetched > 60_000) {
-    topSitesFetched = Date.now();
-    api.topSites().then((sites) => {
+  if (!fetchingTopSites && (wasHidden || Date.now() - Math.max(topSitesFetched, topSitesAttempted) > 60_000)) {
+    fetchingTopSites = true;
+    topSitesAttempted = Date.now();
+    void api.topSites().then((sites) => {
       topSites = sites;
+      topSitesFetched = Date.now();
       if (state) render(state);
-    });
+    }, () => undefined).finally(() => { fetchingTopSites = false; });
   }
   // Drawn on every update so icons appear as they are fetched.
   $('empty-top').hidden = !topSites.length;
@@ -287,13 +345,14 @@ function renderLoading(s: UiState, active: TabInfo | undefined) {
 
   const loading = active?.loading ? active.id : undefined;
   const reload = $('btn-reload');
-  reload.replaceChildren(icon(loading ? 'close' : 'reload'));
+  if (reload.dataset.action !== (loading ? 'stop' : 'reload')) reload.replaceChildren(icon(loading ? 'close' : 'reload'));
   reload.dataset.tip = loading ? 'Stop' : 'Reload';
   // The tooltip is Flecha's own, which screen readers don't see.
   reload.setAttribute('aria-label', loading ? 'Stop' : 'Reload');
   reload.dataset.action = loading ? 'stop' : 'reload';
   // The reload shortcut doesn't stop.
   if (loading) delete reload.dataset.kbd;
+  else if (s.shortcuts.reload) reload.dataset.kbd = s.shortcuts.reload;
 
   if (loading === progressTab) return;
   const bar = $('urlbar-progress');
@@ -361,33 +420,37 @@ function originOf(url: string) {
   }
 }
 
-function renderNode(node: PinnedNode, space: Space, folderId: string | undefined): HTMLElement {
-  if (node.kind === 'tab') {
-    const tab = state!.tabs[node.tabId];
-    return tab ? tabRow(tab, space, { zone: 'pinned', folderId, beforeTabId: tab.id }) : h('span');
-  }
-  const name = h('span', { class: 'title folder-name' }, node.name);
-  const header = h(
-    'button',
-    {
-      class: 'row',
-      onclick: () => api.toggleFolder(node.id),
-      ondblclick: (e: Event) => {
-        e.stopPropagation();
-        editInline(name, node.name, (value) => api.renameFolder(node.id, value));
-      },
-    },
-    h('span', { class: 'row-icon folder-icon' }, icon(node.open ? 'folderOpen' : 'folder')),
-    name,
-    h('span', { class: 'chevron' }, icon('chevron')),
-  );
-  acceptDrops(header, { zone: 'pinned', folderId: node.id });
-  return h(
-    'div',
-    { class: `folder${node.open ? ' open' : ''}` },
-    header,
-    h('div', { class: 'folder-children' }, ...node.children.map((child) => renderNode(child, space, node.id))),
-  );
+function renderPinned(parent: HTMLElement, nodes: PinnedNode[], space: Space, folderId?: string) {
+  keyedRows(parent, use => {
+    for (const node of nodes) {
+      if (node.kind === 'tab') {
+        const tab = state!.tabs[node.tabId];
+        if (tab) tabRow(use, tab, space, { zone: 'pinned', folderId, beforeTabId: tab.id });
+        continue;
+      }
+      const folder = use(`folder:${space.id}:${node.id}`, () => {
+        const name = h('span', { class: 'title folder-name' });
+        const header = h('button', {
+          class: 'row',
+          onclick: () => api.toggleFolder(node.id),
+          ondblclick: (e: Event) => {
+            e.stopPropagation();
+            editInline(name, name.textContent ?? '', value => api.renameFolder(node.id, value));
+          },
+        }, h('span', { class: 'row-icon folder-icon' }), name, h('span', { class: 'chevron' }, icon('chevron')));
+        acceptDrops(header, { zone: 'pinned', spaceId: space.id, folderId: node.id });
+        return h('div', { class: 'folder' }, header, h('div', { class: 'folder-children' }));
+      });
+      const header = folder.firstElementChild!;
+      const name = header.children[1];
+      if (name.textContent !== node.name) name.textContent = node.name;
+      if (!header.firstElementChild!.firstChild || folder.classList.contains('open') !== node.open) {
+        header.firstElementChild!.replaceChildren(icon(node.open ? 'folderOpen' : 'folder'));
+        folder.classList.toggle('open', node.open);
+      }
+      renderPinned(folder.lastElementChild as HTMLElement, node.children, space, node.id);
+    }
+  });
 }
 
 /** The agent's folder in this Space (agentFolder.ts). */
@@ -403,110 +466,119 @@ function renderAgentFolder(s: UiState, space: Space) {
   const folder = $('agent-folder');
   const tabs = agentTabs(s, space);
   folder.hidden = !tabs.length;
-  if (!tabs.length) return folder.replaceChildren();
+  if (!tabs.length) {
+    if (folder.firstChild) folder.replaceChildren();
+    return;
+  }
   const busy = !!s.agent?.busy;
   folder.classList.toggle('open', agentFolderOpen);
   folder.classList.toggle('busy', busy);
-  // The toggle and Clear are buttons side by side, as Today's header has them, so each is a
-  // keyboard stop of its own.
-  const toggle = h(
-    'button',
-    {
-      class: 'row agent-folder-toggle',
-      'aria-expanded': String(agentFolderOpen),
-      onclick: () => {
-        agentFolderOpen = !agentFolderOpen;
-        renderAgentFolder(state!, space);
-      },
-    },
-    h('span', { class: 'row-icon folder-icon' }, busy ? h('span', { class: 'agent-dot' }) : icon('sparkle')),
-    h('span', { class: 'title folder-name' }, busy ? 'Agent is working…' : 'Agent’s tabs'),
-    h('span', { class: 'chevron' }, icon('chevron')),
-  );
-  const clear = h('button', { class: 'text-button', title: 'Close the agent’s tabs', onclick: () => tabs.forEach((tab) => api.close(tab.id)) }, 'Clear');
-  // Its rows take no drops: a tab dropped among them would land in Today and leave the folder.
-  folder.replaceChildren(
-    h('div', { class: 'agent-folder-header' }, toggle, clear),
-    h('div', { class: 'folder-children' }, ...tabs.map((tab) => tabRow(tab, space, undefined))),
-  );
+  keyedRows(folder, use => {
+    const header = use('header', () => {
+      const toggle = h('button', {
+        class: 'row agent-folder-toggle',
+        onclick: () => {
+          agentFolderOpen = !agentFolderOpen;
+          if (state) render(state);
+        },
+      }, h('span', { class: 'row-icon folder-icon' }), h('span', { class: 'title folder-name' }),
+      h('span', { class: 'chevron' }, icon('chevron')));
+      const clear = h('button', { class: 'text-button', title: 'Close the agent’s tabs', onclick: () => {
+        const current = state?.spaces.find(sp => sp.id === state?.activeSpaceId);
+        if (state && current) agentTabs(state, current).forEach(tab => api.close(tab.id));
+      } }, 'Clear');
+      return h('div', { class: 'agent-folder-header' }, toggle, clear);
+    });
+    const toggle = header.firstElementChild!;
+    if (toggle.getAttribute('aria-expanded') !== String(agentFolderOpen)) toggle.setAttribute('aria-expanded', String(agentFolderOpen));
+    const title = busy ? 'Agent is working…' : 'Agent’s tabs';
+    if (toggle.children[1].textContent !== title) {
+      toggle.children[1].textContent = title;
+      toggle.children[0].replaceChildren(busy ? h('span', { class: 'agent-dot' }) : icon('sparkle'));
+    }
+    const list = use('children', () => h('div', { class: 'folder-children' }));
+    keyedRows(list, useTab => tabs.forEach(tab => tabRow(useTab, tab, space, undefined)));
+  });
 }
 
-/** Today's tabs, with the two halves of a split drawn together as one row, as in Arc. */
-function todayRows(s: UiState, space: Space): HTMLElement[] {
+/** Draw both halves of a split at the first member's position. */
+function todayRows(s: UiState, space: Space, use: UseRow) {
   const pair = todaySplit(s.tabs, space);
-  const rows: HTMLElement[] = [];
   let pairDrawn = false;
+  const draw = (useTab: UseRow, tab: TabInfo) => tabRow(useTab, tab, space, { zone: 'today', beforeTabId: tab.id });
   for (const id of space.today) {
     const tab = s.tabs[id];
     if (!tab || inAgentFolder(s.tabs, space, id)) continue;
-    // The row sits where whichever half comes first in the list is; the other half is skipped.
-    if (pair && pair.includes(id)) {
+    if (pair?.includes(id)) {
       if (pairDrawn) continue;
       pairDrawn = true;
-      const [left, right] = pair.map((pid) => s.tabs[pid]);
-      const showing = !!space.activeTabId && pair.includes(space.activeTabId);
-      rows.push(
-        h(
-          'div',
-          { class: `split-row${showing ? ' showing' : ''}`, title: space.splitMode === 'responsive' ? 'Responsive view' : 'Split view' },
-          tabRow(left, space, { zone: 'today', beforeTabId: left.id }),
-          tabRow(right, space, { zone: 'today', beforeTabId: right.id }),
-        ),
-      );
-      continue;
-    }
-    rows.push(tabRow(tab, space, { zone: 'today', beforeTabId: tab.id }));
+      const split = use('split', () => h('div', { class: 'split-row' }));
+      split.classList.toggle('showing', !!space.activeTabId && pair.includes(space.activeTabId));
+      const tip = space.splitMode === 'responsive' ? 'Responsive view' : 'Split view';
+      if (split.dataset.tip !== tip) split.dataset.tip = tip;
+      keyedRows(split, useTab => pair.forEach(id => draw(useTab, s.tabs[id])));
+    } else draw(use, tab);
   }
-  return rows;
 }
 
-/** A tab's row; `target` is where a tab dropped on it goes, and a row without one takes no drops. */
-function tabRow(tab: TabInfo, space: Space, target: DropTarget | undefined) {
-  const close = h(
-    'span',
-    {
-      class: 'close',
-      title: !target || target.zone === 'today' ? 'Close tab' : 'Unload tab',
-      onclick: (e: Event) => {
-        e.stopPropagation();
-        api.close(tab.id);
-      },
-    },
-    icon('close'),
-  );
-  const inSplit = !!space.split?.includes(tab.id) && !!space.activeTabId && space.split.includes(space.activeTabId);
-  const row = h(
-    'button',
-    {
-      class: `row${tab.id === space.activeTabId ? ' active' : ''}${inSplit ? ' in-split' : ''}${tab.loading ? ' loading' : ''}${
-        state?.agent?.busy && state.agent.tabId === tab.id ? ' agent-driving' : ''
-      }`,
-    },
-    tab.loading ? spinner() : favicon(tab),
-    h('span', { class: 'title' }, tabTitle(tab)),
-    tab.audible || tab.muted
-      ? h(
-          'span',
-          {
-            class: `audio-mark${tab.muted ? ' muted' : ''}`,
-            title: tab.muted ? 'Unmute' : 'Mute',
-            onclick: (e: Event) => {
-              e.stopPropagation();
-              api.toggleMute(tab.id);
-            },
-          },
-          icon(tab.muted ? 'muted' : 'volume'),
-        )
-      : null,
-    errorBadge(tab),
-    isBoosted(tab.url) ? h('span', { class: 'boost-mark', title: 'Boosted: a script or styles from ~/.flecha/boosts run here' }, icon('zap')) : null,
-    tab.device === 'mobile'
+type IconInputs = Pick<UiState, 'faviconHosts' | 'faviconUrl' | 'faviconUrls'>;
+type RowIcon = IconInputs & { url: string; favicon?: string; src?: string; loading: boolean };
+const tabIcons = new WeakMap<HTMLElement, RowIcon>();
+function patchTabIcon(row: HTMLElement, tab: TabInfo, loading: boolean) {
+  const previous = tabIcons.get(row);
+  const { faviconHosts, faviconUrl, faviconUrls } = state!;
+  if (previous && previous.url === tab.url && previous.loading === loading && previous.favicon === tab.favicon &&
+      previous.faviconHosts === faviconHosts && previous.faviconUrl === faviconUrl && previous.faviconUrls === faviconUrls) return;
+  const src = loading ? undefined : faviconSource(tab);
+  tabIcons.set(row, { url: tab.url, favicon: tab.favicon, loading, src, faviconHosts, faviconUrl, faviconUrls });
+  if (previous && previous.loading === loading && previous.url === tab.url && previous.src === src) return;
+  const next = loading ? spinner() : favicon(tab, src);
+  next.dataset.rowKey = 'icon';
+  if (row.firstElementChild) row.firstElementChild.replaceWith(next);
+  else row.append(next);
+}
+
+const rowContents = new WeakMap<HTMLElement, { tab: TabInfo; errors?: number; boostedHosts: string[] }>();
+/** Row listeners use stable tab and drop-target IDs. Only its changing contents are patched. */
+function tabRow(use: UseRow, tab: TabInfo, space: Space, target: DropTarget | undefined) {
+  const row = use(`tab:${space.id}:${tab.id}`, () => {
+    const el = h('button', { class: 'row' });
+    wireTab(el, tab, target && { ...target, spaceId: space.id });
+    return el;
+  });
+  row.draggable = tab.device !== 'mobile';
+  const split = space.split;
+  row.classList.toggle('active', tab.id === space.activeTabId);
+  row.classList.toggle('in-split', !!split?.includes(tab.id) && !!space.activeTabId && split.includes(space.activeTabId));
+  row.classList.toggle('loading', !!tab.loading);
+  row.classList.toggle('agent-driving', !!state?.agent?.busy && state.agent.tabId === tab.id);
+  patchTabIcon(row, tab, !!tab.loading);
+  const errors = state!.consoleErrors[tab.id];
+  const boostedHosts = state!.boostedHosts;
+  const previous = rowContents.get(row);
+  if (previous?.tab === tab && previous.errors === errors && previous.boostedHosts === boostedHosts) return;
+  rowContents.set(row, { tab, errors, boostedHosts });
+  keyedRows(row, part => {
+    part('icon', () => favicon(tab));
+    const title = part('title', () => h('span', { class: 'title' }));
+    const label = tabTitle(tab);
+    if (title.textContent !== label) title.textContent = label;
+    if (tab.audible || tab.muted) part(tab.muted ? 'muted' : 'audible', () => h('span', {
+      class: `audio-mark${tab.muted ? ' muted' : ''}`, title: tab.muted ? 'Unmute' : 'Mute',
+      onclick: (e: Event) => { e.stopPropagation(); api.toggleMute(tab.id); },
+    }, icon(tab.muted ? 'muted' : 'volume')));
+    if (errors && isDevUrl(tab.url)) part('errors:' + errors, () => errorBadge(tab)!);
+    if (isBoosted(tab.url)) part('boost', () =>
+      h('span', { class: 'boost-mark', title: 'Boosted: a script or styles from ~/.flecha/boosts run here' }, icon('zap')));
+    const mobile = tab.device === 'mobile';
+    part(mobile ? 'device' : 'split', () => mobile
       ? h('span', { class: 'device-badge', title: 'Phone-sized mirror' }, icon('phone'))
-      : h('span', { class: 'split-badge', title: 'In split view' }, icon('columns')),
-    close,
-  );
-  wireTab(row, tab, target);
-  return row;
+      : h('span', { class: 'split-badge', title: 'In split view' }, icon('columns')));
+    part('close', () => h('span', {
+      class: 'close', title: !target || target.zone === 'today' ? 'Close tab' : 'Unload tab',
+      onclick: (e: Event) => { e.stopPropagation(); api.close(tab.id); },
+    }, icon('close')));
+  });
 }
 
 /** Red count of console errors, only on pages you're developing (local URLs). */
@@ -575,8 +647,8 @@ function editHomeUrl(tabId: string) {
 }
 
 /** A Space's button drags among the others to reorder the Spaces; the drop's side picks before or after. */
-function spaceDrag(s: UiState, spaceId: string): Props {
-  const order = () => s.spaces.map((sp) => sp.id);
+function spaceDrag(spaceId: string): Props {
+  const order = () => state!.spaces.map((sp) => sp.id);
   const after = (e: DragEvent) => {
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
     return e.clientX > r.left + r.width / 2;
@@ -614,7 +686,7 @@ function spaceDrag(s: UiState, spaceId: string): Props {
 
 function wireTab(el: HTMLElement, tab: TabInfo, target: DropTarget | undefined) {
   el.dataset.tabId = tab.id;
-  el.draggable = true;
+  el.draggable = tab.device !== 'mobile';
   el.addEventListener('click', () => api.activate(tab.id));
   el.addEventListener('auxclick', (e) => e.button === 1 && api.close(tab.id));
   el.addEventListener('contextmenu', (e) => {
@@ -622,33 +694,91 @@ function wireTab(el: HTMLElement, tab: TabInfo, target: DropTarget | undefined) 
     api.tabMenu(tab.id);
   });
   el.addEventListener('dragstart', (e) => {
+    const space = state?.spaces.find((item) => item.id === state?.activeSpaceId);
+    const current = state?.tabs[tab.id];
+    if (!space || !current || current.device === 'mobile') return e.preventDefault();
+    draggedTab = { id: tab.id, spaceId: space.id };
     e.dataTransfer!.setData(DRAG_TYPE, tab.id);
     e.dataTransfer!.effectAllowed = 'move';
     $('favorites').classList.add('show-empty');
+    updatePinnedVisibility(space);
     showSplitDrop(tab.id);
   });
   el.addEventListener('dragend', () => {
+    clearDropTarget?.();
+    if (draggedTab?.id !== tab.id) return;
+    draggedTab = undefined;
     $('favorites').classList.remove('show-empty');
     hideSplitDrop();
+    if (state) render(state);
   });
-  if (target) acceptDrops(el, target, 'drop-before');
+  if (target) acceptDrops(el, target, 'drop-before', el.classList.contains('row') ? tab.id : undefined);
 }
 
-function acceptDrops(el: HTMLElement, target: DropTarget, hoverClass = 'drag-over') {
+function refreshIncomingDrop() {
+  clearTimeout(incomingDropTimer);
+  incomingDropTimer = setTimeout(() => {
+    if (incomingDrop) clearDropTarget?.();
+  }, INCOMING_DROP_IDLE_MS);
+}
+
+function acceptDrops(el: HTMLElement, target: DropTarget, hoverClass = 'drag-over', splitTarget?: string) {
+  let hoveredSpaceId: string | undefined;
+  let hoveredSide: 'left' | 'right' | undefined;
+  const endHover = () => {
+    hoveredSpaceId = undefined;
+    hoveredSide = undefined;
+    if (clearDropTarget === endHover) clearDropTarget = undefined;
+    el.classList.remove(hoverClass, 'drop-split-left', 'drop-split-right');
+    if (incomingDrop !== el) return;
+    clearTimeout(incomingDropTimer);
+    incomingDrop = undefined;
+    queueMicrotask(() => {
+      if (!incomingDrop && deferredRows && state) render(state);
+    });
+  };
+  const currentTarget = () => (!draggedTab || draggedTab.spaceId === state?.activeSpaceId) &&
+    (!target.spaceId || target.spaceId === state?.activeSpaceId);
+  const splitSide = (e: DragEvent): 'left' | 'right' | undefined => {
+    if (!draggedTab || !state || !canDropToSplit(state.tabs, draggedTab.id, splitTarget)) return;
+    const rect = el.getBoundingClientRect();
+    // The split zones follow upstream #13. Top and bottom remain available for moving tabs.
+    if (e.clientY - rect.top <= 7 || rect.bottom - e.clientY <= 7) return;
+    const x = (e.clientX - rect.left) / rect.width;
+    if (x < 0.25) return 'left';
+    if (x >= 0.4) return 'right';
+  };
   el.addEventListener('dragover', (e) => {
     if (!e.dataTransfer?.types.includes(DRAG_TYPE)) return;
-    e.preventDefault();
     e.stopPropagation();
-    el.classList.add(hoverClass);
+    clearDropTarget?.();
+    if (!currentTarget()) return;
+    e.preventDefault();
+    hoveredSpaceId = state?.activeSpaceId;
+    if (!draggedTab && hoveredSpaceId) {
+      incomingDrop = el;
+      refreshIncomingDrop();
+    }
+    hoveredSide = splitSide(e);
+    clearDropTarget = endHover;
+    el.classList.add(hoveredSide ? `drop-split-${hoveredSide}` : hoverClass);
   });
-  el.addEventListener('dragleave', () => el.classList.remove(hoverClass));
+  el.addEventListener('dragleave', (e) => {
+    if (!(e.relatedTarget instanceof Node) || !el.contains(e.relatedTarget)) endHover();
+  });
   el.addEventListener('drop', (e) => {
-    el.classList.remove(hoverClass);
+    const spaceId = hoveredSpaceId;
+    const side = hoveredSide;
+    endHover();
     const id = e.dataTransfer?.getData(DRAG_TYPE);
     if (!id) return;
     e.preventDefault();
     e.stopPropagation();
-    api.moveTab(id, target);
+    if (!spaceId || spaceId !== state?.activeSpaceId || !currentTarget()) return;
+    if (side !== splitSide(e) || (side && id !== draggedTab?.id)) return;
+    hideSplitDrop();
+    if (side && splitTarget) api.dropToSplit(id, side, { kind: 'row', tabId: splitTarget, spaceId });
+    else api.moveTab(id, { ...target, spaceId });
   });
 }
 
@@ -665,6 +795,8 @@ function editInline(el: HTMLElement, current: string, commit: (value: string) =>
     el.removeEventListener('keydown', onKey);
     el.removeEventListener('blur', onBlur);
     el.contentEditable = 'false';
+    const row = el.closest<HTMLElement>('[data-tab-id]');
+    if (row) rowContents.delete(row);
     const value = el.textContent?.trim() ?? '';
     const changed = save && (!!value || commitBlank) && value !== current;
     if (changed) commit(value);
@@ -960,7 +1092,7 @@ let completion: ReturnType<typeof inlineCompletion>;
 let mayComplete = false;
 
 function looksLikeUrl(q: string) {
-  return /^[a-z][a-z0-9+.-]*:\/\//i.test(q) || (!/\s/.test(q) && /\.[a-z]{2,}(:\d+)?(\/|$)/i.test(q)) || /^localhost(:\d+)?/.test(q);
+  return webAddress(q) !== undefined;
 }
 
 function openPalette(mode: PaletteMode) {
@@ -1495,20 +1627,20 @@ document.addEventListener('mousedown', (e) => {
 // ---- drop a tab on the page to split ---------------------------------------------------
 
 const splitDrop = $('split-drop');
+let hoveredPageDrop: { half: HTMLElement; target: Parameters<FlechaApi['dropToSplit']>[2] } | undefined;
 
 /** Drop zones over the page while a tab is dragged, unless it's the tab already on screen. */
 function showSplitDrop(tabId: string) {
   const space = state?.spaces.find((s) => s.id === state!.activeSpaceId);
-  if (!space?.activeTabId || space.activeTabId === tabId || (space.split?.includes(tabId) && space.split.includes(space.activeTabId))) return;
-  // Where the page is: right of the docked sidebar, else the whole window inside the gap.
-  const left = document.body.dataset.sidebar === 'docked' ? $('sidebar').offsetWidth : 8;
-  Object.assign(splitDrop.style, { left: `${left}px`, top: '8px', right: '8px', bottom: '8px' });
+  if (surface !== 'window' || !state || !space || draggedTab?.spaceId !== space.id || !canDropToSplit(state.tabs, tabId, pageSplitTarget(space, tabId))) return hideSplitDrop();
+  if (!splitDrop.hidden) return;
   splitDrop.hidden = false;
   api.setTabDragging(true);
 }
 
 function hideSplitDrop() {
   if (splitDrop.hidden) return;
+  hoveredPageDrop = undefined;
   splitDrop.hidden = true;
   for (const half of splitDrop.children) half.classList.remove('over');
   api.setTabDragging(false);
@@ -1516,19 +1648,26 @@ function hideSplitDrop() {
 
 for (const half of splitDrop.querySelectorAll<HTMLElement>('.drop-half')) {
   half.addEventListener('dragover', (e) => {
-    if (!e.dataTransfer?.types.includes(DRAG_TYPE)) return;
+    if (splitDrop.hidden || !draggedTab || !e.dataTransfer?.types.includes(DRAG_TYPE)) return;
+    const space = state?.spaces.find((s) => s.id === draggedTab?.spaceId);
+    const target = space && pageSplitTarget(space, draggedTab.id);
+    if (!space || !target || space.id !== state?.activeSpaceId) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     half.classList.add('over');
+    hoveredPageDrop = { half, target: { kind: 'page', tabId: target, spaceId: space.id } };
   });
-  half.addEventListener('dragleave', () => half.classList.remove('over'));
+  half.addEventListener('dragleave', () => {
+    half.classList.remove('over');
+    if (hoveredPageDrop?.half === half) hoveredPageDrop = undefined;
+  });
   half.addEventListener('drop', (e) => {
     const id = e.dataTransfer?.getData(DRAG_TYPE);
     e.preventDefault();
-    splitDrop.hidden = true;
-    for (const h of splitDrop.children) h.classList.remove('over');
-    if (id) api.dropToSplit(id, half.dataset.side as 'left' | 'right');
-    else api.setTabDragging(false);
+    if (splitDrop.hidden) return;
+    const hovered = hoveredPageDrop;
+    hideSplitDrop();
+    if (id && hovered?.half === half) api.dropToSplit(id, half.dataset.side as 'left' | 'right', hovered.target);
   });
 }
 
@@ -1737,13 +1876,40 @@ $('sidebar').addEventListener('contextmenu', (e) => {
 
 acceptDrops($('favorites'), { zone: 'favorites' });
 acceptDrops($('pinned'), { zone: 'pinned' });
+acceptDrops($('pinned-header'), { zone: 'pinned' });
+const pinnedSection = $('pinned-section');
+function externalPinExpansion(expanded: boolean) {
+  if (!expanded) clearTimeout(pinnedHoverTimer);
+  if (externalPinnedDrag === expanded) return;
+  externalPinnedDrag = expanded;
+  const space = state?.spaces.find((item) => item.id === state?.activeSpaceId);
+  if (space) updatePinnedVisibility(space);
+}
+function refreshPinnedHover(event: DragEvent) {
+  if (!draggedTab && event.dataTransfer?.types.includes(DRAG_TYPE)) {
+    externalPinExpansion(true);
+    clearTimeout(pinnedHoverTimer);
+    pinnedHoverTimer = setTimeout(() => externalPinExpansion(false), INCOMING_DROP_IDLE_MS);
+  }
+}
+pinnedSection.addEventListener('dragenter', refreshPinnedHover);
+pinnedSection.addEventListener('dragover', refreshPinnedHover, true);
+pinnedSection.addEventListener('drop', () => queueMicrotask(() => externalPinExpansion(false)), true);
+pinnedSection.addEventListener('dragleave', (event) => {
+  if (!(event.relatedTarget instanceof Node) || !pinnedSection.contains(event.relatedTarget)) externalPinExpansion(false);
+});
+$('btn-toggle-pinned').onclick = () => {
+  const space = state?.spaces.find((item) => item.id === state?.activeSpaceId);
+  if (space) api.updateSpace(space.id, { pinnedCollapsed: !space.pinnedCollapsed });
+};
 acceptDrops($('today'), { zone: 'today' });
 acceptDrops($('btn-newtab'), { zone: 'today' });
 
-const renderOnboarding = setupOnboarding(api, h, icon);
+let renderOnboarding: ReturnType<typeof setupOnboarding> | undefined;
 api.onState((s) => {
   render(s);
-  renderOnboarding(s);
+  if (!s.onboarded) renderOnboarding ??= setupOnboarding(api, h, icon);
+  renderOnboarding?.(s);
 });
 api.onPalette(openPalette);
 api.onClosePalette(hidePalette);
@@ -1752,4 +1918,11 @@ api.onRenameTab(renameTab);
 api.onEditHomeUrl(editHomeUrl);
 api.onPeek(renderPeek);
 api.onDownloads(renderDownloads);
+onReconnect(() => {
+  if (topSitesAttempted > topSitesFetched) {
+    topSitesAttempted = topSitesFetched = 0;
+    if (state) render(state);
+  }
+  if (surface === 'window') api.setTabDragging(!splitDrop.hidden);
+});
 api.ready();

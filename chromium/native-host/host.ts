@@ -16,8 +16,8 @@ import os from 'node:os';
 import path from 'node:path';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { detectBrowsers, readBookmarksHtml, readBrowser } from './browserImport';
-import { AGENT_TOOLS, AGENT_TOOL_TIMEOUT_MS, McpBridge, fail, type AgentResult } from './agentServer';
-import type { HostMethods, ToHost, ToShell } from './protocol';
+import { AGENT_TOOLS, McpBridge, fail, type AgentResult } from './agentServer';
+import { toolTimeout, toolWatchdog, type HostMethods, type ToHost, type ToShell } from './protocol';
 
 const SHELL_ORIGIN = 'chrome-extension://abdiaepfgbbhdjaecjipmaailijaaide/';
 /** Chromium refuses messages from a host over 1 MB; leave room for the chunk's own fields. */
@@ -117,8 +117,8 @@ function register(mcp: McpServer) {
     const run = (args: Record<string, unknown> = {}) =>
       new Promise<AgentResult>((resolve) => {
         const id = nextTool++;
-        const wait = AGENT_TOOL_TIMEOUT_MS + (typeof args.timeoutMs === 'number' ? args.timeoutMs : 0);
-        const deadline = Date.now() + wait;
+        const wait = toolWatchdog(args.timeoutMs);
+        const deadline = Date.now() + toolTimeout(args.timeoutMs);
         const timer = setTimeout(() => finish(fail(`Flecha didn’t answer ${name} within ${wait / 1000}s`)), wait);
         const finish = (result: AgentResult) => {
           clearTimeout(timer);
