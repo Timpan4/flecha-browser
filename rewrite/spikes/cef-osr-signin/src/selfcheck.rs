@@ -481,7 +481,7 @@ fn script(name: &str, collect: &str, ready: &str) -> String {
   window.__flechaFlush = report;
   const check = () => {{ try {{ if (!done && ready()) report('ready'); }} catch (e) {{}} }};
   check();
-  if (!done) new MutationObserver(check).observe(document, {{ subtree: true, childList: true, characterData: true }});
+  if (!done) new MutationObserver(check).observe(document, {{ subtree: true, childList: true, characterData: true, attributes: true }});
 }})();"#
     )
 }

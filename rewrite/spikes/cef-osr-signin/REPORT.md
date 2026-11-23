@@ -6,7 +6,7 @@ Plan: [docs/cef-gpui-rewrite-plan.md](../../../docs/cef-gpui-rewrite-plan.md), s
 
 - Built on the pins and self-checked in both modes on Xvfb. Results are in [Automated results](#automated-results).
 - The sign-in gate (checks 1 to 7) is **not run**. It needs the owner and a purpose-made Google account. The checklist is in [Manual checklist](#manual-checklist-for-the-owner).
-- The automated checks found one result that matters before the manual run: on the Chrome Web Store, "Add to Chrome" is **disabled in both modes**, even in the Chrome-style control (see [Web Store](#web-store)).
+- Nothing in the automated results blocks the manual run. Both modes present the same identity to pages: `navigator.webdriver` false, CEF's default user agent, `Chromium` and `Not.A/Brand` brands with no `Google Chrome` brand. Both run fully sandboxed. The Web Store offers "Add to Chrome" in both modes, next to an "Install Chrome" button (see [Web Store](#web-store)).
 
 ## What the app is
 
@@ -86,7 +86,61 @@ To run anything on Xvfb with an isolated session (no D-Bus activation, scratch H
 
 ## Automated results
 
-RESULTS_PLACEHOLDER
+Run on 2026-11-23 on the workstation, on Xvfb only, through `scripts/xvfb-isolated.sh` (private D-Bus bus without service activation, scratch HOME, XDG and runtime dirs, fresh profile per run). Each run is one `--self-check` with `--self-check-timeout-secs 30`. The JSON reports are in [evidence/](evidence/).
+
+### Self-check
+
+| Field | Alloy OSR | Chrome-style control |
+|---|---|---|
+| Runtime style (`BrowserHost::GetRuntimeStyle`) | alloy, windowless | chrome, windowed |
+| `navigator.webdriver` | `false` | `false` |
+| `navigator.userAgent` | `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36` | same |
+| `navigator.userAgentData.brands` | `Not.A/Brand` 24, `Chromium` 158 | same |
+| `fullVersionList` (high-entropy) | `Chromium` 158.0.8127.18 | same |
+| `window.chrome` keys | `loadTimes`, `csi`, `app` | same |
+| Screen seen by the page | 1280×1024, colour depth 24 (from the Xvfb screen through `GetScreenInfo`) | 1280×1024, depth 24 |
+| `chrome://version` CEF / Chromium | `158.0.3+g8c29be2+chromium-158.0.8127.18` / `158.0.8127.18 (Official Build)` | same |
+| Runtime CEF commit (`cef_api_hash(…, 2)`) | `8c29be24…` | same |
+| `chrome://sandbox` | Namespace layer-1 sandbox, PID and network namespaces, seccomp-BPF with TSYNC: "You are adequately sandboxed." | same |
+| /proc: renderer-type processes | seccomp mode 2, `NoNewPrivs` 1, own user, PID and network namespaces | same |
+| /proc: processes without seccomp | browser, network service (`--utility-sub-type=network.mojom.NetworkService`), zygote helpers; Chromium's normal Linux layout | same |
+| Forbidden switches in any process command line (`--remote-debugging-*`, `--enable-automation`, `--headless`, `--no-sandbox` and other sandbox-off switches, `--user-agent`, `--disable-web-security`, `--ignore-certificate-errors`, `--use-mock-keychain`, `--test-type`) | none | none |
+
+Switches CEF itself adds to the browser process (from `chrome://version`, identical in both modes): `--lang=en-US --disable-signin-promo-on-avatar-pill-for-testing --disable-features=GlicActorUi,AutofillActorMode,LensOverlay,KillOnInvalidNavigationHeaders --ozone-platform=x11`. None of them is visible to pages. The `-for-testing` switch only hides a profile-menu promo.
+
+### Web Store
+
+Page: uBlock Origin Lite, `https://chromewebstore.google.com/detail/ublock-origin-lite/ddkjiahejlhfcafbddmgiahcphecmpfh`. Nothing was clicked except "Reject all" on Google's consent page, which the store redirects to from a Swedish address (`consent.google.com/…&gl=SE`). Nothing was installed and no account was used.
+
+| Field | Alloy OSR | Chrome-style control |
+|---|---|---|
+| Final page | the detail page, after the consent redirect | same |
+| "Add to Chrome" | present, enabled | present, enabled |
+| Other offer | "Install Chrome" button, enabled | same |
+| `typeof chrome.webstorePrivate` | `object` | `object` |
+| `typeof chrome.management` | `object` | `object` |
+
+"Add to Chrome" first renders disabled and turns enabled once the page has finished its own checks. An earlier run that reported at first render saw it disabled; the self-check now waits for the enabled state. The "Install Chrome" button suggests the store does not take either mode for Google Chrome (no `Google Chrome` brand in `userAgentData`). Whether clicking "Add to Chrome" installs anything is check 4, for the owner. In OSR there is no extension toolbar, so even a successful install has no surface for the popup.
+
+### OSR input on Xvfb
+
+`scripts/input-actions.sh` drives `scripts/input-test.html` in an OSR window with xdotool. xdotool is not installed on the workstation; the run used nixpkgs' build (`nix --extra-experimental-features 'nix-command flakes' shell nixpkgs#xdotool`, passed as `XDOTOOL=<path>`, run without the inherited `LD_LIBRARY_PATH`). The page logs what it receives ([full log](evidence/osr-input-events.txt)):
+
+| Action | Page saw |
+|---|---|
+| Click a text field, type `Hello Wörld 123!` | value `Hello Wörld 123!` |
+| Click a password field, type `pa$$ wörd`, Enter | value `pa$$ wörd`, `keydown Enter` |
+| Textarea: `line1`, Enter, `line2`, Ctrl+A, Backspace, `kept` | `line1\nline2`, then empty, then `kept` |
+| Double click a button | `click` detail 1, `click` detail 2, `dblclick` |
+| Click a `<select>`, Down, Enter | popup drawn over the page ([screenshot](evidence/osr-select-popup.png)), `change` to `two` |
+| Three wheel notches down | `scroll` events up to `scrollY` 240 |
+| Ctrl+P | no output, no crash, no visible dialog |
+
+Screenshots: [OSR page](evidence/osr-page.png), [Chrome-style control](evidence/chrome-page.png).
+
+### Isolation note
+
+The first OSR self-check ran under a plain `dbus-run-session`. D-Bus activation on that private bus started a keyring helper that printed `GNOME_KEYRING_CONTROL=/run/user/1000/keyring`, the owner's keyring control directory, and started portal and gvfs services. So that run touched the owner's running `gnome-keyring-daemon` once through its control socket. No secret was requested on the owner's session bus and no unlock prompt was triggered. Every later run used `scripts/session-bus.conf` (no service directories, so nothing is activated) and a scratch `XDG_RUNTIME_DIR`, and printed no keyring, portal or gvfs lines.
 
 ## Manual checklist for the owner
 

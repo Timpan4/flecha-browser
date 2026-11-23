@@ -1,0 +1,55 @@
+[console] INPUT text "H"
+[console] INPUT text "He"
+[console] INPUT text "Hel"
+[console] INPUT text "Hell"
+[console] INPUT text "Hello"
+[console] INPUT text "Hello "
+[console] INPUT text "Hello W"
+[console] INPUT text "Hello Wö"
+[console] INPUT text "Hello Wör"
+[console] INPUT text "Hello Wörl"
+[console] INPUT text "Hello Wörld"
+[console] INPUT text "Hello Wörld "
+[console] INPUT text "Hello Wörld 1"
+[console] INPUT text "Hello Wörld 12"
+[console] INPUT text "Hello Wörld 123"
+[console] INPUT text "Hello Wörld 123!"
+[console] INPUT password "p"
+[console] INPUT password "pa"
+[console] INPUT password "pa$"
+[console] INPUT password "pa$$"
+[console] INPUT password "pa$$ "
+[console] INPUT password "pa$$ w"
+[console] INPUT password "pa$$ wö"
+[console] INPUT password "pa$$ wör"
+[console] INPUT password "pa$$ wörd"
+[console] INPUT area "l"
+[console] INPUT area "li"
+[console] INPUT area "lin"
+[console] INPUT area "line"
+[console] INPUT area "line1"
+[console] INPUT area "line1\n"
+[console] INPUT area "line1\nl"
+[console] INPUT area "line1\nli"
+[console] INPUT area "line1\nlin"
+[console] INPUT area "line1\nline"
+[console] INPUT area "line1\nline2"
+[console] INPUT area ""
+[console] INPUT area "k"
+[console] INPUT area "ke"
+[console] INPUT area "kep"
+[console] INPUT area "kept"
+[console] INPUT click 1
+[console] INPUT click 2
+[console] INPUT dblclick
+[console] INPUT choice two
+[console] INPUT scroll 5
+[console] INPUT scroll 20
+[console] INPUT scroll 42
+[console] INPUT scroll 67
+[console] INPUT scroll 94
+[console] INPUT scroll 122
+[console] INPUT scroll 183
+[console] INPUT scroll 211
+[console] INPUT scroll 239
+[console] INPUT scroll 240

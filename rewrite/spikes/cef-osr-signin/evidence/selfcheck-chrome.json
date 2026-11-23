@@ -1,0 +1,549 @@
+{
+  "browsers": [
+    {
+      "id": 1,
+      "is_popup": false,
+      "runtime_style": "chrome",
+      "windowless": false
+    }
+  ],
+  "cef": {
+    "archive": {
+      "name": "cef_binary_158.0.3+g8c29be2+chromium-158.0.8127.18_linux64_minimal.tar.bz2",
+      "sha1": "620b80a02dfe93ed7884a9eb1b265ff34f799024",
+      "type": "minimal"
+    },
+    "compiled_cef_version": "158.0.3+g8c29be2+chromium-158.0.8127.18",
+    "loaded_libcef": "/home/timpan4/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/target/debug/libcef.so",
+    "runtime_cef_commit": "8c29be240971eebee960ac92114d3efccb5780ff"
+  },
+  "forbidden_switches_found": [],
+  "mode": "chrome",
+  "processes": [
+    {
+      "cmdline": [
+        "/home/timpan4/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/../../../target/debug/cef-osr-signin",
+        "--mode",
+        "chrome",
+        "--profile",
+        "/home/timpan4/.cache/claude-tmp/claude-1000/-home-timpan4--t3-worktrees-flecha-browser-t3-b27fdf4c-b461b197f50d3f33/185448a3-280b-4eb9-824f-b081e3d55d84/scratchpad/final2/chrome/profile",
+        "--self-check",
+        "--self-check-timeout-secs",
+        "30",
+        "--report",
+        "/home/timpan4/.cache/claude-tmp/claude-1000/-home-timpan4--t3-worktrees-flecha-browser-t3-b27fdf4c-b461b197f50d3f33/185448a3-280b-4eb9-824f-b081e3d55d84/scratchpad/final2/chrome/report.json"
+      ],
+      "name": "cef-osr-signin",
+      "namespaces": {
+        "net": "same as browser",
+        "pid": "same as browser",
+        "user": "same as browser"
+      },
+      "no_new_privs": "0",
+      "pid": 66665,
+      "seccomp": "0",
+      "type": "browser"
+    },
+    {
+      "cmdline": [
+        "/home/timpan4/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/target/debug/cef-osr-signin",
+        "--type=zygote",
+        "--no-zygote-sandbox",
+        "--enable-crash-reporter=,",
+        "--change-stack-guard-on-fork=enable",
+        "--user-data-dir=/home/timpan4/.cache/claude-tmp/claude-1000/-home-timpan4--t3-worktrees-flecha-browser-t3-b27fdf4c-b461b197f50d3f33/185448a3-280b-4eb9-824f-b081e3d55d84/scratchpad/final2/chrome/profile"
+      ],
+      "name": "cef-osr-signin",
+      "namespaces": {
+        "net": "same as browser",
+        "pid": "same as browser",
+        "user": "same as browser"
+      },
+      "no_new_privs": "1",
+      "pid": 66668,
+      "seccomp": "0",
+      "type": "zygote"
+    },
+    {
+      "cmdline": [
+        "/home/timpan4/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/target/debug/cef-osr-signin",
+        "--type=zygote",
+        "--enable-crash-reporter=,",
+        "--change-stack-guard-on-fork=enable",
+        "--user-data-dir=/home/timpan4/.cache/claude-tmp/claude-1000/-home-timpan4--t3-worktrees-flecha-browser-t3-b27fdf4c-b461b197f50d3f33/185448a3-280b-4eb9-824f-b081e3d55d84/scratchpad/final2/chrome/profile"
+      ],
+      "name": "cef-osr-signin",
+      "namespaces": {
+        "net": "separate",
+        "pid": "separate",
+        "user": "separate"
+      },
+      "no_new_privs": "1",
+      "pid": 66669,
+      "seccomp": "0",
+      "type": "zygote"
+    },
+    {
+      "cmdline": [
+        "/home/timpan4/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/target/debug/cef-osr-signin",
+        "--type=zygote",
+        "--enable-crash-reporter=,",
+        "--change-stack-guard-on-fork=enable",
+        "--user-data-dir=/home/timpan4/.cache/claude-tmp/claude-1000/-home-timpan4--t3-worktrees-flecha-browser-t3-b27fdf4c-b461b197f50d3f33/185448a3-280b-4eb9-824f-b081e3d55d84/scratchpad/final2/chrome/profile"
+      ],
+      "name": "cef-osr-signin",
+      "namespaces": {
+        "net": "separate",
+        "pid": "separate",
+        "user": "separate"
+      },
+      "no_new_privs": "1",
+      "pid": 66671,
+      "seccomp": "0",
+      "type": "zygote"
+    },
+    {
+      "cmdline": [
+        "/home/timpan4/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/target/debug/cef-osr-signin",
+        "--type=zygote",
+        "--no-zygote-sandbox",
+        "--enable-crash-reporter=,",
+        "--change-stack-guard-on-fork=enable",
+        "--user-data-dir=/home/timpan4/.cache/claude-tmp/claude-1000/-home-timpan4--t3-worktrees-flecha-browser-t3-b27fdf4c-b461b197f50d3f33/185448a3-280b-4eb9-824f-b081e3d55d84/scratchpad/final2/chrome/profile"
+      ],
+      "name": "cef-osr-signin",
+      "namespaces": {
+        "net": "same as browser",
+        "pid": "same as browser",
+        "user": "same as browser"
+      },
+      "no_new_privs": "1",
+      "pid": 66698,
+      "seccomp": "0",
+      "type": "zygote"
+    },
+    {
+      "cmdline": [
+        "/proc/self/exe",
+        "--type=utility",
+        "--utility-sub-type=network.mojom.NetworkService",
+        "--lang=en-US",
+        "--service-sandbox-type=none",
+        "--enable-crash-reporter=,",
+        "--change-stack-guard-on-fork=enable",
+        "--user-data-dir=/home/timpan4/.cache/claude-tmp/claude-1000/-home-timpan4--t3-worktrees-flecha-browser-t3-b27fdf4c-b461b197f50d3f33/185448a3-280b-4eb9-824f-b081e3d55d84/scratchpad/final2/chrome/profile",
+        "--shared-files=v8_context_snapshot_data:100",
+        "--metrics-shmem-handle=4,i,4683779537503479952,3053173034113634090,524288",
+        "--field-trial-handle=3,i,9845394544732788558,13306855860909710051,262144",
+        "--disable-features=AutofillActorMode,GlicActorUi,KillOnInvalidNavigationHeaders,LensOverlay",
+        "--variations-seed-version",
+        "--pseudonymization-salt-handle=7,i,12385403893298218237,5818730576495459382,4",
+        "--trace-process-track-uuid=3190708989122997041"
+      ],
+      "name": "cef-osr-signin",
+      "namespaces": {
+        "net": "same as browser",
+        "pid": "same as browser",
+        "user": "same as browser"
+      },
+      "no_new_privs": "1",
+      "pid": 66700,
+      "seccomp": "0",
+      "type": "utility"
+    },
+    {
+      "cmdline": [
+        "/home/timpan4/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/target/debug/cef-osr-signin",
+        "--type=zygote",
+        "--enable-crash-reporter=,",
+        "--change-stack-guard-on-fork=enable",
+        "--user-data-dir=/home/timpan4/.cache/claude-tmp/claude-1000/-home-timpan4--t3-worktrees-flecha-browser-t3-b27fdf4c-b461b197f50d3f33/185448a3-280b-4eb9-824f-b081e3d55d84/scratchpad/final2/chrome/profile"
+      ],
+      "name": "cef-osr-signin",
+      "namespaces": {
+        "net": "separate",
+        "pid": "separate",
+        "user": "separate"
+      },
+      "no_new_privs": "1",
+      "pid": 66714,
+      "seccomp": "2",
+      "type": "zygote"
+    },
+    {
+      "cmdline": [
+        "/home/timpan4/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/target/debug/cef-osr-signin",
+        "--type=zygote",
+        "--enable-crash-reporter=,",
+        "--change-stack-guard-on-fork=enable",
+        "--user-data-dir=/home/timpan4/.cache/claude-tmp/claude-1000/-home-timpan4--t3-worktrees-flecha-browser-t3-b27fdf4c-b461b197f50d3f33/185448a3-280b-4eb9-824f-b081e3d55d84/scratchpad/final2/chrome/profile"
+      ],
+      "name": "cef-osr-signin",
+      "namespaces": {
+        "net": "separate",
+        "pid": "separate",
+        "user": "separate"
+      },
+      "no_new_privs": "1",
+      "pid": 66774,
+      "seccomp": "2",
+      "type": "zygote"
+    },
+    {
+      "cmdline": [
+        "bwrap",
+        "--unshare-all",
+        "--die-with-parent",
+        "--chdir",
+        "/",
+        "--ro-bind",
+        "/usr",
+        "/usr",
+        "--dev",
+        "/dev",
+        "--ro-bind-try",
+        "/etc/ld.so.cache",
+        "/etc/ld.so.cache",
+        "--ro-bind-try",
+        "/nix/store",
+        "/nix/store",
+        "--tmpfs",
+        "/tmp-home",
+        "--tmpfs",
+        "/tmp-run",
+        "--clearenv",
+        "--setenv",
+        "HOME",
+        "/tmp-home",
+        "--setenv",
+        "XDG_RUNTIME_DIR",
+        "/tmp-run",
+        "--setenv",
+        "XDG_RUNTIME_DIR",
+        "/home/timpan4/.cache/claude-tmp/claude-1000/-home-timpan4--t3-worktrees-flecha-browser-t3-b27fdf4c-b461b197f50d3f33/185448a3-280b-4eb9-824f-b081e3d55d84/scratchpad/final2/chrome/runtime",
+        "--symlink",
+        "/usr/lib",
+        "/lib",
+        "--symlink",
+        "/usr/lib",
+        "/lib64",
+        "--ro-bind-try",
+        "/etc/fonts/conf.d",
+        "/etc/fonts/conf.d",
+        "--ro-bind-try",
+        "/etc/fonts/fonts.conf",
+        "/etc/fonts/fonts.conf",
+        "--ro-bind-try",
+        "/var/cache/fontconfig",
+        "/var/cache/fontconfig",
+        "--bind-try",
+        "/home/timpan4/.cache/claude-tmp/claude-1000/-home-timpan4--t3-worktrees-flecha-browser-t3-b27fdf4c-b461b197f50d3f33/185448a3-280b-4eb9-824f-b081e3d55d84/scratchpad/final2/chrome/xdg-cache/glycin/usr/lib/glycin-loaders/2+/glycin-svg",
+        "/home/timpan4/.cache/claude-tmp/claude-1000/-home-timpan4--t3-worktrees-flecha-browser-t3-b27fdf4c-b461b197f50d3f33/185448a3-280b-4eb9-824f-b081e3d55d84/scratchpad/final2/chrome/xdg-cache/glycin/usr/lib/glycin-loaders/2+/glycin-svg",
+        "--setenv",
+        "XDG_CACHE_HOME",
+        "/home/timpan4/.cache/claude-tmp/claude-1000/-home-timpan4--t3-worktrees-flecha-browser-t3-b27fdf4c-b461b197f50d3f33/185448a3-280b-4eb9-824f-b081e3d55d84/scratchpad/final2/chrome/xdg-cache/glycin/usr/lib/glycin-loaders/2+/glycin-svg",
+        "--seccomp",
+        "125",
+        "/usr/lib/glycin-loaders/2+/glycin-svg",
+        "--dbus-fd",
+        "123"
+      ],
+      "name": "bwrap",
+      "namespaces": {
+        "net": "same as browser",
+        "pid": "same as browser",
+        "user": "same as browser"
+      },
+      "no_new_privs": "1",
+      "pid": 66807,
+      "seccomp": "0",
+      "type": "?"
+    },
+    {
+      "cmdline": [
+        "bwrap",
+        "--unshare-all",
+        "--die-with-parent",
+        "--chdir",
+        "/",
+        "--ro-bind",
+        "/usr",
+        "/usr",
+        "--dev",
+        "/dev",
+        "--ro-bind-try",
+        "/etc/ld.so.cache",
+        "/etc/ld.so.cache",
+        "--ro-bind-try",
+        "/nix/store",
+        "/nix/store",
+        "--tmpfs",
+        "/tmp-home",
+        "--tmpfs",
+        "/tmp-run",
+        "--clearenv",
+        "--setenv",
+        "HOME",
+        "/tmp-home",
+        "--setenv",
+        "XDG_RUNTIME_DIR",
+        "/tmp-run",
+        "--setenv",
+        "XDG_RUNTIME_DIR",
+        "/home/timpan4/.cache/claude-tmp/claude-1000/-home-timpan4--t3-worktrees-flecha-browser-t3-b27fdf4c-b461b197f50d3f33/185448a3-280b-4eb9-824f-b081e3d55d84/scratchpad/final2/chrome/runtime",
+        "--symlink",
+        "/usr/lib",
+        "/lib",
+        "--symlink",
+        "/usr/lib",
+        "/lib64",
+        "--ro-bind-try",
+        "/etc/fonts/conf.d",
+        "/etc/fonts/conf.d",
+        "--ro-bind-try",
+        "/etc/fonts/fonts.conf",
+        "/etc/fonts/fonts.conf",
+        "--ro-bind-try",
+        "/var/cache/fontconfig",
+        "/var/cache/fontconfig",
+        "--bind-try",
+        "/home/timpan4/.cache/claude-tmp/claude-1000/-home-timpan4--t3-worktrees-flecha-browser-t3-b27fdf4c-b461b197f50d3f33/185448a3-280b-4eb9-824f-b081e3d55d84/scratchpad/final2/chrome/xdg-cache/glycin/usr/lib/glycin-loaders/2+/glycin-svg",
+        "/home/timpan4/.cache/claude-tmp/claude-1000/-home-timpan4--t3-worktrees-flecha-browser-t3-b27fdf4c-b461b197f50d3f33/185448a3-280b-4eb9-824f-b081e3d55d84/scratchpad/final2/chrome/xdg-cache/glycin/usr/lib/glycin-loaders/2+/glycin-svg",
+        "--setenv",
+        "XDG_CACHE_HOME",
+        "/home/timpan4/.cache/claude-tmp/claude-1000/-home-timpan4--t3-worktrees-flecha-browser-t3-b27fdf4c-b461b197f50d3f33/185448a3-280b-4eb9-824f-b081e3d55d84/scratchpad/final2/chrome/xdg-cache/glycin/usr/lib/glycin-loaders/2+/glycin-svg",
+        "--seccomp",
+        "125",
+        "/usr/lib/glycin-loaders/2+/glycin-svg",
+        "--dbus-fd",
+        "123"
+      ],
+      "name": "bwrap",
+      "namespaces": {
+        "net": "separate",
+        "pid": "separate",
+        "user": "separate"
+      },
+      "no_new_privs": "1",
+      "pid": 66808,
+      "seccomp": "2",
+      "type": "?"
+    },
+    {
+      "cmdline": [
+        "/usr/lib/glycin-loaders/2+/glycin-svg",
+        "--dbus-fd",
+        "123"
+      ],
+      "name": "glycin-svg",
+      "namespaces": {
+        "net": "separate",
+        "pid": "separate",
+        "user": "separate"
+      },
+      "no_new_privs": "1",
+      "pid": 66809,
+      "seccomp": "2",
+      "type": "?"
+    },
+    {
+      "cmdline": [
+        "/home/timpan4/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/target/debug/cef-osr-signin",
+        "--type=zygote",
+        "--enable-crash-reporter=,",
+        "--change-stack-guard-on-fork=enable",
+        "--user-data-dir=/home/timpan4/.cache/claude-tmp/claude-1000/-home-timpan4--t3-worktrees-flecha-browser-t3-b27fdf4c-b461b197f50d3f33/185448a3-280b-4eb9-824f-b081e3d55d84/scratchpad/final2/chrome/profile"
+      ],
+      "name": "cef-osr-signin",
+      "namespaces": {
+        "net": "separate",
+        "pid": "separate",
+        "user": "separate"
+      },
+      "no_new_privs": "1",
+      "pid": 67015,
+      "seccomp": "2",
+      "type": "zygote"
+    },
+    {
+      "cmdline": [
+        "/home/timpan4/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/target/debug/cef-osr-signin",
+        "--type=zygote",
+        "--enable-crash-reporter=,",
+        "--change-stack-guard-on-fork=enable",
+        "--user-data-dir=/home/timpan4/.cache/claude-tmp/claude-1000/-home-timpan4--t3-worktrees-flecha-browser-t3-b27fdf4c-b461b197f50d3f33/185448a3-280b-4eb9-824f-b081e3d55d84/scratchpad/final2/chrome/profile"
+      ],
+      "name": "cef-osr-signin",
+      "namespaces": {
+        "net": "separate",
+        "pid": "separate",
+        "user": "separate"
+      },
+      "no_new_privs": "1",
+      "pid": 67040,
+      "seccomp": "2",
+      "type": "zygote"
+    },
+    {
+      "cmdline": [
+        "/home/timpan4/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/target/debug/cef-osr-signin",
+        "--type=zygote",
+        "--enable-crash-reporter=,",
+        "--change-stack-guard-on-fork=enable",
+        "--user-data-dir=/home/timpan4/.cache/claude-tmp/claude-1000/-home-timpan4--t3-worktrees-flecha-browser-t3-b27fdf4c-b461b197f50d3f33/185448a3-280b-4eb9-824f-b081e3d55d84/scratchpad/final2/chrome/profile"
+      ],
+      "name": "cef-osr-signin",
+      "namespaces": {
+        "net": "separate",
+        "pid": "separate",
+        "user": "separate"
+      },
+      "no_new_privs": "1",
+      "pid": 67052,
+      "seccomp": "2",
+      "type": "zygote"
+    },
+    {
+      "cmdline": [
+        "/home/timpan4/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/target/debug/cef-osr-signin",
+        "--type=zygote",
+        "--enable-crash-reporter=,",
+        "--change-stack-guard-on-fork=enable",
+        "--user-data-dir=/home/timpan4/.cache/claude-tmp/claude-1000/-home-timpan4--t3-worktrees-flecha-browser-t3-b27fdf4c-b461b197f50d3f33/185448a3-280b-4eb9-824f-b081e3d55d84/scratchpad/final2/chrome/profile"
+      ],
+      "name": "cef-osr-signin",
+      "namespaces": {
+        "net": "separate",
+        "pid": "separate",
+        "user": "separate"
+      },
+      "no_new_privs": "1",
+      "pid": 67068,
+      "seccomp": "2",
+      "type": "zygote"
+    }
+  ],
+  "steps": {
+    "page": {
+      "brands": [
+        {
+          "brand": "Not.A/Brand",
+          "version": "24"
+        },
+        {
+          "brand": "Chromium",
+          "version": "158"
+        }
+      ],
+      "devicePixelRatio": 1,
+      "fullVersionList": [
+        {
+          "brand": "Not.A/Brand",
+          "version": "24.0.0.0"
+        },
+        {
+          "brand": "Chromium",
+          "version": "158.0.8127.18"
+        }
+      ],
+      "href": "file:///home/timpan4/.cache/claude-tmp/claude-1000/-home-timpan4--t3-worktrees-flecha-browser-t3-b27fdf4c-b461b197f50d3f33/185448a3-280b-4eb9-824f-b081e3d55d84/scratchpad/final2/chrome/profile/flecha-selfcheck.html",
+      "inner": [
+        1050,
+        917
+      ],
+      "isSecureContext": true,
+      "languages": [
+        "en-US",
+        "en"
+      ],
+      "pdfViewerEnabled": true,
+      "platform": "Linux",
+      "pluginCount": 5,
+      "reason": "ready",
+      "screen": {
+        "availHeight": 1024,
+        "availWidth": 1280,
+        "colorDepth": 24,
+        "height": 1024,
+        "width": 1280
+      },
+      "uaFullVersion": "158.0.8127.18",
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36",
+      "userAgentDataPresent": true,
+      "webdriver": false,
+      "windowChromeKeys": [
+        "loadTimes",
+        "csi",
+        "app"
+      ]
+    },
+    "sandbox": {
+      "href": "chrome://sandbox/",
+      "reason": "ready",
+      "text": "Sandbox Status\nLayer 1 Sandbox\tNamespace\nPID namespaces\tYes\nNetwork namespaces\tYes\nSeccomp-BPF sandbox\tYes\nSeccomp-BPF sandbox supports TSYNC\tYes\nPtrace Protection with Yama LSM (Broker)\tYes\nPtrace Protection with Yama LSM (Non-broker)\tNo\n\nYou are adequately sandboxed.",
+      "title": "Sandbox Status"
+    },
+    "version": {
+      "href": "chrome://version/",
+      "reason": "ready",
+      "text": "The Chromium Authors\nCopyright 2026 The Chromium Authors. All rights reserved.\nlicense | credits\nCEF\t158.0.3+g8c29be2+chromium-158.0.8127.18\nChromium\t158.0.8127.18 (Official Build) (x86_64) \nRevision\t6449d9f9a6a906edff724b7b220199b3fde4615c-refs/branch-heads/8127@{#845}\nOS\tLinux\nJavaScript\tV8 15.8.62.9\nUser Agent\tMozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36\nCommand Line\t/home/timpan4/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/../../../target/debug/cef-osr-signin --lang=en-US --disable-signin-promo-on-avatar-pill-for-testing --disable-features=GlicActorUi,AutofillActorMode,LensOverlay,KillOnInvalidNavigationHeaders --ozone-platform=x11 --flag-switches-begin --flag-switches-end\nExecutable Path\t/home/timpan4/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/target/debug/cef-osr-signin\nModule Path\t/home/timpan4/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/target/debug/cef-osr-signin\nUser Data Path [*]\t/home/timpan4/.cache/claude-tmp/claude-1000/-home-timpan4--t3-worktrees-flecha-browser-t3-b27fdf4c-b461b197f50d3f33/185448a3-280b-4eb9-824f-b081e3d55d84/scratchpad/final2/chrome/profile\nProfile Path [*]\t/home/timpan4/.cache/claude-tmp/claude-1000/-home-timpan4--t3-worktrees-flecha-browser-t3-b27fdf4c-b461b197f50d3f33/185448a3-280b-4eb9-824f-b081e3d55d84/scratchpad/final2/chrome/profile/Default\nVariations Source\tcommand line or about flags\nCommand-line Variations\teyJkaXNhYmxlLWZlYXR1cmVzIjoiQXV0b2ZpbGxBY3Rvck1vZGUsRmlyc3RS...\t\nActive Variations\tf4f00e05-ca7d8d80\n9481ce98-3d47f4f4\n2a426c03-3d47f4f4\n70678518-dee66fa8\nbe338734-dee66fa8\n5f9907a9-dee66fa8\n8eeccb9a-dee66fa8\n2b465683-dee66fa8\n52fc7926-dee66fa8\nbc9b361d-dee66fa8\na41a7188-dee66fa8\nff71bfdc-dee66fa8\n251fc742-dee66fa8\n2159dd0c-dee66fa8\n4330e9a4-dee66fa8\ne7cc79d5-dee66fa8\n4b935545-bb2d3403\n9a38bae3-6046c8a7\n2d1e43a3-3d47f4f4\n386dc267-3d47f4f4\nd69d967d-4866ef6e\n3c8f75a1-21623f2a\na4406b35-1657e2d6\n408da146-1657e2d6\n\t\n\n[*] In Chromium terminology, CefSettings.root_cache_path is the \"User Data Path\" and CefSettings.cache_path is the \"Profile Path\". Chromium's process singleton lock protects against multiple app instances writing to the same \"User Data Path\" directory. Implement CefBrowserProcessHandler:: OnAlreadyRunningAppRelaunch to handle the case of app relaunch with the same directory.",
+      "title": "About Version"
+    },
+    "webstore": {
+      "buttons": [
+        "Main menu",
+        "Go back",
+        "Close",
+        "Clear search",
+        "Search",
+        "More options menu",
+        "Google apps",
+        "Discover",
+        "Extensions",
+        "Themes",
+        "Install Chrome",
+        "Ratings are updated daily and may not reflect the most recent reviews.",
+        "Share",
+        "Add to Chrome",
+        "Previous slide",
+        "Item media 2 (screenshot) for uBlock Origin Lite",
+        "Item media 3 (screenshot) for uBlock Origin Lite",
+        "Item media 1 (screenshot) for uBlock Origin Lite",
+        "Next slide",
+        "Preview slide 1 for uBlock Origin Lite",
+        "Preview slide 2 for uBlock Origin Lite",
+        "Preview slide 3 for uBlock Origin Lite",
+        "See more",
+        "Show more languages"
+      ],
+      "chromeMentions": [
+        "chrome web store",
+        "Switch to Chrome to install extensions and themes",
+        "Install Chrome",
+        "Add to Chrome",
+        "About Chrome Web Store"
+      ],
+      "href": "https://chromewebstore.google.com/detail/ublock-origin-lite/ddkjiahejlhfcafbddmgiahcphecmpfh",
+      "installButtons": [
+        {
+          "disabled": false,
+          "label": "Install Chrome"
+        },
+        {
+          "disabled": false,
+          "label": "Add to Chrome"
+        }
+      ],
+      "management": "object",
+      "reason": "ready",
+      "title": "uBlock Origin Lite - Chrome Web Store",
+      "webstorePrivate": "object"
+    },
+    "webstore_notes": [
+      {
+        "consent": "clicked Reject all",
+        "href": "https://consent.google.com/m?continue=https://chromewebstore.google.com/detail/ublock-origin-lite/ddkjiahejlhfcafbddmgiahcphecmpfh&gl=SE&m=0&pc=cws&cm=2&hl=en-US&src=1"
+      }
+    ]
+  }
+}
