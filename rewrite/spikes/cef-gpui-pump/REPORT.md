@@ -50,14 +50,14 @@ Each app run gets:
 
 - Xvfb (`-nolisten tcp`) on a display it picks, with `WAYLAND_DISPLAY` and `WAYLAND_SOCKET` unset.
 - A fresh `mktemp -d` CEF cache and a fresh `mktemp -d` `XDG_RUNTIME_DIR` (mode 700), both deleted afterwards.
-- `dbus-run-session` with `scripts/isolated-session-bus.conf`: no service directories, so nothing is activated, and the bus listens at `$XDG_RUNTIME_DIR/bus` in the scratch dir.
+- `dbus-run-session` with `scripts/isolated-session-bus.conf`: no service directories, so nothing is activated, and the bus listens at `$XDG_RUNTIME_DIR/bus` in the scratch dir. That config must only run with a scratch runtime dir. A test with two buses on one scratch dir showed dbus-daemon replacing an existing socket at its path and deleting it on exit, so with the desktop's runtime dir it would remove `/run/user/1000/bus`. The runner always passes a new `mktemp -d` dir.
 - `DBUS_SYSTEM_BUS_ADDRESS=unix:path=/nonexistent`.
 
 The app checks this itself. After the page loads and again before shutdown, `probe::forbidden_refs` lists every file the process tree has open or memory-mapped and every Unix socket peer (from `ss -xan`), and fails the run if any lies under the caller's `XDG_RUNTIME_DIR` (`/run/user/1000`) or `/run/dbus/system_bus_socket`. In r3 all 38 samples were clean, with every fd table and map readable. The limits: it samples twice, so a connection opened and closed between samples is missed, and sandboxed renderers live in their own network namespace, so their sockets (966NO_PEER966 per sample) get no peer path from `ss`. Their open and mapped files are still scanned.
 
 What used to reach the desktop session now lands in the scratch dir. Every run's listing shows `dconf/user` there (`*.runtime-dir.txt`).
 
-Negative control: one manual idle run with the first round's environment (the caller's `XDG_RUNTIME_DIR`, no system bus override, the old bus config listening in `/tmp`; a manual run, output not committed). It failed `isolation_clean`. The browser process had `/run/user/1000/dconf/user` and `/run/user/1000/dconf/cosmic` mapped and 4 connections to `/run/dbus/system_bus_socket`.
+Negative control: one manual idle run with the first round's environment (the caller's `XDG_RUNTIME_DIR`, no system bus override, the old bus config listening in `/tmp`; `results/2026-11-23-r3/review-evidence/isolation-control/`). It failed `isolation_clean`. The browser process had `/run/user/1000/dconf/user` and `/run/user/1000/dconf/cosmic` mapped and 4 connections to `/run/dbus/system_bus_socket`.
 
 The first round's very first smoke run used stock `dbus-run-session`, which activated a private gvfs daemon, xdg-desktop-portal, the document portal, the gtk and cosmic portal backends and the a11y bus. gvfs failed to mount `/run/user/1000/gvfs` (permission denied). No process from that run survives, and the desktop session's gvfs mount is intact.
 
@@ -87,7 +87,7 @@ The one paint is a full-view repaint (`[0, 0, 1024, 640]`) 966HOLD_MS966 ms afte
 
 It is Chromium's paint-holding timeout. In the local Chromium 158.0.8119.0 tree, `third_party/blink/common/widget/constants.cc:15` sets `kNewContentRenderingDelay = base::Seconds(4)`. `RenderWidgetHostImpl::InitializePaintHolding` starts it at navigation, and on expiry `ClearDisplayedGraphics` makes the renderer repaint once. The PR verifier confirmed the cause: a CDP `Input.dispatchMouseEvent` about 1.5 s after load moved the repaint to 1503 ms and removed the 4 s paint. That path is `content/browser/devtools/protocol/input_handler.cc:694`, which calls `ForceFirstFrameAfterNavigationTimeout()`.
 
-The owner's decision: the idle check passes with that frame explained. `idle_pass` therefore requires 0 unexplained pump calls, no more GPUI renders than CEF paints in the window, and every paint in the window to be that repaint: at most one, of the whole view, at least `kNewContentRenderingDelay` after navigation. `idle_frames.strict_no_frames` records whether the window had no frame at all.
+The parent agent's decision for this fix round: the idle check passes with that frame explained. `idle_pass` therefore requires 0 unexplained pump calls, no more GPUI renders than CEF paints in the window, and every paint in the window to be that repaint: at most one, of the whole view, at least `kNewContentRenderingDelay` after navigation. `idle_frames.strict_no_frames` records whether the window had no frame at all.
 
 ### 10 ms calls: CEF's pump time slice
 
@@ -114,7 +114,7 @@ The page holds 30 frames/s in every case. `include/internal/cef_types.h` gives `
 - List tabs: 1 tab, `Target.getTargetInfo` returned `type: page`, title `anim`, the file URL.
 - Evaluate: `Runtime.evaluate("navigator.webdriver")` back to back. The loop itself ran 966CDP_LOOP_S966 s for a 30 s window: 966CDP_CALLS966 calls, every reply `false`, no errors. Per-call latency: p50 966LAT50966 ms, p99 966LAT99966 ms, max 966LATMAX966 ms. The page counted `navigator.webdriver` on every animation frame: 966CDP_SAMPLES966 samples during the loop, 0 not `false`, and its rAF rate over the loop was 966CDP_RAF966 frames/s.
 - Screenshot: `Page.captureScreenshot` returned a 1024 × 640 PNG (`cdp.png`) in 966SHOT_MS966 ms.
-- Correction to the first round: its report quoted 30.13 s, which was measured after the screenshot and the `/proc` scans, not the loop alone. The PR verifier's runs of that build took 47.3, 33.4 and 34.7 s with 903, 817 and 818 page frames, so the evaluate flood can slow both the loop and the page on a loaded host. The loop's length, per-call latency and page frame rate are now recorded separately, before the screenshot. In r3 the loop ended within one call of 30 s, and the page kept 30 frames/s.
+- Correction to the first round: its report quoted 30.13 s, which was measured after the screenshot and the `/proc` scans, not the loop alone. The PR verifier reported 47.3, 33.4 and 34.7 s from that same field, and 903, 817 and 818 page frames. Only the frame counts show the page slowing down, and this round did not reproduce it: the loop ran 30.000 s and 30.006 s in two full runs, at 30 page frames/s. The loop's length, per-call latency and page frame rate are now recorded separately, before the screenshot. In r3 the loop ended within one call of 30 s, and the page kept 30 frames/s.
 - Negative control (`results/2026-11-23/cdp-enable-automation/`, first-round build): the same check with `EXTRA_ARGS=--enable-automation`, 3 s warmup and a 5 s window. All 58,080 replies and all 153 page samples were `true`, and the run failed. The check detects `navigator.webdriver` turning on.
 - No port or pipe: no process in the tree has `remote-debugging` or `enable-automation` on its command line. No process in the tree has a listening TCP socket. The run now fails unless every fd table and socket table was read (`listening_sockets.complete`), and in r3 all were. The one listening socket is Chromium's ProcessSingleton Unix socket (`/tmp/org.chromium.Chromium.*/SingletonSocket`), which is not a DevTools endpoint.
 
@@ -152,7 +152,7 @@ Each fix was checked by breaking it on purpose. Removing the reentrancy check fa
 
 ## Review findings
 
-From the PR #93 verifier and 15 OpenCodeReview leads. "Reproduced" means shown on the first-round code (commit d7ade4a) before the fix.
+From the PR #93 verifier and 15 OpenCodeReview leads. "Reproduced" means shown on the first-round code (commit d7ade4a) before the fix. "By reading" means confirmed in the code but not run. Repro inputs and outputs are in `results/2026-11-23-r3/review-evidence/`.
 
 | Finding | Reproduced? | Fix or reason |
 |---|---|---|
@@ -160,18 +160,18 @@ From the PR #93 verifier and 15 OpenCodeReview leads. "Reproduced" means shown o
 | Idle repaint cause | Confirmed by the verifier | Documented; idle passes with the paint-holding frame explained |
 | 10 ms pump calls unexplained | Confirmed in CEF source | Documented, with the frame-budget impact |
 | `requests_delayed` always 0 | Confirmed in Chromium source | Documented; unit tests cover the path |
-| CDP loop length and page rate misreported | Yes, by the verifier | Loop length, per-call latency and page rAF rate recorded before the screenshot; report corrected |
+| CDP loop length and page rate misreported | Reported by the verifier; the slowdown did not reproduce here (30.0 s loops at 30 frames/s) | Loop length, per-call latency and page rAF rate recorded before the screenshot; report corrected |
 | Reentrancy guard and delayed path untested | Yes, no caller could reach the guard | Unit tests in `src/schedule.rs`, shown to fail when each fix is removed |
-| `run-checks.sh`: Xvfb read can block forever | Yes: with an `Xvfb` that exits at once, the old script hung until killed at 20 s | `read -t` bounded by `STEP_TIMEOUT_MS`; new script exits 1 after 3 s |
-| `run-checks.sh`: stale report reused after a crash | Yes: app exited 1 and the old script printed the previous report's `pass=true` | Report and PNG removed before each run |
+| `run-checks.sh`: Xvfb read can block forever | Yes: with an `Xvfb` that exits at once, the old script hung until killed at 20 s (`review-evidence/runner/`) | `read -t` bounded by `STEP_TIMEOUT_MS`; new script exits 1 after 3 s |
+| `run-checks.sh`: stale report reused after a crash | Yes: app exited 1 and the old script printed the previous report's `pass=true` (`review-evidence/runner/`) | Report and PNG removed before each run |
 | `run-checks.sh`: exits 0 after failures | Yes, same run exited 0 | Counts failures and exits 1; the EXIT trap keeps that status |
 | `build.rs` checks the host OS | By Cargo semantics (build scripts are compiled for the host); no cross build here | Uses `CARGO_CFG_TARGET_OS` |
 | `bridge.rs`: a cancelled call leaks its pending sender | No: every call is awaited to completion, and `detach_all` clears the map | Not changed |
-| `config.rs` accepts a zero-length window | Yes by reading: the old parser accepted 0, and idle would pass on an empty window | `--pump-measure-ms` and `--pump-step-timeout-ms` must be > 0 |
+| `config.rs` accepts a zero-length window | Yes: the old binary passed idle with `--pump-measure-ms=0`, a 19 ms window and 0 pump calls (`review-evidence/zero-window/`) | `--pump-measure-ms` and `--pump-step-timeout-ms` must be > 0 |
 | `engine.rs` keeps closed browser handles | Yes by reading: handles stayed in `tracked` until teardown | `OnBeforeClose` removes the entry and drops the handle after the borrow |
 | `CefShutdown()` called after a browser-close timeout | Yes by reading; not forced at runtime | `CefShutdown()` is skipped and the run fails unless every `OnBeforeClose` arrived |
-| `wait_gone` skips malformed child records | Yes: a string PID and an out-of-range PID gave `pass=true` | Each record must parse with a positive `i32` PID |
-| `pidfd_open` errors other than ESRCH count as exited | Yes: under `ulimit -n 4` with a live child, the old check gave `pass=true`. The `/proc` read after `pidfd_open` had the same hole | Those errors are "inconclusive" and fail the check |
+| `wait_gone` skips malformed child records | Yes: a string PID and an out-of-range PID gave `pass=true` (`review-evidence/wait-gone/`) | Each record must parse with a positive `i32` PID |
+| `pidfd_open` errors other than ESRCH count as exited | Yes: under `ulimit -n 4` with a live child, the old check gave `pass=true` (`review-evidence/wait-gone/`). The `/proc` read after `pidfd_open` had the same hole | Those errors are "inconclusive" and fail the check |
 | Pump: delayed requests can postpone the periodic call | Yes, in a unit test with the old rule | The 33 ms deadline counts from the last call and requests cannot move it |
 | Listening-socket check passes on unreadable tables | Yes by reading: table read errors were ignored | Errors recorded; `cdp_pass` requires `complete` |
 | `view.rs` keeps frames GPUI never drew | Yes by measurement: frames arrive at 30/s and GPUI draws about 21/s, so about 9/s waited for the next draw | Undrawn frames are dropped when replaced (`gpui_frames_never_drawn`) |
