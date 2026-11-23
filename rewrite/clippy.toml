@@ -1,0 +1,5 @@
+disallowed-methods = [
+    { path = "gpui::BackgroundExecutor::timer", reason = "arm GPUI timers through flecha_cef::Timers::arm" },
+    { path = "gpui::BackgroundExecutor::scheduler_executor", reason = "its timer bypasses flecha_cef::Timers::arm" },
+    { path = "gpui::ForegroundExecutor::scheduler_executor", reason = "its timer bypasses flecha_cef::Timers::arm" },
+]

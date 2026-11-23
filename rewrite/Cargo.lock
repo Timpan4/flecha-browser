@@ -1761,6 +1761,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "flecha"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "flecha-cef",
+ "flecha-services",
+ "flecha-ui",
+ "gpui",
+ "gpui_platform",
+]
+
+[[package]]
+name = "flecha-cef"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cef",
+ "flecha-core",
+ "flecha-surface",
+ "futures",
+ "gpui",
+]
+
+[[package]]
 name = "flecha-core"
 version = "0.1.0"
 dependencies = [
@@ -1776,6 +1800,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "flecha-services"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "flecha-core",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "flecha-surface"
 version = "0.1.0"
 dependencies = [
@@ -1785,6 +1819,20 @@ dependencies = [
  "image",
  "smallvec",
  "wgpu",
+]
+
+[[package]]
+name = "flecha-ui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "flecha-cef",
+ "flecha-core",
+ "flecha-services",
+ "flecha-surface",
+ "futures",
+ "gpui",
+ "uuid",
 ]
 
 [[package]]
