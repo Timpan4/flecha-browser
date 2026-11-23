@@ -183,12 +183,12 @@ fn merge_deduplicates_existing_urls_and_append_keeps_the_import_intact() {
         },
         None
     ));
-    let mut incoming = incoming_space("work-copy", " work ");
+    let mut incoming = incoming_space("work-copy", "\u{feff} work \u{feff}");
     incoming.isolated = true;
     incoming.pinned = vec![
         ImportNode::Folder {
             id: FolderId::new("imported-folder"),
-            name: " docs ".into(),
+            name: "\u{feff} docs \u{feff}".into(),
             children: vec![
                 ImportNode::Tab(incoming_tab("duplicate-pin", existing)),
                 ImportNode::Tab(incoming_tab("first-repeat", repeat)),

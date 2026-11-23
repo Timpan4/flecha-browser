@@ -12,6 +12,8 @@ Once a build ships, changing the snapshot format requires a schema version bump.
 
 The reader validates JSON syntax and skips unknown fields throughout the snapshot without materializing their nested values. Legacy pinned folder children are part of the schema, so serde_json's normal nesting limit still applies to those trees. An overdeep legacy tree triggers recovery that preserves the original snapshot. Version 3 writes flat pin records.
 
+Saved scalar values repair independently. Strings replace lone UTF-16 surrogates with U+FFFD, and out-of-range numbers fall back through the field's existing repair rules.
+
 `import_spaces` merges or appends parsed Spaces, folders, favorites, splits, and archive entries in one transaction. It preserves folder depth. Source readers can flatten their own input before calling it. Like the Arc reader, it accepts HTTP and HTTPS URLs, and reports rejected tab and archive entries.
 
 For whole-state file imports, call `storage::set_aside_before_import` and persist the result before replacing the current state. Read the pre-import copy with `storage::state_before_import`.
@@ -34,6 +36,9 @@ GPUI owns command-bar ranking across sources, Peeks, shortcut registration, loca
 - Auto-archive protects both panes of a selected split even in a background Space. Tabs with missing or invalid activity timestamps are ineligible for wall-clock expiry. Active-use sleep thresholds also require a known usage timestamp.
 - The archive keeps the shell's front insertion and cap. At capacity, older tabs evicted from closed-window history can displace newer archive entries. Undo compares the original close times of all retained entries and windows. The Chromium shell compares the heads of those lists. Reopening a window whose active Space lost its Today tabs opens the first Space that retained tabs.
 - Suggestion requests keep JWTs local even when pasted directly beside other text or with spaced, repeatedly encoded, or default-ignorable characters around or inside them. The local decoder accepts either standard Base64 or Base64URL for each segment, and accepts any JSON object header.
+- GPUI must honor a matching local JWT decode row on Enter before calling the generic resolver, which can otherwise classify the token as a search.
 - Environment switches apply to HTTP and HTTPS pages. A blob URL stays on its original origin.
 - The command bar treats malformed explicit HTTP and HTTPS input as invalid so its path, query, and fragment stay local.
+
+Regenerate the committed address parity fixture from the repository root with `bun rewrite/crates/flecha-core/scripts/generate-address-fixture.ts`. The script records Chromium's current outputs and preserves documented Rust divergences for review.
 - GitHub issue shortcuts require a complete repository segment and fall back to GitHub search for ambiguous paths.

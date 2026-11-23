@@ -10,6 +10,7 @@ use serde_json::{Map, Value, value::RawValue};
 
 mod snapshot;
 
+use crate::input_text::trim_input;
 use crate::shortcuts::repair_saved_bindings;
 use crate::state::{DEFAULT_SPACE_COLOR, PinnedTree, compare_recency};
 use crate::{
@@ -259,8 +260,8 @@ fn check_version(version: &RawValue, legacy_only: bool) -> Result<(), DecodeErro
     let raw = version.get();
     let decoded;
     let text = if raw.starts_with('"') {
-        decoded = serde_json::from_str::<String>(raw).map_err(DecodeError::Json)?;
-        decoded.trim()
+        decoded = snapshot::scalar(version);
+        trim_input(decoded.as_str().unwrap_or_default())
     } else {
         raw
     };
@@ -453,7 +454,7 @@ fn repair(mut raw: Map<String, Value>, tabs: BTreeMap<TabId, Tab>) -> Option<Bro
 type RawRecord<'a> = BTreeMap<String, &'a RawValue>;
 
 fn raw_field<T: DeserializeOwned>(raw: &RawRecord<'_>, key: &str) -> Option<T> {
-    serde_json::from_str(raw.get(key)?.get()).ok()
+    serde_json::from_value(snapshot::scalar(raw.get(key)?)).ok()
 }
 
 fn repair_tab(raw: &RawValue) -> Option<Tab> {
@@ -802,7 +803,7 @@ fn millis(value: &Value) -> Option<EpochMillis> {
 
 fn coerce_millis(value: &Value) -> Option<f64> {
     if let Some(text) = value.as_str() {
-        let text = text.trim();
+        let text = trim_input(text);
         for (prefix, radix) in [("0x", 16), ("0b", 2), ("0o", 8)] {
             if let Some(digits) = text
                 .strip_prefix(prefix)

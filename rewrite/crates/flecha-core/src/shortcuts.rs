@@ -207,10 +207,10 @@ pub fn keys_for<'a>(bindings: &'a Keybindings, id: &str, platform: Platform) -> 
 }
 
 fn custom_keys<'a>(bindings: &'a Keybindings, id: &str, platform: Platform) -> Option<&'a str> {
-    bindings.get(id).and_then(Option::as_deref).filter(|keys| {
-        assignable_accelerator(keys, platform)
-            .is_some_and(|accelerator| !is_reserved(accelerator, platform))
-    })
+    bindings
+        .get(id)
+        .and_then(Option::as_deref)
+        .filter(|keys| assignable_accelerator(keys, platform).is_some())
 }
 
 fn configured_keys<'a>(bindings: &'a Keybindings, id: &str, platform: Platform) -> Option<&'a str> {

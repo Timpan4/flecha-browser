@@ -5,6 +5,34 @@ use flecha_core::{
 };
 
 #[test]
+fn switching_space_claims_its_previously_hidden_selection() {
+    let mut state = decode(
+        r#"{
+      "version": 3,
+      "tabs": {"shared": {"url": "https://example.org"}},
+      "favorites": ["shared"],
+      "spaces": [{"id": "home"}, {"id": "work"}],
+      "windows": [
+        {"id": "a", "activeSpaceId": "home", "spaces": {"work": {"activeTabId": "shared"}}},
+        {"id": "b", "activeSpaceId": "work", "spaces": {"work": {"activeTabId": "shared"}}}
+      ]
+    }"#,
+    )
+    .unwrap();
+    let (a, b) = (WindowId::new("a"), WindowId::new("b"));
+    let shared = TabId::new("shared");
+    assert!(state.window(&a).unwrap().visible_tabs().is_empty());
+    assert_eq!(
+        state.window(&b).unwrap().visible_tabs(),
+        std::slice::from_ref(&shared)
+    );
+    let change = state.switch_space(&a, &SpaceId::new("work"));
+    assert!(change.result);
+    assert_eq!(state.window(&a).unwrap().visible_tabs(), [shared]);
+    assert!(state.window(&b).unwrap().visible_tabs().is_empty());
+}
+
+#[test]
 fn close_below_keeps_its_anchor() {
     use flecha_core::{CloseToday, PinnedKey};
     let (s, w) = (SpaceId::new("s"), WindowId::new("w"));

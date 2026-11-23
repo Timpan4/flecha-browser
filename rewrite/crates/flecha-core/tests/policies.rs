@@ -31,7 +31,7 @@ fn shortcut_edits_displace_shadowed_defaults_too() {
 fn shortcut_conflicts_follow_chromium_modifier_and_key_normalization() {
     let platform = Platform::Linux;
     let bindings = Keybindings::from([("reload".into(), Some("control+1".into()))]);
-    assert_eq!(keys_for(&bindings, "reload", platform), Some("CmdOrCtrl+R"));
+    assert_eq!(keys_for(&bindings, "reload", platform), None);
     assert!(same_keys(
         " control + Ctrl + Return ",
         "CmdOrCtrl+Enter",

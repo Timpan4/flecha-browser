@@ -10,12 +10,13 @@ use serde_json::{Value, json};
 use unicode_normalization::UnicodeNormalization;
 use url::{Host, Url};
 
+use crate::input_text::{split_input, trim_input};
 use crate::{Environment, EnvironmentTarget, EpochMillis, SearchEngine};
 
 macro_rules! re {
-    ($pattern:literal) => {{
+    ($($pattern:expr),+ $(,)?) => {{
         static REGEX: std::sync::LazyLock<regex::Regex> =
-            std::sync::LazyLock::new(|| regex::Regex::new($pattern).unwrap());
+            std::sync::LazyLock::new(|| regex::Regex::new(concat!($($pattern),+)).unwrap());
         &*REGEX
     }};
 }
@@ -25,17 +26,6 @@ mod address;
 pub use address::{
     InputResolution, pinnable_address, rejected_address, resolve_input, web_address,
 };
-
-// ECMAScript TrimString uses the union of WhiteSpace and LineTerminator.
-fn trim_input(input: &str) -> &str {
-    input.trim_matches(|ch: char| {
-        matches!(
-            ch,
-            '\u{0009}'..='\u{000D}' | ' ' | '\u{00A0}' | '\u{1680}' | '\u{2000}'..='\u{200A}'
-                | '\u{2028}' | '\u{2029}' | '\u{202F}' | '\u{205F}' | '\u{3000}' | '\u{FEFF}'
-        )
-    })
-}
 
 /// Chromium's default minimum interval between suggestion requests.
 pub const SUGGEST_INTERVAL_MS: EpochMillis = 100;
@@ -151,15 +141,14 @@ pub fn suggestable(raw: &str) -> bool {
         return false;
     }
     let separator = re!(r"[^\p{L}\p{N}\p{M}\p{Default_Ignorable_Code_Point}\x21-\x7e。．｡]+");
-    let alone = normalized
-        .split_whitespace()
+    let alone = split_input(&normalized)
         .flat_map(|word| separator.split(word))
         .filter(|part| !part.is_empty())
         .count()
         == 1;
     let punct_start = re!(r#"^[("'“‘\[]+"#);
     let punct_end = re!(r#"[.。．｡,;:!)"'”’\]]+$"#);
-    for word in normalized.split_whitespace() {
+    for word in split_input(&normalized) {
         let decoded: String = decode_component(word).chars().nfkc().collect();
         for form in [word, decoded.as_str()] {
             for part in std::iter::once(form).chain(separator.split(form)) {
@@ -301,8 +290,14 @@ fn decode_component(word: &str) -> std::borrow::Cow<'_, str> {
 fn contains_jwt(text: &str) -> bool {
     // Check every dot-separated triple and every possible start of its header,
     // including tokens pasted immediately after letters, punctuation, or URL text.
-    let candidates = re!(r"[A-Za-z0-9_+/=-]+(?:\s*\.\s*[A-Za-z0-9_+/=-]*){2,}");
-    let delimiter = re!(r"\s*\.\s*");
+    let candidates = re!(
+        r"[A-Za-z0-9_+/=-]+(?:[",
+        js_space_chars!(),
+        r"]*\.[",
+        js_space_chars!(),
+        r"]*[A-Za-z0-9_+/=-]*){2,}"
+    );
+    let delimiter = re!(r"[", js_space_chars!(), r"]*\.[", js_space_chars!(), r"]*");
     for candidate in candidates.find_iter(text) {
         let mut parts = delimiter.split(candidate.as_str());
         let (Some(mut header), Some(mut payload)) = (parts.next(), parts.next()) else {
@@ -379,17 +374,26 @@ fn address_part(word: &str, alone: bool) -> bool {
         "view-source",
         "webcal",
     ];
-    if let Some(matched) = re!(r"(?i)^([a-z][a-z0-9+.-]*):(\S?)").captures(word)
+    if let Some(matched) =
+        re!(r"(?i)^([a-z][a-z0-9+.-]*):([^", js_space_chars!(), r"]?)").captures(word)
         && (alone
             || !matched[2].is_empty()
             || SCHEMES.contains(&matched[1].to_ascii_lowercase().as_str()))
     {
         return true;
     }
-    if re!(r"^(~|\.{1,2})?[\\/]\S").is_match(word) {
+    if re!(r"^(~|\.{1,2})?[\\/][^", js_space_chars!(), r"]").is_match(word) {
         return true;
     }
-    if re!(r"\S[/\\?#@:]\S").is_match(word) {
+    if re!(
+        r"[^",
+        js_space_chars!(),
+        r"][/\\?#@:][^",
+        js_space_chars!(),
+        r"]"
+    )
+    .is_match(word)
+    {
         let numeric_pair = re!(r"^([0-9]+)(?:[/:][0-9]+)+$")
             .captures(word)
             .and_then(|parts| parts[1].parse::<u32>().ok())
@@ -398,7 +402,7 @@ fn address_part(word: &str, alone: bool) -> bool {
             return true;
         }
     }
-    if re!(r"\S[/\\]$").is_match(word)
+    if re!(r"[^", js_space_chars!(), r"][/\\]$").is_match(word)
         || word
             .strip_suffix(['?', '#'])
             .is_some_and(|host| is_host(host) || opens_as_ip(host))
@@ -461,7 +465,7 @@ pub fn developer_suggestions(
             })
             .collect();
     }
-    let mut words = query.split_whitespace();
+    let mut words = split_input(query);
     if let Some(alias) = words.next() {
         let arg = words.collect::<Vec<_>>().join(" ");
         if !arg.is_empty()
@@ -721,7 +725,7 @@ pub fn describe_environment(url: &str, environments: &[Environment]) -> Option<A
 pub fn parse_targets(text: &str) -> Vec<EnvironmentTarget> {
     text.lines()
         .filter_map(|line| {
-            let parts: Vec<_> = line.split_whitespace().collect();
+            let parts: Vec<_> = split_input(line).collect();
             let (raw, label) = parts.split_last()?;
             let url = Url::parse(&address::address(raw, true)?).ok()?;
             if !matches!(url.scheme(), "http" | "https") {

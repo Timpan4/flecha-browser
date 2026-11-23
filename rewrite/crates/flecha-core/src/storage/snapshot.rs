@@ -105,37 +105,75 @@ pub(super) fn project(fields: &RawRecord<'_>) -> Result<Map<String, Value>, Deco
     SNAPSHOT_FIELDS
         .iter()
         .filter_map(|&(key, shape)| Some((key, shape, fields.get(key)?)))
-        .map(|(key, shape, raw)| {
-            let mut deserializer = serde_json::Deserializer::from_str(raw.get());
-            let value = shape
-                .deserialize(&mut deserializer)
-                .map_err(DecodeError::Json)?;
-            Ok((key.into(), value))
-        })
+        .map(|(key, shape, raw)| Ok((key.into(), shape.project(raw).map_err(DecodeError::Json)?)))
         .collect()
+}
+
+impl Shape {
+    fn project(self, raw: &RawValue) -> serde_json::Result<Value> {
+        match (self, raw.get().as_bytes().first()) {
+            (Scalar, _) => Ok(scalar(raw)),
+            // The enclosing spaces array and Space record count toward JSON depth.
+            (LegacyPins, _) => legacy_pins(raw, 2),
+            (Array(_), Some(b'[')) | (Record(_) | Dictionary(_), Some(b'{')) => {
+                let mut deserializer = serde_json::Deserializer::from_str(raw.get());
+                serde::Deserializer::deserialize_any(&mut deserializer, self)
+            }
+            // Leave a wrong-type value for repair rather than asking the JSON
+            // deserializer to interpret it as a number, string or container.
+            _ => Ok(Value::Null),
+        }
+    }
 }
 
 impl<'de> DeserializeSeed<'de> for Shape {
     type Value = Value;
 
     fn deserialize<D: serde::Deserializer<'de>>(self, deserializer: D) -> Result<Value, D::Error> {
-        match self {
-            Scalar => scalar(<&RawValue>::deserialize(deserializer)?).map_err(D::Error::custom),
-            // The enclosing spaces array and Space record count toward JSON depth.
-            LegacyPins => legacy_pins::<D::Error>(<&RawValue>::deserialize(deserializer)?, 2),
-            _ => deserializer.deserialize_any(self),
-        }
+        self.project(<&RawValue>::deserialize(deserializer)?)
+            .map_err(D::Error::custom)
     }
 }
 
-fn scalar(raw: &RawValue) -> serde_json::Result<Value> {
+pub(super) fn scalar(raw: &RawValue) -> Value {
     // Preserve the wrong container type for the repair checks. In particular, a
     // malformed shortcut must not turn into null, which means an explicit unbind.
     match raw.get().as_bytes().first() {
-        Some(b'{') => Ok(Value::Object(Map::new())),
-        Some(b'[') => Ok(Value::Array(Vec::new())),
-        _ => serde_json::from_str(raw.get()),
+        Some(b'{') => Value::Object(Map::new()),
+        Some(b'[') => Value::Array(Vec::new()),
+        Some(b'"') => serde_json::from_str::<String>(raw.get())
+            .or_else(|_| lossy_string(raw))
+            .map_or_else(|_| Value::Object(Map::new()), Value::String),
+        _ => serde_json::from_str(raw.get()).unwrap_or_else(|_| Value::Object(Map::new())),
     }
+}
+
+fn lossy_string(raw: &RawValue) -> serde_json::Result<String> {
+    struct LossyString;
+
+    impl Visitor<'_> for LossyString {
+        type Value = String;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("a JSON string")
+        }
+
+        fn visit_bytes<E>(self, bytes: &[u8]) -> Result<String, E> {
+            let mut bytes = bytes.to_vec();
+            // serde_json's byte reader decodes valid pairs and represents each lone
+            // UTF-16 surrogate as one WTF-8 triplet. Replace each triplet once.
+            for start in 0..bytes.len().saturating_sub(2) {
+                let triplet = &mut bytes[start..start + 3];
+                if matches!(triplet, [0xed, 0xa0..=0xbf, 0x80..=0xbf]) {
+                    triplet.copy_from_slice("\u{fffd}".as_bytes());
+                }
+            }
+            Ok(String::from_utf8_lossy(&bytes).into_owned())
+        }
+    }
+
+    let mut deserializer = serde_json::Deserializer::from_str(raw.get());
+    serde::Deserializer::deserialize_bytes(&mut deserializer, LossyString)
 }
 
 fn legacy_pins<E: Error>(raw: &RawValue, parent_depth: usize) -> Result<Value, E> {
@@ -166,7 +204,7 @@ fn legacy_pins<E: Error>(raw: &RawValue, parent_depth: usize) -> Result<Value, E
         let mut fields = Map::new();
         for key in ["id", "kind", "tabId", "name", "open"] {
             if let Some(value) = record.get(key) {
-                fields.insert(key.into(), scalar(value).map_err(E::custom)?);
+                fields.insert(key.into(), scalar(value));
             }
         }
         if fields.get("kind").and_then(Value::as_str) == Some("folder")
@@ -216,29 +254,5 @@ impl<'de> Visitor<'de> for Shape {
             while input.next_element::<IgnoredAny>()?.is_some() {}
         }
         Ok(Value::Array(result))
-    }
-
-    fn visit_bool<E>(self, _: bool) -> Result<Value, E> {
-        Ok(Value::Null)
-    }
-
-    fn visit_i64<E>(self, _: i64) -> Result<Value, E> {
-        Ok(Value::Null)
-    }
-
-    fn visit_u64<E>(self, _: u64) -> Result<Value, E> {
-        Ok(Value::Null)
-    }
-
-    fn visit_f64<E>(self, _: f64) -> Result<Value, E> {
-        Ok(Value::Null)
-    }
-
-    fn visit_str<E>(self, _: &str) -> Result<Value, E> {
-        Ok(Value::Null)
-    }
-
-    fn visit_unit<E>(self) -> Result<Value, E> {
-        Ok(Value::Null)
     }
 }

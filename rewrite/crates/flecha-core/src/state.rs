@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use crate::Settings;
+use crate::input_text::trim_input;
 use crate::suggestions::{display_url, match_quality};
 use crate::tree::{self, Branch};
 
@@ -352,7 +353,7 @@ impl BrowserState {
     }
 
     pub fn search_archive(&self, query: &str) -> Vec<&ArchivedTab> {
-        if query.trim().is_empty() {
+        if trim_input(query).is_empty() {
             return self.archive.iter().collect();
         }
         let mut matches: Vec<_> = self
@@ -420,12 +421,12 @@ impl BrowserState {
         let Some(space) = self.space_mut(id) else {
             return false;
         };
-        if let Some(name) = name.map(str::trim).filter(|name| !name.is_empty()) {
+        if let Some(name) = name.map(trim_input).filter(|name| !name.is_empty()) {
             // store.ts limits the name to 40 UTF-16 units.
             space.name = truncate_utf16(name, 40).into();
         }
         if let Some(emoji) = emoji {
-            let emoji: String = emoji.trim().chars().take(2).collect();
+            let emoji: String = trim_input(emoji).chars().take(2).collect();
             space.emoji = (!emoji.is_empty()).then_some(emoji);
         }
         if let Some(color) = color
@@ -1197,7 +1198,7 @@ impl BrowserState {
         let Some(list) = self.pinned_list_mut(space, parent) else {
             return false;
         };
-        let name = truncate_utf16(name.trim(), 80);
+        let name = truncate_utf16(trim_input(name), 80);
         list.push(PinnedNode::Folder {
             id,
             name: if name.is_empty() { "New Folder" } else { name }.into(),
@@ -1219,7 +1220,7 @@ impl BrowserState {
         else {
             return false;
         };
-        if let Some(name) = name.map(str::trim).filter(|name| !name.is_empty()) {
+        if let Some(name) = name.map(trim_input).filter(|name| !name.is_empty()) {
             *saved_name = name.into();
         }
         if let Some(open) = open {

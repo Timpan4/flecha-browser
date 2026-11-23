@@ -8,6 +8,26 @@ use flecha_core::{Environment, SearchEngine};
 use serde_json::{Value, json};
 
 #[test]
+fn obscured_explicit_addresses_and_nel_in_hosts_stay_local() {
+    let engine = SearchEngine::Google;
+    for input in [
+        "host.example\u{85}/p?token=x",
+        "ho\u{85}st.example/p?token=x",
+        "\u{200b}https://host.example/p?token=x",
+        "ht\u{ad}tps://host.example/p?token=x",
+        "\u{200b}ht\u{feff}tps:///p?token=x",
+        "\u{2060}file:///home/u/secret",
+    ] {
+        assert_eq!(
+            resolve_input(input, engine),
+            InputResolution::Invalid,
+            "{input:?}"
+        );
+        assert!(engine.suggestion_url(input).is_none(), "{input:?}");
+    }
+}
+
+#[test]
 fn explicit_http_addresses_without_hosts_stay_local() {
     let engine = SearchEngine::Google;
     let inputs = [

@@ -1,7 +1,8 @@
 use url::{Host, Url};
 
-use super::{decode_component, encode_component, trim_input};
+use super::{decode_component, default_ignorables, encode_component};
 use crate::SearchEngine;
+use crate::input_text::{is_js_whitespace, trim_input};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum InputResolution {
@@ -35,30 +36,38 @@ fn has_credentials(input: &str) -> bool {
     let Some((userinfo, destination)) = input.split_once('@') else {
         return false;
     };
-    if userinfo.is_empty() || destination.starts_with(char::is_whitespace) {
+    if userinfo.is_empty() || destination.starts_with(is_js_whitespace) {
         return false;
     }
-    let has_tail = re!(r"^[^\s/?#\\]+[/?#\\]").is_match(destination);
+    let has_tail = re!(r"^[^", js_space_chars!(), r"/?#\\]+[/?#\\]").is_match(destination);
     match userinfo.split_once(':') {
         Some((name, password)) if !name.contains(['/', '?', '#']) => {
             has_tail
-                || !password.starts_with(char::is_whitespace)
-                || trim_input(password).contains(char::is_whitespace)
+                || !password.starts_with(is_js_whitespace)
+                || trim_input(password).contains(is_js_whitespace)
         }
         None => {
             !userinfo.contains(['/', '?', '#'])
-                && (has_tail || !userinfo.contains(char::is_whitespace))
+                && (has_tail || !userinfo.contains(is_js_whitespace))
         }
         _ => false,
     }
 }
 
 pub fn rejected_address(raw: &str) -> bool {
-    // Explicit HTTP(S) input that fails address parsing must stay local.
     if has_credentials(raw)
         || trim_input(raw)
             .split_once(':')
-            .is_some_and(|(scheme, _)| is_http_scheme(&scheme.replace(['\t', '\r', '\n'], "")))
+            .is_some_and(|(scheme, tail)| {
+                // Look through invisible scheme characters for privacy. Navigation still
+                // uses the original input and must pass its own validation.
+                let visible = default_ignorables().replace_all(scheme, "");
+                let visible = visible.replace(char::is_control, "");
+                is_http_scheme(&visible.replace(is_js_whitespace, ""))
+                    || (visible != scheme
+                        && tail.starts_with("//")
+                        && re!(r"^[A-Za-z][A-Za-z0-9+.-]*$").is_match(&visible))
+            })
     {
         return true;
     }
@@ -70,7 +79,14 @@ pub fn rejected_address(raw: &str) -> bool {
         re!(r"(?i)[。．｡]|%2e|%e3%80%82|%ef%bc%8e|%ef%bd%a1").replace_all(&decoded, ".");
     let authority = trim_input(&authority);
     if has_credentials(&format!("{authority}{tail}"))
-        || re!(r"^\[[^\s\[\]]*:[^\s\[\]]*(?:\]|$)").is_match(authority)
+        || re!(
+            r"^\[[^",
+            js_space_chars!(),
+            r"\[\]]*:[^",
+            js_space_chars!(),
+            r"\[\]]*(?:\]|$)"
+        )
+        .is_match(authority)
         || (re!(r"(?i)^[0-9a-f:.]+(?:%[a-z0-9_.-]+)?$").is_match(authority)
             && (authority.contains("::") || authority.matches(':').count() >= 3))
     {
@@ -81,17 +97,35 @@ pub fn rejected_address(raw: &str) -> bool {
         .map_or((authority, None), |(host, port)| {
             (trim_input(host), Some(trim_input(port)))
         });
-    let address_tail = re!(r"^[/\\?#]\S").is_match(tail) || tail.contains('=');
-    let numeric_port = port.is_some_and(|port| {
-        re!(r"^[+-]?[0-9]").is_match(port) && !port.contains(char::is_whitespace)
-    });
-    if re!(r"(?i)^localhost$|^[^\s.@]+\.[^\s@]+$").is_match(host) {
+    let address_tail =
+        re!(r"^[/\\?#][^", js_space_chars!(), r"]").is_match(tail) || tail.contains('=');
+    let numeric_port = port
+        .is_some_and(|port| re!(r"^[+-]?[0-9]").is_match(port) && !port.contains(is_js_whitespace));
+    if re!(
+        r"(?i)^localhost$|^[^",
+        js_space_chars!(),
+        r".@]+\.[^",
+        js_space_chars!(),
+        r"@]+$"
+    )
+    .is_match(host)
+    {
         if port.is_some() {
-            return !typed.contains(char::is_whitespace) || address_tail || numeric_port;
+            return !typed.contains(is_js_whitespace) || address_tail || numeric_port;
         }
-        let separated_question = typed.ends_with(char::is_whitespace)
-            && re!(r"(?i)^\?\s+(?:\S+\s+\S|(?:who|what|when|where|why|which|how)\?$)")
-                .is_match(tail)
+        let separated_question = typed.ends_with(is_js_whitespace)
+            && re!(
+                r"(?i)^\?[",
+                js_space_chars!(),
+                r"]+(?:[^",
+                js_space_chars!(),
+                r"]+[",
+                js_space_chars!(),
+                r"]+[^",
+                js_space_chars!(),
+                r"]|(?:who|what|when|where|why|which|how)\?$)"
+            )
+            .is_match(tail)
             && !tail.contains('=');
         return !tail.is_empty() && !separated_question;
     }
@@ -127,11 +161,16 @@ pub(super) fn address(raw: &str, allow_bare_host: bool) -> Option<String> {
     }
     if re!(r"(?i)^mailto:").is_match(input) {
         let recipient = input[7..].split('?').next().unwrap_or_default();
-        return (!recipient.contains(char::is_whitespace)).then(|| input.into());
+        return (!recipient.contains(is_js_whitespace)).then(|| input.into());
     }
     let end = input.find(['/', '?', '#']).unwrap_or(input.len());
     let (authority, tail) = input.split_at(end);
-    let bare = re!(r"(?i)^(\[[0-9a-f:.]+\]|[^:\s\\@\[\]]+)(?::([0-9]+))?$").captures(authority)?;
+    let bare = re!(
+        r"(?i)^(\[[0-9a-f:.]+\]|[^:",
+        js_space_chars!(),
+        r"\\@\[\]]+)(?::([0-9]+))?$"
+    )
+    .captures(authority)?;
     let host = &bare[1];
     if bare.get(2).is_some()
         && re!(r"(?i)^(blob|ftp|http|https|news|sms|ssh|tel|urn)$").is_match(host)
@@ -162,7 +201,7 @@ pub(super) fn address(raw: &str, allow_bare_host: bool) -> Option<String> {
     };
     let scheme = if local { "http" } else { "https" };
     let result = format!("{scheme}://{endpoint}");
-    if input.contains(char::is_whitespace) {
+    if input.contains(is_js_whitespace) {
         Url::parse(&result).ok().map(Into::into)
     } else {
         Some(result)

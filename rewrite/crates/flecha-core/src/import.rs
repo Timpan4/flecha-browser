@@ -3,6 +3,7 @@
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::input_text::trim_input;
 use crate::state::{DEFAULT_SPACE_COLOR, walk_pins};
 use crate::tree::{self, Branch};
 use crate::{
@@ -393,7 +394,7 @@ impl BrowserState {
 }
 
 fn name_key(name: &str) -> String {
-    name.trim().to_lowercase()
+    trim_input(name).to_lowercase()
 }
 
 fn importable_url(input: &str) -> bool {

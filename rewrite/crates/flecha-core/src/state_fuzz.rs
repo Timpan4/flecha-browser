@@ -24,19 +24,24 @@ fn keys(state: &BrowserState) -> BTreeSet<TabId> {
     state.tabs.keys().cloned().collect()
 }
 
-fn referenced(state: &BrowserState) -> BTreeSet<TabId> {
-    let mut ids: BTreeSet<TabId> = state.favorites.iter().cloned().collect();
-    for space in &state.spaces {
-        ids.extend(space.pinned_tabs().into_iter().cloned());
-    }
-    for win in state
+fn referenced(state: &BrowserState, context: &str) -> BTreeSet<TabId> {
+    let today = state
         .windows
         .iter()
         .chain(state.closed_windows.iter().map(|c| &c.window))
-    {
-        for ws in win.spaces.values() {
-            ids.extend(ws.today.iter().cloned());
-        }
+        .flat_map(|win| win.spaces.values())
+        .flat_map(|space| &space.today);
+    let tabs = state
+        .favorites
+        .iter()
+        .chain(state.spaces.iter().flat_map(Space::pinned_tabs))
+        .chain(today);
+    let mut ids = BTreeSet::new();
+    for id in tabs {
+        assert!(
+            ids.insert(id.clone()),
+            "tab {id:?} is placed twice: {context}"
+        );
     }
     ids
 }
@@ -317,7 +322,11 @@ fn random_transitions_preserve_tab_and_selection_invariants() {
                 "duplicate removal: {context}"
             );
             assert_eq!(report_set, actual, "removed IDs: {context}");
-            assert_eq!(after, referenced(&state), "tab references: {context}");
+            assert_eq!(
+                after,
+                referenced(&state, &context),
+                "tab references: {context}"
+            );
             if let Some(anchor) = anchor_check
                 && before.contains(&anchor)
             {
@@ -326,7 +335,14 @@ fn random_transitions_preserve_tab_and_selection_invariants() {
                     "anchor {anchor:?} removed: {context}"
                 );
             }
+            let mut visible = BTreeSet::new();
             for win in &state.windows {
+                for id in win.visible_tabs() {
+                    assert!(
+                        visible.insert(id),
+                        "visible tab {id:?} has multiple owners: {context}"
+                    );
+                }
                 assert!(state.space(&win.active_space_id).is_some(), "{context}");
                 for (space, ws) in &win.spaces {
                     let members = state.tab_ids(&win.id, space).unwrap_or_else(|| {

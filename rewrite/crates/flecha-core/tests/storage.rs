@@ -10,6 +10,120 @@ use serde_json::{Value, json};
 const V2: &str = include_str!("fixtures/chromium-v2.json");
 
 #[test]
+fn saved_surrogates_are_replaced_per_code_unit_without_losing_archive_entries() {
+    let cases = [
+        (r"Cut \ud83d", "Cut �"),
+        (r"\ude00 tail", "� tail"),
+        (r"\ud83d\ud83d\ude00\ude00", "�😀�"),
+        (r"\uD83D\uDE00", "😀"),
+        (r"\\ud83d \ud83d", r"\ud83d �"),
+    ];
+    for (encoded, title) in cases {
+        let saved = format!(
+            r#"{{
+            "version":2,"tabs":{{}},"spaces":[{{"id":"s"}}],
+            "archive":[{{"url":"https://example.org","title":"{encoded}","closedAt":1}}]
+        }}"#
+        );
+        let state = migrate_legacy(&saved).unwrap();
+        assert_eq!(state.archive()[0].title, title, "{encoded}");
+        let saved = json!(saved);
+        let mut loaded = load(Some(&saved), None).unwrap();
+        let ready = loaded
+            .ready()
+            .expect("a repaired title must not trigger recovery");
+        assert_eq!(ready.state.as_ref(), Some(&state));
+    }
+}
+
+#[test]
+fn out_of_range_snapshot_values_repair_independently() {
+    let fixture = r#"{
+      "version":3,
+      "tabs":{"desktop":{"url":"https://example.org/d"},"side":{"url":"https://example.org/s"},
+              "closed":{"url":"https://example.org/closed"}},
+      "spaces":[{"id":"s","pinnedFlat":[
+        {"kind":"folder","id":"overflow","depth":1e400},
+        {"kind":"folder","id":"keep","depth":0}
+      ]}],
+      "windows":[{"id":"w","activeSpaceId":"s","spaces":{"s":{
+        "today":["desktop","side"],"activeTabId":"desktop","split":["desktop","side"],"splitRatio":1e400
+      }}}],
+      "closedWindows":[{"id":"bad","activeSpaceId":"s","spaces":{"s":{"today":["closed"]}},"closedAt":1e400}],
+      "archive":[{"url":"https://example.org/bad","title":"Bad","closedAt":1e400},
+                 {"url":"https://example.org/keep","title":"Keep","closedAt":7}],
+      "window":{"x":1,"y":2,"width":1e400,"height":4},
+      "sidebarWidth":1e400,"theme":"dark"
+    }"#;
+    for invalid in ["sidebarWidth", "splitRatio", "depth", "closedAt", "width"] {
+        // Leave just one occurrence class malformed so each projection path is tested independently.
+        let input = fixture
+            .lines()
+            .map(|line| {
+                if line.contains(&format!(r#""{invalid}":1e400"#)) {
+                    line.into()
+                } else {
+                    line.replace("1e400", "0.5")
+                }
+            })
+            .collect::<String>();
+        let state = decode(&input).unwrap_or_else(|error| panic!("{invalid}: {error}"));
+        assert_eq!(state.settings.theme, Theme::Dark, "{invalid}");
+        match invalid {
+            "sidebarWidth" => assert_eq!(state.settings.sidebar_width, SidebarWidth::default()),
+            "splitRatio" => assert_eq!(
+                state.focused_window().spaces[&SpaceId::new("s")].split_ratio,
+                None
+            ),
+            "depth" => assert_eq!(state.spaces()[0].pinned.len(), 1),
+            "closedAt" => assert!(state.closed_windows().is_empty() && state.archive().len() == 1),
+            "width" => assert!(state.settings.window.is_none()),
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[test]
+fn many_unrepresentable_values_preserve_readable_snapshot_state() {
+    let saved = json!(
+        r#"{
+      "version":"\ud83d",
+      "tabs":{"t":{"url":"https://example.org","title":"Title\ud83d","lastActive":1e400,
+                   "history":{"index":0,"entries":[{"url":"https://example.org","title":"\udfff"}]}}},
+      "spaces":[1e400,{"id":"s","name":"Name\ude00",
+        "pinned":[{"kind":"folder","id":"f","name":"Folder\ud83d","children":1e400}],
+        "today":["t"]}],
+      "archive":[1e400,{"url":"https://example.org/archive","title":"Archive\ud83d","closedAt":1}],
+      "sitePermissions":{"example.org":1e400},
+      "window":1e400,"sidebarWidth":-1e400,"keybindings":{"newTab":1e400},
+      "onboarded":true
+    }"#
+    );
+    let mut loaded = load(Some(&saved), None).unwrap();
+    let state = loaded
+        .ready()
+        .expect("one damaged value must not disable saves")
+        .state
+        .as_ref()
+        .unwrap();
+    let tab = state.tab(&TabId::new("t")).unwrap();
+    assert_eq!(tab.title, "Title�");
+    assert_eq!(tab.history.as_ref().unwrap().entries[0].title, "�");
+    assert_eq!(tab.last_active, None);
+    let space = &state.spaces()[0];
+    assert_eq!(space.name, "Name�");
+    assert!(
+        matches!(&space.pinned[0], PinnedNode::Folder { name, children, .. } if name == "Folder�" && children.is_empty())
+    );
+    assert_eq!(state.archive()[0].title, "Archive�");
+    assert_eq!(state.settings.sidebar_width, SidebarWidth::default());
+    assert_eq!(state.settings.onboarded, Some(true));
+    assert!(state.settings.site_permissions.is_none());
+    assert!(state.settings.window.is_none());
+    assert!(state.settings.keybindings.is_empty());
+}
+
+#[test]
 fn migrates_a_stock_v2_profile_copy_and_round_trips_the_rewrite_snapshot() {
     let state = migrate_legacy(V2).unwrap();
     let work = SpaceId::new("work");
@@ -172,6 +286,20 @@ fn invalid_saved_shortcuts_fall_back_without_unbinding_other_commands() {
     );
     assert_eq!(keys_for(bindings, "find", Platform::Linux), None);
     assert_eq!(keys_for(bindings, "reload", Platform::Linux), Some("F24"));
+}
+
+#[test]
+fn saved_platform_reserved_override_leaves_the_command_unbound() {
+    use flecha_core::shortcuts::{Platform, keys_for};
+    let state =
+        decode(r#"{"tabs":{},"spaces":[{"id":"s"}],"keybindings":{"newTab":"Ctrl+Alt+1"}}"#)
+            .unwrap();
+    let bindings = &state.settings.keybindings;
+    assert_eq!(keys_for(bindings, "newTab", Platform::Linux), None);
+    assert_eq!(
+        keys_for(bindings, "newTab", Platform::Mac),
+        Some("Ctrl+Alt+1")
+    );
 }
 
 #[test]

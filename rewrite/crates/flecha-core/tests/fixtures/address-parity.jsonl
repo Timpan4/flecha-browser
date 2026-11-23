@@ -1,0 +1,1018 @@
+{"input":"\ufeffhttps://host.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":"\u0085https://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=%C2%85https%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u180ehttps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=%E1%A0%8Ehttps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u200bhttps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=%E2%80%8Bhttps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u200chttps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=%E2%80%8Chttps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u200dhttps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=%E2%80%8Dhttps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u2060https://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=%E2%81%A0https%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u00adhttps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=%C2%ADhttps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u2028https://host.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":"\u00a0https://host.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":"\u3000https://host.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":"\u017fhttps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=%C5%BFhttps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust regex case folding recognizes this scheme spelling.","url":"\u017fhttps://host.example/p?token=x"}}
+{"input":"\u212ahttps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=%E2%84%AAhttps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust regex case folding recognizes this scheme spelling.","url":"\u212ahttps://host.example/p?token=x"}}
+{"input":"\thttps://host.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":"\nhttps://host.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":" https://host.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":"\u000bhttps://host.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":"\u1680https://host.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":"\u034fhttps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=%CD%8Fhttps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u115fhttps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=%E1%85%9Fhttps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\uffa0https://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=%EF%BE%A0https%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u3164https://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=%E3%85%A4https%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\udb40\udc01https://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=%F3%A0%80%81https%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\ud834\udd73https://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=%F0%9D%85%B3https%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"https://host.example/p?token=x\ufeff","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":"https://host.example/p?token=x\u0085","tsUrl":"https://host.example/p?token=x\u0085","tsSuggestable":false}
+{"input":"https://host.example/p?token=x\u180e","tsUrl":"https://host.example/p?token=x\u180e","tsSuggestable":false}
+{"input":"https://host.example/p?token=x\u200b","tsUrl":"https://host.example/p?token=x\u200b","tsSuggestable":false}
+{"input":"https://host.example/p?token=x\u200c","tsUrl":"https://host.example/p?token=x\u200c","tsSuggestable":false}
+{"input":"https://host.example/p?token=x\u200d","tsUrl":"https://host.example/p?token=x\u200d","tsSuggestable":false}
+{"input":"https://host.example/p?token=x\u2060","tsUrl":"https://host.example/p?token=x\u2060","tsSuggestable":false}
+{"input":"https://host.example/p?token=x\u00ad","tsUrl":"https://host.example/p?token=x\u00ad","tsSuggestable":false}
+{"input":"https://host.example/p?token=x\u2028","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":"https://host.example/p?token=x\u00a0","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":"https://host.example/p?token=x\u3000","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":"https://host.example/p?token=x\u017f","tsUrl":"https://host.example/p?token=x\u017f","tsSuggestable":false}
+{"input":"https://host.example/p?token=x\u212a","tsUrl":"https://host.example/p?token=x\u212a","tsSuggestable":false}
+{"input":"https://host.example/p?token=x\t","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":"https://host.example/p?token=x\n","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":"https://host.example/p?token=x ","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":"https://host.example/p?token=x\u000b","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":"https://host.example/p?token=x\u1680","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":"https://host.example/p?token=x\u034f","tsUrl":"https://host.example/p?token=x\u034f","tsSuggestable":false}
+{"input":"https://host.example/p?token=x\u115f","tsUrl":"https://host.example/p?token=x\u115f","tsSuggestable":false}
+{"input":"https://host.example/p?token=x\uffa0","tsUrl":"https://host.example/p?token=x\uffa0","tsSuggestable":false}
+{"input":"https://host.example/p?token=x\u3164","tsUrl":"https://host.example/p?token=x\u3164","tsSuggestable":false}
+{"input":"https://host.example/p?token=x\udb40\udc01","tsUrl":"https://host.example/p?token=x\udb40\udc01","tsSuggestable":false}
+{"input":"https://host.example/p?token=x\ud834\udd73","tsUrl":"https://host.example/p?token=x\ud834\udd73","tsSuggestable":false}
+{"input":"ht\ufefftps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=ht%EF%BB%BFtps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"ht\u0085tps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=ht%C2%85tps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"ht\u180etps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=ht%E1%A0%8Etps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"ht\u200btps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=ht%E2%80%8Btps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"ht\u200ctps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=ht%E2%80%8Ctps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"ht\u200dtps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=ht%E2%80%8Dtps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"ht\u2060tps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=ht%E2%81%A0tps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"ht\u00adtps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=ht%C2%ADtps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"ht\u2028tps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=ht%E2%80%A8tps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"ht\u00a0tps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=ht%C2%A0tps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"ht\u3000tps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=ht%E3%80%80tps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"ht\u017ftps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=ht%C5%BFtps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust regex case folding recognizes this scheme spelling.","url":"ht\u017ftps://host.example/p?token=x"}}
+{"input":"ht\u212atps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=ht%E2%84%AAtps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust regex case folding recognizes this scheme spelling.","url":"ht\u212atps://host.example/p?token=x"}}
+{"input":"ht\ttps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=ht%09tps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"ht\ntps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=ht%0Atps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"ht tps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=ht%20tps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"ht\u000btps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=ht%0Btps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"ht\u1680tps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=ht%E1%9A%80tps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"ht\u034ftps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=ht%CD%8Ftps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"ht\u115ftps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=ht%E1%85%9Ftps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"ht\uffa0tps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=ht%EF%BE%A0tps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"ht\u3164tps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=ht%E3%85%A4tps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"ht\udb40\udc01tps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=ht%F3%A0%80%81tps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"ht\ud834\udd73tps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=ht%F0%9D%85%B3tps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"https\ufeff://host.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"https\u0085://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=https%C2%85%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"https\u180e://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=https%E1%A0%8E%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"https\u200b://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=https%E2%80%8B%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"https\u200c://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=https%E2%80%8C%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"https\u200d://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=https%E2%80%8D%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"https\u2060://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=https%E2%81%A0%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"https\u00ad://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=https%C2%AD%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"https\u2028://host.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"https\u00a0://host.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"https\u3000://host.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"https\u017f://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=https%C5%BF%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust regex case folding recognizes this scheme spelling.","url":"https\u017f://host.example/p?token=x"}}
+{"input":"https\u212a://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=https%E2%84%AA%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust regex case folding recognizes this scheme spelling.","url":"https\u212a://host.example/p?token=x"}}
+{"input":"https\t://host.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"https\n://host.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"https ://host.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"https\u000b://host.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"https\u1680://host.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"https\u034f://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=https%CD%8F%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"https\u115f://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=https%E1%85%9F%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"https\uffa0://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=https%EF%BE%A0%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"https\u3164://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=https%E3%85%A4%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"https\udb40\udc01://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=https%F3%A0%80%81%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"https\ud834\udd73://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=https%F0%9D%85%B3%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"https:\ufeff//host.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"https:\u0085//host.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"https:\u180e//host.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"https:\u200b//host.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"https:\u200c//host.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"https:\u200d//host.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"https:\u2060//host.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"https:\u00ad//host.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"https:\u2028//host.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"https:\u00a0//host.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"https:\u3000//host.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"https:\u017f//host.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"https:\u212a//host.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"https:\t//host.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"https:\n//host.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"https: //host.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"https:\u000b//host.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"https:\u1680//host.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"https:\u034f//host.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"https:\u115f//host.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"https:\uffa0//host.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"https:\u3164//host.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"https:\udb40\udc01//host.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"https:\ud834\udd73//host.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"https://\ufeffhost.example/p?token=x","tsUrl":"https://\ufeffhost.example/p?token=x","tsSuggestable":false}
+{"input":"https://\u0085host.example/p?token=x","tsUrl":"https://\u0085host.example/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"https://\u180ehost.example/p?token=x","tsUrl":"https://\u180ehost.example/p?token=x","tsSuggestable":false}
+{"input":"https://\u200bhost.example/p?token=x","tsUrl":"https://\u200bhost.example/p?token=x","tsSuggestable":false}
+{"input":"https://\u200chost.example/p?token=x","tsUrl":"https://\u200chost.example/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"https://\u200dhost.example/p?token=x","tsUrl":"https://\u200dhost.example/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"https://\u2060host.example/p?token=x","tsUrl":"https://\u2060host.example/p?token=x","tsSuggestable":false}
+{"input":"https://\u00adhost.example/p?token=x","tsUrl":"https://\u00adhost.example/p?token=x","tsSuggestable":false}
+{"input":"https://\u2028host.example/p?token=x","tsUrl":"https://\u2028host.example/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"https://\u00a0host.example/p?token=x","tsUrl":"https://\u00a0host.example/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"https://\u3000host.example/p?token=x","tsUrl":"https://\u3000host.example/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"https://\u017fhost.example/p?token=x","tsUrl":"https://\u017fhost.example/p?token=x","tsSuggestable":false}
+{"input":"https://\u212ahost.example/p?token=x","tsUrl":"https://\u212ahost.example/p?token=x","tsSuggestable":false}
+{"input":"https://\thost.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":"https://\nhost.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":"https:// host.example/p?token=x","tsUrl":"https:// host.example/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"https://\u000bhost.example/p?token=x","tsUrl":"https://\u000bhost.example/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"https://\u1680host.example/p?token=x","tsUrl":"https://\u1680host.example/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"https://\u034fhost.example/p?token=x","tsUrl":"https://\u034fhost.example/p?token=x","tsSuggestable":false}
+{"input":"https://\u115fhost.example/p?token=x","tsUrl":"https://\u115fhost.example/p?token=x","tsSuggestable":false}
+{"input":"https://\uffa0host.example/p?token=x","tsUrl":"https://\uffa0host.example/p?token=x","tsSuggestable":false}
+{"input":"https://\u3164host.example/p?token=x","tsUrl":"https://\u3164host.example/p?token=x","tsSuggestable":false}
+{"input":"https://\udb40\udc01host.example/p?token=x","tsUrl":"https://\udb40\udc01host.example/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"https://\ud834\udd73host.example/p?token=x","tsUrl":"https://\ud834\udd73host.example/p?token=x","tsSuggestable":false}
+{"input":"https://host.example\ufeff/p?token=x","tsUrl":"https://host.example\ufeff/p?token=x","tsSuggestable":false}
+{"input":"https://host.example\u0085/p?token=x","tsUrl":"https://host.example\u0085/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"https://host.example\u180e/p?token=x","tsUrl":"https://host.example\u180e/p?token=x","tsSuggestable":false}
+{"input":"https://host.example\u200b/p?token=x","tsUrl":"https://host.example\u200b/p?token=x","tsSuggestable":false}
+{"input":"https://host.example\u200c/p?token=x","tsUrl":"https://host.example\u200c/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"https://host.example\u200d/p?token=x","tsUrl":"https://host.example\u200d/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"https://host.example\u2060/p?token=x","tsUrl":"https://host.example\u2060/p?token=x","tsSuggestable":false}
+{"input":"https://host.example\u00ad/p?token=x","tsUrl":"https://host.example\u00ad/p?token=x","tsSuggestable":false}
+{"input":"https://host.example\u2028/p?token=x","tsUrl":"https://host.example\u2028/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"https://host.example\u00a0/p?token=x","tsUrl":"https://host.example\u00a0/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"https://host.example\u3000/p?token=x","tsUrl":"https://host.example\u3000/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"https://host.example\u017f/p?token=x","tsUrl":"https://host.example\u017f/p?token=x","tsSuggestable":false}
+{"input":"https://host.example\u212a/p?token=x","tsUrl":"https://host.example\u212a/p?token=x","tsSuggestable":false}
+{"input":"https://host.example\t/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":"https://host.example\n/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":"https://host.example /p?token=x","tsUrl":"https://host.example /p?token=x","tsSuggestable":false}
+{"input":"https://host.example\u000b/p?token=x","tsUrl":"https://host.example\u000b/p?token=x","tsSuggestable":false}
+{"input":"https://host.example\u1680/p?token=x","tsUrl":"https://host.example\u1680/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"https://host.example\u034f/p?token=x","tsUrl":"https://host.example\u034f/p?token=x","tsSuggestable":false}
+{"input":"https://host.example\u115f/p?token=x","tsUrl":"https://host.example\u115f/p?token=x","tsSuggestable":false}
+{"input":"https://host.example\uffa0/p?token=x","tsUrl":"https://host.example\uffa0/p?token=x","tsSuggestable":false}
+{"input":"https://host.example\u3164/p?token=x","tsUrl":"https://host.example\u3164/p?token=x","tsSuggestable":false}
+{"input":"https://host.example\udb40\udc01/p?token=x","tsUrl":"https://host.example\udb40\udc01/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"https://host.example\ud834\udd73/p?token=x","tsUrl":"https://host.example\ud834\udd73/p?token=x","tsSuggestable":false}
+{"input":"https://ho\ufeffst.example/p?token=x","tsUrl":"https://ho\ufeffst.example/p?token=x","tsSuggestable":false}
+{"input":"https://ho\u0085st.example/p?token=x","tsUrl":"https://ho\u0085st.example/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"https://ho\u180est.example/p?token=x","tsUrl":"https://ho\u180est.example/p?token=x","tsSuggestable":false}
+{"input":"https://ho\u200bst.example/p?token=x","tsUrl":"https://ho\u200bst.example/p?token=x","tsSuggestable":false}
+{"input":"https://ho\u200cst.example/p?token=x","tsUrl":"https://ho\u200cst.example/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"https://ho\u200dst.example/p?token=x","tsUrl":"https://ho\u200dst.example/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"https://ho\u2060st.example/p?token=x","tsUrl":"https://ho\u2060st.example/p?token=x","tsSuggestable":false}
+{"input":"https://ho\u00adst.example/p?token=x","tsUrl":"https://ho\u00adst.example/p?token=x","tsSuggestable":false}
+{"input":"https://ho\u2028st.example/p?token=x","tsUrl":"https://ho\u2028st.example/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"https://ho\u00a0st.example/p?token=x","tsUrl":"https://ho\u00a0st.example/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"https://ho\u3000st.example/p?token=x","tsUrl":"https://ho\u3000st.example/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"https://ho\u017fst.example/p?token=x","tsUrl":"https://ho\u017fst.example/p?token=x","tsSuggestable":false}
+{"input":"https://ho\u212ast.example/p?token=x","tsUrl":"https://ho\u212ast.example/p?token=x","tsSuggestable":false}
+{"input":"https://ho\tst.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":"https://ho\nst.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":"https://ho st.example/p?token=x","tsUrl":"https://ho st.example/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"https://ho\u000bst.example/p?token=x","tsUrl":"https://ho\u000bst.example/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"https://ho\u1680st.example/p?token=x","tsUrl":"https://ho\u1680st.example/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"https://ho\u034fst.example/p?token=x","tsUrl":"https://ho\u034fst.example/p?token=x","tsSuggestable":false}
+{"input":"https://ho\u115fst.example/p?token=x","tsUrl":"https://ho\u115fst.example/p?token=x","tsSuggestable":false}
+{"input":"https://ho\uffa0st.example/p?token=x","tsUrl":"https://ho\uffa0st.example/p?token=x","tsSuggestable":false}
+{"input":"https://ho\u3164st.example/p?token=x","tsUrl":"https://ho\u3164st.example/p?token=x","tsSuggestable":false}
+{"input":"https://ho\udb40\udc01st.example/p?token=x","tsUrl":"https://ho\udb40\udc01st.example/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"https://ho\ud834\udd73st.example/p?token=x","tsUrl":"https://ho\ud834\udd73st.example/p?token=x","tsSuggestable":false}
+{"input":"host.example\ufeff/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example\u0085/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example\u180e/p?token=x","tsUrl":"https://host.example\u180e/p?token=x","tsSuggestable":false}
+{"input":"host.example\u200b/p?token=x","tsUrl":"https://host.example\u200b/p?token=x","tsSuggestable":false}
+{"input":"host.example\u200c/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example\u200d/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example\u2060/p?token=x","tsUrl":"https://host.example\u2060/p?token=x","tsSuggestable":false}
+{"input":"host.example\u00ad/p?token=x","tsUrl":"https://host.example\u00ad/p?token=x","tsSuggestable":false}
+{"input":"host.example\u2028/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example\u00a0/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example\u3000/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example\u017f/p?token=x","tsUrl":"https://host.example\u017f/p?token=x","tsSuggestable":false}
+{"input":"host.example\u212a/p?token=x","tsUrl":"https://host.example\u212a/p?token=x","tsSuggestable":false}
+{"input":"host.example\t/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example\n/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example /p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example\u000b/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example\u1680/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example\u034f/p?token=x","tsUrl":"https://host.example\u034f/p?token=x","tsSuggestable":false}
+{"input":"host.example\u115f/p?token=x","tsUrl":"https://host.example\u115f/p?token=x","tsSuggestable":false}
+{"input":"host.example\uffa0/p?token=x","tsUrl":"https://host.example\uffa0/p?token=x","tsSuggestable":false}
+{"input":"host.example\u3164/p?token=x","tsUrl":"https://host.example\u3164/p?token=x","tsSuggestable":false}
+{"input":"host.example\udb40\udc01/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example\ud834\udd73/p?token=x","tsUrl":"https://host.example\ud834\udd73/p?token=x","tsSuggestable":false}
+{"input":"\ufeffhost.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":"\u0085host.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\u180ehost.example/p?token=x","tsUrl":"https://\u180ehost.example/p?token=x","tsSuggestable":false}
+{"input":"\u200bhost.example/p?token=x","tsUrl":"https://\u200bhost.example/p?token=x","tsSuggestable":false}
+{"input":"\u200chost.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\u200dhost.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\u2060host.example/p?token=x","tsUrl":"https://\u2060host.example/p?token=x","tsSuggestable":false}
+{"input":"\u00adhost.example/p?token=x","tsUrl":"https://\u00adhost.example/p?token=x","tsSuggestable":false}
+{"input":"\u2028host.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":"\u00a0host.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":"\u3000host.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":"\u017fhost.example/p?token=x","tsUrl":"https://\u017fhost.example/p?token=x","tsSuggestable":false}
+{"input":"\u212ahost.example/p?token=x","tsUrl":"https://\u212ahost.example/p?token=x","tsSuggestable":false}
+{"input":"\thost.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":"\nhost.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":" host.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":"\u000bhost.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":"\u1680host.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":"\u034fhost.example/p?token=x","tsUrl":"https://\u034fhost.example/p?token=x","tsSuggestable":false}
+{"input":"\u115fhost.example/p?token=x","tsUrl":"https://\u115fhost.example/p?token=x","tsSuggestable":false}
+{"input":"\uffa0host.example/p?token=x","tsUrl":"https://\uffa0host.example/p?token=x","tsSuggestable":false}
+{"input":"\u3164host.example/p?token=x","tsUrl":"https://\u3164host.example/p?token=x","tsSuggestable":false}
+{"input":"\udb40\udc01host.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\ud834\udd73host.example/p?token=x","tsUrl":"https://\ud834\udd73host.example/p?token=x","tsSuggestable":false}
+{"input":"ho\ufeffst.example/p?token=x","tsUrl":"https://www.google.com/search?q=ho%EF%BB%BFst.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"ho\u0085st.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"ho\u180est.example/p?token=x","tsUrl":"https://ho\u180est.example/p?token=x","tsSuggestable":false}
+{"input":"ho\u200bst.example/p?token=x","tsUrl":"https://ho\u200bst.example/p?token=x","tsSuggestable":false}
+{"input":"ho\u200cst.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"ho\u200dst.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"ho\u2060st.example/p?token=x","tsUrl":"https://ho\u2060st.example/p?token=x","tsSuggestable":false}
+{"input":"ho\u00adst.example/p?token=x","tsUrl":"https://ho\u00adst.example/p?token=x","tsSuggestable":false}
+{"input":"ho\u2028st.example/p?token=x","tsUrl":"https://www.google.com/search?q=ho%E2%80%A8st.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"ho\u00a0st.example/p?token=x","tsUrl":"https://www.google.com/search?q=ho%C2%A0st.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"ho\u3000st.example/p?token=x","tsUrl":"https://www.google.com/search?q=ho%E3%80%80st.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"ho\u017fst.example/p?token=x","tsUrl":"https://ho\u017fst.example/p?token=x","tsSuggestable":false}
+{"input":"ho\u212ast.example/p?token=x","tsUrl":"https://ho\u212ast.example/p?token=x","tsSuggestable":false}
+{"input":"ho\tst.example/p?token=x","tsUrl":"https://www.google.com/search?q=ho%09st.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"ho\nst.example/p?token=x","tsUrl":"https://www.google.com/search?q=ho%0Ast.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"ho st.example/p?token=x","tsUrl":"https://www.google.com/search?q=ho%20st.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"ho\u000bst.example/p?token=x","tsUrl":"https://www.google.com/search?q=ho%0Bst.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"ho\u1680st.example/p?token=x","tsUrl":"https://www.google.com/search?q=ho%E1%9A%80st.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"ho\u034fst.example/p?token=x","tsUrl":"https://ho\u034fst.example/p?token=x","tsSuggestable":false}
+{"input":"ho\u115fst.example/p?token=x","tsUrl":"https://ho\u115fst.example/p?token=x","tsSuggestable":false}
+{"input":"ho\uffa0st.example/p?token=x","tsUrl":"https://ho\uffa0st.example/p?token=x","tsSuggestable":false}
+{"input":"ho\u3164st.example/p?token=x","tsUrl":"https://ho\u3164st.example/p?token=x","tsSuggestable":false}
+{"input":"ho\udb40\udc01st.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"ho\ud834\udd73st.example/p?token=x","tsUrl":"https://ho\ud834\udd73st.example/p?token=x","tsSuggestable":false}
+{"input":"host\ufeff.example/p?token=x","tsUrl":"https://www.google.com/search?q=host%EF%BB%BF.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"host\u0085.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host\u180e.example/p?token=x","tsUrl":"https://host\u180e.example/p?token=x","tsSuggestable":false}
+{"input":"host\u200b.example/p?token=x","tsUrl":"https://host\u200b.example/p?token=x","tsSuggestable":false}
+{"input":"host\u200c.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host\u200d.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host\u2060.example/p?token=x","tsUrl":"https://host\u2060.example/p?token=x","tsSuggestable":false}
+{"input":"host\u00ad.example/p?token=x","tsUrl":"https://host\u00ad.example/p?token=x","tsSuggestable":false}
+{"input":"host\u2028.example/p?token=x","tsUrl":"https://www.google.com/search?q=host%E2%80%A8.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"host\u00a0.example/p?token=x","tsUrl":"https://www.google.com/search?q=host%C2%A0.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"host\u3000.example/p?token=x","tsUrl":"https://www.google.com/search?q=host%E3%80%80.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"host\u017f.example/p?token=x","tsUrl":"https://host\u017f.example/p?token=x","tsSuggestable":false}
+{"input":"host\u212a.example/p?token=x","tsUrl":"https://host\u212a.example/p?token=x","tsSuggestable":false}
+{"input":"host\t.example/p?token=x","tsUrl":"https://www.google.com/search?q=host%09.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"host\n.example/p?token=x","tsUrl":"https://www.google.com/search?q=host%0A.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"host .example/p?token=x","tsUrl":"https://www.google.com/search?q=host%20.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"host\u000b.example/p?token=x","tsUrl":"https://www.google.com/search?q=host%0B.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"host\u1680.example/p?token=x","tsUrl":"https://www.google.com/search?q=host%E1%9A%80.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"host\u034f.example/p?token=x","tsUrl":"https://host\u034f.example/p?token=x","tsSuggestable":false}
+{"input":"host\u115f.example/p?token=x","tsUrl":"https://host\u115f.example/p?token=x","tsSuggestable":false}
+{"input":"host\uffa0.example/p?token=x","tsUrl":"https://host\uffa0.example/p?token=x","tsSuggestable":false}
+{"input":"host\u3164.example/p?token=x","tsUrl":"https://host\u3164.example/p?token=x","tsSuggestable":false}
+{"input":"host\udb40\udc01.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host\ud834\udd73.example/p?token=x","tsUrl":"https://host\ud834\udd73.example/p?token=x","tsSuggestable":false}
+{"input":"host.\ufeffexample/p?token=x","tsUrl":"https://www.google.com/search?q=host.%EF%BB%BFexample%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"host.\u0085example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.\u180eexample/p?token=x","tsUrl":"https://host.\u180eexample/p?token=x","tsSuggestable":false}
+{"input":"host.\u200bexample/p?token=x","tsUrl":"https://host.\u200bexample/p?token=x","tsSuggestable":false}
+{"input":"host.\u200cexample/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.\u200dexample/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.\u2060example/p?token=x","tsUrl":"https://host.\u2060example/p?token=x","tsSuggestable":false}
+{"input":"host.\u00adexample/p?token=x","tsUrl":"https://host.\u00adexample/p?token=x","tsSuggestable":false}
+{"input":"host.\u2028example/p?token=x","tsUrl":"https://www.google.com/search?q=host.%E2%80%A8example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"host.\u00a0example/p?token=x","tsUrl":"https://www.google.com/search?q=host.%C2%A0example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"host.\u3000example/p?token=x","tsUrl":"https://www.google.com/search?q=host.%E3%80%80example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"host.\u017fexample/p?token=x","tsUrl":"https://host.\u017fexample/p?token=x","tsSuggestable":false}
+{"input":"host.\u212aexample/p?token=x","tsUrl":"https://host.\u212aexample/p?token=x","tsSuggestable":false}
+{"input":"host.\texample/p?token=x","tsUrl":"https://www.google.com/search?q=host.%09example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"host.\nexample/p?token=x","tsUrl":"https://www.google.com/search?q=host.%0Aexample%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"host. example/p?token=x","tsUrl":"https://www.google.com/search?q=host.%20example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"host.\u000bexample/p?token=x","tsUrl":"https://www.google.com/search?q=host.%0Bexample%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"host.\u1680example/p?token=x","tsUrl":"https://www.google.com/search?q=host.%E1%9A%80example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"host.\u034fexample/p?token=x","tsUrl":"https://host.\u034fexample/p?token=x","tsSuggestable":false}
+{"input":"host.\u115fexample/p?token=x","tsUrl":"https://host.\u115fexample/p?token=x","tsSuggestable":false}
+{"input":"host.\uffa0example/p?token=x","tsUrl":"https://host.\uffa0example/p?token=x","tsSuggestable":false}
+{"input":"host.\u3164example/p?token=x","tsUrl":"https://host.\u3164example/p?token=x","tsSuggestable":false}
+{"input":"host.\udb40\udc01example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.\ud834\udd73example/p?token=x","tsUrl":"https://host.\ud834\udd73example/p?token=x","tsSuggestable":false}
+{"input":"user:pa\ufeffss@host.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pa\u0085ss@host.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pa\u180ess@host.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pa\u200bss@host.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pa\u200css@host.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pa\u200dss@host.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pa\u2060ss@host.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pa\u00adss@host.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pa\u2028ss@host.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pa\u00a0ss@host.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pa\u3000ss@host.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pa\u017fss@host.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pa\u212ass@host.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pa\tss@host.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pa\nss@host.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pa ss@host.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pa\u000bss@host.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pa\u1680ss@host.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pa\u034fss@host.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pa\u115fss@host.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pa\uffa0ss@host.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pa\u3164ss@host.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pa\udb40\udc01ss@host.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pa\ud834\udd73ss@host.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pass@\ufeffhost.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pass@\u0085host.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pass@\u180ehost.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pass@\u200bhost.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pass@\u200chost.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pass@\u200dhost.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pass@\u2060host.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pass@\u00adhost.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pass@\u2028host.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pass@\u00a0host.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pass@\u3000host.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pass@\u017fhost.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pass@\u212ahost.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pass@\thost.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pass@\nhost.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pass@ host.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pass@\u000bhost.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pass@\u1680host.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pass@\u034fhost.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pass@\u115fhost.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pass@\uffa0host.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pass@\u3164host.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pass@\udb40\udc01host.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user:pass@\ud834\udd73host.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"us\ufeffer@host.example/p?x=1","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"us\u0085er@host.example/p?x=1","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"us\u180eer@host.example/p?x=1","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"us\u200ber@host.example/p?x=1","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"us\u200cer@host.example/p?x=1","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"us\u200der@host.example/p?x=1","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"us\u2060er@host.example/p?x=1","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"us\u00ader@host.example/p?x=1","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"us\u2028er@host.example/p?x=1","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"us\u00a0er@host.example/p?x=1","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"us\u3000er@host.example/p?x=1","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"us\u017fer@host.example/p?x=1","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"us\u212aer@host.example/p?x=1","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"us\ter@host.example/p?x=1","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"us\ner@host.example/p?x=1","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"us er@host.example/p?x=1","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"us\u000ber@host.example/p?x=1","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"us\u1680er@host.example/p?x=1","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"us\u034fer@host.example/p?x=1","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"us\u115fer@host.example/p?x=1","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"us\uffa0er@host.example/p?x=1","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"us\u3164er@host.example/p?x=1","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"us\udb40\udc01er@host.example/p?x=1","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"us\ud834\udd73er@host.example/p?x=1","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example:\ufeff8080/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example:\u00858080/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example:\u180e8080/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example:\u200b8080/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example:\u200c8080/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example:\u200d8080/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example:\u20608080/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example:\u00ad8080/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example:\u20288080/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example:\u00a08080/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example:\u30008080/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example:\u017f8080/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example:\u212a8080/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example:\t8080/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example:\n8080/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example: 8080/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example:\u000b8080/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example:\u16808080/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example:\u034f8080/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example:\u115f8080/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example:\uffa08080/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example:\u31648080/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example:\udb40\udc018080/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example:\ud834\udd738080/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example\ufeff:8080/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example\u0085:8080/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example\u180e:8080/p?token=x","tsUrl":"https://host.example\u180e:8080/p?token=x","tsSuggestable":false}
+{"input":"host.example\u200b:8080/p?token=x","tsUrl":"https://host.example\u200b:8080/p?token=x","tsSuggestable":false}
+{"input":"host.example\u200c:8080/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example\u200d:8080/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example\u2060:8080/p?token=x","tsUrl":"https://host.example\u2060:8080/p?token=x","tsSuggestable":false}
+{"input":"host.example\u00ad:8080/p?token=x","tsUrl":"https://host.example\u00ad:8080/p?token=x","tsSuggestable":false}
+{"input":"host.example\u2028:8080/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example\u00a0:8080/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example\u3000:8080/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example\u017f:8080/p?token=x","tsUrl":"https://host.example\u017f:8080/p?token=x","tsSuggestable":false}
+{"input":"host.example\u212a:8080/p?token=x","tsUrl":"https://host.example\u212a:8080/p?token=x","tsSuggestable":false}
+{"input":"host.example\t:8080/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example\n:8080/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example :8080/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example\u000b:8080/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example\u1680:8080/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example\u034f:8080/p?token=x","tsUrl":"https://host.example\u034f:8080/p?token=x","tsSuggestable":false}
+{"input":"host.example\u115f:8080/p?token=x","tsUrl":"https://host.example\u115f:8080/p?token=x","tsSuggestable":false}
+{"input":"host.example\uffa0:8080/p?token=x","tsUrl":"https://host.example\uffa0:8080/p?token=x","tsSuggestable":false}
+{"input":"host.example\u3164:8080/p?token=x","tsUrl":"https://host.example\u3164:8080/p?token=x","tsSuggestable":false}
+{"input":"host.example\udb40\udc01:8080/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example\ud834\udd73:8080/p?token=x","tsUrl":"https://host.example\ud834\udd73:8080/p?token=x","tsSuggestable":false}
+{"input":"localhost\ufeff:3000/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"localhost\u0085:3000/p?token=x","tsUrl":"https://www.google.com/search?q=localhost%C2%85%3A3000%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"localhost\u180e:3000/p?token=x","tsUrl":"http://localhost\u180e:3000/p?token=x","tsSuggestable":false}
+{"input":"localhost\u200b:3000/p?token=x","tsUrl":"http://localhost\u200b:3000/p?token=x","tsSuggestable":false}
+{"input":"localhost\u200c:3000/p?token=x","tsUrl":"https://www.google.com/search?q=localhost%E2%80%8C%3A3000%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"localhost\u200d:3000/p?token=x","tsUrl":"https://www.google.com/search?q=localhost%E2%80%8D%3A3000%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"localhost\u2060:3000/p?token=x","tsUrl":"http://localhost\u2060:3000/p?token=x","tsSuggestable":false}
+{"input":"localhost\u00ad:3000/p?token=x","tsUrl":"http://localhost\u00ad:3000/p?token=x","tsSuggestable":false}
+{"input":"localhost\u2028:3000/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"localhost\u00a0:3000/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"localhost\u3000:3000/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"localhost\u017f:3000/p?token=x","tsUrl":"https://www.google.com/search?q=localhost%C5%BF%3A3000%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust regex case folding flags this host with a port and path.","url":"about:blank"}}
+{"input":"localhost\u212a:3000/p?token=x","tsUrl":"https://www.google.com/search?q=localhost%E2%84%AA%3A3000%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust regex case folding flags this host with a port and path.","url":"about:blank"}}
+{"input":"localhost\t:3000/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"localhost\n:3000/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"localhost :3000/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"localhost\u000b:3000/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"localhost\u1680:3000/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"localhost\u034f:3000/p?token=x","tsUrl":"http://localhost\u034f:3000/p?token=x","tsSuggestable":false}
+{"input":"localhost\u115f:3000/p?token=x","tsUrl":"http://localhost\u115f:3000/p?token=x","tsSuggestable":false}
+{"input":"localhost\uffa0:3000/p?token=x","tsUrl":"http://localhost\uffa0:3000/p?token=x","tsSuggestable":false}
+{"input":"localhost\u3164:3000/p?token=x","tsUrl":"http://localhost\u3164:3000/p?token=x","tsSuggestable":false}
+{"input":"localhost\udb40\udc01:3000/p?token=x","tsUrl":"https://www.google.com/search?q=localhost%F3%A0%80%81%3A3000%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"localhost\ud834\udd73:3000/p?token=x","tsUrl":"http://localhost\ud834\udd73:3000/p?token=x","tsSuggestable":false}
+{"input":"\ufefflocalhost:3000/p?token=x","tsUrl":"http://localhost:3000/p?token=x","tsSuggestable":false}
+{"input":"\u0085localhost:3000/p?token=x","tsUrl":"https://www.google.com/search?q=%C2%85localhost%3A3000%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"\u180elocalhost:3000/p?token=x","tsUrl":"http://\u180elocalhost:3000/p?token=x","tsSuggestable":false}
+{"input":"\u200blocalhost:3000/p?token=x","tsUrl":"http://\u200blocalhost:3000/p?token=x","tsSuggestable":false}
+{"input":"\u200clocalhost:3000/p?token=x","tsUrl":"https://www.google.com/search?q=%E2%80%8Clocalhost%3A3000%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"\u200dlocalhost:3000/p?token=x","tsUrl":"https://www.google.com/search?q=%E2%80%8Dlocalhost%3A3000%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"\u2060localhost:3000/p?token=x","tsUrl":"http://\u2060localhost:3000/p?token=x","tsSuggestable":false}
+{"input":"\u00adlocalhost:3000/p?token=x","tsUrl":"http://\u00adlocalhost:3000/p?token=x","tsSuggestable":false}
+{"input":"\u2028localhost:3000/p?token=x","tsUrl":"http://localhost:3000/p?token=x","tsSuggestable":false}
+{"input":"\u00a0localhost:3000/p?token=x","tsUrl":"http://localhost:3000/p?token=x","tsSuggestable":false}
+{"input":"\u3000localhost:3000/p?token=x","tsUrl":"http://localhost:3000/p?token=x","tsSuggestable":false}
+{"input":"\u017flocalhost:3000/p?token=x","tsUrl":"https://www.google.com/search?q=%C5%BFlocalhost%3A3000%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust regex case folding flags this host with a port and path.","url":"about:blank"}}
+{"input":"\u212alocalhost:3000/p?token=x","tsUrl":"https://www.google.com/search?q=%E2%84%AAlocalhost%3A3000%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust regex case folding flags this host with a port and path.","url":"about:blank"}}
+{"input":"\tlocalhost:3000/p?token=x","tsUrl":"http://localhost:3000/p?token=x","tsSuggestable":false}
+{"input":"\nlocalhost:3000/p?token=x","tsUrl":"http://localhost:3000/p?token=x","tsSuggestable":false}
+{"input":" localhost:3000/p?token=x","tsUrl":"http://localhost:3000/p?token=x","tsSuggestable":false}
+{"input":"\u000blocalhost:3000/p?token=x","tsUrl":"http://localhost:3000/p?token=x","tsSuggestable":false}
+{"input":"\u1680localhost:3000/p?token=x","tsUrl":"http://localhost:3000/p?token=x","tsSuggestable":false}
+{"input":"\u034flocalhost:3000/p?token=x","tsUrl":"http://\u034flocalhost:3000/p?token=x","tsSuggestable":false}
+{"input":"\u115flocalhost:3000/p?token=x","tsUrl":"http://\u115flocalhost:3000/p?token=x","tsSuggestable":false}
+{"input":"\uffa0localhost:3000/p?token=x","tsUrl":"http://\uffa0localhost:3000/p?token=x","tsSuggestable":false}
+{"input":"\u3164localhost:3000/p?token=x","tsUrl":"http://\u3164localhost:3000/p?token=x","tsSuggestable":false}
+{"input":"\udb40\udc01localhost:3000/p?token=x","tsUrl":"https://www.google.com/search?q=%F3%A0%80%81localhost%3A3000%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"\ud834\udd73localhost:3000/p?token=x","tsUrl":"http://\ud834\udd73localhost:3000/p?token=x","tsSuggestable":false}
+{"input":"192.168.0.1\ufeff/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"192.168.0.1\u0085/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"192.168.0.1\u180e/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"192.168.0.1\u200b/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"192.168.0.1\u200c/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"192.168.0.1\u200d/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"192.168.0.1\u2060/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"192.168.0.1\u00ad/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"192.168.0.1\u2028/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"192.168.0.1\u00a0/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"192.168.0.1\u3000/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"192.168.0.1\u017f/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"192.168.0.1\u212a/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"192.168.0.1\t/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"192.168.0.1\n/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"192.168.0.1 /p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"192.168.0.1\u000b/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"192.168.0.1\u1680/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"192.168.0.1\u034f/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"192.168.0.1\u115f/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"192.168.0.1\uffa0/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"192.168.0.1\u3164/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"192.168.0.1\udb40\udc01/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"192.168.0.1\ud834\udd73/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\ufeff192.168.0.1/admin?token=x","tsUrl":"http://192.168.0.1/admin?token=x","tsSuggestable":false}
+{"input":"\u0085192.168.0.1/admin?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\u180e192.168.0.1/admin?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\u200b192.168.0.1/admin?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\u200c192.168.0.1/admin?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\u200d192.168.0.1/admin?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\u2060192.168.0.1/admin?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\u00ad192.168.0.1/admin?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\u2028192.168.0.1/admin?token=x","tsUrl":"http://192.168.0.1/admin?token=x","tsSuggestable":false}
+{"input":"\u00a0192.168.0.1/admin?token=x","tsUrl":"http://192.168.0.1/admin?token=x","tsSuggestable":false}
+{"input":"\u3000192.168.0.1/admin?token=x","tsUrl":"http://192.168.0.1/admin?token=x","tsSuggestable":false}
+{"input":"\u017f192.168.0.1/admin?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\u212a192.168.0.1/admin?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\t192.168.0.1/admin?token=x","tsUrl":"http://192.168.0.1/admin?token=x","tsSuggestable":false}
+{"input":"\n192.168.0.1/admin?token=x","tsUrl":"http://192.168.0.1/admin?token=x","tsSuggestable":false}
+{"input":" 192.168.0.1/admin?token=x","tsUrl":"http://192.168.0.1/admin?token=x","tsSuggestable":false}
+{"input":"\u000b192.168.0.1/admin?token=x","tsUrl":"http://192.168.0.1/admin?token=x","tsSuggestable":false}
+{"input":"\u1680192.168.0.1/admin?token=x","tsUrl":"http://192.168.0.1/admin?token=x","tsSuggestable":false}
+{"input":"\u034f192.168.0.1/admin?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\u115f192.168.0.1/admin?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\uffa0192.168.0.1/admin?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\u3164192.168.0.1/admin?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\udb40\udc01192.168.0.1/admin?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\ud834\udd73192.168.0.1/admin?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"192.168\ufeff.0.1/admin?token=x","tsUrl":"https://www.google.com/search?q=192.168%EF%BB%BF.0.1%2Fadmin%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"192.168\u0085.0.1/admin?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"192.168\u180e.0.1/admin?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"192.168\u200b.0.1/admin?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"192.168\u200c.0.1/admin?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"192.168\u200d.0.1/admin?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"192.168\u2060.0.1/admin?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"192.168\u00ad.0.1/admin?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"192.168\u2028.0.1/admin?token=x","tsUrl":"https://www.google.com/search?q=192.168%E2%80%A8.0.1%2Fadmin%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"192.168\u00a0.0.1/admin?token=x","tsUrl":"https://www.google.com/search?q=192.168%C2%A0.0.1%2Fadmin%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"192.168\u3000.0.1/admin?token=x","tsUrl":"https://www.google.com/search?q=192.168%E3%80%80.0.1%2Fadmin%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"192.168\u017f.0.1/admin?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"192.168\u212a.0.1/admin?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"192.168\t.0.1/admin?token=x","tsUrl":"https://www.google.com/search?q=192.168%09.0.1%2Fadmin%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"192.168\n.0.1/admin?token=x","tsUrl":"https://www.google.com/search?q=192.168%0A.0.1%2Fadmin%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"192.168 .0.1/admin?token=x","tsUrl":"https://www.google.com/search?q=192.168%20.0.1%2Fadmin%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"192.168\u000b.0.1/admin?token=x","tsUrl":"https://www.google.com/search?q=192.168%0B.0.1%2Fadmin%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"192.168\u1680.0.1/admin?token=x","tsUrl":"https://www.google.com/search?q=192.168%E1%9A%80.0.1%2Fadmin%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"192.168\u034f.0.1/admin?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"192.168\u115f.0.1/admin?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"192.168\uffa0.0.1/admin?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"192.168\u3164.0.1/admin?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"192.168\udb40\udc01.0.1/admin?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"192.168\ud834\udd73.0.1/admin?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\ufefffile:///home/u/secret","tsUrl":"file:///home/u/secret","tsSuggestable":false}
+{"input":"\u0085file:///home/u/secret","tsUrl":"https://www.google.com/search?q=%C2%85file%3A%2F%2F%2Fhome%2Fu%2Fsecret","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u180efile:///home/u/secret","tsUrl":"https://www.google.com/search?q=%E1%A0%8Efile%3A%2F%2F%2Fhome%2Fu%2Fsecret","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u200bfile:///home/u/secret","tsUrl":"https://www.google.com/search?q=%E2%80%8Bfile%3A%2F%2F%2Fhome%2Fu%2Fsecret","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u200cfile:///home/u/secret","tsUrl":"https://www.google.com/search?q=%E2%80%8Cfile%3A%2F%2F%2Fhome%2Fu%2Fsecret","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u200dfile:///home/u/secret","tsUrl":"https://www.google.com/search?q=%E2%80%8Dfile%3A%2F%2F%2Fhome%2Fu%2Fsecret","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u2060file:///home/u/secret","tsUrl":"https://www.google.com/search?q=%E2%81%A0file%3A%2F%2F%2Fhome%2Fu%2Fsecret","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u00adfile:///home/u/secret","tsUrl":"https://www.google.com/search?q=%C2%ADfile%3A%2F%2F%2Fhome%2Fu%2Fsecret","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u2028file:///home/u/secret","tsUrl":"file:///home/u/secret","tsSuggestable":false}
+{"input":"\u00a0file:///home/u/secret","tsUrl":"file:///home/u/secret","tsSuggestable":false}
+{"input":"\u3000file:///home/u/secret","tsUrl":"file:///home/u/secret","tsSuggestable":false}
+{"input":"\u017ffile:///home/u/secret","tsUrl":"https://www.google.com/search?q=%C5%BFfile%3A%2F%2F%2Fhome%2Fu%2Fsecret","tsSuggestable":false,"rust":{"reason":"Rust regex case folding recognizes this scheme spelling.","url":"\u017ffile:///home/u/secret"}}
+{"input":"\u212afile:///home/u/secret","tsUrl":"https://www.google.com/search?q=%E2%84%AAfile%3A%2F%2F%2Fhome%2Fu%2Fsecret","tsSuggestable":false,"rust":{"reason":"Rust regex case folding recognizes this scheme spelling.","url":"\u212afile:///home/u/secret"}}
+{"input":"\tfile:///home/u/secret","tsUrl":"file:///home/u/secret","tsSuggestable":false}
+{"input":"\nfile:///home/u/secret","tsUrl":"file:///home/u/secret","tsSuggestable":false}
+{"input":" file:///home/u/secret","tsUrl":"file:///home/u/secret","tsSuggestable":false}
+{"input":"\u000bfile:///home/u/secret","tsUrl":"file:///home/u/secret","tsSuggestable":false}
+{"input":"\u1680file:///home/u/secret","tsUrl":"file:///home/u/secret","tsSuggestable":false}
+{"input":"\u034ffile:///home/u/secret","tsUrl":"https://www.google.com/search?q=%CD%8Ffile%3A%2F%2F%2Fhome%2Fu%2Fsecret","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u115ffile:///home/u/secret","tsUrl":"https://www.google.com/search?q=%E1%85%9Ffile%3A%2F%2F%2Fhome%2Fu%2Fsecret","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\uffa0file:///home/u/secret","tsUrl":"https://www.google.com/search?q=%EF%BE%A0file%3A%2F%2F%2Fhome%2Fu%2Fsecret","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u3164file:///home/u/secret","tsUrl":"https://www.google.com/search?q=%E3%85%A4file%3A%2F%2F%2Fhome%2Fu%2Fsecret","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\udb40\udc01file:///home/u/secret","tsUrl":"https://www.google.com/search?q=%F3%A0%80%81file%3A%2F%2F%2Fhome%2Fu%2Fsecret","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\ud834\udd73file:///home/u/secret","tsUrl":"https://www.google.com/search?q=%F0%9D%85%B3file%3A%2F%2F%2Fhome%2Fu%2Fsecret","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\ufeff/home/u/secret","tsUrl":"https://www.google.com/search?q=%2Fhome%2Fu%2Fsecret","tsSuggestable":false}
+{"input":"\u0085/home/u/secret","tsUrl":"https://www.google.com/search?q=%C2%85%2Fhome%2Fu%2Fsecret","tsSuggestable":false}
+{"input":"\u180e/home/u/secret","tsUrl":"https://www.google.com/search?q=%E1%A0%8E%2Fhome%2Fu%2Fsecret","tsSuggestable":false}
+{"input":"\u200b/home/u/secret","tsUrl":"https://www.google.com/search?q=%E2%80%8B%2Fhome%2Fu%2Fsecret","tsSuggestable":false}
+{"input":"\u200c/home/u/secret","tsUrl":"https://www.google.com/search?q=%E2%80%8C%2Fhome%2Fu%2Fsecret","tsSuggestable":false}
+{"input":"\u200d/home/u/secret","tsUrl":"https://www.google.com/search?q=%E2%80%8D%2Fhome%2Fu%2Fsecret","tsSuggestable":false}
+{"input":"\u2060/home/u/secret","tsUrl":"https://www.google.com/search?q=%E2%81%A0%2Fhome%2Fu%2Fsecret","tsSuggestable":false}
+{"input":"\u00ad/home/u/secret","tsUrl":"https://www.google.com/search?q=%C2%AD%2Fhome%2Fu%2Fsecret","tsSuggestable":false}
+{"input":"\u2028/home/u/secret","tsUrl":"https://www.google.com/search?q=%2Fhome%2Fu%2Fsecret","tsSuggestable":false}
+{"input":"\u00a0/home/u/secret","tsUrl":"https://www.google.com/search?q=%2Fhome%2Fu%2Fsecret","tsSuggestable":false}
+{"input":"\u3000/home/u/secret","tsUrl":"https://www.google.com/search?q=%2Fhome%2Fu%2Fsecret","tsSuggestable":false}
+{"input":"\u017f/home/u/secret","tsUrl":"https://www.google.com/search?q=%C5%BF%2Fhome%2Fu%2Fsecret","tsSuggestable":false}
+{"input":"\u212a/home/u/secret","tsUrl":"https://www.google.com/search?q=%E2%84%AA%2Fhome%2Fu%2Fsecret","tsSuggestable":false}
+{"input":"\t/home/u/secret","tsUrl":"https://www.google.com/search?q=%2Fhome%2Fu%2Fsecret","tsSuggestable":false}
+{"input":"\n/home/u/secret","tsUrl":"https://www.google.com/search?q=%2Fhome%2Fu%2Fsecret","tsSuggestable":false}
+{"input":" /home/u/secret","tsUrl":"https://www.google.com/search?q=%2Fhome%2Fu%2Fsecret","tsSuggestable":false}
+{"input":"\u000b/home/u/secret","tsUrl":"https://www.google.com/search?q=%2Fhome%2Fu%2Fsecret","tsSuggestable":false}
+{"input":"\u1680/home/u/secret","tsUrl":"https://www.google.com/search?q=%2Fhome%2Fu%2Fsecret","tsSuggestable":false}
+{"input":"\u034f/home/u/secret","tsUrl":"https://www.google.com/search?q=%CD%8F%2Fhome%2Fu%2Fsecret","tsSuggestable":false}
+{"input":"\u115f/home/u/secret","tsUrl":"https://www.google.com/search?q=%E1%85%9F%2Fhome%2Fu%2Fsecret","tsSuggestable":false}
+{"input":"\uffa0/home/u/secret","tsUrl":"https://www.google.com/search?q=%EF%BE%A0%2Fhome%2Fu%2Fsecret","tsSuggestable":false}
+{"input":"\u3164/home/u/secret","tsUrl":"https://www.google.com/search?q=%E3%85%A4%2Fhome%2Fu%2Fsecret","tsSuggestable":false}
+{"input":"\udb40\udc01/home/u/secret","tsUrl":"https://www.google.com/search?q=%F3%A0%80%81%2Fhome%2Fu%2Fsecret","tsSuggestable":false}
+{"input":"\ud834\udd73/home/u/secret","tsUrl":"https://www.google.com/search?q=%F0%9D%85%B3%2Fhome%2Fu%2Fsecret","tsSuggestable":false}
+{"input":"\ufeffhttp://intranet/p?token=x","tsUrl":"http://intranet/p?token=x","tsSuggestable":false}
+{"input":"\u0085http://intranet/p?token=x","tsUrl":"https://www.google.com/search?q=%C2%85http%3A%2F%2Fintranet%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u180ehttp://intranet/p?token=x","tsUrl":"https://www.google.com/search?q=%E1%A0%8Ehttp%3A%2F%2Fintranet%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u200bhttp://intranet/p?token=x","tsUrl":"https://www.google.com/search?q=%E2%80%8Bhttp%3A%2F%2Fintranet%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u200chttp://intranet/p?token=x","tsUrl":"https://www.google.com/search?q=%E2%80%8Chttp%3A%2F%2Fintranet%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u200dhttp://intranet/p?token=x","tsUrl":"https://www.google.com/search?q=%E2%80%8Dhttp%3A%2F%2Fintranet%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u2060http://intranet/p?token=x","tsUrl":"https://www.google.com/search?q=%E2%81%A0http%3A%2F%2Fintranet%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u00adhttp://intranet/p?token=x","tsUrl":"https://www.google.com/search?q=%C2%ADhttp%3A%2F%2Fintranet%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u2028http://intranet/p?token=x","tsUrl":"http://intranet/p?token=x","tsSuggestable":false}
+{"input":"\u00a0http://intranet/p?token=x","tsUrl":"http://intranet/p?token=x","tsSuggestable":false}
+{"input":"\u3000http://intranet/p?token=x","tsUrl":"http://intranet/p?token=x","tsSuggestable":false}
+{"input":"\u017fhttp://intranet/p?token=x","tsUrl":"https://www.google.com/search?q=%C5%BFhttp%3A%2F%2Fintranet%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust regex case folding recognizes this scheme spelling.","url":"\u017fhttp://intranet/p?token=x"}}
+{"input":"\u212ahttp://intranet/p?token=x","tsUrl":"https://www.google.com/search?q=%E2%84%AAhttp%3A%2F%2Fintranet%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust regex case folding recognizes this scheme spelling.","url":"\u212ahttp://intranet/p?token=x"}}
+{"input":"\thttp://intranet/p?token=x","tsUrl":"http://intranet/p?token=x","tsSuggestable":false}
+{"input":"\nhttp://intranet/p?token=x","tsUrl":"http://intranet/p?token=x","tsSuggestable":false}
+{"input":" http://intranet/p?token=x","tsUrl":"http://intranet/p?token=x","tsSuggestable":false}
+{"input":"\u000bhttp://intranet/p?token=x","tsUrl":"http://intranet/p?token=x","tsSuggestable":false}
+{"input":"\u1680http://intranet/p?token=x","tsUrl":"http://intranet/p?token=x","tsSuggestable":false}
+{"input":"\u034fhttp://intranet/p?token=x","tsUrl":"https://www.google.com/search?q=%CD%8Fhttp%3A%2F%2Fintranet%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u115fhttp://intranet/p?token=x","tsUrl":"https://www.google.com/search?q=%E1%85%9Fhttp%3A%2F%2Fintranet%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\uffa0http://intranet/p?token=x","tsUrl":"https://www.google.com/search?q=%EF%BE%A0http%3A%2F%2Fintranet%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u3164http://intranet/p?token=x","tsUrl":"https://www.google.com/search?q=%E3%85%A4http%3A%2F%2Fintranet%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\udb40\udc01http://intranet/p?token=x","tsUrl":"https://www.google.com/search?q=%F3%A0%80%81http%3A%2F%2Fintranet%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\ud834\udd73http://intranet/p?token=x","tsUrl":"https://www.google.com/search?q=%F0%9D%85%B3http%3A%2F%2Fintranet%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"http://\ufeff/p?token=x","tsUrl":"http://\ufeff/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"http://\u0085/p?token=x","tsUrl":"http://\u0085/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"http://\u180e/p?token=x","tsUrl":"http://\u180e/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"http://\u200b/p?token=x","tsUrl":"http://\u200b/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"http://\u200c/p?token=x","tsUrl":"http://\u200c/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"http://\u200d/p?token=x","tsUrl":"http://\u200d/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"http://\u2060/p?token=x","tsUrl":"http://\u2060/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"http://\u00ad/p?token=x","tsUrl":"http://\u00ad/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"http://\u2028/p?token=x","tsUrl":"http://\u2028/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"http://\u00a0/p?token=x","tsUrl":"http://\u00a0/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"http://\u3000/p?token=x","tsUrl":"http://\u3000/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"http://\u017f/p?token=x","tsUrl":"http://\u017f/p?token=x","tsSuggestable":false}
+{"input":"http://\u212a/p?token=x","tsUrl":"http://\u212a/p?token=x","tsSuggestable":false}
+{"input":"http://\t/p?token=x","tsUrl":"http:///p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"http://\n/p?token=x","tsUrl":"http:///p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"http:// /p?token=x","tsUrl":"http:// /p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"http://\u000b/p?token=x","tsUrl":"http://\u000b/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"http://\u1680/p?token=x","tsUrl":"http://\u1680/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"http://\u034f/p?token=x","tsUrl":"http://\u034f/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"http://\u115f/p?token=x","tsUrl":"http://\u115f/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"http://\uffa0/p?token=x","tsUrl":"http://\uffa0/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"http://\u3164/p?token=x","tsUrl":"http://\u3164/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"http://\udb40\udc01/p?token=x","tsUrl":"http://\udb40\udc01/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"http://\ud834\udd73/p?token=x","tsUrl":"http://\ud834\udd73/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"\ufeffftp://h.example/p?token=x","tsUrl":"ftp://h.example/p?token=x","tsSuggestable":false}
+{"input":"\u0085ftp://h.example/p?token=x","tsUrl":"https://www.google.com/search?q=%C2%85ftp%3A%2F%2Fh.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u180eftp://h.example/p?token=x","tsUrl":"https://www.google.com/search?q=%E1%A0%8Eftp%3A%2F%2Fh.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u200bftp://h.example/p?token=x","tsUrl":"https://www.google.com/search?q=%E2%80%8Bftp%3A%2F%2Fh.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u200cftp://h.example/p?token=x","tsUrl":"https://www.google.com/search?q=%E2%80%8Cftp%3A%2F%2Fh.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u200dftp://h.example/p?token=x","tsUrl":"https://www.google.com/search?q=%E2%80%8Dftp%3A%2F%2Fh.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u2060ftp://h.example/p?token=x","tsUrl":"https://www.google.com/search?q=%E2%81%A0ftp%3A%2F%2Fh.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u00adftp://h.example/p?token=x","tsUrl":"https://www.google.com/search?q=%C2%ADftp%3A%2F%2Fh.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u2028ftp://h.example/p?token=x","tsUrl":"ftp://h.example/p?token=x","tsSuggestable":false}
+{"input":"\u00a0ftp://h.example/p?token=x","tsUrl":"ftp://h.example/p?token=x","tsSuggestable":false}
+{"input":"\u3000ftp://h.example/p?token=x","tsUrl":"ftp://h.example/p?token=x","tsSuggestable":false}
+{"input":"\u017fftp://h.example/p?token=x","tsUrl":"https://www.google.com/search?q=%C5%BFftp%3A%2F%2Fh.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust regex case folding recognizes this scheme spelling.","url":"\u017fftp://h.example/p?token=x"}}
+{"input":"\u212aftp://h.example/p?token=x","tsUrl":"https://www.google.com/search?q=%E2%84%AAftp%3A%2F%2Fh.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust regex case folding recognizes this scheme spelling.","url":"\u212aftp://h.example/p?token=x"}}
+{"input":"\tftp://h.example/p?token=x","tsUrl":"ftp://h.example/p?token=x","tsSuggestable":false}
+{"input":"\nftp://h.example/p?token=x","tsUrl":"ftp://h.example/p?token=x","tsSuggestable":false}
+{"input":" ftp://h.example/p?token=x","tsUrl":"ftp://h.example/p?token=x","tsSuggestable":false}
+{"input":"\u000bftp://h.example/p?token=x","tsUrl":"ftp://h.example/p?token=x","tsSuggestable":false}
+{"input":"\u1680ftp://h.example/p?token=x","tsUrl":"ftp://h.example/p?token=x","tsSuggestable":false}
+{"input":"\u034fftp://h.example/p?token=x","tsUrl":"https://www.google.com/search?q=%CD%8Fftp%3A%2F%2Fh.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u115fftp://h.example/p?token=x","tsUrl":"https://www.google.com/search?q=%E1%85%9Fftp%3A%2F%2Fh.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\uffa0ftp://h.example/p?token=x","tsUrl":"https://www.google.com/search?q=%EF%BE%A0ftp%3A%2F%2Fh.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u3164ftp://h.example/p?token=x","tsUrl":"https://www.google.com/search?q=%E3%85%A4ftp%3A%2F%2Fh.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\udb40\udc01ftp://h.example/p?token=x","tsUrl":"https://www.google.com/search?q=%F3%A0%80%81ftp%3A%2F%2Fh.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\ud834\udd73ftp://h.example/p?token=x","tsUrl":"https://www.google.com/search?q=%F0%9D%85%B3ftp%3A%2F%2Fh.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\ufeffmailto:a@b.example","tsUrl":"mailto:a@b.example","tsSuggestable":false}
+{"input":"\u0085mailto:a@b.example","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\u180emailto:a@b.example","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\u200bmailto:a@b.example","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\u200cmailto:a@b.example","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\u200dmailto:a@b.example","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\u2060mailto:a@b.example","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\u00admailto:a@b.example","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\u2028mailto:a@b.example","tsUrl":"mailto:a@b.example","tsSuggestable":false}
+{"input":"\u00a0mailto:a@b.example","tsUrl":"mailto:a@b.example","tsSuggestable":false}
+{"input":"\u3000mailto:a@b.example","tsUrl":"mailto:a@b.example","tsSuggestable":false}
+{"input":"\u017fmailto:a@b.example","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\u212amailto:a@b.example","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\tmailto:a@b.example","tsUrl":"mailto:a@b.example","tsSuggestable":false}
+{"input":"\nmailto:a@b.example","tsUrl":"mailto:a@b.example","tsSuggestable":false}
+{"input":" mailto:a@b.example","tsUrl":"mailto:a@b.example","tsSuggestable":false}
+{"input":"\u000bmailto:a@b.example","tsUrl":"mailto:a@b.example","tsSuggestable":false}
+{"input":"\u1680mailto:a@b.example","tsUrl":"mailto:a@b.example","tsSuggestable":false}
+{"input":"\u034fmailto:a@b.example","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\u115fmailto:a@b.example","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\uffa0mailto:a@b.example","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\u3164mailto:a@b.example","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\udb40\udc01mailto:a@b.example","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\ud834\udd73mailto:a@b.example","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\ufeff\ufeffhttps://host.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":"\u0085\u0085https://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=%C2%85%C2%85https%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u180e\u180ehttps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=%E1%A0%8E%E1%A0%8Ehttps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u200b\u200bhttps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=%E2%80%8B%E2%80%8Bhttps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u200c\u200chttps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=%E2%80%8C%E2%80%8Chttps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u200d\u200dhttps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=%E2%80%8D%E2%80%8Dhttps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u2060\u2060https://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=%E2%81%A0%E2%81%A0https%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u00ad\u00adhttps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=%C2%AD%C2%ADhttps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u2028\u2028https://host.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":"\u00a0\u00a0https://host.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":"\u3000\u3000https://host.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":"\u017f\u017fhttps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=%C5%BF%C5%BFhttps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust regex case folding recognizes this scheme spelling.","url":"\u017f\u017fhttps://host.example/p?token=x"}}
+{"input":"\u212a\u212ahttps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=%E2%84%AA%E2%84%AAhttps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust regex case folding recognizes this scheme spelling.","url":"\u212a\u212ahttps://host.example/p?token=x"}}
+{"input":"\t\thttps://host.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":"\n\nhttps://host.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":"  https://host.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":"\u000b\u000bhttps://host.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":"\u1680\u1680https://host.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":"\u034f\u034fhttps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=%CD%8F%CD%8Fhttps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u115f\u115fhttps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=%E1%85%9F%E1%85%9Fhttps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\uffa0\uffa0https://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=%EF%BE%A0%EF%BE%A0https%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u3164\u3164https://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=%E3%85%A4%E3%85%A4https%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\udb40\udc01\udb40\udc01https://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=%F3%A0%80%81%F3%A0%80%81https%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\ud834\udd73\ud834\udd73https://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=%F0%9D%85%B3%F0%9D%85%B3https%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\ufeffHTTPS://HOST.EXAMPLE/P?TOKEN=X","tsUrl":"HTTPS://HOST.EXAMPLE/P?TOKEN=X","tsSuggestable":false}
+{"input":"\u0085HTTPS://HOST.EXAMPLE/P?TOKEN=X","tsUrl":"https://www.google.com/search?q=%C2%85HTTPS%3A%2F%2FHOST.EXAMPLE%2FP%3FTOKEN%3DX","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u180eHTTPS://HOST.EXAMPLE/P?TOKEN=X","tsUrl":"https://www.google.com/search?q=%E1%A0%8EHTTPS%3A%2F%2FHOST.EXAMPLE%2FP%3FTOKEN%3DX","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u200bHTTPS://HOST.EXAMPLE/P?TOKEN=X","tsUrl":"https://www.google.com/search?q=%E2%80%8BHTTPS%3A%2F%2FHOST.EXAMPLE%2FP%3FTOKEN%3DX","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u200cHTTPS://HOST.EXAMPLE/P?TOKEN=X","tsUrl":"https://www.google.com/search?q=%E2%80%8CHTTPS%3A%2F%2FHOST.EXAMPLE%2FP%3FTOKEN%3DX","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u200dHTTPS://HOST.EXAMPLE/P?TOKEN=X","tsUrl":"https://www.google.com/search?q=%E2%80%8DHTTPS%3A%2F%2FHOST.EXAMPLE%2FP%3FTOKEN%3DX","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u2060HTTPS://HOST.EXAMPLE/P?TOKEN=X","tsUrl":"https://www.google.com/search?q=%E2%81%A0HTTPS%3A%2F%2FHOST.EXAMPLE%2FP%3FTOKEN%3DX","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u00adHTTPS://HOST.EXAMPLE/P?TOKEN=X","tsUrl":"https://www.google.com/search?q=%C2%ADHTTPS%3A%2F%2FHOST.EXAMPLE%2FP%3FTOKEN%3DX","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u2028HTTPS://HOST.EXAMPLE/P?TOKEN=X","tsUrl":"HTTPS://HOST.EXAMPLE/P?TOKEN=X","tsSuggestable":false}
+{"input":"\u00a0HTTPS://HOST.EXAMPLE/P?TOKEN=X","tsUrl":"HTTPS://HOST.EXAMPLE/P?TOKEN=X","tsSuggestable":false}
+{"input":"\u3000HTTPS://HOST.EXAMPLE/P?TOKEN=X","tsUrl":"HTTPS://HOST.EXAMPLE/P?TOKEN=X","tsSuggestable":false}
+{"input":"\u017fHTTPS://HOST.EXAMPLE/P?TOKEN=X","tsUrl":"https://www.google.com/search?q=%C5%BFHTTPS%3A%2F%2FHOST.EXAMPLE%2FP%3FTOKEN%3DX","tsSuggestable":false,"rust":{"reason":"Rust regex case folding recognizes this scheme spelling.","url":"\u017fHTTPS://HOST.EXAMPLE/P?TOKEN=X"}}
+{"input":"\u212aHTTPS://HOST.EXAMPLE/P?TOKEN=X","tsUrl":"https://www.google.com/search?q=%E2%84%AAHTTPS%3A%2F%2FHOST.EXAMPLE%2FP%3FTOKEN%3DX","tsSuggestable":false,"rust":{"reason":"Rust regex case folding recognizes this scheme spelling.","url":"\u212aHTTPS://HOST.EXAMPLE/P?TOKEN=X"}}
+{"input":"\tHTTPS://HOST.EXAMPLE/P?TOKEN=X","tsUrl":"HTTPS://HOST.EXAMPLE/P?TOKEN=X","tsSuggestable":false}
+{"input":"\nHTTPS://HOST.EXAMPLE/P?TOKEN=X","tsUrl":"HTTPS://HOST.EXAMPLE/P?TOKEN=X","tsSuggestable":false}
+{"input":" HTTPS://HOST.EXAMPLE/P?TOKEN=X","tsUrl":"HTTPS://HOST.EXAMPLE/P?TOKEN=X","tsSuggestable":false}
+{"input":"\u000bHTTPS://HOST.EXAMPLE/P?TOKEN=X","tsUrl":"HTTPS://HOST.EXAMPLE/P?TOKEN=X","tsSuggestable":false}
+{"input":"\u1680HTTPS://HOST.EXAMPLE/P?TOKEN=X","tsUrl":"HTTPS://HOST.EXAMPLE/P?TOKEN=X","tsSuggestable":false}
+{"input":"\u034fHTTPS://HOST.EXAMPLE/P?TOKEN=X","tsUrl":"https://www.google.com/search?q=%CD%8FHTTPS%3A%2F%2FHOST.EXAMPLE%2FP%3FTOKEN%3DX","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u115fHTTPS://HOST.EXAMPLE/P?TOKEN=X","tsUrl":"https://www.google.com/search?q=%E1%85%9FHTTPS%3A%2F%2FHOST.EXAMPLE%2FP%3FTOKEN%3DX","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\uffa0HTTPS://HOST.EXAMPLE/P?TOKEN=X","tsUrl":"https://www.google.com/search?q=%EF%BE%A0HTTPS%3A%2F%2FHOST.EXAMPLE%2FP%3FTOKEN%3DX","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u3164HTTPS://HOST.EXAMPLE/P?TOKEN=X","tsUrl":"https://www.google.com/search?q=%E3%85%A4HTTPS%3A%2F%2FHOST.EXAMPLE%2FP%3FTOKEN%3DX","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\udb40\udc01HTTPS://HOST.EXAMPLE/P?TOKEN=X","tsUrl":"https://www.google.com/search?q=%F3%A0%80%81HTTPS%3A%2F%2FHOST.EXAMPLE%2FP%3FTOKEN%3DX","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\ud834\udd73HTTPS://HOST.EXAMPLE/P?TOKEN=X","tsUrl":"https://www.google.com/search?q=%F0%9D%85%B3HTTPS%3A%2F%2FHOST.EXAMPLE%2FP%3FTOKEN%3DX","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"https://host.example/p?to\ufeffken=x","tsUrl":"https://host.example/p?to\ufeffken=x","tsSuggestable":false}
+{"input":"https://host.example/p?to\u0085ken=x","tsUrl":"https://host.example/p?to\u0085ken=x","tsSuggestable":false}
+{"input":"https://host.example/p?to\u180eken=x","tsUrl":"https://host.example/p?to\u180eken=x","tsSuggestable":false}
+{"input":"https://host.example/p?to\u200bken=x","tsUrl":"https://host.example/p?to\u200bken=x","tsSuggestable":false}
+{"input":"https://host.example/p?to\u200cken=x","tsUrl":"https://host.example/p?to\u200cken=x","tsSuggestable":false}
+{"input":"https://host.example/p?to\u200dken=x","tsUrl":"https://host.example/p?to\u200dken=x","tsSuggestable":false}
+{"input":"https://host.example/p?to\u2060ken=x","tsUrl":"https://host.example/p?to\u2060ken=x","tsSuggestable":false}
+{"input":"https://host.example/p?to\u00adken=x","tsUrl":"https://host.example/p?to\u00adken=x","tsSuggestable":false}
+{"input":"https://host.example/p?to\u2028ken=x","tsUrl":"https://host.example/p?to\u2028ken=x","tsSuggestable":false}
+{"input":"https://host.example/p?to\u00a0ken=x","tsUrl":"https://host.example/p?to\u00a0ken=x","tsSuggestable":false}
+{"input":"https://host.example/p?to\u3000ken=x","tsUrl":"https://host.example/p?to\u3000ken=x","tsSuggestable":false}
+{"input":"https://host.example/p?to\u017fken=x","tsUrl":"https://host.example/p?to\u017fken=x","tsSuggestable":false}
+{"input":"https://host.example/p?to\u212aken=x","tsUrl":"https://host.example/p?to\u212aken=x","tsSuggestable":false}
+{"input":"https://host.example/p?to\tken=x","tsUrl":"https://host.example/p?to%09ken=x","tsSuggestable":false}
+{"input":"https://host.example/p?to\nken=x","tsUrl":"https://host.example/p?to%0Aken=x","tsSuggestable":false}
+{"input":"https://host.example/p?to ken=x","tsUrl":"https://host.example/p?to ken=x","tsSuggestable":false}
+{"input":"https://host.example/p?to\u000bken=x","tsUrl":"https://host.example/p?to\u000bken=x","tsSuggestable":false}
+{"input":"https://host.example/p?to\u1680ken=x","tsUrl":"https://host.example/p?to\u1680ken=x","tsSuggestable":false}
+{"input":"https://host.example/p?to\u034fken=x","tsUrl":"https://host.example/p?to\u034fken=x","tsSuggestable":false}
+{"input":"https://host.example/p?to\u115fken=x","tsUrl":"https://host.example/p?to\u115fken=x","tsSuggestable":false}
+{"input":"https://host.example/p?to\uffa0ken=x","tsUrl":"https://host.example/p?to\uffa0ken=x","tsSuggestable":false}
+{"input":"https://host.example/p?to\u3164ken=x","tsUrl":"https://host.example/p?to\u3164ken=x","tsSuggestable":false}
+{"input":"https://host.example/p?to\udb40\udc01ken=x","tsUrl":"https://host.example/p?to\udb40\udc01ken=x","tsSuggestable":false}
+{"input":"https://host.example/p?to\ud834\udd73ken=x","tsUrl":"https://host.example/p?to\ud834\udd73ken=x","tsSuggestable":false}
+{"input":"rust\ufeff1.2.3 release notes","tsUrl":"https://www.google.com/search?q=rust%EF%BB%BF1.2.3%20release%20notes","tsSuggestable":true}
+{"input":"rust\u00851.2.3 release notes","tsUrl":"https://www.google.com/search?q=rust%C2%851.2.3%20release%20notes","tsSuggestable":true}
+{"input":"rust\u180e1.2.3 release notes","tsUrl":"https://www.google.com/search?q=rust%E1%A0%8E1.2.3%20release%20notes","tsSuggestable":true}
+{"input":"rust\u200b1.2.3 release notes","tsUrl":"https://www.google.com/search?q=rust%E2%80%8B1.2.3%20release%20notes","tsSuggestable":true}
+{"input":"rust\u200c1.2.3 release notes","tsUrl":"https://www.google.com/search?q=rust%E2%80%8C1.2.3%20release%20notes","tsSuggestable":true}
+{"input":"rust\u200d1.2.3 release notes","tsUrl":"https://www.google.com/search?q=rust%E2%80%8D1.2.3%20release%20notes","tsSuggestable":true}
+{"input":"rust\u20601.2.3 release notes","tsUrl":"https://www.google.com/search?q=rust%E2%81%A01.2.3%20release%20notes","tsSuggestable":true}
+{"input":"rust\u00ad1.2.3 release notes","tsUrl":"https://www.google.com/search?q=rust%C2%AD1.2.3%20release%20notes","tsSuggestable":true}
+{"input":"rust\u20281.2.3 release notes","tsUrl":"https://www.google.com/search?q=rust%E2%80%A81.2.3%20release%20notes","tsSuggestable":true}
+{"input":"rust\u00a01.2.3 release notes","tsUrl":"https://www.google.com/search?q=rust%C2%A01.2.3%20release%20notes","tsSuggestable":true}
+{"input":"rust\u30001.2.3 release notes","tsUrl":"https://www.google.com/search?q=rust%E3%80%801.2.3%20release%20notes","tsSuggestable":true}
+{"input":"rust\u017f1.2.3 release notes","tsUrl":"https://www.google.com/search?q=rust%C5%BF1.2.3%20release%20notes","tsSuggestable":true}
+{"input":"rust\u212a1.2.3 release notes","tsUrl":"https://www.google.com/search?q=rust%E2%84%AA1.2.3%20release%20notes","tsSuggestable":true}
+{"input":"rust\t1.2.3 release notes","tsUrl":"https://www.google.com/search?q=rust%091.2.3%20release%20notes","tsSuggestable":true}
+{"input":"rust\n1.2.3 release notes","tsUrl":"https://www.google.com/search?q=rust%0A1.2.3%20release%20notes","tsSuggestable":true}
+{"input":"rust 1.2.3 release notes","tsUrl":"https://www.google.com/search?q=rust%201.2.3%20release%20notes","tsSuggestable":true}
+{"input":"rust\u000b1.2.3 release notes","tsUrl":"https://www.google.com/search?q=rust%0B1.2.3%20release%20notes","tsSuggestable":true}
+{"input":"rust\u16801.2.3 release notes","tsUrl":"https://www.google.com/search?q=rust%E1%9A%801.2.3%20release%20notes","tsSuggestable":true}
+{"input":"rust\u034f1.2.3 release notes","tsUrl":"https://www.google.com/search?q=rust%CD%8F1.2.3%20release%20notes","tsSuggestable":true}
+{"input":"rust\u115f1.2.3 release notes","tsUrl":"https://www.google.com/search?q=rust%E1%85%9F1.2.3%20release%20notes","tsSuggestable":true}
+{"input":"rust\uffa01.2.3 release notes","tsUrl":"https://www.google.com/search?q=rust%EF%BE%A01.2.3%20release%20notes","tsSuggestable":true}
+{"input":"rust\u31641.2.3 release notes","tsUrl":"https://www.google.com/search?q=rust%E3%85%A41.2.3%20release%20notes","tsSuggestable":true}
+{"input":"rust\udb40\udc011.2.3 release notes","tsUrl":"https://www.google.com/search?q=rust%F3%A0%80%811.2.3%20release%20notes","tsSuggestable":true}
+{"input":"rust\ud834\udd731.2.3 release notes","tsUrl":"https://www.google.com/search?q=rust%F0%9D%85%B31.2.3%20release%20notes","tsSuggestable":true}
+{"input":"rust 1.2.3 release notes\ufeff","tsUrl":"https://www.google.com/search?q=rust%201.2.3%20release%20notes","tsSuggestable":true}
+{"input":"rust 1.2.3 release notes\u0085","tsUrl":"https://www.google.com/search?q=rust%201.2.3%20release%20notes%C2%85","tsSuggestable":true}
+{"input":"rust 1.2.3 release notes\u180e","tsUrl":"https://www.google.com/search?q=rust%201.2.3%20release%20notes%E1%A0%8E","tsSuggestable":true}
+{"input":"rust 1.2.3 release notes\u200b","tsUrl":"https://www.google.com/search?q=rust%201.2.3%20release%20notes%E2%80%8B","tsSuggestable":true}
+{"input":"rust 1.2.3 release notes\u200c","tsUrl":"https://www.google.com/search?q=rust%201.2.3%20release%20notes%E2%80%8C","tsSuggestable":true}
+{"input":"rust 1.2.3 release notes\u200d","tsUrl":"https://www.google.com/search?q=rust%201.2.3%20release%20notes%E2%80%8D","tsSuggestable":true}
+{"input":"rust 1.2.3 release notes\u2060","tsUrl":"https://www.google.com/search?q=rust%201.2.3%20release%20notes%E2%81%A0","tsSuggestable":true}
+{"input":"rust 1.2.3 release notes\u00ad","tsUrl":"https://www.google.com/search?q=rust%201.2.3%20release%20notes%C2%AD","tsSuggestable":true}
+{"input":"rust 1.2.3 release notes\u2028","tsUrl":"https://www.google.com/search?q=rust%201.2.3%20release%20notes","tsSuggestable":true}
+{"input":"rust 1.2.3 release notes\u00a0","tsUrl":"https://www.google.com/search?q=rust%201.2.3%20release%20notes","tsSuggestable":true}
+{"input":"rust 1.2.3 release notes\u3000","tsUrl":"https://www.google.com/search?q=rust%201.2.3%20release%20notes","tsSuggestable":true}
+{"input":"rust 1.2.3 release notes\u017f","tsUrl":"https://www.google.com/search?q=rust%201.2.3%20release%20notes%C5%BF","tsSuggestable":true}
+{"input":"rust 1.2.3 release notes\u212a","tsUrl":"https://www.google.com/search?q=rust%201.2.3%20release%20notes%E2%84%AA","tsSuggestable":true}
+{"input":"rust 1.2.3 release notes\t","tsUrl":"https://www.google.com/search?q=rust%201.2.3%20release%20notes","tsSuggestable":true}
+{"input":"rust 1.2.3 release notes\n","tsUrl":"https://www.google.com/search?q=rust%201.2.3%20release%20notes","tsSuggestable":true}
+{"input":"rust 1.2.3 release notes ","tsUrl":"https://www.google.com/search?q=rust%201.2.3%20release%20notes","tsSuggestable":true}
+{"input":"rust 1.2.3 release notes\u000b","tsUrl":"https://www.google.com/search?q=rust%201.2.3%20release%20notes","tsSuggestable":true}
+{"input":"rust 1.2.3 release notes\u1680","tsUrl":"https://www.google.com/search?q=rust%201.2.3%20release%20notes","tsSuggestable":true}
+{"input":"rust 1.2.3 release notes\u034f","tsUrl":"https://www.google.com/search?q=rust%201.2.3%20release%20notes%CD%8F","tsSuggestable":true}
+{"input":"rust 1.2.3 release notes\u115f","tsUrl":"https://www.google.com/search?q=rust%201.2.3%20release%20notes%E1%85%9F","tsSuggestable":true}
+{"input":"rust 1.2.3 release notes\uffa0","tsUrl":"https://www.google.com/search?q=rust%201.2.3%20release%20notes%EF%BE%A0","tsSuggestable":true}
+{"input":"rust 1.2.3 release notes\u3164","tsUrl":"https://www.google.com/search?q=rust%201.2.3%20release%20notes%E3%85%A4","tsSuggestable":true}
+{"input":"rust 1.2.3 release notes\udb40\udc01","tsUrl":"https://www.google.com/search?q=rust%201.2.3%20release%20notes%F3%A0%80%81","tsSuggestable":true}
+{"input":"rust 1.2.3 release notes\ud834\udd73","tsUrl":"https://www.google.com/search?q=rust%201.2.3%20release%20notes%F0%9D%85%B3","tsSuggestable":true}
+{"input":"\ufeffexample.com is down","tsUrl":"https://www.google.com/search?q=example.com%20is%20down","tsSuggestable":true}
+{"input":"\u0085example.com is down","tsUrl":"https://www.google.com/search?q=%C2%85example.com%20is%20down","tsSuggestable":true}
+{"input":"\u180eexample.com is down","tsUrl":"https://www.google.com/search?q=%E1%A0%8Eexample.com%20is%20down","tsSuggestable":true}
+{"input":"\u200bexample.com is down","tsUrl":"https://www.google.com/search?q=%E2%80%8Bexample.com%20is%20down","tsSuggestable":true}
+{"input":"\u200cexample.com is down","tsUrl":"https://www.google.com/search?q=%E2%80%8Cexample.com%20is%20down","tsSuggestable":true}
+{"input":"\u200dexample.com is down","tsUrl":"https://www.google.com/search?q=%E2%80%8Dexample.com%20is%20down","tsSuggestable":true}
+{"input":"\u2060example.com is down","tsUrl":"https://www.google.com/search?q=%E2%81%A0example.com%20is%20down","tsSuggestable":true}
+{"input":"\u00adexample.com is down","tsUrl":"https://www.google.com/search?q=%C2%ADexample.com%20is%20down","tsSuggestable":true}
+{"input":"\u2028example.com is down","tsUrl":"https://www.google.com/search?q=example.com%20is%20down","tsSuggestable":true}
+{"input":"\u00a0example.com is down","tsUrl":"https://www.google.com/search?q=example.com%20is%20down","tsSuggestable":true}
+{"input":"\u3000example.com is down","tsUrl":"https://www.google.com/search?q=example.com%20is%20down","tsSuggestable":true}
+{"input":"\u017fexample.com is down","tsUrl":"https://www.google.com/search?q=%C5%BFexample.com%20is%20down","tsSuggestable":true}
+{"input":"\u212aexample.com is down","tsUrl":"https://www.google.com/search?q=%E2%84%AAexample.com%20is%20down","tsSuggestable":true}
+{"input":"\texample.com is down","tsUrl":"https://www.google.com/search?q=example.com%20is%20down","tsSuggestable":true}
+{"input":"\nexample.com is down","tsUrl":"https://www.google.com/search?q=example.com%20is%20down","tsSuggestable":true}
+{"input":" example.com is down","tsUrl":"https://www.google.com/search?q=example.com%20is%20down","tsSuggestable":true}
+{"input":"\u000bexample.com is down","tsUrl":"https://www.google.com/search?q=example.com%20is%20down","tsSuggestable":true}
+{"input":"\u1680example.com is down","tsUrl":"https://www.google.com/search?q=example.com%20is%20down","tsSuggestable":true}
+{"input":"\u034fexample.com is down","tsUrl":"https://www.google.com/search?q=%CD%8Fexample.com%20is%20down","tsSuggestable":true}
+{"input":"\u115fexample.com is down","tsUrl":"https://www.google.com/search?q=%E1%85%9Fexample.com%20is%20down","tsSuggestable":true}
+{"input":"\uffa0example.com is down","tsUrl":"https://www.google.com/search?q=%EF%BE%A0example.com%20is%20down","tsSuggestable":true}
+{"input":"\u3164example.com is down","tsUrl":"https://www.google.com/search?q=%E3%85%A4example.com%20is%20down","tsSuggestable":true}
+{"input":"\udb40\udc01example.com is down","tsUrl":"https://www.google.com/search?q=%F3%A0%80%81example.com%20is%20down","tsSuggestable":true}
+{"input":"\ud834\udd73example.com is down","tsUrl":"https://www.google.com/search?q=%F0%9D%85%B3example.com%20is%20down","tsSuggestable":true}
+{"input":"10:30\ufeff meeting","tsUrl":"https://www.google.com/search?q=10%3A30%EF%BB%BF%20meeting","tsSuggestable":true}
+{"input":"10:30\u0085 meeting","tsUrl":"https://www.google.com/search?q=10%3A30%C2%85%20meeting","tsSuggestable":false}
+{"input":"10:30\u180e meeting","tsUrl":"https://www.google.com/search?q=10%3A30%E1%A0%8E%20meeting","tsSuggestable":false}
+{"input":"10:30\u200b meeting","tsUrl":"https://www.google.com/search?q=10%3A30%E2%80%8B%20meeting","tsSuggestable":false}
+{"input":"10:30\u200c meeting","tsUrl":"https://www.google.com/search?q=10%3A30%E2%80%8C%20meeting","tsSuggestable":false}
+{"input":"10:30\u200d meeting","tsUrl":"https://www.google.com/search?q=10%3A30%E2%80%8D%20meeting","tsSuggestable":false}
+{"input":"10:30\u2060 meeting","tsUrl":"https://www.google.com/search?q=10%3A30%E2%81%A0%20meeting","tsSuggestable":false}
+{"input":"10:30\u00ad meeting","tsUrl":"https://www.google.com/search?q=10%3A30%C2%AD%20meeting","tsSuggestable":false}
+{"input":"10:30\u2028 meeting","tsUrl":"https://www.google.com/search?q=10%3A30%E2%80%A8%20meeting","tsSuggestable":true}
+{"input":"10:30\u00a0 meeting","tsUrl":"https://www.google.com/search?q=10%3A30%C2%A0%20meeting","tsSuggestable":true}
+{"input":"10:30\u3000 meeting","tsUrl":"https://www.google.com/search?q=10%3A30%E3%80%80%20meeting","tsSuggestable":true}
+{"input":"10:30\u017f meeting","tsUrl":"https://www.google.com/search?q=10%3A30%C5%BF%20meeting","tsSuggestable":false}
+{"input":"10:30\u212a meeting","tsUrl":"https://www.google.com/search?q=10%3A30%E2%84%AA%20meeting","tsSuggestable":false}
+{"input":"10:30\t meeting","tsUrl":"https://www.google.com/search?q=10%3A30%09%20meeting","tsSuggestable":true}
+{"input":"10:30\n meeting","tsUrl":"https://www.google.com/search?q=10%3A30%0A%20meeting","tsSuggestable":true}
+{"input":"10:30  meeting","tsUrl":"https://www.google.com/search?q=10%3A30%20%20meeting","tsSuggestable":true}
+{"input":"10:30\u000b meeting","tsUrl":"https://www.google.com/search?q=10%3A30%0B%20meeting","tsSuggestable":true}
+{"input":"10:30\u1680 meeting","tsUrl":"https://www.google.com/search?q=10%3A30%E1%9A%80%20meeting","tsSuggestable":true}
+{"input":"10:30\u034f meeting","tsUrl":"https://www.google.com/search?q=10%3A30%CD%8F%20meeting","tsSuggestable":false}
+{"input":"10:30\u115f meeting","tsUrl":"https://www.google.com/search?q=10%3A30%E1%85%9F%20meeting","tsSuggestable":false}
+{"input":"10:30\uffa0 meeting","tsUrl":"https://www.google.com/search?q=10%3A30%EF%BE%A0%20meeting","tsSuggestable":false}
+{"input":"10:30\u3164 meeting","tsUrl":"https://www.google.com/search?q=10%3A30%E3%85%A4%20meeting","tsSuggestable":false}
+{"input":"10:30\udb40\udc01 meeting","tsUrl":"https://www.google.com/search?q=10%3A30%F3%A0%80%81%20meeting","tsSuggestable":false}
+{"input":"10:30\ud834\udd73 meeting","tsUrl":"https://www.google.com/search?q=10%3A30%F0%9D%85%B3%20meeting","tsSuggestable":false}
+{"input":"\ufeff1/2 cup","tsUrl":"https://www.google.com/search?q=1%2F2%20cup","tsSuggestable":true}
+{"input":"\u00851/2 cup","tsUrl":"https://www.google.com/search?q=%C2%851%2F2%20cup","tsSuggestable":false}
+{"input":"\u180e1/2 cup","tsUrl":"https://www.google.com/search?q=%E1%A0%8E1%2F2%20cup","tsSuggestable":false}
+{"input":"\u200b1/2 cup","tsUrl":"https://www.google.com/search?q=%E2%80%8B1%2F2%20cup","tsSuggestable":false}
+{"input":"\u200c1/2 cup","tsUrl":"https://www.google.com/search?q=%E2%80%8C1%2F2%20cup","tsSuggestable":false}
+{"input":"\u200d1/2 cup","tsUrl":"https://www.google.com/search?q=%E2%80%8D1%2F2%20cup","tsSuggestable":false}
+{"input":"\u20601/2 cup","tsUrl":"https://www.google.com/search?q=%E2%81%A01%2F2%20cup","tsSuggestable":false}
+{"input":"\u00ad1/2 cup","tsUrl":"https://www.google.com/search?q=%C2%AD1%2F2%20cup","tsSuggestable":false}
+{"input":"\u20281/2 cup","tsUrl":"https://www.google.com/search?q=1%2F2%20cup","tsSuggestable":true}
+{"input":"\u00a01/2 cup","tsUrl":"https://www.google.com/search?q=1%2F2%20cup","tsSuggestable":true}
+{"input":"\u30001/2 cup","tsUrl":"https://www.google.com/search?q=1%2F2%20cup","tsSuggestable":true}
+{"input":"\u017f1/2 cup","tsUrl":"https://www.google.com/search?q=%C5%BF1%2F2%20cup","tsSuggestable":false}
+{"input":"\u212a1/2 cup","tsUrl":"https://www.google.com/search?q=%E2%84%AA1%2F2%20cup","tsSuggestable":false}
+{"input":"\t1/2 cup","tsUrl":"https://www.google.com/search?q=1%2F2%20cup","tsSuggestable":true}
+{"input":"\n1/2 cup","tsUrl":"https://www.google.com/search?q=1%2F2%20cup","tsSuggestable":true}
+{"input":" 1/2 cup","tsUrl":"https://www.google.com/search?q=1%2F2%20cup","tsSuggestable":true}
+{"input":"\u000b1/2 cup","tsUrl":"https://www.google.com/search?q=1%2F2%20cup","tsSuggestable":true}
+{"input":"\u16801/2 cup","tsUrl":"https://www.google.com/search?q=1%2F2%20cup","tsSuggestable":true}
+{"input":"\u034f1/2 cup","tsUrl":"https://www.google.com/search?q=%CD%8F1%2F2%20cup","tsSuggestable":false}
+{"input":"\u115f1/2 cup","tsUrl":"https://www.google.com/search?q=%E1%85%9F1%2F2%20cup","tsSuggestable":false}
+{"input":"\uffa01/2 cup","tsUrl":"https://www.google.com/search?q=%EF%BE%A01%2F2%20cup","tsSuggestable":false}
+{"input":"\u31641/2 cup","tsUrl":"https://www.google.com/search?q=%E3%85%A41%2F2%20cup","tsSuggestable":false}
+{"input":"\udb40\udc011/2 cup","tsUrl":"https://www.google.com/search?q=%F3%A0%80%811%2F2%20cup","tsSuggestable":false}
+{"input":"\ud834\udd731/2 cup","tsUrl":"https://www.google.com/search?q=%F0%9D%85%B31%2F2%20cup","tsSuggestable":false}
+{"input":"notes \ufeffhost.example/p?token=x","tsUrl":"https://www.google.com/search?q=notes%20%EF%BB%BFhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"notes \u0085host.example/p?token=x","tsUrl":"https://www.google.com/search?q=notes%20%C2%85host.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"notes \u180ehost.example/p?token=x","tsUrl":"https://www.google.com/search?q=notes%20%E1%A0%8Ehost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"notes \u200bhost.example/p?token=x","tsUrl":"https://www.google.com/search?q=notes%20%E2%80%8Bhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"notes \u200chost.example/p?token=x","tsUrl":"https://www.google.com/search?q=notes%20%E2%80%8Chost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"notes \u200dhost.example/p?token=x","tsUrl":"https://www.google.com/search?q=notes%20%E2%80%8Dhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"notes \u2060host.example/p?token=x","tsUrl":"https://www.google.com/search?q=notes%20%E2%81%A0host.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"notes \u00adhost.example/p?token=x","tsUrl":"https://www.google.com/search?q=notes%20%C2%ADhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"notes \u2028host.example/p?token=x","tsUrl":"https://www.google.com/search?q=notes%20%E2%80%A8host.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"notes \u00a0host.example/p?token=x","tsUrl":"https://www.google.com/search?q=notes%20%C2%A0host.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"notes \u3000host.example/p?token=x","tsUrl":"https://www.google.com/search?q=notes%20%E3%80%80host.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"notes \u017fhost.example/p?token=x","tsUrl":"https://www.google.com/search?q=notes%20%C5%BFhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"notes \u212ahost.example/p?token=x","tsUrl":"https://www.google.com/search?q=notes%20%E2%84%AAhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"notes \thost.example/p?token=x","tsUrl":"https://www.google.com/search?q=notes%20%09host.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"notes \nhost.example/p?token=x","tsUrl":"https://www.google.com/search?q=notes%20%0Ahost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"notes  host.example/p?token=x","tsUrl":"https://www.google.com/search?q=notes%20%20host.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"notes \u000bhost.example/p?token=x","tsUrl":"https://www.google.com/search?q=notes%20%0Bhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"notes \u1680host.example/p?token=x","tsUrl":"https://www.google.com/search?q=notes%20%E1%9A%80host.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"notes \u034fhost.example/p?token=x","tsUrl":"https://www.google.com/search?q=notes%20%CD%8Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"notes \u115fhost.example/p?token=x","tsUrl":"https://www.google.com/search?q=notes%20%E1%85%9Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"notes \uffa0host.example/p?token=x","tsUrl":"https://www.google.com/search?q=notes%20%EF%BE%A0host.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"notes \u3164host.example/p?token=x","tsUrl":"https://www.google.com/search?q=notes%20%E3%85%A4host.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"notes \udb40\udc01host.example/p?token=x","tsUrl":"https://www.google.com/search?q=notes%20%F3%A0%80%81host.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"notes \ud834\udd73host.example/p?token=x","tsUrl":"https://www.google.com/search?q=notes%20%F0%9D%85%B3host.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"see \ufeffhttps://host.example/p?token=x now","tsUrl":"https://www.google.com/search?q=see%20%EF%BB%BFhttps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx%20now","tsSuggestable":false}
+{"input":"see \u0085https://host.example/p?token=x now","tsUrl":"https://www.google.com/search?q=see%20%C2%85https%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx%20now","tsSuggestable":false}
+{"input":"see \u180ehttps://host.example/p?token=x now","tsUrl":"https://www.google.com/search?q=see%20%E1%A0%8Ehttps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx%20now","tsSuggestable":false}
+{"input":"see \u200bhttps://host.example/p?token=x now","tsUrl":"https://www.google.com/search?q=see%20%E2%80%8Bhttps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx%20now","tsSuggestable":false}
+{"input":"see \u200chttps://host.example/p?token=x now","tsUrl":"https://www.google.com/search?q=see%20%E2%80%8Chttps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx%20now","tsSuggestable":false}
+{"input":"see \u200dhttps://host.example/p?token=x now","tsUrl":"https://www.google.com/search?q=see%20%E2%80%8Dhttps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx%20now","tsSuggestable":false}
+{"input":"see \u2060https://host.example/p?token=x now","tsUrl":"https://www.google.com/search?q=see%20%E2%81%A0https%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx%20now","tsSuggestable":false}
+{"input":"see \u00adhttps://host.example/p?token=x now","tsUrl":"https://www.google.com/search?q=see%20%C2%ADhttps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx%20now","tsSuggestable":false}
+{"input":"see \u2028https://host.example/p?token=x now","tsUrl":"https://www.google.com/search?q=see%20%E2%80%A8https%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx%20now","tsSuggestable":false}
+{"input":"see \u00a0https://host.example/p?token=x now","tsUrl":"https://www.google.com/search?q=see%20%C2%A0https%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx%20now","tsSuggestable":false}
+{"input":"see \u3000https://host.example/p?token=x now","tsUrl":"https://www.google.com/search?q=see%20%E3%80%80https%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx%20now","tsSuggestable":false}
+{"input":"see \u017fhttps://host.example/p?token=x now","tsUrl":"https://www.google.com/search?q=see%20%C5%BFhttps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx%20now","tsSuggestable":false}
+{"input":"see \u212ahttps://host.example/p?token=x now","tsUrl":"https://www.google.com/search?q=see%20%E2%84%AAhttps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx%20now","tsSuggestable":false}
+{"input":"see \thttps://host.example/p?token=x now","tsUrl":"https://www.google.com/search?q=see%20%09https%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx%20now","tsSuggestable":false}
+{"input":"see \nhttps://host.example/p?token=x now","tsUrl":"https://www.google.com/search?q=see%20%0Ahttps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx%20now","tsSuggestable":false}
+{"input":"see  https://host.example/p?token=x now","tsUrl":"https://www.google.com/search?q=see%20%20https%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx%20now","tsSuggestable":false}
+{"input":"see \u000bhttps://host.example/p?token=x now","tsUrl":"https://www.google.com/search?q=see%20%0Bhttps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx%20now","tsSuggestable":false}
+{"input":"see \u1680https://host.example/p?token=x now","tsUrl":"https://www.google.com/search?q=see%20%E1%9A%80https%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx%20now","tsSuggestable":false}
+{"input":"see \u034fhttps://host.example/p?token=x now","tsUrl":"https://www.google.com/search?q=see%20%CD%8Fhttps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx%20now","tsSuggestable":false}
+{"input":"see \u115fhttps://host.example/p?token=x now","tsUrl":"https://www.google.com/search?q=see%20%E1%85%9Fhttps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx%20now","tsSuggestable":false}
+{"input":"see \uffa0https://host.example/p?token=x now","tsUrl":"https://www.google.com/search?q=see%20%EF%BE%A0https%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx%20now","tsSuggestable":false}
+{"input":"see \u3164https://host.example/p?token=x now","tsUrl":"https://www.google.com/search?q=see%20%E3%85%A4https%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx%20now","tsSuggestable":false}
+{"input":"see \udb40\udc01https://host.example/p?token=x now","tsUrl":"https://www.google.com/search?q=see%20%F3%A0%80%81https%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx%20now","tsSuggestable":false}
+{"input":"see \ud834\udd73https://host.example/p?token=x now","tsUrl":"https://www.google.com/search?q=see%20%F0%9D%85%B3https%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx%20now","tsSuggestable":false}
+{"input":"\ufeff[::1]:8080/p?token=x","tsUrl":"http://[::1]:8080/p?token=x","tsSuggestable":false}
+{"input":"\u0085[::1]:8080/p?token=x","tsUrl":"https://www.google.com/search?q=%C2%85%5B%3A%3A1%5D%3A8080%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"\u180e[::1]:8080/p?token=x","tsUrl":"https://www.google.com/search?q=%E1%A0%8E%5B%3A%3A1%5D%3A8080%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"\u200b[::1]:8080/p?token=x","tsUrl":"https://www.google.com/search?q=%E2%80%8B%5B%3A%3A1%5D%3A8080%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"\u200c[::1]:8080/p?token=x","tsUrl":"https://www.google.com/search?q=%E2%80%8C%5B%3A%3A1%5D%3A8080%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"\u200d[::1]:8080/p?token=x","tsUrl":"https://www.google.com/search?q=%E2%80%8D%5B%3A%3A1%5D%3A8080%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"\u2060[::1]:8080/p?token=x","tsUrl":"https://www.google.com/search?q=%E2%81%A0%5B%3A%3A1%5D%3A8080%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"\u00ad[::1]:8080/p?token=x","tsUrl":"https://www.google.com/search?q=%C2%AD%5B%3A%3A1%5D%3A8080%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"\u2028[::1]:8080/p?token=x","tsUrl":"http://[::1]:8080/p?token=x","tsSuggestable":false}
+{"input":"\u00a0[::1]:8080/p?token=x","tsUrl":"http://[::1]:8080/p?token=x","tsSuggestable":false}
+{"input":"\u3000[::1]:8080/p?token=x","tsUrl":"http://[::1]:8080/p?token=x","tsSuggestable":false}
+{"input":"\u017f[::1]:8080/p?token=x","tsUrl":"https://www.google.com/search?q=%C5%BF%5B%3A%3A1%5D%3A8080%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"\u212a[::1]:8080/p?token=x","tsUrl":"https://www.google.com/search?q=%E2%84%AA%5B%3A%3A1%5D%3A8080%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"\t[::1]:8080/p?token=x","tsUrl":"http://[::1]:8080/p?token=x","tsSuggestable":false}
+{"input":"\n[::1]:8080/p?token=x","tsUrl":"http://[::1]:8080/p?token=x","tsSuggestable":false}
+{"input":" [::1]:8080/p?token=x","tsUrl":"http://[::1]:8080/p?token=x","tsSuggestable":false}
+{"input":"\u000b[::1]:8080/p?token=x","tsUrl":"http://[::1]:8080/p?token=x","tsSuggestable":false}
+{"input":"\u1680[::1]:8080/p?token=x","tsUrl":"http://[::1]:8080/p?token=x","tsSuggestable":false}
+{"input":"\u034f[::1]:8080/p?token=x","tsUrl":"https://www.google.com/search?q=%CD%8F%5B%3A%3A1%5D%3A8080%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"\u115f[::1]:8080/p?token=x","tsUrl":"https://www.google.com/search?q=%E1%85%9F%5B%3A%3A1%5D%3A8080%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"\uffa0[::1]:8080/p?token=x","tsUrl":"https://www.google.com/search?q=%EF%BE%A0%5B%3A%3A1%5D%3A8080%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"\u3164[::1]:8080/p?token=x","tsUrl":"https://www.google.com/search?q=%E3%85%A4%5B%3A%3A1%5D%3A8080%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"\udb40\udc01[::1]:8080/p?token=x","tsUrl":"https://www.google.com/search?q=%F3%A0%80%81%5B%3A%3A1%5D%3A8080%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"\ud834\udd73[::1]:8080/p?token=x","tsUrl":"https://www.google.com/search?q=%F0%9D%85%B3%5B%3A%3A1%5D%3A8080%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"\ufeff127.0.0.1:8080/p","tsUrl":"http://127.0.0.1:8080/p","tsSuggestable":false}
+{"input":"\u0085127.0.0.1:8080/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\u180e127.0.0.1:8080/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\u200b127.0.0.1:8080/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\u200c127.0.0.1:8080/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\u200d127.0.0.1:8080/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\u2060127.0.0.1:8080/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\u00ad127.0.0.1:8080/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\u2028127.0.0.1:8080/p","tsUrl":"http://127.0.0.1:8080/p","tsSuggestable":false}
+{"input":"\u00a0127.0.0.1:8080/p","tsUrl":"http://127.0.0.1:8080/p","tsSuggestable":false}
+{"input":"\u3000127.0.0.1:8080/p","tsUrl":"http://127.0.0.1:8080/p","tsSuggestable":false}
+{"input":"\u017f127.0.0.1:8080/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\u212a127.0.0.1:8080/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\t127.0.0.1:8080/p","tsUrl":"http://127.0.0.1:8080/p","tsSuggestable":false}
+{"input":"\n127.0.0.1:8080/p","tsUrl":"http://127.0.0.1:8080/p","tsSuggestable":false}
+{"input":" 127.0.0.1:8080/p","tsUrl":"http://127.0.0.1:8080/p","tsSuggestable":false}
+{"input":"\u000b127.0.0.1:8080/p","tsUrl":"http://127.0.0.1:8080/p","tsSuggestable":false}
+{"input":"\u1680127.0.0.1:8080/p","tsUrl":"http://127.0.0.1:8080/p","tsSuggestable":false}
+{"input":"\u034f127.0.0.1:8080/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\u115f127.0.0.1:8080/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\uffa0127.0.0.1:8080/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\u3164127.0.0.1:8080/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\udb40\udc01127.0.0.1:8080/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\ud834\udd73127.0.0.1:8080/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"https://host.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":"host.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
+{"input":"user:pass@host.example/p","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"user@host.example/p?x=1","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example:8080/p?token=x","tsUrl":"https://host.example:8080/p?token=x","tsSuggestable":false}
+{"input":"localhost:3000/p?token=x","tsUrl":"http://localhost:3000/p?token=x","tsSuggestable":false}
+{"input":"192.168.0.1/p?token=x","tsUrl":"http://192.168.0.1/p?token=x","tsSuggestable":false}
+{"input":"192.168.0.1/admin?token=x","tsUrl":"http://192.168.0.1/admin?token=x","tsSuggestable":false}
+{"input":"file:///home/u/secret","tsUrl":"file:///home/u/secret","tsSuggestable":false}
+{"input":"/home/u/secret","tsUrl":"https://www.google.com/search?q=%2Fhome%2Fu%2Fsecret","tsSuggestable":false}
+{"input":"http://intranet/p?token=x","tsUrl":"http://intranet/p?token=x","tsSuggestable":false}
+{"input":"http:///p?token=x","tsUrl":"http:///p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"ftp://h.example/p?token=x","tsUrl":"ftp://h.example/p?token=x","tsSuggestable":false}
+{"input":"mailto:a@b.example","tsUrl":"mailto:a@b.example","tsSuggestable":false}
+{"input":"HTTPS://HOST.EXAMPLE/P?TOKEN=X","tsUrl":"HTTPS://HOST.EXAMPLE/P?TOKEN=X","tsSuggestable":false}
+{"input":"rust1.2.3 release notes","tsUrl":"https://www.google.com/search?q=rust1.2.3%20release%20notes","tsSuggestable":true}
+{"input":"example.com is down","tsUrl":"https://www.google.com/search?q=example.com%20is%20down","tsSuggestable":true}
+{"input":"10:30 meeting","tsUrl":"https://www.google.com/search?q=10%3A30%20meeting","tsSuggestable":true}
+{"input":"1/2 cup","tsUrl":"https://www.google.com/search?q=1%2F2%20cup","tsSuggestable":true}
+{"input":"notes host.example/p?token=x","tsUrl":"https://www.google.com/search?q=notes%20host.example%2Fp%3Ftoken%3Dx","tsSuggestable":false}
+{"input":"see https://host.example/p?token=x now","tsUrl":"https://www.google.com/search?q=see%20https%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx%20now","tsSuggestable":false}
+{"input":"[::1]:8080/p?token=x","tsUrl":"http://[::1]:8080/p?token=x","tsSuggestable":false}
+{"input":"127.0.0.1:8080/p","tsUrl":"http://127.0.0.1:8080/p","tsSuggestable":false}
+{"input":"\u0085host.example\u0085/p?token=x#private","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.\u0085example/p?token=x#private","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"host.example\u0085:8443/private?token=x","tsUrl":"about:blank","tsSuggestable":false}
+{"input":"\u200bhttps:///p?token=x","tsUrl":"https://www.google.com/search?q=%E2%80%8Bhttps%3A%2F%2F%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"ht\u00adtps:///p?token=x","tsUrl":"https://www.google.com/search?q=ht%C2%ADtps%3A%2F%2F%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u200bht\ufefftps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=%E2%80%8Bht%EF%BB%BFtps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"ht\u2060tp://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=ht%E2%81%A0tp%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"\u180eftp://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=%E1%A0%8Eftp%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"https://","tsUrl":"https://","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"https:///p?token=x","tsUrl":"https:///p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
+{"input":"ht\ttps:///p?token=x","tsUrl":"https://www.google.com/search?q=ht%09tps%3A%2F%2F%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
