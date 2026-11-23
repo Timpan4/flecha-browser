@@ -107,7 +107,8 @@ pub struct PromptView<'a> {
     pub origin: &'a Origin,
     /// Every kind the page asked for.
     pub requested: PermissionSet,
-    /// The kinds still undecided, which the prompt asks about.
+    /// The kinds the prompt asks about, fixed when it was queued. An answer applies to these
+    /// kinds only.
     pub ask: PermissionSet,
 }
 
@@ -213,6 +214,7 @@ impl PermissionManager {
             prompt.partition == *partition
                 && prompt.origin == *origin
                 && prompt.requested == requested
+                && ask.is_subset(prompt.ask)
         }) {
             Some(prompt) => prompt.waiters.push(id),
             None => queue.push_back(Prompt {
@@ -498,21 +500,20 @@ impl PermissionManager {
         }
     }
 
-    /// Completes queued prompts that saved or one-time answers now decide, and refreshes the
-    /// kinds the rest ask about.
+    /// Completes queued prompts that saved or one-time answers now decide. A prompt whose
+    /// undecided kinds grew beyond the ones it shows is denied: its answer must never cover a
+    /// kind the user was not asked about.
     fn settle(&mut self) -> Vec<Completion> {
         let mut prompts = std::mem::take(&mut self.prompts);
         let mut completions = Vec::new();
         for (tab, queue) in &mut prompts {
-            queue.retain_mut(|prompt| {
+            queue.retain(|prompt| {
                 let verdict =
                     match self.combine(&prompt.partition, tab, &prompt.origin, prompt.requested) {
                         Combined::Allow => Verdict::Allow,
                         Combined::Block => Verdict::Block,
-                        Combined::Ask(ask) => {
-                            prompt.ask = ask;
-                            return true;
-                        }
+                        Combined::Ask(ask) if ask.is_subset(prompt.ask) => return true,
+                        Combined::Ask(_) => Verdict::Block,
                     };
                 completions.extend(
                     prompt

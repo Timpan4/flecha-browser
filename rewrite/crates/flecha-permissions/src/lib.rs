@@ -24,5 +24,5 @@ pub use manager::{
 };
 pub use origin::{Origin, OriginError};
 pub use snapshot::{
-    DecodeError, Decoded, LoadError, Loaded, SCHEMA_VERSION, Snapshot, SnapshotFile,
+    DecodeError, Decoded, Loaded, SCHEMA_VERSION, Snapshot, SnapshotError, SnapshotFile,
 };

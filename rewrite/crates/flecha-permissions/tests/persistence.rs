@@ -1,8 +1,8 @@
 use std::fs;
 
 use flecha_permissions::{
-    Decision, DecodeError, Evaluation, LoadError, Origin, Partition, PermissionKind,
-    PermissionManager, SCHEMA_VERSION, SiteControl, Snapshot, SnapshotFile, TabId, Verdict,
+    Decision, DecodeError, Evaluation, Origin, Partition, PermissionKind, PermissionManager,
+    SCHEMA_VERSION, SiteControl, Snapshot, SnapshotError, SnapshotFile, TabId, Verdict,
 };
 
 fn origin(url: &str) -> Origin {
@@ -123,10 +123,15 @@ fn newer_schema_is_left_untouched_and_cannot_be_overwritten() {
         format!(r#"{{"version":{},"partitions":{{}}}}"#, SCHEMA_VERSION + 1),
         r#"{"version":7,"origins":["a new shape"]}"#.to_owned(),
         r#"{"version":2.5}"#.to_owned(),
+        // The version decides before the payload is decoded, so a payload this build cannot
+        // parse, or an overflowing version, still reads as newer.
+        r#"{"version":2,"future_payload":1e400}"#.to_owned(),
+        r#"{"version":2e400,"partitions":{}}"#.to_owned(),
+        r#"{"version":"2","partitions":{}}"#.to_owned(),
     ] {
         fs::write(&path, &newer).unwrap();
         match SnapshotFile::open(&path) {
-            Err(LoadError::NewerSchema(_)) => {}
+            Err(SnapshotError::NewerSchema(_)) => {}
             other => panic!("expected a newer-schema refusal, got {other:?}"),
         }
         assert_eq!(fs::read_to_string(&path).unwrap(), newer);
@@ -144,7 +149,8 @@ fn damaged_file_moves_aside_and_loads_empty() {
         b"[]".to_vec(),
         b"{\"partitions\":{}}".to_vec(),
         b"{\"version\":0,\"partitions\":{}}".to_vec(),
-        b"{\"version\":\"1\",\"partitions\":{}}".to_vec(),
+        b"{\"version\":\"one\",\"partitions\":{}}".to_vec(),
+        b"{\"version\":1,\"partitions\":{},\"extra\":1e400}".to_vec(),
         b"{\"version\":1,\"partitions\":[]}".to_vec(),
         vec![0xff, 0xfe, b'{'],
     ] {
@@ -169,7 +175,10 @@ fn unreadable_path_is_an_error_not_damage() {
     // A directory where the file should be cannot be read as one.
     let path = dir.path().join("permissions.json");
     fs::create_dir(&path).unwrap();
-    assert!(matches!(SnapshotFile::open(&path), Err(LoadError::Io(_))));
+    assert!(matches!(
+        SnapshotFile::open(&path),
+        Err(SnapshotError::Io(_))
+    ));
     assert!(path.is_dir());
     assert!(!dir.path().join("permissions.json.damaged").exists());
 }
@@ -188,13 +197,12 @@ fn invalid_entries_never_become_grants() {
           "http://localhost:3000": {"geolocation": "block"},
           "https://shape.example": "allow"
         },
-        "isolated:": {"https://a.example": {"camera": "allow"}},
         "ephemeral:x": {"https://a.example": {"camera": "allow"}},
         "isolated:work": []
       }
     }"#;
     let decoded = Snapshot::decode(json).unwrap();
-    assert_eq!(decoded.skipped_entries, 10);
+    assert_eq!(decoded.skipped_entries, 9);
     let manager = PermissionManager::from_snapshot(decoded.snapshot);
     let ok = manager.site_settings(&Partition::Shared, &origin("https://ok.example"));
     assert_eq!(ok.decision(PermissionKind::Camera), Decision::Allow);
@@ -224,4 +232,128 @@ fn decode_reports_version_before_shape() {
         Snapshot::decode(r#"{"version":-1,"partitions":{}}"#),
         Err(DecodeError::Damaged(_))
     ));
+}
+
+#[test]
+fn a_current_version_spelled_as_a_string_still_loads() {
+    let decoded = Snapshot::decode(r#"{"version":"1","partitions":{}}"#).unwrap();
+    assert_eq!(decoded.snapshot, Snapshot::default());
+}
+
+#[test]
+fn save_refuses_a_newer_file_written_after_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("permissions.json");
+    let (file, _) = SnapshotFile::open(&path).unwrap();
+    let newer = r#"{"version":2,"future_payload":1e400}"#;
+    fs::write(&path, newer).unwrap();
+
+    assert!(matches!(
+        file.save(&sample().snapshot()),
+        Err(SnapshotError::NewerSchema(found)) if found == "2"
+    ));
+    assert_eq!(fs::read_to_string(&path).unwrap(), newer);
+    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+}
+
+#[test]
+fn every_isolated_space_id_round_trips() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("permissions.json");
+    let site = origin("https://maps.example");
+    let mut manager = PermissionManager::new();
+    for id in ["", ":", "work"] {
+        manager
+            .set_setting(
+                &Partition::Isolated(id.into()),
+                &site,
+                PermissionKind::Geolocation,
+                Decision::Block,
+            )
+            .unwrap();
+    }
+    let (file, _) = SnapshotFile::open(&path).unwrap();
+    file.save(&manager.snapshot()).unwrap();
+
+    let (_, loaded) = SnapshotFile::open(&path).unwrap();
+    assert_eq!(loaded.skipped_entries, 0);
+    let mut restored = PermissionManager::from_snapshot(loaded.snapshot);
+    for id in ["", ":", "work"] {
+        assert_eq!(
+            restored.evaluate(
+                &Partition::Isolated(id.into()),
+                &TabId::new("t"),
+                &site,
+                PermissionKind::Geolocation
+            ),
+            Evaluation::Resolved(Verdict::Block),
+            "isolated {id:?}"
+        );
+    }
+}
+
+#[test]
+fn a_failed_save_removes_only_its_own_temp_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("permissions.json");
+    let (file, _) = SnapshotFile::open(&path).unwrap();
+    // Files that look like temp files from another writer.
+    let foreign = [
+        dir.path().join(".permissions.json.abc123.tmp"),
+        dir.path().join("permissions.json.1-2-0.tmp"),
+    ];
+    for other in &foreign {
+        fs::write(other, "someone else's").unwrap();
+    }
+    // A non-empty directory at the destination makes the final rename fail.
+    fs::create_dir(&path).unwrap();
+    fs::write(path.join("keep"), "kept").unwrap();
+
+    assert!(matches!(
+        file.save(&sample().snapshot()),
+        Err(SnapshotError::Io(_))
+    ));
+    for other in &foreign {
+        assert_eq!(fs::read_to_string(other).unwrap(), "someone else's");
+    }
+    assert_eq!(fs::read_to_string(path.join("keep")).unwrap(), "kept");
+    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), foreign.len() + 1);
+}
+
+#[test]
+fn encoded_keys_sort_by_their_text() {
+    let mut manager = PermissionManager::new();
+    let site = origin("https://maps.example");
+    for (partition, kind) in [
+        (Partition::Shared, PermissionKind::Geolocation),
+        (Partition::Shared, PermissionKind::ClipboardRead),
+        (
+            Partition::Isolated("a".into()),
+            PermissionKind::Notifications,
+        ),
+    ] {
+        manager
+            .set_setting(&partition, &site, kind, Decision::Allow)
+            .unwrap();
+    }
+    assert_eq!(
+        manager.snapshot().encode(),
+        r#"{
+  "partitions": {
+    "isolated:a": {
+      "https://maps.example": {
+        "notifications": "allow"
+      }
+    },
+    "shared": {
+      "https://maps.example": {
+        "clipboard-read": "allow",
+        "geolocation": "allow"
+      }
+    }
+  },
+  "version": 1
+}
+"#
+    );
 }

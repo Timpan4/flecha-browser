@@ -59,6 +59,10 @@ impl PermissionSet {
         self.0 == 0
     }
 
+    pub fn is_subset(self, other: Self) -> bool {
+        self.0 & !other.0 == 0
+    }
+
     pub fn iter(self) -> impl Iterator<Item = PermissionKind> {
         PermissionKind::ALL
             .into_iter()

@@ -1,11 +1,11 @@
+use std::cmp::Ordering as CmpOrdering;
 use std::collections::BTreeMap;
+use std::fmt;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::SystemTime;
-use std::{fmt, process};
 
+use flecha_core::storage::{StoredVersion, newer_schema_version, read_schema_version};
 use serde_json::{Map, Value};
 
 use crate::kind::{PermissionKind, Verdict};
@@ -52,63 +52,57 @@ impl fmt::Display for DecodeError {
 impl std::error::Error for DecodeError {}
 
 impl Snapshot {
-    /// The document in sorted key order.
+    /// The document with every object's keys in sorted order. `serde_json::Map` keeps insertion
+    /// order when another crate in the build enables `preserve_order`, so the keys are sorted
+    /// here rather than by the map.
     pub fn encode(&self) -> String {
-        let mut partitions = Map::new();
-        for (partition, grants) in &self.partitions {
-            if grants.is_empty() {
-                continue;
-            }
-            let key = match partition {
-                StoredPartition::Shared => SHARED_KEY.to_owned(),
-                StoredPartition::Isolated(id) => format!("{ISOLATED_PREFIX}{id}"),
-            };
-            let origins = grants
-                .iter()
-                .map(|(origin, decided)| {
-                    let decided = decided
-                        .iter()
-                        .map(|(kind, verdict)| {
-                            let verdict = match verdict {
-                                Verdict::Allow => "allow",
-                                Verdict::Block => "block",
-                            };
-                            (kind.name().to_owned(), Value::from(verdict))
-                        })
-                        .collect::<Map<_, _>>();
-                    (origin.as_str().to_owned(), Value::Object(decided))
-                })
-                .collect::<Map<_, _>>();
-            partitions.insert(key, Value::Object(origins));
-        }
-        let mut document = Map::new();
-        document.insert("partitions".to_owned(), Value::Object(partitions));
-        document.insert("version".to_owned(), Value::from(SCHEMA_VERSION));
-        let mut json = serde_json::to_string_pretty(&Value::Object(document))
+        let partitions = sorted_object(self.partitions.iter().filter(|(_, g)| !g.is_empty()).map(
+            |(partition, grants)| {
+                let key = match partition {
+                    StoredPartition::Shared => SHARED_KEY.to_owned(),
+                    StoredPartition::Isolated(id) => format!("{ISOLATED_PREFIX}{id}"),
+                };
+                let origins = sorted_object(grants.iter().map(|(origin, decided)| {
+                    let decided = sorted_object(decided.iter().map(|(kind, verdict)| {
+                        let verdict = match verdict {
+                            Verdict::Allow => "allow",
+                            Verdict::Block => "block",
+                        };
+                        (kind.name().to_owned(), Value::from(verdict))
+                    }));
+                    (origin.as_str().to_owned(), decided)
+                }));
+                (key, origins)
+            },
+        ));
+        let document = sorted_object([
+            ("partitions".to_owned(), partitions),
+            ("version".to_owned(), Value::from(SCHEMA_VERSION)),
+        ]);
+        let mut json = serde_json::to_string_pretty(&document)
             .expect("JSON values with string keys always serialize");
         json.push('\n');
         json
     }
 
-    /// Reads a document. The version is checked before anything else, so a newer document is
-    /// reported as newer even when this build cannot read its shape.
+    /// Reads a document. Only the top-level `version` is read first, so a newer document is
+    /// reported as newer whatever the rest of it holds.
     pub fn decode(json: &str) -> Result<Decoded, DecodeError> {
-        let document: Value =
-            serde_json::from_str(json).map_err(|error| DecodeError::Damaged(error.to_string()))?;
-        let Value::Object(document) = document else {
-            return Err(DecodeError::Damaged("not an object".to_owned()));
-        };
-        match document.get("version") {
-            Some(Value::Number(version)) if version.as_u64() == Some(SCHEMA_VERSION) => {}
-            Some(Value::Number(version))
-                if version
-                    .as_f64()
-                    .is_some_and(|found| found > SCHEMA_VERSION as f64) =>
-            {
-                return Err(DecodeError::NewerSchema(version.to_string()));
-            }
+        match read_schema_version(json, SCHEMA_VERSION)
+            .map_err(|error| DecodeError::Damaged(error.to_string()))?
+        {
+            Some(StoredVersion {
+                order: CmpOrdering::Equal,
+                ..
+            }) => {}
+            Some(StoredVersion {
+                order: CmpOrdering::Greater,
+                text,
+            }) => return Err(DecodeError::NewerSchema(text)),
             _ => return Err(DecodeError::Damaged("no supported version".to_owned())),
         }
+        let document: Value =
+            serde_json::from_str(json).map_err(|error| DecodeError::Damaged(error.to_string()))?;
         let Some(Value::Object(partitions)) = document.get("partitions") else {
             return Err(DecodeError::Damaged("no partitions object".to_owned()));
         };
@@ -120,7 +114,6 @@ impl Snapshot {
                 Some(StoredPartition::Shared)
             } else {
                 key.strip_prefix(ISOLATED_PREFIX)
-                    .filter(|id| !id.is_empty())
                     .map(|id| StoredPartition::Isolated(id.to_owned()))
             };
             let (Some(partition), Value::Object(origins)) = (partition, origins) else {
@@ -180,23 +173,29 @@ pub struct Loaded {
 }
 
 #[derive(Debug)]
-pub enum LoadError {
+pub enum SnapshotError {
     Io(io::Error),
-    /// A newer build wrote the file. It is left in place and no handle is returned, so this
-    /// build cannot overwrite it.
+    /// A newer build wrote the file. It is left in place: `open` returns no handle, and `save`
+    /// refuses to replace it.
     NewerSchema(String),
 }
 
-impl fmt::Display for LoadError {
+impl From<io::Error> for SnapshotError {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+impl fmt::Display for SnapshotError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Io(error) => write!(f, "reading permission snapshot: {error}"),
+            Self::Io(error) => write!(f, "permission snapshot I/O: {error}"),
             Self::NewerSchema(found) => write!(f, "permission snapshot schema {found} is newer"),
         }
     }
 }
 
-impl std::error::Error for LoadError {
+impl std::error::Error for SnapshotError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io(error) => Some(error),
@@ -208,13 +207,9 @@ impl std::error::Error for LoadError {
 impl SnapshotFile {
     /// Reads the file at `path`. A missing file loads empty. A damaged one is renamed to
     /// `<name>.damaged`, replacing an older backup, and loads empty.
-    pub fn open(path: impl Into<PathBuf>) -> Result<(Self, Loaded), LoadError> {
+    pub fn open(path: impl Into<PathBuf>) -> Result<(Self, Loaded), SnapshotError> {
         let path = path.into();
-        let bytes = match fs::read(&path) {
-            Ok(bytes) => Some(bytes),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-            Err(error) => return Err(LoadError::Io(error)),
-        };
+        let bytes = read_if_present(&path)?;
         let mut loaded = Loaded {
             snapshot: Snapshot::default(),
             skipped_entries: 0,
@@ -229,10 +224,12 @@ impl SnapshotFile {
                     loaded.snapshot = decoded.snapshot;
                     loaded.skipped_entries = decoded.skipped_entries;
                 }
-                Err(DecodeError::NewerSchema(found)) => return Err(LoadError::NewerSchema(found)),
+                Err(DecodeError::NewerSchema(found)) => {
+                    return Err(SnapshotError::NewerSchema(found));
+                }
                 Err(DecodeError::Damaged(_)) => {
-                    let backup = sibling(&path, "damaged").map_err(LoadError::Io)?;
-                    fs::rename(&path, &backup).map_err(LoadError::Io)?;
+                    let backup = sibling(&path, "damaged")?;
+                    fs::rename(&path, &backup)?;
                     loaded.damaged_backup = Some(backup);
                 }
             }
@@ -246,43 +243,61 @@ impl SnapshotFile {
 
     /// Writes through a new file beside the snapshot and renames it into place, so a reader sees
     /// the old or the new contents, never part of either.
-    pub fn save(&self, snapshot: &Snapshot) -> io::Result<()> {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let unique = format!(
-            "{}-{}-{}.tmp",
-            process::id(),
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        );
-        let temp = sibling(&self.path, &unique)?;
-        let result = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp)
-            .and_then(|mut file| {
-                file.write_all(snapshot.encode().as_bytes())?;
-                file.sync_all()
-            })
-            .and_then(|()| fs::rename(&temp, &self.path));
-        if result.is_err() {
-            let _ = fs::remove_file(&temp);
+    ///
+    /// A newer build may have written the file since `open`, so its version is read again first
+    /// and a newer schema is refused. A writer that replaces the file between that read and the
+    /// rename is not detected.
+    pub fn save(&self, snapshot: &Snapshot) -> Result<(), SnapshotError> {
+        if let Some(bytes) = read_if_present(&self.path)?
+            && let Some(found) = std::str::from_utf8(&bytes)
+                .ok()
+                .and_then(|json| newer_schema_version(json, SCHEMA_VERSION))
+        {
+            return Err(SnapshotError::NewerSchema(found));
         }
-        result?;
-        sync_parent(&self.path)
+        let name = file_name(&self.path)?;
+        let dir = match self.path.parent() {
+            Some(dir) if !dir.as_os_str().is_empty() => dir,
+            _ => Path::new("."),
+        };
+        // `tempfile` creates the file exclusively, retries on a name collision, and deletes only
+        // the file it created when a later step fails.
+        let mut temp = tempfile::Builder::new()
+            .prefix(&format!(".{}.", name.to_string_lossy()))
+            .suffix(".tmp")
+            .tempfile_in(dir)?;
+        temp.write_all(snapshot.encode().as_bytes())?;
+        temp.as_file().sync_all()?;
+        temp.persist(&self.path).map_err(|error| error.error)?;
+        sync_dir(dir)?;
+        Ok(())
     }
 }
 
-fn sibling(path: &Path, suffix: &str) -> io::Result<PathBuf> {
-    let name = path.file_name().ok_or_else(|| {
+fn sorted_object(entries: impl IntoIterator<Item = (String, Value)>) -> Value {
+    let sorted: BTreeMap<_, _> = entries.into_iter().collect();
+    Value::Object(sorted.into_iter().collect::<Map<_, _>>())
+}
+
+fn read_if_present(path: &Path) -> io::Result<Option<Vec<u8>>> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+fn file_name(path: &Path) -> io::Result<&std::ffi::OsStr> {
+    path.file_name().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
             "snapshot path has no file name",
         )
-    })?;
-    let mut name = name.to_owned();
+    })
+}
+
+fn sibling(path: &Path, suffix: &str) -> io::Result<PathBuf> {
+    let mut name = file_name(path)?.to_owned();
     name.push(".");
     name.push(suffix);
     Ok(path.with_file_name(name))
@@ -290,14 +305,11 @@ fn sibling(path: &Path, suffix: &str) -> io::Result<PathBuf> {
 
 /// Makes the rename itself durable.
 #[cfg(unix)]
-fn sync_parent(path: &Path) -> io::Result<()> {
-    match path.parent() {
-        Some(dir) if !dir.as_os_str().is_empty() => fs::File::open(dir)?.sync_all(),
-        _ => fs::File::open(".")?.sync_all(),
-    }
+fn sync_dir(dir: &Path) -> io::Result<()> {
+    fs::File::open(dir)?.sync_all()
 }
 
 #[cfg(not(unix))]
-fn sync_parent(_path: &Path) -> io::Result<()> {
+fn sync_dir(_dir: &Path) -> io::Result<()> {
     Ok(())
 }

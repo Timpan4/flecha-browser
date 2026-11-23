@@ -445,3 +445,55 @@ fn clearing_a_partition_denies_its_queued_prompts() {
     assert_eq!(manager.snapshot(), Default::default());
     assert_eq!(manager.pending_prompt(&tab).unwrap().request, shared);
 }
+
+#[test]
+fn a_prompt_never_grows_beyond_the_kinds_it_shows() {
+    let mut manager = PermissionManager::new();
+    let tab = TabId::new("a");
+    let site = origin("https://meet.example");
+    let shared = Partition::Shared;
+    manager
+        .set_setting(&shared, &site, Camera, Decision::Allow)
+        .unwrap();
+    let id = prompt(manager.evaluate(&shared, &tab, &site, media()));
+    assert_eq!(manager.pending_prompt(&tab).unwrap().ask, Microphone.into());
+
+    // Camera goes back to "ask" while the microphone prompt is on screen.
+    assert_eq!(
+        manager.set_setting(&shared, &site, Camera, Decision::Ask),
+        Ok(vec![done(id, Verdict::Block)])
+    );
+    assert!(manager.pending_prompt(&tab).is_none());
+    assert_eq!(
+        manager.resolve_prompt(id, PromptOutcome::AllowAlways),
+        Err(PermissionError::UnknownRequest)
+    );
+    assert_eq!(
+        manager.site_settings(&shared, &site).decision(Camera),
+        Decision::Ask
+    );
+    assert_eq!(
+        manager.site_settings(&shared, &site).decision(Microphone),
+        Decision::Ask
+    );
+
+    // The page asks again and gets a new prompt that shows both kinds.
+    let again = prompt(manager.evaluate(&shared, &tab, &site, media()));
+    assert_ne!(again, id);
+    assert_eq!(manager.pending_prompt(&tab).unwrap().ask, media());
+}
+
+#[test]
+fn an_answer_covers_only_the_kinds_the_prompt_showed() {
+    let mut manager = PermissionManager::new();
+    let tab = TabId::new("a");
+    let site = origin("https://meet.example");
+    let shared = Partition::Shared;
+    let id = prompt(manager.evaluate(&shared, &tab, &site, Microphone));
+    manager
+        .resolve_prompt(id, PromptOutcome::AllowAlways)
+        .unwrap();
+    let settings = manager.site_settings(&shared, &site);
+    assert_eq!(settings.decision(Microphone), Decision::Allow);
+    assert_eq!(settings.decision(Camera), Decision::Ask);
+}
