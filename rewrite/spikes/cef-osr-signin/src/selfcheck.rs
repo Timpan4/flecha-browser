@@ -2,8 +2,15 @@
 //! reports through `console.log`, inspects this process tree in /proc, prints one JSON report and
 //! closes the browsers. It signs in to nothing. Its only click is "Reject all" on Google's cookie
 //! consent page, when the Web Store redirects there.
+//!
+//! Reports carry a per-run nonce and are accepted only from the first browser, so console
+//! output from anything else cannot complete a step. Command lines and the home directory are
+//! redacted from the report.
 
-use crate::{cli::SelfCheckOptions, common};
+use crate::{
+    cli::{self, SelfCheckOptions},
+    common, runtime,
+};
 use cef::*;
 use serde_json::{Map, Value, json};
 use std::{cell::RefCell, collections::HashMap, fs, path::Path};
@@ -16,22 +23,16 @@ pub const REPORT_MARKER: &str = "FLECHA_SELFCHECK_REPORT ";
 pub const WEBSTORE_URL: &str =
     "https://chromewebstore.google.com/detail/ublock-origin-lite/ddkjiahejlhfcafbddmgiahcphecmpfh";
 
-/// Switches that would make the build differ from a shipping browser.
-const FORBIDDEN_SWITCHES: &[&str] = &[
-    "--remote-debugging-port",
-    "--remote-debugging-pipe",
-    "--remote-debugging-address",
-    "--enable-automation",
-    "--headless",
-    "--no-sandbox",
-    "--disable-setuid-sandbox",
-    "--disable-seccomp-filter-sandbox",
-    "--disable-namespace-sandbox",
-    "--user-agent",
-    "--disable-web-security",
-    "--ignore-certificate-errors",
-    "--use-mock-keychain",
-    "--test-type",
+/// Switch values kept in the report. Every other value is replaced, since `--` passes arbitrary
+/// switches and some carry paths.
+const SHOWN_SWITCH_VALUES: &[&str] = &[
+    "--type",
+    "--utility-sub-type",
+    "--lang",
+    "--ozone-platform",
+    "--disable-features",
+    "--enable-features",
+    "--password-store",
 ];
 
 struct Step {
@@ -51,6 +52,8 @@ struct Run {
     primary: Option<Browser>,
     report_path: Option<std::path::PathBuf>,
     finished: bool,
+    nonce: String,
+    runtime: Value,
 }
 
 thread_local! {
@@ -58,26 +61,32 @@ thread_local! {
 }
 
 /// Prepares the run and returns the URL the first browser must open.
-pub fn init(options: &SelfCheckOptions, profile: &Path) -> std::io::Result<String> {
+pub fn init(
+    options: &SelfCheckOptions,
+    profile: &Path,
+    runtime: &runtime::Runtime,
+) -> std::io::Result<String> {
     let page = profile.join("flecha-selfcheck.html");
     fs::create_dir_all(profile)?;
     fs::write(
         &page,
         "<!doctype html><meta charset=utf-8><title>Flecha self-check</title><p>self-check</p>",
     )?;
-    let page_url = format!("file://{}", page.display());
+    let page_url = file_url(&page);
+    let nonce = nonce();
 
     let steps = vec![
         Step {
             name: "page",
             url: page_url.clone(),
-            js: script("page", PAGE_COLLECT, "() => true"),
+            js: script("page", &nonce, PAGE_COLLECT, "() => true"),
         },
         Step {
             name: "version",
             url: "chrome://version".into(),
             js: script(
                 "version",
+                &nonce,
                 TEXT_COLLECT,
                 r"() => /\d+\.\d+\.\d+\.\d+/.test(document.body?.innerText ?? '')",
             ),
@@ -87,6 +96,7 @@ pub fn init(options: &SelfCheckOptions, profile: &Path) -> std::io::Result<Strin
             url: "chrome://sandbox".into(),
             js: script(
                 "sandbox",
+                &nonce,
                 TEXT_COLLECT,
                 r"() => /adequately sandboxed/i.test(document.body?.innerText ?? '')",
             ),
@@ -94,7 +104,12 @@ pub fn init(options: &SelfCheckOptions, profile: &Path) -> std::io::Result<Strin
         Step {
             name: "webstore",
             url: WEBSTORE_URL.into(),
-            js: script("webstore", WEBSTORE_COLLECT, WEBSTORE_READY),
+            js: script(
+                "webstore",
+                &nonce,
+                WEBSTORE_COLLECT,
+                &WEBSTORE_READY.replace("__NONCE__", &nonce),
+            ),
         },
     ];
     RUN.with_borrow_mut(|run| {
@@ -109,9 +124,36 @@ pub fn init(options: &SelfCheckOptions, profile: &Path) -> std::io::Result<Strin
             primary: None,
             report_path: options.report.clone(),
             finished: false,
+            nonce,
+            runtime: runtime.report(),
         })
     });
     Ok(page_url)
+}
+
+/// A `file://` URL for an absolute path, percent-encoding everything but unreserved
+/// characters and `/`, so `#`, `%` or `?` in a directory name stay part of the path.
+fn file_url(path: &Path) -> String {
+    use std::os::unix::ffi::OsStrExt;
+    let mut url = String::from("file://");
+    for &b in path.as_os_str().as_bytes() {
+        if b.is_ascii_alphanumeric() || b"-._~/".contains(&b) {
+            url.push(b as char);
+        } else {
+            url.push_str(&format!("%{b:02X}"));
+        }
+    }
+    url
+}
+
+/// Not a secret: it only keeps console output that did not come from the injected collector
+/// from completing a step.
+fn nonce() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{:x}{:x}", nanos, std::process::id())
 }
 
 fn active() -> bool {
@@ -188,21 +230,36 @@ fn push_to_step_list(suffix: &str, value: Value) {
     });
 }
 
-/// Returns true when the message belonged to the self-check.
-pub fn on_console_message(message: &str) -> bool {
-    if let Some(note) = message.strip_prefix(NOTE_MARKER) {
-        add_note(note);
-        return true;
-    }
-    let Some(rest) = message.strip_prefix(MARKER) else {
+/// Returns true when the message was addressed to the self-check (accepted or rejected).
+/// Messages are `FLECHA_STEP <nonce> <step> <json object>` and `FLECHA_NOTE <nonce> <json>`.
+pub fn on_console_message(browser: Option<&Browser>, message: &str) -> bool {
+    let (note, rest) = if let Some(rest) = message.strip_prefix(NOTE_MARKER) {
+        (true, rest)
+    } else if let Some(rest) = message.strip_prefix(MARKER) {
+        (false, rest)
+    } else {
         return false;
     };
-    if !active() {
+    if !active() || !browser.is_some_and(is_primary) {
         return true;
     }
-    let (name, payload) = rest.split_once(' ').unwrap_or((rest, ""));
-    let value =
-        serde_json::from_str(payload).unwrap_or_else(|_| Value::String(payload.to_string()));
+    let nonce = RUN.with_borrow(|run| run.as_ref().map(|r| r.nonce.clone()).unwrap_or_default());
+    let Some(rest) = rest
+        .strip_prefix(nonce.as_str())
+        .and_then(|r| r.strip_prefix(' '))
+    else {
+        return true;
+    };
+    if note {
+        add_note(rest);
+        return true;
+    }
+    let Some((name, payload)) = rest.split_once(' ') else {
+        return true;
+    };
+    let Ok(value @ Value::Object(_)) = serde_json::from_str::<Value>(payload) else {
+        return true;
+    };
     let current = RUN.with_borrow_mut(|run| {
         let run = run.as_mut()?;
         (run.steps[run.index].name == name).then(|| {
@@ -244,7 +301,17 @@ fn arm_timeout() {
         let run = run.as_ref().expect("self-check run");
         (run.generation, run.step_timeout_ms)
     });
-    post_delayed_task(ThreadId::UI, Some(&mut StepTimeout::new(generation)), delay);
+    if post_delayed_task(ThreadId::UI, Some(&mut StepTimeout::new(generation)), delay) != 1 {
+        // Without a deadline a step that never reports would wait forever.
+        eprintln!("self-check: cannot schedule the step timeout; stopping");
+        RUN.with_borrow_mut(|run| {
+            if let Some(run) = run.as_mut() {
+                run.results
+                    .insert("error".into(), json!("cannot schedule the step timeout"));
+            }
+        });
+        finish();
+    }
 }
 
 wrap_task! {
@@ -296,11 +363,20 @@ fn on_timeout(generation: u64) {
 }
 
 fn finish() {
-    let (results, report_path) = RUN.with_borrow_mut(|run| {
-        let run = run.as_mut().expect("self-check run");
+    let Some((results, report_path, runtime)) = RUN.with_borrow_mut(|run| {
+        let run = run.as_mut()?;
+        if run.finished {
+            return None;
+        }
         run.finished = true;
-        (std::mem::take(&mut run.results), run.report_path.clone())
-    });
+        Some((
+            std::mem::take(&mut run.results),
+            run.report_path.clone(),
+            run.runtime.clone(),
+        ))
+    }) else {
+        return;
+    };
 
     let browsers: Vec<Value> = common::browsers()
         .iter()
@@ -315,35 +391,40 @@ fn finish() {
         })
         .collect();
 
-    let processes = inspect_processes();
-    let forbidden: Vec<Value> = processes
+    let scan = inspect_processes();
+    let forbidden: Vec<Value> = scan
+        .processes
         .iter()
         .flat_map(|p| {
-            let pid = p["pid"].clone();
-            p["cmdline"]
-                .as_array()
-                .cloned()
-                .unwrap_or_default()
-                .into_iter()
-                .filter_map(move |arg| {
-                    let arg = arg.as_str()?.to_string();
-                    FORBIDDEN_SWITCHES
-                        .iter()
-                        .any(|s| arg == *s || arg.starts_with(&format!("{s}=")))
-                        .then(|| json!({ "pid": pid, "switch": arg }))
-                })
+            p.cmdline
+                .iter()
+                .filter(|a| cli::is_forbidden(a))
+                .map(|a| json!({ "pid": p.pid, "switch": redact_switch(a) }))
         })
         .collect();
+    let processes: Vec<Value> = scan.processes.iter().map(|p| p.report.clone()).collect();
+
+    let mut results = results;
+    if let Some(Value::Object(version)) = results.get_mut("version")
+        && let Some(Value::String(text)) = version.get_mut("text")
+    {
+        *text = redact_version_text(text);
+    }
 
     let report = json!({
         "mode": common::mode().name(),
-        "cef": cef_versions(),
+        "cef": runtime,
         "browsers": browsers,
         "steps": results,
         "processes": processes,
+        // A scan with read errors cannot show that no forbidden switch was present.
+        "process_scan": { "complete": scan.errors.is_empty(), "errors": scan.errors },
         "forbidden_switches_found": forbidden,
     });
-    let text = serde_json::to_string_pretty(&report).expect("serialize report");
+    let mut text = serde_json::to_string_pretty(&report).expect("serialize report");
+    for home in homes() {
+        text = text.replace(&home, "~");
+    }
     println!("{REPORT_MARKER}{text}");
     if let Some(path) = report_path
         && let Err(e) = fs::write(&path, &text)
@@ -363,54 +444,102 @@ fn style_name(style: RuntimeStyle) -> &'static str {
     }
 }
 
-fn cef_versions() -> Value {
-    let compiled = String::from_utf8_lossy(cef::sys::CEF_VERSION)
-        .trim_end_matches('\0')
-        .to_string();
-    // SAFETY: api_hash returns a NUL-terminated string owned by libcef.
-    let runtime_commit = unsafe {
-        std::ffi::CStr::from_ptr(api_hash(cef::sys::CEF_API_VERSION_LAST, 2))
-            .to_string_lossy()
-            .into_owned()
-    };
-    let libcef = fs::read_to_string("/proc/self/maps").ok().and_then(|maps| {
-        maps.lines()
-            .filter_map(|l| l.split_whitespace().nth(5))
-            .find(|p| p.ends_with("/libcef.so"))
-            .map(str::to_string)
+/// The home directories to hide in the report: `$HOME` and the user's passwd entry (the Xvfb
+/// harness gives the app a scratch `$HOME`).
+fn homes() -> Vec<String> {
+    let mut homes: Vec<String> = std::env::var("HOME").into_iter().collect();
+    let uid = fs::read_to_string("/proc/self/status").ok().and_then(|s| {
+        s.lines()
+            .find_map(|l| l.strip_prefix("Uid:"))
+            .and_then(|v| v.split_whitespace().next().map(str::to_string))
     });
-    let archive = libcef.as_ref().and_then(|p| {
-        let dir = Path::new(p).parent()?;
-        let text = fs::read_to_string(dir.join("archive.json")).ok()?;
-        serde_json::from_str::<Value>(&text).ok()
-    });
-    json!({
-        "compiled_cef_version": compiled,
-        "runtime_cef_commit": runtime_commit,
-        "loaded_libcef": libcef,
-        "archive": archive,
-    })
+    if let (Some(uid), Ok(passwd)) = (uid, fs::read_to_string("/etc/passwd")) {
+        homes.extend(passwd.lines().find_map(|l| {
+            let f: Vec<&str> = l.split(':').collect();
+            (f.len() > 5 && f[2] == uid).then(|| f[5].to_string())
+        }));
+    }
+    // Longest first, so a scratch HOME under the real home is replaced whole.
+    homes.retain(|h| h.len() > 1);
+    homes.sort_by_key(|h| std::cmp::Reverse(h.len()));
+    homes
+}
+
+/// `--name=value` keeps its value only for switches in SHOWN_SWITCH_VALUES.
+fn redact_switch(arg: &str) -> String {
+    match arg.split_once('=') {
+        Some((name, _)) if !SHOWN_SWITCH_VALUES.contains(&name) => format!("{name}=<redacted>"),
+        _ => arg.to_string(),
+    }
+}
+
+/// A command line as the report shows it: switches only, values redacted as above, and no
+/// program path or positional arguments.
+fn redact_cmdline(cmdline: &[String]) -> Vec<String> {
+    cmdline
+        .iter()
+        .skip(1)
+        .filter(|a| a.starts_with("--"))
+        .map(|a| redact_switch(a))
+        .collect()
+}
+
+/// `chrome://version` lists the executable, profile path and full command line; keep the
+/// command line's switches (redacted) and drop the paths.
+fn redact_version_text(text: &str) -> String {
+    text.lines()
+        .map(|line| match line.split_once('\t') {
+            Some(("Command Line", value)) => {
+                let args: Vec<String> = value.split(' ').map(str::to_string).collect();
+                let mut shown = vec!["<program>".to_string()];
+                shown.extend(redact_cmdline(&args));
+                format!("Command Line\t{}", shown.join(" "))
+            }
+            Some((label @ ("Executable Path" | "Profile Path"), _)) => {
+                format!("{label}\t<redacted>")
+            }
+            _ => line.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+struct Process {
+    pid: u32,
+    /// Raw, for the forbidden-switch scan only; never written to the report.
+    cmdline: Vec<String>,
+    report: Value,
+}
+
+struct Scan {
+    processes: Vec<Process>,
+    errors: Vec<String>,
 }
 
 /// Lists this process and its descendants with their sandbox state from /proc.
-fn inspect_processes() -> Vec<Value> {
+fn inspect_processes() -> Scan {
     let root = std::process::id();
+    let mut errors = Vec::new();
     let mut parents: HashMap<u32, u32> = HashMap::new();
-    if let Ok(entries) = fs::read_dir("/proc") {
-        for entry in entries.flatten() {
-            let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
-                continue;
-            };
-            let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat")) else {
-                continue;
-            };
-            // Field 4 (ppid) follows the parenthesised command name, which may contain spaces.
-            if let Some(after) = stat.rsplit_once(')').map(|(_, a)| a)
-                && let Some(ppid) = after.split_whitespace().nth(1).and_then(|v| v.parse().ok())
-            {
-                parents.insert(pid, ppid);
+    match fs::read_dir("/proc") {
+        Ok(entries) => {
+            for entry in entries.flatten() {
+                let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
+                    continue;
+                };
+                // A process can exit between listing and reading; that is not a scan gap.
+                let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat")) else {
+                    continue;
+                };
+                // Field 4 (ppid) follows the parenthesised command name, which may contain spaces.
+                if let Some(after) = stat.rsplit_once(')').map(|(_, a)| a)
+                    && let Some(ppid) = after.split_whitespace().nth(1).and_then(|v| v.parse().ok())
+                {
+                    parents.insert(pid, ppid);
+                }
             }
         }
+        Err(e) => errors.push(format!("/proc: {e}")),
     }
     let is_descendant = |mut pid: u32| loop {
         if pid == root {
@@ -428,22 +557,29 @@ fn inspect_processes() -> Vec<Value> {
         .filter(|&p| is_descendant(p))
         .collect();
     pids.sort_unstable();
-    pids.into_iter()
+    let processes = pids
+        .into_iter()
         .map(|pid| {
-            let cmdline: Vec<String> = fs::read(format!("/proc/{pid}/cmdline"))
-                .map(|raw| {
-                    raw.split(|b| *b == 0)
-                        .filter(|a| !a.is_empty())
-                        .map(|a| String::from_utf8_lossy(a).into_owned())
-                        .collect()
-                })
-                .unwrap_or_default();
+            let cmdline: Vec<String> = match fs::read(format!("/proc/{pid}/cmdline")) {
+                Ok(raw) => raw
+                    .split(|b| *b == 0)
+                    .filter(|a| !a.is_empty())
+                    .map(|a| String::from_utf8_lossy(a).into_owned())
+                    .collect(),
+                Err(e) => {
+                    errors.push(format!("/proc/{pid}/cmdline: {e}"));
+                    Vec::new()
+                }
+            };
             let process_type = cmdline
                 .iter()
                 .find_map(|a| a.strip_prefix("--type="))
                 .unwrap_or(if pid == root { "browser" } else { "?" })
                 .to_string();
-            let status = fs::read_to_string(format!("/proc/{pid}/status")).unwrap_or_default();
+            let status = fs::read_to_string(format!("/proc/{pid}/status")).unwrap_or_else(|e| {
+                errors.push(format!("/proc/{pid}/status: {e}"));
+                String::new()
+            });
             let field = |name: &str| {
                 status
                     .lines()
@@ -464,7 +600,7 @@ fn inspect_processes() -> Vec<Value> {
                     (kind.to_string(), value)
                 })
                 .collect();
-            json!({
+            let report = json!({
                 "pid": pid,
                 "type": process_type,
                 // Zygote children keep the zygote's argv, so the name tells them apart.
@@ -472,15 +608,21 @@ fn inspect_processes() -> Vec<Value> {
                 "seccomp": field("Seccomp:"),
                 "no_new_privs": field("NoNewPrivs:"),
                 "namespaces": ns,
-                "cmdline": cmdline,
-            })
+                "switches": redact_cmdline(&cmdline),
+            });
+            Process {
+                pid,
+                cmdline,
+                report,
+            }
         })
-        .collect()
+        .collect();
+    Scan { processes, errors }
 }
 
 /// Wraps a collector so that it reports once, when `ready()` first holds or when the host
 /// calls `window.__flechaFlush` after the step timeout.
-fn script(name: &str, collect: &str, ready: &str) -> String {
+fn script(name: &str, nonce: &str, collect: &str, ready: &str) -> String {
     format!(
         r#"(() => {{
   const NAME = {name:?};
@@ -493,7 +635,7 @@ fn script(name: &str, collect: &str, ready: &str) -> String {
     let r;
     try {{ r = await collect(); }} catch (e) {{ r = {{ error: String(e) }}; }}
     r.reason = reason;
-    console.log('{MARKER}' + NAME + ' ' + JSON.stringify(r));
+    console.log('{MARKER}{nonce} ' + NAME + ' ' + JSON.stringify(r));
   }};
   window.__flechaFlush = report;
   const check = () => {{ try {{ if (!done && ready()) report('ready'); }} catch (e) {{}} }};
@@ -549,7 +691,7 @@ const WEBSTORE_READY: &str = r#"() => {
         .find(b => /^reject all$/i.test(label(b)));
       if (reject) {
         window.__flechaConsent = true;
-        console.log('FLECHA_NOTE ' + JSON.stringify({ consent: 'clicked Reject all', href: location.href }));
+        console.log('FLECHA_NOTE __NONCE__ ' + JSON.stringify({ consent: 'clicked Reject all' }));
         reject.click();
       }
     }

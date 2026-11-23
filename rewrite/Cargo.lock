@@ -291,7 +291,6 @@ name = "cef-osr-signin"
 version = "0.0.0"
 dependencies = [
  "cef",
- "cef-dll-sys",
  "serde_json",
  "softbuffer",
  "winit",

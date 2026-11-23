@@ -33,9 +33,16 @@
     const loads = Number(localStorage.getItem('flecha-loads') || 0) + 1;
     localStorage.setItem('flecha-loads', String(loads));
     log('storage loads', loads);
-    for (const id of ['text', 'password', 'area']) {
+    // Never type a real secret here. Even so, the password field reports only its length and
+    // whether it equals the scripted test string, and its key presses are not logged.
+    const SCRIPTED_PASSWORD = 'pa$$ wörd';
+    for (const id of ['text', 'area']) {
       document.getElementById(id).addEventListener('input', e => log(id, JSON.stringify(e.target.value)));
     }
+    document.getElementById('password').addEventListener('input', e => {
+      const v = e.target.value;
+      log('password length', [...v].length, 'scripted', v === SCRIPTED_PASSWORD);
+    });
     document.getElementById('choice').addEventListener('change', e => log('choice', e.target.value));
     document.getElementById('button').addEventListener('click', e => log('click', e.detail));
     document.getElementById('button').addEventListener('dblclick', () => log('dblclick'));
@@ -51,7 +58,9 @@
         .then(s => { log('camera granted', s.getVideoTracks().length); s.getTracks().forEach(t => t.stop()); })
         .catch(e => log('camera error', e.name));
     });
-    document.addEventListener('keydown', e => log('keydown', e.key, e.code, e.keyCode));
+    document.addEventListener('keydown', e => {
+      if (e.target.type !== 'password') log('keydown', e.key, e.code, e.keyCode);
+    });
     addEventListener('scroll', () => log('scroll', Math.round(scrollY)));
   }
 </script>

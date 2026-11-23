@@ -1,58 +1,91 @@
 #!/usr/bin/env bash
 # Runs the spike on its own Xvfb display, never on the desktop session.
 #
-#   xvfb-isolated.sh <out-dir> <cef-osr-signin args...>
+#   WAIT_SECS=<secs> xvfb-isolated.sh <out-dir> <cef-osr-signin args...>
 #
-# Isolation: a private D-Bus session bus without service activation (session-bus.conf),
-# scratch HOME, XDG and runtime dirs under <out-dir>, no inherited LD_LIBRARY_PATH, and
-# WAYLAND_DISPLAY unset. Logs go to <out-dir>/stdout.log and stderr.log. The app's stdin is
-# the FIFO <out-dir>/stdin.fifo, so OSR terminal commands can be sent with
-# `echo 'go <url>' >"$CMD"`. Xvfb and the app are stopped by PID.
+# Isolation, for this script and everything it starts (Xvfb, the app, ACTIONS and any window
+# manager): no session bus address, scratch HOME, XDG and runtime dirs under <out-dir>, no
+# inherited LD_LIBRARY_PATH, WAYLAND_DISPLAY unset. The app gets a private D-Bus session bus
+# without service activation (session-bus.conf) and is started through run.sh, which loads the
+# runtime prepare.sh staged. Logs go to <out-dir>/stdout.log and stderr.log. The app's stdin
+# is the FIFO <out-dir>/stdin.fifo, so OSR terminal commands can be sent with
+# `echo 'go <url>' >"$CMD"`.
+#
+# WAIT_SECS is required. It bounds each wait: Xvfb readiness, the first page load, and the
+# grace period between SIGTERM and SIGKILL when the app is stopped. It bounds a test run and
+# is not a product limit.
 #
 # Without SCREENSHOT or ACTIONS the script waits for the app to exit and returns its status.
 # With SCREENSHOT=1 or ACTIONS=<script> it waits for the app's first "[load-end]" line, runs
 # ACTIONS (with DISPLAY, OUT, APP_PID and CMD set), then saves <out-dir>/screenshot.png. If the
 # actions ended the app, the script returns the app's exit status; otherwise it stops the app.
+# A failing ACTIONS script fails the run.
 set -euo pipefail
+: "${WAIT_SECS:?set WAIT_SECS, the bound in seconds for each wait}"
 
 here=$(cd "$(dirname "$0")" && pwd)
-bin=${BIN:-$here/../../../target/debug/cef-osr-signin}
-out=$1
+launcher=$here/../run.sh
+out=$(mkdir -p "$1" && cd "$1" && pwd)
 shift
 mkdir -p "$out"/{home,xdg-config,xdg-cache,xdg-data,runtime}
 chmod 700 "$out/runtime"
+
+unset DBUS_SESSION_BUS_ADDRESS WAYLAND_DISPLAY LD_LIBRARY_PATH
+export HOME=$out/home XDG_RUNTIME_DIR=$out/runtime XDG_CONFIG_HOME=$out/xdg-config \
+    XDG_CACHE_HOME=$out/xdg-cache XDG_DATA_HOME=$out/xdg-data XDG_SESSION_TYPE=x11
 
 display_fifo=$out/display.fifo
 cmd_fifo=$out/stdin.fifo
 rm -f "$display_fifo" "$cmd_fifo"
 mkfifo "$display_fifo" "$cmd_fifo"
-# Hold the command FIFO open so the app sees no EOF between commands.
-exec 4<>"$cmd_fifo"
+# Read-write opens do not block, so a stalled Xvfb cannot hang the harness on open, and the
+# command FIFO stays open between commands (the app sees no EOF).
+exec 3<>"$display_fifo" 4<>"$cmd_fifo"
 
-Xvfb -displayfd 3 -nolisten tcp 3>"$display_fifo" 2>"$out/xvfb.log" &
-xvfb_pid=$!
+xvfb_pid=
 app_pid=
+# Sends TERM to a whole process group, waits up to WAIT_SECS, then sends KILL.
+# shellcheck disable=SC2329 # called from cleanup, which runs through trap EXIT
+stop_group() {
+    local pgid=$1 deadline=$((SECONDS + WAIT_SECS))
+    kill -TERM -- "-$pgid" 2>/dev/null || return 0
+    while kill -0 -- "-$pgid" 2>/dev/null; do
+        if ((SECONDS >= deadline)); then
+            echo "process group $pgid ignored SIGTERM for ${WAIT_SECS}s; sending SIGKILL" >&2
+            kill -KILL -- "-$pgid" 2>/dev/null || true
+            break
+        fi
+        sleep 0.2
+    done
+}
+# shellcheck disable=SC2329 # runs through trap EXIT
 cleanup() {
     if [[ -n $app_pid ]]; then
-        # The browser is dbus-run-session's child; stop it first so it is not orphaned.
-        for child in $(pgrep -P "$app_pid" || true); do kill "$child" 2>/dev/null || true; done
+        stop_group "$app_pid"
         wait "$app_pid" 2>/dev/null || true
     fi
-    kill "$xvfb_pid" 2>/dev/null || true
-    wait "$xvfb_pid" 2>/dev/null || true
-    exec 4>&-
+    if [[ -n $xvfb_pid ]]; then
+        stop_group "$xvfb_pid"
+        wait "$xvfb_pid" 2>/dev/null || true
+    fi
+    exec 3>&- 4>&-
     rm -f "$display_fifo" "$cmd_fifo"
 }
 trap cleanup EXIT
-read -r display_number <"$display_fifo"
+
+# setsid gives Xvfb and the app their own process groups (pgid = pid), so cleanup reaches
+# every process they start.
+setsid Xvfb -displayfd 3 -nolisten tcp 2>"$out/xvfb.log" &
+xvfb_pid=$!
+if ! read -r -t "$WAIT_SECS" display_number <&3; then
+    echo "Xvfb published no display within ${WAIT_SECS}s; see $out/xvfb.log" >&2
+    exit 1
+fi
 display=:$display_number
+export DISPLAY=$display
 echo "xvfb pid $xvfb_pid display $display"
 
-env -u WAYLAND_DISPLAY -u DBUS_SESSION_BUS_ADDRESS -u LD_LIBRARY_PATH \
-    DISPLAY="$display" HOME="$out/home" XDG_RUNTIME_DIR="$out/runtime" \
-    XDG_CONFIG_HOME="$out/xdg-config" XDG_CACHE_HOME="$out/xdg-cache" \
-    XDG_DATA_HOME="$out/xdg-data" XDG_SESSION_TYPE=x11 \
-    dbus-run-session --config-file="$here/session-bus.conf" -- "$bin" "$@" \
+setsid dbus-run-session --config-file="$here/session-bus.conf" -- "$launcher" "$@" \
     <"$cmd_fifo" >"$out/stdout.log" 2>"$out/stderr.log" &
 app_pid=$!
 echo "app pid $app_pid"
@@ -68,18 +101,29 @@ finish() {
 }
 
 if [[ ${SCREENSHOT:-0} == 1 || -n ${ACTIONS:-} ]]; then
+    deadline=$((SECONDS + WAIT_SECS))
     until grep -ac '^\[load-end\] ' "$out/stderr.log" >/dev/null; do
-        kill -0 "$app_pid" 2>/dev/null || { echo "app exited before loading"; exit 1; }
+        if ! kill -0 "$app_pid" 2>/dev/null; then
+            set +e
+            wait "$app_pid"
+            status=$?
+            app_pid=
+            echo "app exited with status $status before loading a page" >&2
+            exit $((status == 0 ? 1 : status))
+        fi
+        if ((SECONDS >= deadline)); then
+            echo "no page load within ${WAIT_SECS}s" >&2
+            exit 1
+        fi
         sleep 0.2
     done
     if [[ -n ${ACTIONS:-} ]]; then
-        env -u LD_LIBRARY_PATH DISPLAY="$display" OUT="$out" APP_PID="$app_pid" CMD="$cmd_fifo" \
-            bash "$ACTIONS"
+        OUT=$out APP_PID=$app_pid CMD=$cmd_fifo bash "$ACTIONS"
     fi
     if ! kill -0 "$app_pid" 2>/dev/null; then
         finish
     fi
-    DISPLAY=$display import -window root "$out/screenshot.png"
+    import -window root "$out/screenshot.png"
     echo "screenshot $out/screenshot.png"
     exit 0
 fi

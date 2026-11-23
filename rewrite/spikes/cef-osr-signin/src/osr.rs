@@ -27,8 +27,10 @@ use winit::{
     dpi::{LogicalSize, PhysicalPosition, PhysicalSize},
     event::{ElementState, KeyEvent as WinitKeyEvent, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
-    keyboard::{KeyCode, KeyLocation, PhysicalKey},
-    platform::scancode::PhysicalKeyExtScancode,
+    keyboard::KeyLocation,
+    platform::{
+        modifier_supplement::KeyEventExtModifierSupplement, scancode::PhysicalKeyExtScancode,
+    },
     window::{Cursor, CursorIcon, Window, WindowId},
 };
 
@@ -43,7 +45,8 @@ const DOUBLE_CLICK_DISTANCE: f64 = 5.0;
 /// cefsimple's window size, as in chrome mode.
 const INITIAL_SIZE: LogicalSize<f64> = LogicalSize::new(800.0, 600.0);
 
-const FLAG_CAPS: u32 = 1;
+// EVENTFLAG_CAPS_LOCK_ON (1) is not sent: winit 0.30 does not report lock-key state, and
+// guessing it from Caps Lock presses would be wrong whenever it was on before the window opened.
 const FLAG_SHIFT: u32 = 2;
 const FLAG_CONTROL: u32 = 4;
 const FLAG_ALT: u32 = 8;
@@ -116,6 +119,8 @@ pub struct View {
     modifiers: u32,
     last_click: Option<(Instant, MouseButton, (f64, f64), i32)>,
     is_main: bool,
+    /// Its window could not be created; its browser is closed instead of shown.
+    failed: bool,
 }
 
 type ViewRef = Rc<RefCell<View>>;
@@ -138,6 +143,7 @@ impl View {
             modifiers: 0,
             last_click: None,
             is_main,
+            failed: false,
         }))
     }
 
@@ -308,9 +314,16 @@ wrap_render_handler! {
             if buffer.is_null() || width <= 0 || height <= 0 {
                 return;
             }
-            let len = width as usize * height as usize;
-            // SAFETY: CEF passes a BGRA buffer of width * height pixels, valid for this call.
-            let src = unsafe { std::slice::from_raw_parts(buffer, len * 4) };
+            let Some(bytes) = (width as usize)
+                .checked_mul(height as usize)
+                .and_then(|pixels| pixels.checked_mul(4))
+                .filter(|&bytes| bytes <= isize::MAX as usize)
+            else {
+                return;
+            };
+            // SAFETY: CEF passes a BGRA buffer of width * height pixels, valid for this call;
+            // `bytes` is that size and fits the slice length limit.
+            let src = unsafe { std::slice::from_raw_parts(buffer, bytes) };
             {
                 let mut v = self.view.borrow_mut();
                 let (target, size) = if type_ == PaintElementType::POPUP {
@@ -367,7 +380,7 @@ wrap_life_span_handler! {
                 }
             }
             let url = target_url.map(|u| u.to_string()).unwrap_or_default();
-            eprintln!("[popup] {url}");
+            eprintln!("[popup] {}", common::display_url(&url));
             let view = View::new(size, scale, false);
             VIEWS.with_borrow_mut(|views| views.push(view.clone()));
             if let Some(info) = window_info {
@@ -385,9 +398,17 @@ wrap_life_span_handler! {
 
         fn on_after_created(&self, browser: Option<&mut Browser>) {
             let Some(browser) = browser else { return };
-            self.view.borrow_mut().browser = Some(browser.clone());
+            let failed = {
+                let mut v = self.view.borrow_mut();
+                v.browser = Some(browser.clone());
+                v.failed
+            };
             common::browser_created(browser);
             if let Some(host) = browser.host() {
+                if failed {
+                    host.close_browser(1);
+                    return;
+                }
                 host.was_resized();
                 host.set_focus(1);
             }
@@ -403,6 +424,7 @@ wrap_life_span_handler! {
             let id = Rc::as_ptr(&self.view);
             VIEWS.with_borrow_mut(|views| views.retain(|v| Rc::as_ptr(v) != id));
             if let Some(browser) = browser {
+                drop_pending(browser.identifier());
                 common::browser_closed(browser);
             }
             wake();
@@ -410,9 +432,16 @@ wrap_life_span_handler! {
     }
 }
 
-enum Pending {
+enum Request {
     Media(MediaAccessCallback, u32),
     Prompt(PermissionPromptCallback, u64),
+}
+
+/// A request waiting for `allow`/`deny`, with the browser that asked, so closing that browser
+/// drops its requests.
+struct Pending {
+    browser: i32,
+    request: Request,
 }
 
 thread_local! {
@@ -420,16 +449,35 @@ thread_local! {
     static NEXT_PENDING: RefCell<u32> = const { RefCell::new(1) };
 }
 
-fn add_pending(pending: Pending, origin: &str, what: String) {
+fn add_pending(browser: Option<&Browser>, request: Request, origin: &str, what: String) {
     let id = NEXT_PENDING.with_borrow_mut(|n| {
         let id = *n;
         *n += 1;
         id
     });
-    PENDING.with_borrow_mut(|p| p.insert(id, pending));
+    let browser = browser.map_or(0, |b| b.identifier());
+    PENDING.with_borrow_mut(|p| p.insert(id, Pending { browser, request }));
     eprintln!(
         "[permission {id}] {origin} requests {what}. Type `allow {id}` or `deny {id}` and press Enter."
     );
+}
+
+/// Cancels the media requests of a closing browser. CEF dismisses its permission prompts
+/// itself (`on_dismiss_permission_prompt`).
+fn drop_pending(browser: i32) {
+    let dropped: Vec<Pending> = PENDING.with_borrow_mut(|p| {
+        let ids: Vec<u32> = p
+            .iter()
+            .filter(|(_, v)| v.browser == browser)
+            .map(|(id, _)| *id)
+            .collect();
+        ids.iter().filter_map(|id| p.remove(id)).collect()
+    });
+    for pending in dropped {
+        if let Request::Media(callback, _) = pending.request {
+            callback.cancel();
+        }
+    }
 }
 
 fn media_names(mask: u32) -> String {
@@ -452,7 +500,7 @@ wrap_permission_handler! {
     impl PermissionHandler {
         fn on_request_media_access_permission(
             &self,
-            _browser: Option<&mut Browser>,
+            browser: Option<&mut Browser>,
             _frame: Option<&mut Frame>,
             requesting_origin: Option<&CefString>,
             requested_permissions: u32,
@@ -461,7 +509,8 @@ wrap_permission_handler! {
             let Some(callback) = callback else { return 0 };
             let origin = requesting_origin.map(|o| o.to_string()).unwrap_or_default();
             add_pending(
-                Pending::Media(callback.clone(), requested_permissions),
+                browser.as_deref(),
+                Request::Media(callback.clone(), requested_permissions),
                 &origin,
                 media_names(requested_permissions),
             );
@@ -470,7 +519,7 @@ wrap_permission_handler! {
 
         fn on_show_permission_prompt(
             &self,
-            _browser: Option<&mut Browser>,
+            browser: Option<&mut Browser>,
             prompt_id: u64,
             requesting_origin: Option<&CefString>,
             requested_permissions: u32,
@@ -479,7 +528,8 @@ wrap_permission_handler! {
             let Some(callback) = callback else { return 0 };
             let origin = requesting_origin.map(|o| o.to_string()).unwrap_or_default();
             add_pending(
-                Pending::Prompt(callback.clone(), prompt_id),
+                browser.as_deref(),
+                Request::Prompt(callback.clone(), prompt_id),
                 &origin,
                 format!("permission types {requested_permissions:#x} (cef_permission_request_types_t)"),
             );
@@ -493,22 +543,25 @@ wrap_permission_handler! {
             _result: PermissionRequestResult,
         ) {
             PENDING.with_borrow_mut(|p| {
-                p.retain(|_, v| !matches!(v, Pending::Prompt(_, id) if *id == prompt_id))
+                p.retain(|_, v| !matches!(v.request, Request::Prompt(_, id) if id == prompt_id))
             });
         }
     }
 }
 
 fn answer_permission(id: u32, allow: bool) {
-    match PENDING.with_borrow_mut(|p| p.remove(&id)) {
-        Some(Pending::Media(callback, mask)) => {
+    match PENDING
+        .with_borrow_mut(|p| p.remove(&id))
+        .map(|p| p.request)
+    {
+        Some(Request::Media(callback, mask)) => {
             if allow {
                 callback.cont(mask);
             } else {
                 callback.cancel();
             }
         }
-        Some(Pending::Prompt(callback, _)) => callback.cont(if allow {
+        Some(Request::Prompt(callback, _)) => callback.cont(if allow {
             PermissionRequestResult::ACCEPT
         } else {
             PermissionRequestResult::DENY
@@ -639,10 +692,26 @@ impl OsrApp {
         let pending: Vec<ViewRef> = VIEWS.with_borrow(|views| {
             views
                 .iter()
-                .filter(|v| v.borrow().window.is_none())
+                .filter(|v| v.borrow().window.is_none() && !v.borrow().failed)
                 .cloned()
                 .collect()
         });
+        // A main window that cannot be created ends the run; a popup's browser is closed.
+        let fail = |view: &ViewRef, message: String| {
+            let (is_main, browser) = {
+                let mut v = view.borrow_mut();
+                v.failed = true;
+                (v.is_main, v.browser.clone())
+            };
+            if is_main {
+                common::fail_startup(&message);
+            } else {
+                eprintln!("{message}; closing the popup");
+                if let Some(host) = browser.and_then(|b| b.host()) {
+                    host.close_browser(1);
+                }
+            }
+        };
         for view in pending {
             let (size, scale, is_main) = {
                 let v = view.borrow();
@@ -662,7 +731,7 @@ impl OsrApp {
             let window = match event_loop.create_window(attrs) {
                 Ok(w) => Rc::new(w),
                 Err(e) => {
-                    eprintln!("cannot create window: {e}");
+                    fail(&view, format!("cannot create window: {e}"));
                     continue;
                 }
             };
@@ -671,7 +740,7 @@ impl OsrApp {
             let surface = match surface {
                 Ok(s) => s,
                 Err(e) => {
-                    eprintln!("cannot create softbuffer surface: {e}");
+                    fail(&view, format!("cannot create softbuffer surface: {e}"));
                     continue;
                 }
             };
@@ -712,7 +781,7 @@ impl OsrApp {
             None,
         );
         if created != 1 {
-            eprintln!("browser_host_create_browser failed");
+            common::fail_startup("browser_host_create_browser failed");
         }
     }
 
@@ -820,18 +889,19 @@ impl OsrApp {
         let modifiers = view.borrow().modifiers;
         let pressed = event.state == ElementState::Pressed;
 
+        let vk =
+            keys::windows_key_code(event.physical_key, &event.key_without_modifiers()).unwrap_or(0);
         if pressed
             && modifiers & (FLAG_CONTROL | FLAG_SHIFT | FLAG_ALT) == FLAG_CONTROL
-            && event.physical_key == PhysicalKey::Code(KeyCode::KeyP)
+            && vk == 0x50
         {
-            // Alloy has no browser accelerators. Ctrl+P prints, as in a browser.
+            // Alloy has no browser accelerators. Ctrl+P (VK_P) prints, as in a browser.
             if !event.repeat {
                 host.print();
             }
             return;
         }
 
-        let vk = keys::windows_key_code(event.physical_key).unwrap_or(0);
         // winit reports evdev scancodes; X11 keycodes are evdev + 8.
         let native = event
             .physical_key
@@ -969,7 +1039,7 @@ impl ApplicationHandler<UserEvent> for OsrApp {
                     flags |= FLAG_COMMAND;
                 }
                 let mut v = view.borrow_mut();
-                v.modifiers = flags | (v.modifiers & FLAG_CAPS);
+                v.modifiers = flags;
             }
             WindowEvent::KeyboardInput {
                 event,
@@ -1048,6 +1118,14 @@ impl ApplicationHandler<UserEvent> for OsrApp {
         if common::all_closed() {
             event_loop.exit();
             return;
+        }
+        if common::startup_failed() {
+            // No main browser exists or will exist. Close any popup and leave once none is open.
+            if common::browsers().is_empty() {
+                event_loop.exit();
+                return;
+            }
+            common::close_all();
         }
 
         // CEF asks for work through OnScheduleMessagePumpWork; without a request, still pump at

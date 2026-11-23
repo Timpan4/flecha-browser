@@ -58,6 +58,6 @@ pub fn create_browser(url: &str) {
         None,
     );
     if created != 1 {
-        eprintln!("browser_host_create_browser failed");
+        common::fail_startup("browser_host_create_browser failed");
     }
 }

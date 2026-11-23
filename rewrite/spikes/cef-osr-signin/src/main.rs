@@ -13,6 +13,7 @@ mod cli;
 mod common;
 mod keys;
 mod osr;
+mod runtime;
 mod selfcheck;
 
 use cef::*;
@@ -91,17 +92,31 @@ wrap_browser_process_handler! {
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
-    let _ = api_hash(sys::CEF_API_VERSION_LAST, 0);
+    if let Err(e) = runtime::configure_api() {
+        eprintln!("wrong CEF runtime: {e}");
+        return ExitCode::FAILURE;
+    }
 
-    // CEF relaunches this binary for its renderer, GPU, utility and zygote processes.
-    if args.iter().any(|a| a.starts_with("--type=")) {
+    // CEF relaunches this binary for its renderer, GPU, utility and zygote processes, with
+    // `--type=`. The browser process always has `--mode`, which CEF never passes on (it sees
+    // only argv[0] and what follows `--`, and `--type` is refused there), so a `--type=` that
+    // is the value of one of this program's options does not count.
+    let is_subprocess = !args
+        .iter()
+        .any(|a| a == "--mode" || a.starts_with("--mode="))
+        && args.iter().any(|a| a.starts_with("--type="));
+    if is_subprocess {
         let argv = Argv::new(&args);
         let code = execute_process(
             Some(&argv.main_args),
             None::<&mut App>,
             std::ptr::null_mut(),
         );
-        std::process::exit(code.max(0));
+        if code < 0 {
+            eprintln!("execute_process returned {code} in a subprocess");
+            std::process::exit(1);
+        }
+        std::process::exit(code);
     }
 
     let options = match cli::parse(&args) {
@@ -115,13 +130,27 @@ fn main() -> ExitCode {
         }
     };
     common::MODE.set(options.mode).expect("mode set once");
+    common::LOG_CONSOLE
+        .set(options.log_console)
+        .expect("log_console set once");
+
+    let runtime = match runtime::check() {
+        Ok(runtime) => runtime,
+        Err(e) => {
+            eprintln!("wrong CEF runtime: {e}");
+            eprintln!(
+                "Stage the pinned runtime with spikes/cef-osr-signin/prepare.sh and start through run.sh."
+            );
+            return ExitCode::FAILURE;
+        }
+    };
 
     if let Err(e) = std::fs::create_dir_all(&options.profile) {
         eprintln!("cannot create profile {}: {e}", options.profile.display());
         return ExitCode::FAILURE;
     }
     let start_url = match &options.self_check {
-        Some(sc) => match selfcheck::init(sc, &options.profile) {
+        Some(sc) => match selfcheck::init(sc, &options.profile, &runtime) {
             Ok(url) => url,
             Err(e) => {
                 eprintln!("cannot prepare self-check: {e}");
@@ -157,6 +186,9 @@ fn main() -> ExitCode {
         root_cache_path: profile.clone(),
         cache_path: profile,
         background_color: common::BACKGROUND,
+        // The paks, ICU data and locales are next to the loaded libcef.so, not the binary.
+        resources_dir_path: CefString::from(runtime.dir.to_string_lossy().as_ref()),
+        locales_dir_path: CefString::from(runtime.dir.join("locales").to_string_lossy().as_ref()),
         ..Default::default()
     };
     let mut app = SpikeApp::new(start_url.clone());
@@ -181,5 +213,9 @@ fn main() -> ExitCode {
         None => run_message_loop(),
     }
     shutdown();
-    ExitCode::SUCCESS
+    if common::startup_failed() {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
 }

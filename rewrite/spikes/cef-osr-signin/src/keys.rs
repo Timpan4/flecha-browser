@@ -1,10 +1,26 @@
-//! winit physical keys to Windows virtual-key codes, which CEF's `windows_key_code` expects on
-//! every platform. Values are the VK_* constants from Microsoft's "Virtual-Key Codes" table, as
+//! winit keys to Windows virtual-key codes, which CEF's `windows_key_code` expects on every
+//! platform. Values are the VK_* constants from Microsoft's "Virtual-Key Codes" table, as
 //! mirrored in Chromium's ui/events/keycodes/keyboard_codes_posix.h.
 
-use winit::keyboard::{KeyCode, PhysicalKey};
+use winit::keyboard::{Key, KeyCode, PhysicalKey};
 
-pub fn windows_key_code(key: PhysicalKey) -> Option<i32> {
+/// Letters take their code from the layout, as Chromium's own X11 and Wayland input does
+/// (KeyboardCodeFromXKeyEvent maps the keysym first): on AZERTY the key labelled A is at the
+/// physical Q position and must still be VK_A, or Ctrl+A acts as Ctrl+Q. `unmodified` is
+/// winit's `key_without_modifiers()`. Every other key uses its physical position.
+pub fn windows_key_code(physical: PhysicalKey, unmodified: &Key) -> Option<i32> {
+    if let Key::Character(text) = unmodified {
+        let mut chars = text.chars();
+        if let (Some(c), None) = (chars.next(), chars.next())
+            && c.is_ascii_alphabetic()
+        {
+            return Some(c.to_ascii_uppercase() as i32);
+        }
+    }
+    physical_key_code(physical)
+}
+
+fn physical_key_code(key: PhysicalKey) -> Option<i32> {
     let PhysicalKey::Code(code) = key else {
         return None;
     };
@@ -140,4 +156,31 @@ pub fn is_keypad(key: PhysicalKey) -> bool {
                 | NumpadEnter
         )
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn letters_follow_the_layout_and_other_keys_their_position() {
+        let a = Key::Character("a".into());
+        // AZERTY: the A key is at the physical Q position.
+        assert_eq!(
+            windows_key_code(PhysicalKey::Code(KeyCode::KeyQ), &a),
+            Some(0x41)
+        );
+        // Non-letters keep the physical code (AZERTY's unshifted digit row gives `&`).
+        let amp = Key::Character("&".into());
+        assert_eq!(
+            windows_key_code(PhysicalKey::Code(KeyCode::Digit1), &amp),
+            Some(0x31)
+        );
+        // Swedish ö is not ASCII: physical code (VK_OEM_1 at the Semicolon position).
+        let oe = Key::Character("ö".into());
+        assert_eq!(
+            windows_key_code(PhysicalKey::Code(KeyCode::Semicolon), &oe),
+            physical_key_code(PhysicalKey::Code(KeyCode::Semicolon))
+        );
+    }
 }

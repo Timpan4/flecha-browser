@@ -4,7 +4,7 @@ use std::path::PathBuf;
 pub enum Mode {
     /// Alloy-style windowless (off-screen) browser painted into a winit window.
     Osr,
-    /// Windowed Chrome-style browser in CEF Views, the control.
+    /// Chrome-style browser in a native Chrome window, the control.
     Chrome,
 }
 
@@ -23,6 +23,8 @@ pub struct Options {
     pub profile: PathBuf,
     pub url: String,
     pub self_check: Option<SelfCheckOptions>,
+    /// Relay console messages from every page, not only from local `file://` pages.
+    pub log_console: bool,
     /// Arguments after `--`, passed to CEF unchanged.
     pub cef_args: Vec<String>,
 }
@@ -34,11 +36,37 @@ pub struct SelfCheckOptions {
     pub report: Option<PathBuf>,
 }
 
+/// Switches that make the browser differ from a shipping build: remote control, automation,
+/// sandbox off, a spoofed user agent, weakened web security, test mode. The self-check scans
+/// every process for them, and they are refused after `--`. `--type` is refused there too,
+/// because it would turn the browser process into a subprocess.
+pub const FORBIDDEN_SWITCHES: &[&str] = &[
+    "--remote-debugging-port",
+    "--remote-debugging-pipe",
+    "--remote-debugging-address",
+    "--enable-automation",
+    "--headless",
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-seccomp-filter-sandbox",
+    "--disable-namespace-sandbox",
+    "--user-agent",
+    "--disable-web-security",
+    "--ignore-certificate-errors",
+    "--use-mock-keychain",
+    "--test-type",
+];
+
+pub fn is_forbidden(arg: &str) -> bool {
+    let name = arg.split_once('=').map_or(arg, |(name, _)| name);
+    FORBIDDEN_SWITCHES.contains(&name)
+}
+
 /// cefsimple's start page (cef-rs examples/cefsimple/src/shared/simple_app.rs).
 const DEFAULT_URL: &str = "https://www.google.com/";
 
 pub const USAGE: &str = "\
-usage: cef-osr-signin --mode <osr|chrome> --profile <absolute dir> [--url <url>]
+usage: cef-osr-signin --mode <osr|chrome> --profile <absolute dir> [--url <url>] [--log-console]
                       [--self-check --self-check-timeout-secs <secs> [--report <file>]]
                       [-- <extra CEF switches>]";
 
@@ -47,6 +75,7 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
     let mut profile = None;
     let mut url = None;
     let mut self_check = false;
+    let mut log_console = false;
     let mut timeout_secs = None;
     let mut report = None;
     let mut cef_args = Vec::new();
@@ -67,6 +96,12 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
                 .or_else(|| it.next().cloned())
                 .ok_or_else(|| format!("{name} needs a value"))
         };
+        let flag = |name: &str| -> Result<bool, String> {
+            match inline {
+                None => Ok(true),
+                Some(_) => Err(format!("{name} takes no value")),
+            }
+        };
         match key {
             "--mode" => {
                 mode = Some(match value("--mode")?.as_str() {
@@ -77,7 +112,8 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
             }
             "--profile" => profile = Some(PathBuf::from(value("--profile")?)),
             "--url" => url = Some(value("--url")?),
-            "--self-check" => self_check = true,
+            "--self-check" => self_check = flag("--self-check")?,
+            "--log-console" => log_console = flag("--log-console")?,
             "--self-check-timeout-secs" => {
                 let v = value("--self-check-timeout-secs")?;
                 let secs: i64 = v
@@ -94,6 +130,12 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
         }
     }
 
+    if let Some(bad) = cef_args
+        .iter()
+        .find(|a| is_forbidden(a) || a.starts_with("--type="))
+    {
+        return Err(format!("refusing CEF switch {bad:?} after --"));
+    }
     let mode = mode.ok_or("--mode is required")?;
     let profile = profile.ok_or("--profile is required")?;
     if !profile.is_absolute() {
@@ -102,7 +144,9 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
     let self_check = if self_check {
         let secs = timeout_secs.ok_or("--self-check needs --self-check-timeout-secs")?;
         Some(SelfCheckOptions {
-            step_timeout_ms: secs * 1000,
+            step_timeout_ms: secs
+                .checked_mul(1000)
+                .ok_or("--self-check-timeout-secs is too large")?,
             report,
         })
     } else {
@@ -116,6 +160,54 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
         profile,
         url: url.unwrap_or_else(|| DEFAULT_URL.to_string()),
         self_check,
+        log_console,
         cef_args,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(rest: &[&str]) -> Vec<String> {
+        ["cef-osr-signin", "--mode", "osr", "--profile", "/tmp/p"]
+            .iter()
+            .chain(rest)
+            .map(|s| s.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn refuses_forbidden_and_type_switches_after_separator() {
+        for bad in [
+            "--no-sandbox",
+            "--remote-debugging-port=9222",
+            "--type=renderer",
+        ] {
+            assert!(parse(&args(&["--", bad])).is_err(), "{bad}");
+        }
+        for ok in ["--password-store=basic", "--ozone-platform=wayland"] {
+            assert!(parse(&args(&["--", ok])).is_ok(), "{ok}");
+        }
+    }
+
+    #[test]
+    fn presence_flags_take_no_value() {
+        assert!(parse(&args(&["--log-console=false"])).is_err());
+        assert!(
+            parse(&args(&[
+                "--self-check=false",
+                "--self-check-timeout-secs",
+                "1"
+            ]))
+            .is_err()
+        );
+        assert!(parse(&args(&["--log-console"])).unwrap().log_console);
+    }
+
+    #[test]
+    fn timeout_overflow_is_an_error() {
+        let huge = i64::MAX.to_string();
+        assert!(parse(&args(&["--self-check", "--self-check-timeout-secs", &huge])).is_err());
+    }
 }
