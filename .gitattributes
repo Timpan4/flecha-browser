@@ -1,5 +1,5 @@
 # Chromium keeps its source in LF. Preserve patch bytes on Windows checkouts too.
 chromium/patches/*.patch -text
 # Spike results are captured program output and stay byte-exact, trailing spaces included.
-rewrite/spikes/*/results/** -whitespace
-rewrite/spikes/*/evidence/** -whitespace
+rewrite/spikes/*/results/** -text -whitespace
+rewrite/spikes/*/evidence/** -text -whitespace
