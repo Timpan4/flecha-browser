@@ -1,8 +1,8 @@
-xvfb pid 1364255 display :2
-app pid 1364257
-[console] INPUT storage loads 1 (file://…/fresh3/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+xvfb pid 37882 display :1
+app pid 37884
+[console] INPUT storage loads 1 (file://…/fresh4/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
 [browser] created id=2 open=2
-[load-end] http://127.0.0.1:34763
+[load-end] http://127.0.0.1:43575
 [browser] closed id=1 open=1
 PASS alive
 [browser] closed id=2 open=0

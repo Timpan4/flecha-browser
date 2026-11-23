@@ -168,7 +168,10 @@ Command output: [evidence/runtime-checks.txt](evidence/runtime-checks.txt).
 | Check | Result |
 |---|---|
 | `run.sh` before `prepare.sh` | exit 1: `No CEF runtime at …/target/cef-runtime/158.0.3/cef_linux_x86_64. Run spikes/cef-osr-signin/prepare.sh first.` |
-| `prepare.sh` | downloaded the beta archive, `sha1sum --check` passed, staged it |
+| `prepare.sh` | downloaded the beta archive, `sha1sum --check` passed, staged it; no `download.*` or `unpack.*` left |
+| `prepare.sh` with `include/` moved out of the stage | exit 1: `The CEF runtime at … is incomplete: include is missing. Remove the directory and run prepare.sh again.` |
+| `prepare.sh` with the archive removed and a `curl` that writes junk | exit 1: `sha1sum` reports the mismatch; no `download.*` file left |
+| `run.sh` with `FLECHA_SPIKE_BIN=no-such-spike-binary` | exit 1: the bare name is resolved through `PATH` before the check |
 | `build.sh` through the lock, PATH `cargo` (the caching `mbx` shim) | exit 0; `readelf -d`: `NEEDED libcef.so`, no RUNPATH; no `libcef.so` or `.pak` at the top level of `target/debug`. cef-dll-sys's build script still copies a runtime under `target/debug/build/`, which is on no library search path and is never loaded |
 | The binary started without `run.sh` | exit 127: `libcef.so: cannot open shared object file` (dynamic loader) |
 | `libcef.so` copied alone into a directory, `LD_LIBRARY_PATH` pointing there | exit 1: `wrong CEF runtime: cannot read …/archive.json` |
@@ -212,7 +215,7 @@ Page: uBlock Origin Lite, `https://chromewebstore.google.com/detail/ublock-origi
 
 ### OSR input on Xvfb
 
-`scripts/input-actions.sh` drives `scripts/input-test.html` in an OSR window with xdotool and fails unless the page reports each expected event. Before typing into a field it clicks the field and waits for the page's `focus` event, so keys cannot go to the document. The page logs what it receives ([full log](evidence/osr-input-events.txt)):
+`scripts/input-actions.sh` drives `scripts/input-test.html` in an OSR window with xdotool and fails unless the page reports each expected event. Before typing into a field it clicks the field and waits for the page's `focus` event, so keys cannot go to the document. It ran 6 times in the fresh clone and passed 6 times ([per-run summary](evidence/input-runs.txt)). The page logs what it receives ([full log](evidence/osr-input-events.txt)):
 
 | Action | Page saw |
 |---|---|
