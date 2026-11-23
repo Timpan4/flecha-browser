@@ -44,14 +44,27 @@ pub struct SsTable {
     pub rejected: Vec<String>,
 }
 
-/// Parses `ss -xan` output. The first line must be the header and every other
-/// non-blank line a row: a rejected row is a socket whose address the scan
-/// never checks, so the caller must treat any as an incomplete scan.
+/// The columns of `ss -xan`'s header, as iproute2 7.3 prints them.
+const SS_HEADER: [&str; 8] = [
+    "Netid",
+    "State",
+    "Recv-Q",
+    "Send-Q",
+    "Local",
+    "Address:Port",
+    "Peer",
+    "Address:Port",
+];
+
+/// Parses `ss -xan` output. The first line must be the full header and every
+/// other non-blank line a row: a rejected row is a socket whose address the
+/// scan never checks, and a truncated header may mean truncated output, so the
+/// caller must treat any rejected line as an incomplete scan.
 pub fn parse_ss_unix(text: &str) -> SsTable {
     let mut table = SsTable::default();
     let mut lines = text.lines();
     match lines.next() {
-        Some(header) if header.starts_with("Netid") => {}
+        Some(header) if header.split_whitespace().eq(SS_HEADER) => {}
         Some(other) => table.rejected.push(other.to_string()),
         None => table
             .rejected
@@ -71,7 +84,9 @@ pub fn parse_ss_unix(text: &str) -> SsTable {
 /// in normal form: `/run//user/1000` or `/run/user/./1000` would never match.
 /// The kernel reports fd targets and mapped files with symlinks resolved, so an
 /// entry that exists is also added in its canonical form, and a symlink alias
-/// then matches what it points to. An entry that does not exist stays as given.
+/// then matches what it points to. An entry that does not exist stays as given;
+/// any other resolution error, or a canonical path that is not valid UTF-8 and
+/// so could not be matched exactly, is an error.
 pub fn scan_roots(option: &str, value: &str) -> Result<Vec<String>, String> {
     let mut roots = Vec::new();
     for p in value.split(':').filter(|p| !p.is_empty()) {
@@ -92,11 +107,18 @@ pub fn scan_roots(option: &str, value: &str) -> Result<Vec<String>, String> {
             ));
         }
         roots.push(p.to_string());
-        if let Ok(real) = std::fs::canonicalize(p) {
-            let real = real.to_string_lossy().into_owned();
-            if !roots.contains(&real) {
-                roots.push(real);
-            }
+        let real = match std::fs::canonicalize(p) {
+            Ok(real) => real,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(format!("--pump-{option} entry {p:?}: {e}")),
+        };
+        let Some(real) = real.to_str().map(str::to_string) else {
+            return Err(format!(
+                "--pump-{option} entry {p:?} resolves to {real:?}, which is not valid UTF-8"
+            ));
+        };
+        if !roots.contains(&real) {
+            roots.push(real);
         }
     }
     Ok(roots)
@@ -191,6 +213,13 @@ mod tests {
         assert_eq!(table.rejected, ["u_str ESTAB 0 0 /run/user/1000/bus 19 *"]);
         let headless = parse_ss_unix("u_str ESTAB 0 0 * 17 * 18\n");
         assert_eq!(headless.rejected.len(), 1, "a missing header is rejected");
+        // Review thread 4666506440: a truncated header is not an empty table.
+        let truncated = parse_ss_unix("Netid State\n");
+        assert_eq!(truncated.rejected, ["Netid State"]);
+        let spaced = parse_ss_unix(
+            "Netid State  Recv-Q Send-Q      Local Address:Port    Peer Address:Port\n",
+        );
+        assert!(spaced.rejected.is_empty(), "{spaced:?}");
         assert_eq!(
             parse_ss_unix("").rejected.len(),
             1,
@@ -238,6 +267,47 @@ mod tests {
         let roots = roots.unwrap();
         assert_eq!(roots, [alias, real.clone()]);
         assert!(roots.iter().any(|r| path_under(&format!("{real}/bus"), r)));
+    }
+
+    /// Review threads 4666506455 and 4666506429: a root that cannot be resolved
+    /// for a reason other than not existing, or that resolves to a path that is
+    /// not valid UTF-8, is an error naming the option.
+    #[cfg(unix)]
+    #[test]
+    fn unresolvable_or_non_utf8_scan_roots_are_errors() {
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::fs::canonicalize(std::env::temp_dir())
+            .unwrap()
+            .join(format!(
+                "cef-gpui-pump-root-errors-test-{}",
+                std::process::id()
+            ));
+        std::fs::create_dir(&dir).unwrap();
+        let bytes = std::ffi::OsStr::from_bytes(b"not-utf8-\xff");
+        std::fs::create_dir(dir.join(bytes)).unwrap();
+        std::os::unix::fs::symlink(dir.join(bytes), dir.join("alias")).unwrap();
+        std::fs::create_dir(dir.join("locked")).unwrap();
+        std::fs::set_permissions(dir.join("locked"), std::fs::Permissions::from_mode(0o000))
+            .unwrap();
+        let alias = dir.join("alias").to_string_lossy().into_owned();
+        let hidden = dir.join("locked/x").to_string_lossy().into_owned();
+        let non_utf8 = scan_roots("allow-paths", &alias);
+        let denied = scan_roots("forbid-paths", &hidden);
+        // A process that may read a mode 000 dir (root) cannot test the error.
+        let privileged = std::fs::read_dir(dir.join("locked")).is_ok();
+        std::fs::set_permissions(dir.join("locked"), std::fs::Permissions::from_mode(0o700))
+            .unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        let error = non_utf8.unwrap_err();
+        assert!(
+            error.contains("--pump-allow-paths") && error.contains("UTF-8"),
+            "{error}"
+        );
+        if !privileged {
+            let error = denied.unwrap_err();
+            assert!(error.contains("--pump-forbid-paths"), "{error}");
+        }
     }
 
     /// Review thread probe.rs:284: an entry that cannot be resolved makes the

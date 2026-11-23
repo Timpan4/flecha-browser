@@ -47,9 +47,10 @@ out=$(cd "$copy/rewrite" && CARGO_NET_GIT_FETCH_WITH_CLI=true flock "$lock" \
 grep -E -A6 '^error: use of a disallowed method' <<<"$out" || true
 (( status != 0 )) || { echo "Clippy passed the direct per-call timer" >&2; exit 1; }
 # The diagnostic's header and its primary span, which rustc prints on the next
-# line, must name the timer and the mutant's position.
+# line, must name the timer and exactly the mutant's position.
 awk -v span="--> $mutant:$at" '
-    prev ~ /^error: use of a disallowed method `gpui::BackgroundExecutor::timer`$/ && index($0, span) { found = 1 }
+    { line = $0; sub(/^[ \t]+/, "", line) }
+    prev ~ /^error: use of a disallowed method `gpui::BackgroundExecutor::timer`$/ && line == span { found = 1 }
     { prev = $0 }
     END { exit !found }' <<<"$out" ||
     { echo "$out" >&2; echo "Clippy did not reject the timer at $mutant:$at" >&2; exit 1; }
