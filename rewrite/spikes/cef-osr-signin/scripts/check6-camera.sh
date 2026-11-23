@@ -4,7 +4,8 @@
 # spike then loads only file:// and loopback pages, see src/common.rs). The page's camera
 # button calls getUserMedia.
 # OSR: a click on the button must print a [permission N] prompt; `allow N` answers it.
-# Chrome and Flecha: Tab moves to the button and Space presses it. Chrome's permission bubble
+# Chrome and Flecha: Tab is pressed until the page reports focus on the camera button (a fixed
+# count of Tabs can lose one to the browser's own UI), then Space presses it. Chrome's permission bubble
 # opens with keyboard focus, which blurs the page (the page logs "window blur"); in the bubble
 # Tab moves through Close, the device list and "Allow while visiting the site" (seen on
 # CEF 158 and Chromium 158), and Return presses that. The bubble ignores input that arrives
@@ -35,8 +36,19 @@ if [[ $APP_MODE == osr ]]; then
     fi
     how="auto, Xvfb, $device: prompt: $prompt"
 else
-    # Tab order on input-test.html: text, password, area, choice, button, popup, notify, camera.
-    xdo key Tab Tab Tab Tab Tab Tab Tab Tab space
+    # One Tab per step; the step ends once the latest focus the page logged is the camera button.
+    camera_focused() {
+        local last
+        last=$(tail -n "+$((m + 1))" "$log" | grep -a '^\[console\] INPUT focus ' | tail -n 1 || true)
+        [[ $last == '[console] INPUT focus camera '* ]] && return 0
+        xdo key Tab
+        return 1
+    }
+    if ! wait_until 'focus on the camera button' camera_focused; then
+        cell 6 fail "auto, Xvfb, keyboard only, $device: Tab never reached the camera button"
+        exit 0
+    fi
+    xdo key space
     wait_for '^\[console\] INPUT camera requested' "$m" >/dev/null || true
     if wait_for '^\[console\] INPUT window blur' "$m" >/dev/null 2>&1; then
         prompt='the permission bubble took focus; Tab Tab Tab, Return on "Allow while visiting the site"'

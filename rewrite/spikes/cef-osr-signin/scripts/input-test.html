@@ -40,7 +40,7 @@
       document.getElementById(id).addEventListener('input', e => log(id, JSON.stringify(e.target.value)));
     }
     // The action scripts wait for focus before typing, so keys never go to the document.
-    for (const id of ['text', 'password', 'area']) {
+    for (const id of ['text', 'password', 'area', 'camera']) {
       document.getElementById(id).addEventListener('focus', () => log('focus', id));
     }
     document.getElementById('password').addEventListener('input', e => {
