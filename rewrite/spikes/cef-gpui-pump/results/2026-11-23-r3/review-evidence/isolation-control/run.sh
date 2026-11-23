@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# HISTORICAL, DO NOT RERUN. This is the record of a review repro run on
+# 2026-11-23 against commit d7ade4a. It takes paths as arguments and copies or
+# deletes files at them, and its environment predates the current isolation.
+# The exit below keeps it from running; the lines after it are what ran.
+echo "historical record; do not rerun" >&2
+exit 1
 # Negative control: the d7ade4a environment (desktop XDG_RUNTIME_DIR, default system bus).
 set -euo pipefail
 C=$1 bin=$2 page=$3

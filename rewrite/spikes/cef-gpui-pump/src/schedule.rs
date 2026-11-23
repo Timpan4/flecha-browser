@@ -40,11 +40,24 @@ pub enum Event {
     },
 }
 
+impl Event {
+    /// A request's time is when CEF made it; a call's is when it started.
+    pub fn at(&self) -> Instant {
+        match *self {
+            Event::Request { at, .. } | Event::Call { at, .. } => at,
+        }
+    }
+}
+
 /// Next call time. The periodic deadline counts from the end of the last call
 /// and is never pushed back by requests, so a stream of delayed requests cannot
 /// stretch the gap past `MAX_PUMP_INTERVAL`.
+///
+/// Requests carry the time CEF made them, not the time the pump read them, so
+/// a busy main thread does not add its queueing delay to a requested delay.
 #[derive(Debug)]
 pub struct Scheduler {
+    last_call_start: Instant,
     last_call_end: Instant,
     requested: Option<(Instant, Reason)>,
 }
@@ -52,21 +65,30 @@ pub struct Scheduler {
 impl Scheduler {
     pub fn new(now: Instant) -> Self {
         Self {
+            last_call_start: now,
             last_call_end: now,
             requested: None,
         }
     }
 
-    /// A CEF request. It replaces any earlier pending request, as the contract says.
-    pub fn request(&mut self, now: Instant, delay_ms: i64) {
-        self.requested = Some(if delay_ms <= 0 {
-            (now, Reason::Immediate)
+    /// A CEF request made at `at`. It replaces any earlier pending request, as
+    /// the contract says. A request whose time came before the last call
+    /// started was served by that call.
+    pub fn request(&mut self, at: Instant, delay_ms: i64) {
+        let due = if delay_ms <= 0 {
+            at
         } else {
-            (
-                now + Duration::from_millis(delay_ms as u64),
-                Reason::Delayed,
-            )
-        });
+            at + Duration::from_millis(delay_ms as u64)
+        };
+        if due < self.last_call_start {
+            return;
+        }
+        let reason = if delay_ms <= 0 {
+            Reason::Immediate
+        } else {
+            Reason::Delayed
+        };
+        self.requested = Some((due, reason));
     }
 
     pub fn next(&self) -> (Instant, Reason) {
@@ -77,10 +99,11 @@ impl Scheduler {
         }
     }
 
-    /// A call finished at `now`. Any pending request was served by it.
-    pub fn called(&mut self, now: Instant, rerun: bool) {
-        self.last_call_end = now;
-        self.requested = rerun.then_some((now, Reason::Rerun));
+    /// A call ran from `start` to `end`. Any pending request was served by it.
+    pub fn called(&mut self, start: Instant, end: Instant, rerun: bool) {
+        self.last_call_start = start;
+        self.last_call_end = end;
+        self.requested = rerun.then_some((end, Reason::Rerun));
     }
 }
 
@@ -101,8 +124,15 @@ impl Guard {
             return false;
         }
         self.in_work.set(true);
+        // Clears the flag on return and on unwind alike.
+        struct Release<'a>(&'a Cell<bool>);
+        impl Drop for Release<'_> {
+            fn drop(&mut self) {
+                self.0.set(false);
+            }
+        }
+        let _release = Release(&self.in_work);
         work();
-        self.in_work.set(false);
         true
     }
 
@@ -119,6 +149,14 @@ impl Guard {
 /// Checks a trace against the contract: every call answers a CEF request, is a
 /// rerun, or is a periodic call made `MAX_PUMP_INTERVAL` after the previous one.
 pub fn analyze(trace: &[Event]) -> Value {
+    analyze_between(trace, None)
+}
+
+/// Like `analyze`, but counts only calls that start within `window`. Events
+/// before it still count as history, so a call just inside the window is
+/// judged against the request or call just before it.
+pub fn analyze_between(trace: &[Event], window: Option<(Instant, Instant)>) -> Value {
+    let inside = |at: Instant| window.is_none_or(|(from, to)| at >= from && at <= to);
     let mut last_call: Option<(Instant, Duration)> = None;
     let mut last_request: Option<(Instant, i64)> = None;
     let mut gaps_ms: Vec<f64> = Vec::new();
@@ -126,23 +164,21 @@ pub fn analyze(trace: &[Event]) -> Value {
     let mut unexplained = Vec::new();
     let mut calls = 0u64;
     let mut requests = 0u64;
-    let first = trace.first().map(|e| match e {
-        Event::Request { at, .. } | Event::Call { at, .. } => *at,
-    });
+    let origin = window
+        .map(|(from, _)| from)
+        .or_else(|| trace.first().map(Event::at));
     for event in trace {
         match *event {
             Event::Request { at, delay_ms } => {
-                requests += 1;
+                requests += inside(at) as u64;
                 last_request = Some((at, delay_ms));
             }
             Event::Call { at, reason, took } => {
-                calls += 1;
-                work_ms.push(took.as_secs_f64() * 1e3);
-                if let Some((prev, _)) = last_call {
-                    gaps_ms.push((at - prev).as_secs_f64() * 1e3);
-                }
-                // The most recent request since the previous call started.
-                let pending = last_request.filter(|(r, _)| last_call.is_none_or(|(c, _)| *r >= c));
+                // The most recent request since the previous call started. A
+                // call consumes it, so it cannot explain a second call.
+                let pending = last_request
+                    .take()
+                    .filter(|(r, _)| last_call.is_none_or(|(c, _)| *r >= c));
                 let explained = match reason {
                     Reason::Immediate => pending.is_some_and(|(_, d)| d <= 0),
                     Reason::Delayed => pending
@@ -152,9 +188,17 @@ pub fn analyze(trace: &[Event]) -> Value {
                         last_call.is_none_or(|(c, took)| at >= c + took + MAX_PUMP_INTERVAL)
                     }
                 };
-                if !explained {
-                    let offset = first.map(|f| (at - f).as_secs_f64() * 1e3);
-                    unexplained.push(json!({ "at_ms": offset, "reason": format!("{reason:?}") }));
+                if inside(at) {
+                    calls += 1;
+                    work_ms.push(took.as_secs_f64() * 1e3);
+                    if let Some((prev, _)) = last_call.filter(|(prev, _)| inside(*prev)) {
+                        gaps_ms.push((at - prev).as_secs_f64() * 1e3);
+                    }
+                    if !explained {
+                        let offset = origin.map(|o| (at - o).as_secs_f64() * 1e3);
+                        unexplained
+                            .push(json!({ "at_ms": offset, "reason": format!("{reason:?}") }));
+                    }
                 }
                 last_call = Some((at, took));
             }
@@ -232,7 +276,7 @@ mod tests {
         let t0 = Instant::now();
         let mut s = Scheduler::new(t0);
         s.request(t0, 10);
-        s.called(t0 + 10 * MS, false);
+        s.called(t0 + 10 * MS, t0 + 10 * MS, false);
         assert_eq!(
             s.next(),
             (t0 + 10 * MS + MAX_PUMP_INTERVAL, Reason::Periodic)
@@ -254,7 +298,7 @@ mod tests {
 
         let t0 = Instant::now();
         let mut s = Scheduler::new(t0);
-        s.called(t0, true);
+        s.called(t0, t0, true);
         assert_eq!(s.next(), (t0, Reason::Rerun));
         // A call after the guard was released runs.
         assert!(guard.run(|| {}));
@@ -300,5 +344,78 @@ mod tests {
         assert_eq!(a["unexplained_calls"], 1);
         let at_ms = a["unexplained_examples"][0]["at_ms"].as_f64().unwrap();
         assert!((at_ms - 60.0).abs() < 1e-6, "{at_ms}");
+    }
+
+    /// Review thread schedule.rs:145: one request explains one call.
+    #[test]
+    fn one_request_explains_only_one_call() {
+        let t0 = Instant::now();
+        let trace = [
+            Event::Request {
+                at: t0,
+                delay_ms: 0,
+            },
+            Event::Call {
+                at: t0,
+                reason: Reason::Immediate,
+                took: Duration::ZERO,
+            },
+            Event::Call {
+                at: t0,
+                reason: Reason::Immediate,
+                took: Duration::ZERO,
+            },
+        ];
+        assert_eq!(analyze(&trace)["unexplained_calls"], 1);
+    }
+
+    /// A request read after a call started, but made before it, was served by it.
+    #[test]
+    fn a_request_made_before_the_last_call_started_was_served() {
+        let t0 = Instant::now();
+        let mut s = Scheduler::new(t0);
+        s.called(t0 + 5 * MS, t0 + 6 * MS, false);
+        s.request(t0 + 4 * MS, 0);
+        assert_eq!(
+            s.next(),
+            (t0 + 6 * MS + MAX_PUMP_INTERVAL, Reason::Periodic)
+        );
+        // The requested delay counts from when CEF asked, not when it was read.
+        s.request(t0 + 4 * MS, 10);
+        assert_eq!(s.next(), (t0 + 14 * MS, Reason::Delayed));
+    }
+
+    /// Review thread schedule.rs:105: a panicking call must not leave the guard held.
+    #[test]
+    fn the_guard_is_released_when_the_call_unwinds() {
+        let guard = Guard::default();
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            guard.run(|| panic!("work panicked"));
+        }));
+        assert!(caught.is_err());
+        assert!(guard.run(|| {}));
+        assert_eq!(guard.deferred(), 0);
+    }
+
+    /// Review thread pump.rs:80: a call just inside a window, answering a
+    /// request made just before it, is explained.
+    #[test]
+    fn a_window_keeps_the_history_before_it() {
+        let t0 = Instant::now();
+        let trace = [
+            Event::Request {
+                at: t0,
+                delay_ms: 0,
+            },
+            Event::Call {
+                at: t0 + MS,
+                reason: Reason::Immediate,
+                took: Duration::ZERO,
+            },
+        ];
+        let a = analyze_between(&trace, Some((t0 + MS, t0 + 2 * MS)));
+        assert_eq!(a["calls"], 1);
+        assert_eq!(a["requests"], 0);
+        assert_eq!(a["unexplained_calls"], 0);
     }
 }

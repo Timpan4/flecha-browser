@@ -174,6 +174,7 @@ fn browser_main(args: cef::args::Args, mut app: cef::App) -> Result<bool> {
         config::Scenario::DevTools => "devtools_pass",
     };
     let pass = report.get(pass_key) == Some(&json!(true))
+        && report.get("pump_pass") == Some(&json!(true))
         && report.get("isolation_clean") == Some(&json!(true))
         && browsers_closed
         && !report.contains_key("error")
@@ -225,7 +226,7 @@ fn wait_gone(path: &str) -> Result<bool> {
 fn start(
     cx: &mut App,
     cfg: config::Config,
-    pump_requests: mpsc::UnboundedReceiver<i64>,
+    pump_requests: mpsc::UnboundedReceiver<(std::time::Instant, i64)>,
     context_ready: mpsc::UnboundedReceiver<()>,
     report: scenario::Report,
     children: Rc<RefCell<Vec<probe::Proc>>>,
@@ -296,6 +297,7 @@ fn start(
         report,
         children_before_shutdown: children,
         navigation_started: None,
+        idle_window: None,
     };
     cx.spawn(async move |cx| run.run(cx).await).detach();
     Ok(())

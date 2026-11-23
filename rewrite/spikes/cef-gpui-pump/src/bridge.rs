@@ -2,19 +2,38 @@
 //! `CefBrowserHost::SendDevToolsMessage` and `AddDevToolsMessageObserver`.
 //! No remote-debugging port or pipe is opened (`include/cef_browser.h`: these
 //! calls "do not require an active DevTools front-end or remote-debugging session").
+//!
+//! Call timeouts: GPUI's Linux timers all run on one shared `Timer` thread and
+//! stay there until they fire, even when dropped (`gpui/src/platform_scheduler.rs`,
+//! `gpui_linux/src/linux/dispatcher.rs`). A timer per call piled up about 15,000
+//! timers a second under a CDP loop, saturated that thread and stalled the CEF
+//! pump behind it. So calls carry a deadline, and one sweeper task holds at most
+//! one timer, set for the earliest deadline of a call in flight.
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use base64::Engine as _;
 use cef::*;
-use futures::{FutureExt as _, channel::oneshot};
-use gpui::BackgroundExecutor;
+use futures::channel::oneshot;
+use gpui::{AsyncApp, BackgroundExecutor, Task};
 use serde_json::{Value, json};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc as StdRc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-type Pending = StdRc<RefCell<HashMap<i32, oneshot::Sender<std::result::Result<Value, Value>>>>>;
+enum Failure {
+    Protocol(Value),
+    Timeout,
+}
+
+struct InFlight {
+    reply: oneshot::Sender<std::result::Result<Value, Failure>>,
+    deadline: Instant,
+}
+
+type Pending = StdRc<RefCell<HashMap<i32, InFlight>>>;
+/// Set while the sweeper waits with no call in flight; a new call wakes it.
+type Wake = StdRc<RefCell<Option<oneshot::Sender<()>>>>;
 
 struct Tab {
     id: i32,
@@ -25,10 +44,12 @@ struct Tab {
 pub struct Bridge {
     next_id: Cell<i32>,
     pending: Pending,
+    wake: Wake,
     events: StdRc<Cell<u64>>,
+    timers: StdRc<Cell<u64>>,
     tabs: RefCell<Vec<Tab>>,
-    executor: BackgroundExecutor,
     timeout: Duration,
+    _sweeper: Task<()>,
 }
 
 wrap_dev_tools_message_observer! {
@@ -47,13 +68,13 @@ wrap_dev_tools_message_observer! {
             let Ok(value) = serde_json::from_slice::<Value>(message) else { return 0 };
             match value.get("id").and_then(Value::as_i64) {
                 Some(id) => {
-                    let waiter = self.pending.borrow_mut().remove(&(id as i32));
-                    if let Some(waiter) = waiter {
+                    let call = self.pending.borrow_mut().remove(&(id as i32));
+                    if let Some(call) = call {
                         let outcome = match value.get("error") {
-                            Some(err) => Err(err.clone()),
+                            Some(err) => Err(Failure::Protocol(err.clone())),
                             None => Ok(value.get("result").cloned().unwrap_or(Value::Null)),
                         };
-                        let _ = waiter.send(outcome);
+                        let _ = call.reply.send(outcome);
                     }
                 }
                 None => self.events.set(self.events.get() + 1),
@@ -68,17 +89,73 @@ wrap_dev_tools_message_observer! {
     }
 }
 
+/// Fails every call whose deadline passed. Sleeps until the earliest deadline
+/// in flight, or until a call arrives when none is. Deadlines are the call
+/// time plus one fixed timeout, so a call made while the timer is set never
+/// has an earlier deadline, and the sweeper sets about one timer per timeout.
+async fn sweep(
+    pending: Pending,
+    wake: Wake,
+    timers: StdRc<Cell<u64>>,
+    executor: BackgroundExecutor,
+) {
+    loop {
+        let earliest = pending.borrow().values().map(|c| c.deadline).min();
+        let Some(deadline) = earliest else {
+            let (tx, rx) = oneshot::channel();
+            *wake.borrow_mut() = Some(tx);
+            if rx.await.is_err() {
+                return;
+            }
+            continue;
+        };
+        let now = Instant::now();
+        if deadline > now {
+            timers.set(timers.get() + 1);
+            executor.timer(deadline - now).await;
+        }
+        let now = Instant::now();
+        let expired: Vec<i32> = pending
+            .borrow()
+            .iter()
+            .filter(|(_, c)| c.deadline <= now)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in expired {
+            let call = pending.borrow_mut().remove(&id);
+            if let Some(call) = call {
+                let _ = call.reply.send(Err(Failure::Timeout));
+            }
+        }
+    }
+}
+
 impl Bridge {
     /// `timeout` bounds each call: CEF drops malformed messages without a reply.
-    pub fn new(executor: BackgroundExecutor, timeout: Duration) -> Self {
+    pub fn new(cx: &mut AsyncApp, timeout: Duration) -> Self {
+        let pending: Pending = Default::default();
+        let wake: Wake = Default::default();
+        let timers: StdRc<Cell<u64>> = Default::default();
+        let executor = cx.background_executor().clone();
+        let sweeper = cx.spawn({
+            let (pending, wake, timers) = (pending.clone(), wake.clone(), timers.clone());
+            async move |_| sweep(pending, wake, timers, executor).await
+        });
         Self {
             next_id: Cell::new(1),
-            pending: Default::default(),
+            pending,
+            wake,
             events: Default::default(),
+            timers,
             tabs: Default::default(),
-            executor,
             timeout,
+            _sweeper: sweeper,
         }
+    }
+
+    /// GPUI timers the timeout sweeper has created.
+    pub fn timeout_timers_created(&self) -> u64 {
+        self.timers.get()
     }
 
     pub fn attach(&self, browser: &Browser) -> Result<i32> {
@@ -120,26 +197,28 @@ impl Bridge {
             .with_context(|| format!("no tab {tab}"))?;
         let id = self.next_id.get();
         self.next_id.set(id + 1);
-        let (tx, rx) = oneshot::channel();
-        self.pending.borrow_mut().insert(id, tx);
+        let (reply, rx) = oneshot::channel();
+        let deadline = Instant::now() + self.timeout;
+        self.pending
+            .borrow_mut()
+            .insert(id, InFlight { reply, deadline });
+        let idle_sweeper = self.wake.borrow_mut().take();
+        if let Some(wake) = idle_sweeper {
+            let _ = wake.send(());
+        }
         let message = json!({ "id": id, "method": method, "params": params }).to_string();
         // No RefCell borrow is held across this CEF call.
         if host.send_dev_tools_message(Some(message.as_bytes())) == 0 {
             self.pending.borrow_mut().remove(&id);
             bail!("SendDevToolsMessage rejected {method}");
         }
-        let mut timer = self.executor.timer(self.timeout).fuse();
-        let mut rx = rx.fuse();
-        futures::select_biased! {
-            outcome = rx => match outcome {
-                Ok(Ok(result)) => Ok(result),
-                Ok(Err(error)) => Err(anyhow!("{method} failed: {error}")),
-                Err(_) => Err(anyhow!("{method}: observer dropped")),
-            },
-            _ = timer => {
-                self.pending.borrow_mut().remove(&id);
+        match rx.await {
+            Ok(Ok(result)) => Ok(result),
+            Ok(Err(Failure::Protocol(error))) => Err(anyhow!("{method} failed: {error}")),
+            Ok(Err(Failure::Timeout)) => {
                 Err(anyhow!("{method}: no reply within {:?}", self.timeout))
             }
+            Err(_) => Err(anyhow!("{method}: bridge dropped the call")),
         }
     }
 

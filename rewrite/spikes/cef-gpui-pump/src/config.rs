@@ -38,8 +38,11 @@ pub struct Config {
     /// window manager the window never becomes active.
     pub no_inactive_throttle: bool,
     /// Paths the process tree must not have open, mapped or connected to
-    /// (the desktop session's runtime dir, the system bus socket).
+    /// (the desktop session's runtime dir, the system bus socket, the real home).
     pub forbidden_paths: Vec<String>,
+    /// Exceptions inside `forbidden_paths` the run needs: the bundle with
+    /// libcef, the test pages, the results dir that holds stderr.
+    pub allowed_paths: Vec<String>,
 }
 
 impl Config {
@@ -95,16 +98,22 @@ impl Config {
             second_browser: opts.contains_key("second-browser"),
             no_inactive_throttle: opts.contains_key("no-inactive-throttle"),
             forbidden_paths: {
-                let paths: Vec<String> = get("forbid-paths")?
-                    .split(':')
-                    .filter(|p| !p.is_empty())
-                    .map(str::to_string)
-                    .collect();
+                let paths = path_list(&get("forbid-paths")?);
                 if paths.is_empty() {
                     bail!("--pump-forbid-paths names no path");
                 }
                 paths
             },
+            allowed_paths: path_list(&get("allow-paths")?),
         })
     }
+}
+
+/// A colon-separated list of absolute paths; empty entries are dropped.
+fn path_list(value: &str) -> Vec<String> {
+    value
+        .split(':')
+        .filter(|p| !p.is_empty())
+        .map(str::to_string)
+        .collect()
 }

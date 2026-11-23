@@ -296,44 +296,64 @@ pub fn listening_sockets(procs: &[Proc]) -> Value {
     let owned: HashSet<u64> = owner.keys().copied().collect();
     let mut listening = Vec::new();
     let mut table_errors = Vec::new();
-    let mut read_table = |table: &str| match fs::read_to_string(table) {
-        Ok(text) => text,
+    // Socket tables are per network namespace, and sandboxed renderers have
+    // their own, so each process's tables are read through /proc/PID/net. A
+    // namespace whose id is readable is read once.
+    let mut namespaces: HashSet<String> = HashSet::new();
+    let mut read_table = |table: String| match fs::read_to_string(&table) {
+        Ok(text) => Some((table, text)),
         Err(e) => {
             table_errors.push(json!({ "table": table, "error": e.to_string() }));
-            String::new()
+            None
         }
     };
-    // /proc/net/tcp{,6}: field 3 is the state, 0A is TCP_LISTEN; field 9 is the inode.
-    for table in ["/proc/net/tcp", "/proc/net/tcp6"] {
-        for line in read_table(table).lines().skip(1) {
-            let f: Vec<&str> = line.split_whitespace().collect();
-            if f.get(3) == Some(&"0A")
-                && let Some(inode) = f.get(9).and_then(|s| s.parse::<u64>().ok())
-                && owned.contains(&inode)
-            {
-                listening.push(json!({ "table": table, "local": f[1], "pid": owner[&inode] }));
+    for p in procs {
+        let namespace = fs::read_link(format!("/proc/{}/ns/net", p.pid))
+            .map(|l| l.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| format!("pid {}", p.pid));
+        if !namespaces.insert(namespace) {
+            continue;
+        }
+        // tcp{,6}: field 3 is the state, 0A is TCP_LISTEN; field 9 is the inode.
+        for name in ["tcp", "tcp6"] {
+            let Some((table, text)) = read_table(format!("/proc/{}/net/{name}", p.pid)) else {
+                continue;
+            };
+            for line in text.lines().skip(1) {
+                let f: Vec<&str> = line.split_whitespace().collect();
+                if f.get(3) == Some(&"0A")
+                    && let Some(inode) = f.get(9).and_then(|s| s.parse::<u64>().ok())
+                    && owned.contains(&inode)
+                {
+                    listening.push(json!({ "table": table, "local": f[1], "pid": owner[&inode] }));
+                }
             }
         }
-    }
-    // /proc/net/unix: field 3 is flags; __SO_ACCEPTCON (0x10000) marks a listening socket.
-    for line in read_table("/proc/net/unix").lines().skip(1) {
-        let f: Vec<&str> = line.split_whitespace().collect();
-        let flags = f
-            .get(3)
-            .and_then(|s| u64::from_str_radix(s, 16).ok())
-            .unwrap_or(0);
-        let inode = f.get(6).and_then(|s| s.parse::<u64>().ok());
-        if flags & 0x10000 != 0
-            && let Some(inode) = inode.filter(|i| owned.contains(i))
-        {
-            listening
-                .push(json!({ "table": "/proc/net/unix", "path": f.get(7), "pid": owner[&inode] }));
+        // unix: field 3 is flags; __SO_ACCEPTCON (0x10000) marks a listening socket.
+        let Some((table, text)) = read_table(format!("/proc/{}/net/unix", p.pid)) else {
+            continue;
+        };
+        for line in text.lines().skip(1) {
+            let f: Vec<&str> = line.split_whitespace().collect();
+            let flags = f
+                .get(3)
+                .and_then(|s| u64::from_str_radix(s, 16).ok())
+                .unwrap_or(0);
+            let inode = f.get(6).and_then(|s| s.parse::<u64>().ok());
+            if flags & 0x10000 != 0
+                && let Some(inode) = inode.filter(|i| owned.contains(i))
+            {
+                listening.push(
+                    json!({ "table": table, "kind": "unix", "path": f.get(7), "pid": owner[&inode] }),
+                );
+            }
         }
     }
     // Zero listeners proves nothing unless every fd table and socket table was read.
     let complete = unreadable.is_empty() && table_errors.is_empty();
     json!({
         "listening": listening,
+        "network_namespaces_read": namespaces.len(),
         "sockets_seen": owned.len(),
         "unreadable_fd_tables": unreadable,
         "table_errors": table_errors,
@@ -342,13 +362,17 @@ pub fn listening_sockets(procs: &[Proc]) -> Value {
 }
 
 /// Open files, memory-mapped files and Unix socket peers of `procs` that lie
-/// under any of `forbidden` (path prefixes).
+/// under any of `forbidden` and none of `allowed` (whole path components).
 ///
 /// Socket peers come from `ss -x`, which lists the Unix sockets of this network
 /// namespace. Sandboxed renderers run in their own network namespace, so their
 /// sockets are counted in `sockets_without_peer_info` instead of resolved.
-pub fn forbidden_refs(procs: &[Proc], forbidden: &[String]) -> Value {
-    let under = |path: &str| forbidden.iter().any(|f| path.starts_with(f.as_str()));
+pub fn forbidden_refs(procs: &[Proc], forbidden: &[String], allowed: &[String]) -> Value {
+    use cef_gpui_pump::path_under;
+    let under = |path: &str| {
+        forbidden.iter().any(|f| path_under(path, f))
+            && !allowed.iter().any(|a| path_under(path, a))
+    };
     let mut open = Vec::new();
     let mut mapped = Vec::new();
     let mut unreadable = Vec::new();
@@ -433,6 +457,7 @@ pub fn forbidden_refs(procs: &[Proc], forbidden: &[String]) -> Value {
         && ss_error.is_none();
     json!({
         "forbidden": forbidden,
+        "allowed": allowed,
         "processes": procs.len(),
         "open_files": open,
         "mapped_files": mapped,

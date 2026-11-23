@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Runs every Spike 2 check on a private Xvfb display, a private D-Bus session
-# with no service activation, a scratch XDG_RUNTIME_DIR per run, and a system
-# bus address that points nowhere. Each app run checks that its process tree
-# holds nothing under the desktop session's runtime dir or the system bus
-# socket (`isolation_clean` in the report). Stops what it starts by PID.
+# with no service activation, a scratch XDG_RUNTIME_DIR, HOME and TMPDIR per
+# run, and a system bus address that points nowhere. Each app run checks that
+# its process tree holds nothing under the desktop session's runtime dir, the
+# system bus socket or the caller's home outside the bundle, pages and results
+# (`isolation_clean` in the report). Stops what it starts by PID.
 # Exits nonzero if any run fails.
 #
 # Usage: scripts/run-checks.sh RESULTS_DIR [SCENARIO...]
@@ -50,19 +51,28 @@ cp --reflink=auto -f "$profile_dir/cef-gpui-pump" "$bundle/"
 bin=$bundle/cef-gpui-pump
 echo "bundle $bundle (CEF from $cef_dir)"
 # What this run tested: the commit, any tracked edits on top of it, and the CEF archive.
-{
-    echo "head $(git -C "$here" rev-parse HEAD)"
-    echo "tracked changes in rewrite/:"
-    git -C "$here/../.." status --porcelain --untracked-files=no -- .
-} >"$results/build.txt"
+# A copy without git metadata (for example from `git archive`) still runs.
+if head=$(git -C "$here" rev-parse HEAD 2>/dev/null); then
+    {
+        echo "head $head"
+        echo "tracked changes in rewrite/:"
+        git -C "$here/../.." status --porcelain --untracked-files=no -- .
+    } >"$results/build.txt"
+else
+    echo "no git metadata" >"$results/build.txt"
+fi
 cp -f "$cef_dir/archive.json" "$results/cef-archive.json"
 
 # The private bus must never take over an existing socket path.
 "$here/scripts/check-bus-listener.sh"
 
-# What the app must not reach: the caller's runtime dir and the system bus.
+# What the app must not reach: the caller's runtime dir, the system bus and
+# the caller's home. What it needs from that home: the bundle with libcef,
+# the test pages, and the results dir that holds its stderr.
 desktop_runtime=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
 system_bus_socket=/run/dbus/system_bus_socket
+real_home=${HOME:?}
+allowed="$bundle:$pages:$results"
 
 xvfb_pid=
 scratch=()
@@ -102,39 +112,48 @@ run_one() {
     local out=$results/$name.json
     # A crash must not leave an older report to be read as this run's.
     rm -f -- "$out" "${out%.json}.png"
-    # A fresh, throwaway CEF profile and runtime dir per run (mktemp -d makes
-    # them mode 700); never the owner's profiles or session runtime dir.
-    local cache runtime
-    cache=$(mktemp -d -t cef-gpui-pump-cache.XXXXXX)
-    runtime=$(mktemp -d -t cef-gpui-pump-runtime.XXXXXX)
-    scratch+=("$cache" "$runtime")
+    # One throwaway base per run (mktemp -d makes it mode 700) holds the CEF
+    # profile, XDG_RUNTIME_DIR, HOME and TMPDIR; never the owner's profiles,
+    # session runtime dir, home or shared /tmp.
+    local base cache runtime home tmp
+    base=$(mktemp -d -t cef-gpui-pump-run.XXXXXX)
+    scratch+=("$base")
+    cache=$base/cache runtime=$base/runtime home=$base/home tmp=$base/tmp
+    mkdir -m 700 -- "$cache" "$runtime" "$home" "$tmp"
     # The bus config names this run's scratch dir; dbus-daemon picks a new socket name in it.
     sed "s|__SCRATCH_RUNTIME_DIR__|$runtime|" "$here/scripts/isolated-session-bus.conf.in" >"$runtime/session-bus.conf"
     echo "== $name"
     local status=0
+    # XDG base dirs and cache overrides would point back into the real home.
     env -u WAYLAND_DISPLAY -u WAYLAND_SOCKET -u DBUS_SESSION_BUS_ADDRESS \
+        -u XDG_CONFIG_HOME -u XDG_CACHE_HOME -u XDG_DATA_HOME -u XDG_STATE_HOME \
+        -u MESA_SHADER_CACHE_DIR -u __GL_SHADER_DISK_CACHE_PATH \
         DISPLAY="$display" XDG_SESSION_TYPE=x11 XDG_RUNTIME_DIR="$runtime" \
+        HOME="$home" TMPDIR="$tmp" \
         DBUS_SYSTEM_BUS_ADDRESS=unix:path=/nonexistent \
         dbus-run-session --config-file="$runtime/session-bus.conf" -- "$bin" \
         --ozone-platform=x11 --password-store=basic \
         --pump-url="$url" --pump-out="$out" --pump-cache-dir="$cache" \
         --pump-warmup-ms="$WARMUP_MS" --pump-measure-ms="$MEASURE_MS" \
         --pump-step-timeout-ms="$STEP_TIMEOUT_MS" \
-        --pump-forbid-paths="$desktop_runtime:$system_bus_socket" \
+        --pump-forbid-paths="$desktop_runtime:$system_bus_socket:$real_home" \
+        --pump-allow-paths="$allowed" \
         ${EXTRA_ARGS:-} "$@" >/dev/null 2>"$results/$name.stderr" || status=$?
-    # What landed in the scratch runtime dir would otherwise have gone to the desktop's.
-    (cd "$runtime" && find . -mindepth 1 -printf '%y %m %P\n' | sort) >"$results/$name.runtime-dir.txt"
-    rm -rf -- "$cache" "$runtime"
+    # What landed in the scratch dirs would otherwise have gone to the desktop
+    # session's runtime dir, the owner's home or the shared /tmp.
+    (cd "$base" && find runtime home tmp -mindepth 1 -printf '%y %m %p\n' | sort) >"$results/$name.scratch-dirs.txt"
     # Zygotes exit once the browser process has closed their sockets. Wait for
-    # every child the app saw before CefShutdown to exit (pidfd, bounded by STEP_TIMEOUT_MS).
+    # every child the app saw before CefShutdown to exit (pidfd, bounded by
+    # STEP_TIMEOUT_MS). This mode reads /proc only and never starts CEF.
     local verdict=fail
     if [[ -f $out ]]; then
-        "$bin" --pump-wait-gone="$out" || true
+        env -i HOME="$home" TMPDIR="$tmp" PATH="$PATH" "$bin" --pump-wait-gone="$out" || true
         [[ $status -eq 0 && $(jq .pass "$out") == true ]] && verdict=pass
-        echo "   exit=$status scenario_pass=$(jq .scenario_pass "$out") isolation_clean=$(jq .isolation_clean "$out") shutdown_clean=$(jq .shutdown_clean "$out") pass=$(jq .pass "$out")"
+        echo "   exit=$status scenario_pass=$(jq .scenario_pass "$out") pump_pass=$(jq .pump_pass "$out") isolation_clean=$(jq .isolation_clean "$out") shutdown_clean=$(jq .shutdown_clean "$out") pass=$(jq .pass "$out")"
     else
         echo "   exit=$status, no report written (see $name.stderr)"
     fi
+    rm -rf -- "$base"
     [[ $verdict == pass ]] || failures=$((failures + 1))
 }
 

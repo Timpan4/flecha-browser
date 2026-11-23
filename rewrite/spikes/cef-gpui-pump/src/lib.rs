@@ -1,7 +1,17 @@
 //! The parts of the spike that need neither CEF nor GPUI, so `cargo test` can
 //! run them without loading libcef.
 
+pub mod idle;
 pub mod schedule;
+
+/// Whether `path` is `dir` or lies below it, by whole path components.
+pub fn path_under(path: &str, dir: &str) -> bool {
+    let dir = dir.trim_end_matches('/');
+    path == dir
+        || path
+            .strip_prefix(dir)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
 
 /// Template tokens left in a document: `@NAME@`, or `NNNNAMENNN`, the shape a
 /// botched fill leaves when it replaces each `@` with the same number.
@@ -36,7 +46,16 @@ pub fn template_tokens(text: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::template_tokens;
+    use super::{path_under, template_tokens};
+
+    #[test]
+    fn path_under_matches_whole_components() {
+        assert!(path_under("/home/u", "/home/u"));
+        assert!(path_under("/home/u/.cache/x", "/home/u"));
+        assert!(path_under("/home/u/x", "/home/u/"));
+        assert!(!path_under("/home/u2/x", "/home/u"));
+        assert!(!path_under("/home", "/home/u"));
+    }
 
     #[test]
     fn report_has_no_template_tokens() {

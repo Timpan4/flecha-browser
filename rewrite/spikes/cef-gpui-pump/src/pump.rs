@@ -14,7 +14,7 @@
 //!   on the periodic call.
 
 use cef_gpui_pump::schedule::{Event, Guard, Reason, Scheduler};
-pub use cef_gpui_pump::schedule::{MAX_PUMP_INTERVAL, analyze};
+pub use cef_gpui_pump::schedule::{MAX_PUMP_INTERVAL, analyze, analyze_between};
 use futures::{FutureExt as _, StreamExt as _, channel::mpsc};
 use gpui::AsyncApp;
 use serde_json::{Value, json};
@@ -23,19 +23,21 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
-static SCHEDULE_TX: OnceLock<mpsc::UnboundedSender<i64>> = OnceLock::new();
+static SCHEDULE_TX: OnceLock<mpsc::UnboundedSender<(Instant, i64)>> = OnceLock::new();
 static REQUESTS_RECEIVED: AtomicU64 = AtomicU64::new(0);
+static TIMERS_CREATED: AtomicU64 = AtomicU64::new(0);
 
-/// Called from CEF's `OnScheduleMessagePumpWork` on any thread. Only marshals.
+/// Called from CEF's `OnScheduleMessagePumpWork` on any thread. Only marshals,
+/// with the time of the request.
 pub fn request_from_cef(delay_ms: i64) {
     REQUESTS_RECEIVED.fetch_add(1, Ordering::Relaxed);
     if let Some(tx) = SCHEDULE_TX.get() {
-        let _ = tx.unbounded_send(delay_ms);
+        let _ = tx.unbounded_send((Instant::now(), delay_ms));
     }
 }
 
 /// Must run before `CefInitialize`, which can already request work.
-pub fn install() -> mpsc::UnboundedReceiver<i64> {
+pub fn install() -> mpsc::UnboundedReceiver<(Instant, i64)> {
     let (tx, rx) = mpsc::unbounded();
     SCHEDULE_TX.set(tx).expect("pump installed twice");
     rx
@@ -74,6 +76,11 @@ pub fn requests_received_any_thread() -> u64 {
     REQUESTS_RECEIVED.load(Ordering::Relaxed)
 }
 
+/// GPUI timers the pump loop has created since start.
+pub fn timers_created() -> u64 {
+    TIMERS_CREATED.load(Ordering::Relaxed)
+}
+
 /// Start recording every request and call until `stop_trace`.
 pub fn start_trace() {
     TRACE.with_borrow_mut(|t| *t = Some(Vec::new()));
@@ -91,51 +98,100 @@ fn record(event: Event) {
     });
 }
 
-/// One guarded `CefDoMessageLoopWork()` call.
-fn do_work(reason: Reason) {
+/// One guarded `CefDoMessageLoopWork()` call. Returns when it started and ended,
+/// or `None` if the guard deferred it.
+fn do_work(reason: Reason) -> Option<(Instant, Instant)> {
     let at = Instant::now();
     let ran = GUARD.with(|g| g.run(cef::do_message_loop_work));
     if !ran {
-        return;
+        return None;
     }
-    let took = at.elapsed();
+    let end = Instant::now();
     COUNTS.with_borrow_mut(|c| match reason {
         Reason::Immediate => c.calls_immediate += 1,
         Reason::Delayed => c.calls_delayed += 1,
         Reason::Periodic => c.calls_periodic += 1,
         Reason::Rerun => c.calls_rerun += 1,
     });
-    record(Event::Call { at, reason, took });
+    record(Event::Call {
+        at,
+        reason,
+        took: end - at,
+    });
+    Some((at, end))
+}
+
+fn take_request(scheduler: &mut Scheduler, (at, delay_ms): (Instant, i64)) {
+    record(Event::Request { at, delay_ms });
+    COUNTS.with_borrow_mut(|c| {
+        if delay_ms <= 0 {
+            c.requests_immediate += 1
+        } else {
+            c.requests_delayed += 1
+        }
+    });
+    scheduler.request(at, delay_ms);
+}
+
+/// Returns `Pending` once, so other GPUI foreground tasks run between
+/// back-to-back pump calls.
+fn yield_now() -> impl std::future::Future<Output = ()> {
+    let mut yielded = false;
+    std::future::poll_fn(move |cx| {
+        if yielded {
+            std::task::Poll::Ready(())
+        } else {
+            yielded = true;
+            cx.waker().wake_by_ref();
+            std::task::Poll::Pending
+        }
+    })
 }
 
 /// The pump loop. Runs on GPUI's main thread until the request channel closes
 /// or the app quits.
-pub async fn run(mut requests: mpsc::UnboundedReceiver<i64>, cx: &mut AsyncApp) {
+///
+/// It creates a GPUI timer only when no armed timer fires early enough, and
+/// never for a call that is already due. GPUI's Linux timers all run on one
+/// shared thread and stay there until they fire, even when dropped
+/// (`gpui/src/platform_scheduler.rs`, `gpui_linux/src/linux/dispatcher.rs`), so
+/// one timer per request would pile up under a stream of CEF requests.
+pub async fn run(mut requests: mpsc::UnboundedReceiver<(Instant, i64)>, cx: &mut AsyncApp) {
     let executor = cx.background_executor().clone();
     let mut scheduler = Scheduler::new(Instant::now());
+    let mut armed: Option<(Instant, futures::future::Fuse<gpui::Task<()>>)> = None;
     loop {
-        let (due, reason) = scheduler.next();
-        let mut timer = executor
-            .timer(due.saturating_duration_since(Instant::now()))
-            .fuse();
-        futures::select_biased! {
-            _ = timer => {}
-            delay = requests.next() => {
-                let Some(delay_ms) = delay else { return };
-                let now = Instant::now();
-                record(Event::Request { at: now, delay_ms });
-                COUNTS.with_borrow_mut(|c| if delay_ms <= 0 {
-                    c.requests_immediate += 1
-                } else {
-                    c.requests_delayed += 1
-                });
-                scheduler.request(now, delay_ms);
-                continue;
+        // Every request already queued counts before the next call is chosen.
+        loop {
+            match requests.try_recv() {
+                Ok(request) => take_request(&mut scheduler, request),
+                Err(mpsc::TryRecvError::Closed) => return,
+                Err(mpsc::TryRecvError::Empty) => break,
             }
         }
-        do_work(reason);
-        let rerun = GUARD.with(Guard::take_rerun);
-        scheduler.called(Instant::now(), rerun);
+        let (due, reason) = scheduler.next();
+        let now = Instant::now();
+        if due > now {
+            if armed.as_ref().is_none_or(|(at, _)| *at > due) {
+                TIMERS_CREATED.fetch_add(1, Ordering::Relaxed);
+                armed = Some((due, executor.timer(due - now).fuse()));
+            }
+            let (armed_at, mut timer) = armed.take().expect("armed above");
+            futures::select_biased! {
+                _ = timer => {}
+                request = requests.next() => {
+                    let Some(request) = request else { return };
+                    take_request(&mut scheduler, request);
+                    armed = Some((armed_at, timer));
+                }
+            }
+            continue;
+        }
+        if let Some((start, end)) = do_work(reason) {
+            let rerun = GUARD.with(Guard::take_rerun);
+            scheduler.called(start, end, rerun);
+        }
+        yield_now().await;
     }
 }
 

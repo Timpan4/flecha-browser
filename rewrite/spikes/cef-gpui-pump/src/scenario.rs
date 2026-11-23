@@ -9,6 +9,7 @@ use crate::pump;
 use crate::view::{PageView, ViewStats};
 use anyhow::{Context as _, Result, bail};
 use cef::{ImplBrowser as _, ImplBrowserHost as _};
+use cef_gpui_pump::idle;
 use futures::{FutureExt as _, StreamExt as _, channel::mpsc};
 use gpui::{AsyncApp, WindowHandle};
 use serde_json::{Map, Value, json};
@@ -17,12 +18,6 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 pub type Report = Rc<RefCell<Map<String, Value>>>;
-
-/// Chromium 158 `third_party/blink/common/widget/constants.cc`:
-/// `kNewContentRenderingDelay = base::Seconds(4)`, the paint-holding timeout.
-/// `RenderWidgetHostImpl::InitializePaintHolding` starts it at navigation, and
-/// on expiry `ClearDisplayedGraphics` makes the renderer repaint once.
-const PAINT_HOLDING_TIMEOUT: Duration = Duration::from_secs(4);
 
 pub struct Run {
     pub cfg: Config,
@@ -36,6 +31,8 @@ pub struct Run {
     pub children_before_shutdown: Rc<RefCell<Vec<Proc>>>,
     /// When page 0's `CreateBrowserSync` started its navigation.
     pub navigation_started: Option<Instant>,
+    /// Idle scenario: the measured window, judged after the pump trace stops.
+    pub idle_window: Option<(Instant, Instant)>,
 }
 
 /// Counters from both sides at one instant.
@@ -122,7 +119,11 @@ impl Run {
 
     /// The tree's references to the desktop session (see `probe::forbidden_refs`).
     fn isolation(&self) -> Value {
-        probe::forbidden_refs(&probe::tree(probe::self_pid()), &self.cfg.forbidden_paths)
+        probe::forbidden_refs(
+            &probe::tree(probe::self_pid()),
+            &self.cfg.forbidden_paths,
+            &self.cfg.allowed_paths,
+        )
     }
 
     pub async fn run(mut self, cx: &mut AsyncApp) {
@@ -189,7 +190,7 @@ impl Run {
         self.put("page_load_ms", json!(load.as_secs_f64() * 1e3));
         let isolation = self.isolation();
         self.put("isolation_after_load", isolation);
-        let bridge = Bridge::new(cx.background_executor().clone(), self.cfg.step_timeout);
+        let bridge = Bridge::new(cx, self.cfg.step_timeout);
         for index in 0..count {
             let browser = self.hub.page(index).context("page not tracked")?;
             bridge.attach(&browser)?;
@@ -204,76 +205,105 @@ impl Run {
             1
         };
         let bridge = self.start_pages(cx, pages).await?;
+        // The pump is traced from page load to the end of every scenario, so a
+        // late wake-up anywhere, not only in the idle window, fails the run.
+        let pump_timers_before = pump::timers_created();
+        let traced_from = Instant::now();
+        pump::start_trace();
         let result = match self.cfg.scenario {
             Scenario::Idle => self.idle(cx).await,
             Scenario::Animate => self.animate(cx, &bridge).await,
             Scenario::Cdp => self.cdp(cx, &bridge).await,
             Scenario::DevTools => self.devtools(cx, &bridge).await,
         };
+        let trace = pump::stop_trace();
+        let traced_seconds = traced_from.elapsed().as_secs_f64();
         bridge.detach_all();
+        let analysis = pump::analyze(&trace);
+        let max_gap_ms = analysis["gap_between_calls_ms"]["max"].as_f64();
+        let step_ms = self.cfg.step_timeout.as_secs_f64() * 1e3;
+        let pump_pass =
+            analysis["unexplained_calls"] == 0 && max_gap_ms.is_some_and(|gap| gap <= step_ms);
+        let pump_timers = pump::timers_created() - pump_timers_before;
+        self.put(
+            "pump_trace",
+            json!({
+                "seconds": traced_seconds,
+                "max_gap_between_calls_ms": max_gap_ms,
+                "max_gap_bound_ms": step_ms,
+                "pump_timers_created": pump_timers,
+                "pump_timers_per_second": pump_timers as f64 / traced_seconds,
+                "bridge_timeout_timers_created": bridge.timeout_timers_created(),
+                "analysis": analysis,
+            }),
+        );
+        self.put("pump_pass", json!(pump_pass));
+        if let Some(window) = self.idle_window {
+            self.judge_idle(pump::analyze_between(&trace, Some(window)))?;
+        }
         result
     }
 
     async fn idle(&mut self, cx: &mut AsyncApp) -> Result<()> {
         self.sleep(cx, self.cfg.warmup).await;
         let a = self.snap();
-        pump::start_trace();
         self.sleep(cx, self.cfg.measure).await;
-        let trace = pump::stop_trace();
         let b = self.snap();
+        self.idle_window = Some((a.at, b.at));
         let delta = self.delta(&a, &b);
-        let analysis = pump::analyze(&trace);
+        self.put("idle", delta);
+        Ok(())
+    }
+
+    /// The idle verdict, from the pump trace of the measured window and the
+    /// page's paint log (rule and tests: `cef_gpui_pump::idle`).
+    fn judge_idle(&mut self, analysis: Value) -> Result<()> {
+        let (from, to) = self.idle_window.context("no idle window")?;
         let navigation = self.navigation_started.context("no navigation time")?;
         let full_view = [0, 0, self.hub.view_width, self.hub.view_height];
-        // Every OnPaint of the static page, timed from navigation, to explain any repaint.
-        let (paints, in_window, paint_holding): (Vec<Value>, usize, usize) = {
-            let log = self.hub.paint_log.borrow();
-            let mut in_window = 0;
-            let mut paint_holding = 0;
-            let rows = log
-                .iter()
-                .map(|(t, rects)| {
-                    let inside = *t >= a.at && *t <= b.at;
-                    // The paint-holding repaint: the whole view, once the
-                    // timeout has passed since navigation. Chromium clears
-                    // paint holding once per navigation.
-                    let holding =
-                        *t >= navigation + PAINT_HOLDING_TIMEOUT && rects.as_slice() == [full_view];
-                    if inside {
-                        in_window += 1;
-                        paint_holding += holding as usize;
-                    }
-                    json!({
-                        "ms_after_navigation": (*t - navigation).as_secs_f64() * 1e3,
-                        "in_measured_window": inside,
-                        "paint_holding_repaint": holding,
-                        "dirty_rects": rects,
-                    })
+        let log = self.hub.paint_log.borrow().clone();
+        let paints: Vec<idle::Paint> = log
+            .iter()
+            .map(|(t, rects)| idle::Paint {
+                after_navigation: t.saturating_duration_since(navigation),
+                full_view: rects.as_slice() == [full_view],
+                in_window: *t >= from && *t <= to,
+            })
+            .collect();
+        let renders = self
+            .report
+            .borrow()
+            .get("idle")
+            .and_then(|d| d["gpui_renders"].as_u64())
+            .unwrap_or(u64::MAX);
+        let unexplained = analysis["unexplained_calls"].as_u64().unwrap_or(u64::MAX);
+        let verdict = idle::judge(&paints, renders, unexplained);
+        let rows: Vec<Value> = log
+            .iter()
+            .zip(&paints)
+            .zip(&verdict.paint_holding)
+            .map(|(((_, rects), p), holding)| {
+                json!({
+                    "ms_after_navigation": p.after_navigation.as_secs_f64() * 1e3,
+                    "in_measured_window": p.in_window,
+                    "paint_holding_repaint": holding,
+                    "dirty_rects": rects,
                 })
-                .collect();
-            (rows, in_window, paint_holding)
-        };
-        let renders = delta["gpui_renders"].as_u64().unwrap_or(u64::MAX);
-        // GPUI may draw only for CEF frames, and CEF may paint only the one
-        // paint-holding repaint.
-        let explained_paints = in_window == paint_holding && paint_holding <= 1;
-        let strict = renders == 0;
-        let pass =
-            analysis["unexplained_calls"] == 0 && explained_paints && renders <= in_window as u64;
-        self.put("idle_paint_log", json!(paints));
-        self.put("idle", delta);
+            })
+            .collect();
+        self.put("idle_paint_log", json!(rows));
         self.put("idle_pump_trace", analysis);
         self.put(
             "idle_frames",
             json!({
                 "gpui_renders_in_window": renders,
-                "on_paint_in_window": in_window,
-                "paint_holding_repaints_in_window": paint_holding,
-                "paint_holding_timeout_ms": PAINT_HOLDING_TIMEOUT.as_secs_f64() * 1e3,
-                "strict_no_frames": strict,
+                "on_paint_in_window": verdict.paints_in_window,
+                "paint_holding_repaints_in_window": verdict.paint_holding_in_window,
+                "paint_holding_timeout_ms": idle::PAINT_HOLDING_TIMEOUT.as_secs_f64() * 1e3,
+                "strict_no_frames": renders == 0,
             }),
         );
-        self.put("idle_pass", json!(pass));
+        self.put("idle_pass", json!(verdict.pass));
         Ok(())
     }
 
@@ -340,28 +370,57 @@ impl Run {
 
         let before = self.page_counters(bridge).await?;
         let before_at = Instant::now();
+        let step = self.cfg.step_timeout;
+        let executor = cx.background_executor().clone();
         // Keep the DevTools session busy for the measured window and read
         // navigator.webdriver from both the call and the page's own rAF sampler.
         let start = Instant::now();
-        let mut calls = 0u64;
-        let mut true_replies = 0u64;
-        let mut errors = Vec::new();
-        let mut latencies_ms: Vec<f64> = Vec::new();
-        while start.elapsed() < self.cfg.measure {
-            let t = Instant::now();
-            let reply = bridge.evaluate(tab, "navigator.webdriver").await;
-            latencies_ms.push(t.elapsed().as_secs_f64() * 1e3);
-            match reply {
-                Ok(Value::Bool(false)) => {}
-                Ok(other) => {
-                    true_replies += 1;
-                    errors.push(format!("navigator.webdriver = {other}"));
+        let flood = async {
+            let mut calls = 0u64;
+            let mut true_replies = 0u64;
+            let mut errors = Vec::new();
+            let mut latencies_ms: Vec<f64> = Vec::new();
+            while start.elapsed() < self.cfg.measure {
+                let t = Instant::now();
+                let reply = bridge.evaluate(tab, "navigator.webdriver").await;
+                latencies_ms.push(t.elapsed().as_secs_f64() * 1e3);
+                match reply {
+                    Ok(Value::Bool(false)) => {}
+                    Ok(other) => {
+                        true_replies += 1;
+                        errors.push(format!("navigator.webdriver = {other}"));
+                    }
+                    Err(e) => errors.push(format!("{e:#}")),
                 }
-                Err(e) => errors.push(format!("{e:#}")),
+                calls += 1;
             }
-            calls += 1;
-        }
-        let loop_seconds = start.elapsed().as_secs_f64();
+            (calls, true_replies, errors, latencies_ms, start.elapsed())
+        };
+        // Alongside the loop, one call that never gets a reply (a promise that
+        // never settles) shows that the bridge's timeout fires under load. It
+        // must fail with the timeout within one more step timeout.
+        let timeout_probe = async {
+            let sent = Instant::now();
+            let reply = bridge.evaluate(tab, "new Promise(() => {})").fuse();
+            let mut bound = executor.timer(step + step).fuse();
+            futures::pin_mut!(reply);
+            futures::select_biased! {
+                reply = reply => json!({
+                    "timed_out": reply.as_ref().err().is_some_and(|e| e.to_string().contains("no reply within")),
+                    "error": reply.as_ref().err().map(|e| format!("{e:#}")),
+                    "returned_after_ms": sent.elapsed().as_secs_f64() * 1e3,
+                    "late_ms": (sent.elapsed().as_secs_f64() - step.as_secs_f64()) * 1e3,
+                }),
+                _ = bound => json!({
+                    "timed_out": false,
+                    "error": "no result within two step timeouts",
+                    "returned_after_ms": sent.elapsed().as_secs_f64() * 1e3,
+                }),
+            }
+        };
+        let ((calls, true_replies, errors, mut latencies_ms, loop_time), timeout_probe) =
+            futures::join!(flood, timeout_probe);
+        let loop_seconds = loop_time.as_secs_f64();
         let after = self.page_counters(bridge).await?;
         let page_seconds = before_at.elapsed().as_secs_f64();
         latencies_ms.sort_by(f64::total_cmp);
@@ -400,9 +459,18 @@ impl Run {
         let sockets = probe::listening_sockets(&tree);
         let tcp_listeners = sockets["listening"]
             .as_array()
-            .map(|l| l.iter().filter(|s| s["table"] != "/proc/net/unix").count())
+            .map(|l| l.iter().filter(|s| s["kind"] != "unix").count())
             .unwrap_or(0);
+        // Both bounds come from the step timeout, the harness's bound on any one
+        // wait for CEF: a call may take no longer, and the loop may overrun the
+        // window by no more.
+        let slowest_ms = latencies_ms.last().copied().unwrap_or(0.0);
+        let step_ms = step.as_secs_f64() * 1e3;
+        let loop_bound_ms = (self.cfg.measure + step).as_secs_f64() * 1e3;
+        let timely = slowest_ms <= step_ms && loop_seconds * 1e3 <= loop_bound_ms;
         let pass = calls > 0
+            && timely
+            && timeout_probe["timed_out"] == true
             && true_replies == 0
             && errors.is_empty()
             && samples > 0
@@ -418,7 +486,10 @@ impl Run {
                 "calls": calls,
                 "measure_ms": self.cfg.measure.as_secs_f64() * 1e3,
                 "loop_seconds": loop_seconds,
+                "loop_bound_ms": loop_bound_ms,
                 "call_latency_ms": latency,
+                "call_latency_bound_ms": step_ms,
+                "timely": timely,
                 "page_raf_frames": raf,
                 "page_raf_per_second": raf / page_seconds,
                 "page_counter_seconds": page_seconds,
@@ -430,6 +501,7 @@ impl Run {
                 "page_after": after,
             }),
         );
+        self.put("cdp_timeout_probe", timeout_probe);
         self.put("cdp_screenshot", screenshot);
         self.put("cdp_events_received", json!(bridge.events_received()));
         self.put(
