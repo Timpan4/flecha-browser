@@ -1,0 +1,17 @@
+Isolated run: /home/timpan4/.t3/worktrees/flecha-browser/t3-25e8aab9-8fed79970e8c4302/rewrite/target/phase1.GXGPNy
+Isolation check passed: runtime sockets absent, localhost resolved, localtest.me unresolved
+PASS checked /proc environ for the app and its CEF descendants (10 processes, including a renderer or zygote child)
+PASS opened a durable tab, received CEF load and paint, and captured the GPUI fixture frame
+PASS an X11 click and key passed through GPUI into the CEF input field
+PASS CEF rejected the localtest.me navigation (net error -106)
+PASS split the selected tab, loaded the second pane, and captured both pages at once
+PASS promoted the transient Peek into Today with its browser, document and draft intact
+PASS moved the live document to Flechinha and back to the last active Flecha window
+PASS closed the returned tab, added a new archive entry, and matched the shipping TS trace
+PASS dropped retired Created, Paint, Title and Address callbacks before shell dispatch
+PASS Peek in an empty isolated Space did not receive the shared cookie
+PASS two tabs in the isolated Space shared the cookie and the ordinary Space did not receive it
+PASS restarted on the same scratch profile and captured both restored pages in their original panes
+PASS the isolated cookie persisted after restart and stayed out of the ordinary Space
+PASS CEF shut down cleanly
+Isolated process namespace exited (0)

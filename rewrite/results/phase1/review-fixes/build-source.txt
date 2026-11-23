@@ -1,0 +1,5 @@
+Binary source be3216b6273494131519b40dcab49163f2a5fd85
+rustc 1.100.0 (0ef1bc386 2026-11-09)
+e3c2ad106fabbd48bf816a205c264d4af43022b470a5060471a9c04592a6e893  target/debug/flecha
+Launcher at 06bfa8e045b51447f2de01dad5fa987f2c5a3148
+Negative-control driver at 728ab0c63dfa27e32793a02e884eb4e3992fcdf2
