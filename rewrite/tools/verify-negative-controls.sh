@@ -33,16 +33,29 @@ expect_failure() {
 expect_failure direct-launch 'Flecha must be started by rewrite/tools/isolated-run.sh' \
   env -i LD_LIBRARY_PATH="$runtime" "$rewrite/target/debug/flecha"
 expect_failure restore 'restore lost the persisted window' tools/verify-slice.sh break-restore
+expect_failure resolver 'Public name localtest.me resolved inside the launcher' \
+  tools/isolated-run.sh x11 -- bash -c 'printf "127.0.0.1 localtest.me\n" >> /mnt/scratch/hosts
+    exec bash tools/verify-launcher-isolation.sh'
+expect_failure runtime-socket 'Host runtime sockets are visible inside the launcher' \
+  tools/isolated-run.sh x11 -- node -e '
+    const { spawnSync } = require("node:child_process");
+    require("node:net").createServer().listen("/run/fixture.sock", () => {
+      const result = spawnSync("bash", ["tools/verify-launcher-isolation.sh"], { stdio: "inherit" });
+      process.exit(result.status ?? 1);
+    });'
 
 binary="./target/${suite##*/}/rewrite/target/debug/flecha"
-for mutation in cookie stale; do
+for mutation in cookie stale stale-paint stale-title split-swap blank-restart close-archive peek-shared; do
   case "$mutation" in
-    cookie) expected='cookie request used the wrong Space context' ;;
-    stale) expected='stale CEF generation reached the shell' ;;
+    cookie|peek-shared) expected='cookie request used the wrong Space context' ;;
+    stale|stale-paint|stale-title) expected='stale CEF generation reached the shell' ;;
+    split-swap) expected='split put the fixture pages on the wrong split sides' ;;
+    blank-restart) expected='restart-split did not paint both split pages' ;;
+    close-archive) expected='closing did not add a fresh archive entry' ;;
   esac
   (
     cd "$shadow"
-    cp "$rewrite/crates/flecha-cef/src/lib.rs" crates/flecha-cef/src/lib.rs
+    cp -a "$rewrite/crates/." crates/
     node "$rewrite/tools/mutate-slice.mjs" "$mutation"
     "${launcher[@]}" build --locked -p flecha -j 14 >"$logs/$mutation-build.log" 2>&1
   ) || { cat "$logs/$mutation-build.log" >&2; exit 1; }
@@ -51,7 +64,7 @@ done
 
 (
   cd "$shadow"
-  cp "$rewrite/crates/flecha-cef/src/lib.rs" crates/flecha-cef/src/lib.rs
+  cp -a "$rewrite/crates/." crates/
   node "$rewrite/tools/mutate-slice.mjs" timeout
   expect_failure timeout 'use of a disallowed method' \
     "${launcher[@]}" clippy --locked -p flecha -j 14 --all-targets -- -D warnings

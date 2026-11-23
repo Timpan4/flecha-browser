@@ -23,13 +23,16 @@ export async function fixture() {
     return;
   }
 
-  const cookie = /(?:^|; )flecha_phase1=isolated(?:;|$)/.test(request.headers.cookie ?? '');
+  const cookie = /(?:^|; )flecha_phase1=(isolated|shared)(?:;|$)/.exec(request.headers.cookie ?? '')?.[1];
 
-  if (path === '/cookie/set') {
-    response.setHeader('Set-Cookie', 'flecha_phase1=isolated; Path=/; HttpOnly; SameSite=Lax');
+  const write = { '/cookie/set': 'isolated', '/cookie/set-shared': 'shared' }[path];
+
+  if (write) {
+    response.setHeader('Set-Cookie', `flecha_phase1=${write}; Path=/; HttpOnly; SameSite=Lax`);
   }
 
-  const name = path === '/cookie/check' ? (cookie ? 'Cookie present' : 'Cookie absent') : `Flecha fixture ${path}`;
+  const cookieResult = { isolated: 'Cookie present', shared: 'Shared cookie' };
+  const name = path === '/cookie/check' ? (cookieResult[cookie] ?? 'Cookie absent') : `Flecha fixture ${path}`;
 
   const [background, marker] = {
     '/split': ['#703496', '#f386b9'],

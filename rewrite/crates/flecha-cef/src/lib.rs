@@ -31,6 +31,7 @@ pub enum Event {
     Address(String),
     Title(String),
     Loaded { url: String, status: i32 },
+    LoadFailed { url: String, code: i32 },
     Paint,
     PaintFailed,
     OpenLink { url: String, foreground: bool },
@@ -287,6 +288,16 @@ impl Engine {
 
     pub fn viewport(&self, tab: &TabId) -> Option<Viewport> {
         Some(self.browsers.get(tab)?.slot.viewport.get())
+    }
+
+    /// Exercise the same queue and dispatch boundary as CEF's callbacks.
+    #[doc(hidden)]
+    pub fn queue_verification_callbacks(&self, tab: &TabId) -> Option<BrowserKey> {
+        let slot = &self.browsers.get(tab)?.slot;
+        slot.emit(Event::Paint);
+        slot.emit(Event::Title("retired verification title".into()));
+        slot.emit(Event::Address("about:blank#retired-verification".into()));
+        Some(slot.key.borrow().clone())
     }
 
     pub fn ids(&self) -> impl Iterator<Item = &TabId> {

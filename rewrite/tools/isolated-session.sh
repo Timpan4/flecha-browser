@@ -14,6 +14,8 @@ export FLECHA_PROFILE=/mnt/scratch/profile FLECHA_LAUNCHER=isolated
 umask 077
 mkdir -p "$HOME" "$XDG_RUNTIME_DIR" "$TMPDIR" "$FLECHA_PROFILE"
 
+bash /mnt/work/tools/verify-launcher-isolation.sh
+
 dbus-daemon --config-file=/mnt/work/tools/session-bus.conf --address="$DBUS_SESSION_BUS_ADDRESS" \
   --nofork --print-address > /mnt/scratch/bus.address 2> /mnt/scratch/bus.log &
 bus=$!

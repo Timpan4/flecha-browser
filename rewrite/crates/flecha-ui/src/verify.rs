@@ -25,6 +25,7 @@ enum Command {
     Select { tab: TabId },
     Split { url: String },
     Peek { url: String },
+    ClosePeek,
     Promote,
     Detach,
     Return,
@@ -34,17 +35,25 @@ enum Command {
     Isolate,
     Quit,
     Snapshot,
+    Capture,
     Recreate { tab: TabId },
     Script { tab: TabId, source: String },
 }
 
 impl Command {
-    fn run(self, state: &mut Controller, window: &WindowId) -> Result<Value> {
+    fn run(
+        self,
+        state: &mut Controller,
+        window: &WindowId,
+        cx: &mut App,
+        seq: u64,
+    ) -> Result<Value> {
         let action = match self {
             Self::Open { url } => Action::Open(url),
             Self::Select { tab } => Action::Select(tab),
             Self::Split { url } => Action::SplitNew(url),
             Self::Peek { url } => Action::Peek(url),
+            Self::ClosePeek => Action::ClosePeek,
             Self::Promote => Action::Promote,
             Self::Detach => Action::Detach,
             Self::Return => Action::Return,
@@ -54,16 +63,46 @@ impl Command {
             Self::Isolate => Action::Isolate,
             Self::Quit => Action::Quit,
             Self::Snapshot => return snapshot(state),
+            Self::Capture => {
+                let handle = *state
+                    .windows
+                    .get(window)
+                    .context("no GPUI window to capture")?;
+                handle.update(cx, |_, window, _| {
+                    // GPUI runs next-frame callbacks before drawing. Redraw
+                    // in the first callback and acknowledge in the following one.
+                    window.on_next_frame(move |window, _| {
+                        window.refresh();
+                        window.on_next_frame(move |_, _| {
+                            emit(json!({ "type": "presented", "seq": seq }))
+                        });
+                    });
+                    window.refresh();
+                })?;
+                return Ok(Value::Null);
+            }
             Self::Recreate { tab } => {
                 let owner = state.engine.owner(&tab).context("no engine owner")?.clone();
                 let viewport = state.engine.viewport(&tab).context("no engine viewport")?;
                 // Both sync CEF creations emit OnAfterCreated before the pump
                 // dispatches. Only the second generation can reach the shell.
-                for _ in [(), ()] {
-                    state.engine.close(&tab);
-                    state.pane(owner.clone(), tab.clone(), viewport)?;
-                }
-                return Ok(json!(state.engine.browser_id(&tab)));
+                state.engine.close(&tab);
+                state.pane(owner.clone(), tab.clone(), viewport)?;
+                let retired = state
+                    .engine
+                    .queue_verification_callbacks(&tab)
+                    .context("no generation to retire")?;
+                state.engine.close(&tab);
+                state.pane(owner, tab.clone(), viewport)?;
+                let current = state
+                    .engine
+                    .key(&tab)
+                    .context("no replacement generation")?;
+                return Ok(json!({
+                    "retired": retired.generation(),
+                    "current": current.generation(),
+                    "browser": state.engine.browser_id(&tab),
+                }));
             }
             Self::Script { tab, source } => {
                 ensure!(
@@ -130,7 +169,7 @@ pub(super) fn install(controller: &Shared, cx: &mut App) {
                 let id = request
                     .window
                     .unwrap_or_else(|| state.model.core.focused_window().id.clone());
-                match request.command.run(&mut state, &id) {
+                match request.command.run(&mut state, &id, cx, request.seq) {
                     Ok(result) => {
                         emit(json!({ "type": "reply", "seq": request.seq, "result": result }))
                     }
@@ -155,15 +194,20 @@ pub(super) fn ready() {
 
 pub(super) fn event(message: &BrowserEvent) {
     let tab = &message.key.tab;
-    let value = match &message.event {
+    let mut value = match &message.event {
         Event::Created(browser) => json!({ "type": "created", "tab": tab, "browser": browser }),
         Event::Closed => json!({ "type": "closed", "tab": tab }),
         Event::Loaded { status, url } => {
             json!({ "type": "loaded", "tab": tab, "status": status, "url": url })
         }
+        Event::LoadFailed { url, code } => {
+            json!({ "type": "load_failed", "tab": tab, "url": url, "code": code })
+        }
+        Event::Address(address) => json!({ "type": "address", "tab": tab, "address": address }),
         Event::Title(title) => json!({ "type": "title", "tab": tab, "title": title }),
         Event::Paint => json!({ "type": "paint", "tab": tab }),
         _ => return,
     };
+    value["generation"] = json!(message.key.generation());
     emit(value);
 }

@@ -29,7 +29,7 @@ Run it from `rewrite/`, with Cargo's target dir left at `rewrite/target`. If a b
 
 ## Phase 1 on Linux
 
-Start every Phase 1 app through the launcher. Its Xvfb and headless Weston backends use a private display and a private, non-activating D-Bus session. Bubblewrap masks the host's home, display and bus sockets, and gives the run scratch XDG directories and a loopback-only network. The launcher clears the environment with `env -i` and gives CEF `--password-store=basic`. Keep test URLs on the fixture's loopback server.
+Start every Phase 1 app through the launcher. Its Xvfb and headless Weston backends use a private display and a private, non-activating D-Bus session. Bubblewrap mounts only the system files and Flecha build files needed by the run. It gives the run private `/run` and `/var/run`, scratch XDG directories, loopback-only networking, and a files-only resolver with a localhost hosts file. The launcher clears the environment with `env -i` and gives CEF `--password-store=basic`. Keep test URLs on the fixture's loopback server.
 
 ```sh
 # From rewrite/
@@ -40,7 +40,9 @@ tools/verify-negative-controls.sh
 
 The launcher needs a C compiler, bubblewrap, `ip`, `setpriv`, D-Bus and the selected compositor. The Xvfb verifier also needs Node, ImageMagick, and X11 and Xtst development headers. It prints the scratch directory for each run. The watchdog uses the same default and `FLECHA_HARNESS_TIMEOUT_MS` override as the Chromium native harness. It signals the launcher by pidfd, so it also works without a delegated cgroup on CI. The kernel reaps the isolated PID namespace when its init exits.
 
-The verifier exercises live core state, CEF events and browser identity, native X11 input, and pixels captured after GPUI compositing. It checks the app and CEF descendants through `/proc` for inherited session variables. The negative controls test missing restore data, shared cookies, a stale callback, direct startup, and a forbidden GPUI timeout. Build stamps and run output are in [results/phase1](results/phase1).
+The verifier compares live tab ordering, selection and split sides with the shipping TypeScript replay. It checks GPUI pixels before and after restart, native X11 input, CEF lifecycle events, cookies, and inherited session variables. The launcher checks for filesystem sockets and rejects public name resolution before starting its private services. The negative controls include a swapped split, a blank restart, stale callbacks, and a Peek using the shared cookie jar. Build stamps and run output are in [results/phase1](results/phase1).
+
+Regenerate the shipping trace from the repository root with `node rewrite/tools/slice-ts-replay.mjs > rewrite/tools/slice-ts-replay.jsonl`.
 
 The software OSR path is exercised on Xvfb. Real Wayland sessions, real GPU composition, native macOS and Windows windows, and Google sign-in remain manual checks. They require the relevant hardware, desktop session or test account.
 

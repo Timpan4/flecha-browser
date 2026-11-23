@@ -44,7 +44,11 @@ impl Model {
 
     pub fn open(&mut self, window: &WindowId, url: String, activate: bool) -> Result<TabId> {
         let id = tab_id();
-        let after = self.active(window).cloned();
+        let after = if activate {
+            None
+        } else {
+            self.active(window).cloned()
+        };
         ensure!(
             self.core.open_today(
                 id.clone(),
@@ -64,23 +68,25 @@ impl Model {
         url: String,
         source: Option<&TabId>,
     ) -> Result<Option<TabId>> {
-        ensure!(
-            self.core.window(&window).is_some(),
-            "Peek requires a Flecha window"
-        );
+        let active_space = &self
+            .core
+            .window(&window)
+            .context("Peek requires a Flecha window")?
+            .active_space_id;
         let transient = Transient {
             id: tab_id(),
             tab: Tab::new(url, now()),
             partition: source
                 .and_then(|id| self.partition(id))
-                .unwrap_or(Partition::Shared),
+                .unwrap_or_else(|| self.space_partition(active_space)),
         };
         Ok(self.peeks.insert(window, transient).map(|old| old.id))
     }
 
     pub fn promote(&mut self, window: &WindowId) -> Result<TabId> {
         let page = self.peeks.remove(window).context("no Peek to promote")?;
-        self.adopt(window, page)
+        let after = self.active(window).cloned();
+        self.adopt(window, page, after.as_ref())
     }
 
     pub fn detach(&mut self, source: &TabId) -> Result<Detachment> {
@@ -113,17 +119,21 @@ impl Model {
             .flechinhas
             .remove(window)
             .context("no Flechinha to return")?;
-        let tab = self.adopt(&destination, page)?;
+        let tab = self.adopt(&destination, page, None)?;
         Ok((destination, tab))
     }
 
-    fn adopt(&mut self, window: &WindowId, mut page: Transient) -> Result<TabId> {
-        let after = self.active(window).cloned();
+    fn adopt(
+        &mut self,
+        window: &WindowId,
+        mut page: Transient,
+        after: Option<&TabId>,
+    ) -> Result<TabId> {
         page.tab.home_url = None;
         page.tab.last_active = Some(now() as f64);
         ensure!(
             self.core
-                .open_today(page.id.clone(), page.tab, window, after.as_ref(), true),
+                .open_today(page.id.clone(), page.tab, window, after, true),
             "could not adopt page"
         );
         Ok(page.id)
@@ -133,16 +143,20 @@ impl Model {
         if let Some(transient) = self.transient(id) {
             return Some(transient.partition.clone());
         }
-        let space = match self.core.locate(id)? {
-            Placement::Favorite => None,
-            Placement::Pinned { space, .. } | Placement::Today { space, .. } => Some(space),
-        };
-        Some(
-            match space.filter(|space| self.core.space(space).is_some_and(|space| space.isolated)) {
-                Some(space) => Partition::Isolated(space.clone()),
-                None => Partition::Shared,
-            },
-        )
+        Some(match self.core.locate(id)? {
+            Placement::Favorite => Partition::Shared,
+            Placement::Pinned { space, .. } | Placement::Today { space, .. } => {
+                self.space_partition(space)
+            }
+        })
+    }
+
+    fn space_partition(&self, id: &SpaceId) -> Partition {
+        if self.core.space(id).is_some_and(|space| space.isolated) {
+            Partition::Isolated(id.clone())
+        } else {
+            Partition::Shared
+        }
     }
 
     fn transient(&self, id: &TabId) -> Option<&Transient> {

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { once, EventEmitter } from 'node:events';
-import { createWriteStream, renameSync } from 'node:fs';
+import { createWriteStream, readFileSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -12,16 +12,18 @@ import { checkProcessEnvironment } from './verify-process-env.mjs';
 const out = join(process.env.HOME, '..');
 const mode = process.argv[2] ?? 'slice';
 
+const shippingTrace = readFileSync(new URL('./slice-ts-replay.jsonl', import.meta.url), 'utf8')
+  .trim().split('\n').map(line => JSON.parse(line));
+
 assert(['slice', 'open', 'break-restore'].includes(mode), 'unknown slice check');
 
 const site = await fixture();
 const { base } = site;
 const pass = message => console.log(`PASS ${message}`);
 let waitingFor = 'start Flecha';
-const binary = process.argv[3] ?? './target/debug/flecha';
 
 function browser(name) {
-  const child = spawn(binary, ['--verify']);
+  const child = spawn('./target/debug/flecha', ['--verify']);
   const log = createWriteStream(join(out, `${name}.log`));
   const emitter = new EventEmitter();
   const events = [];
@@ -79,6 +81,11 @@ function browser(name) {
       child.stdin.end();
       assert.deepEqual(await closed, [0, null]);
     },
+    async present() {
+      const after = events.length;
+      await command('capture');
+      await wait('GPUI presented the fixture frame', event => event.type === 'presented', after);
+    },
     release() {
       child.stdin.destroy();
       child.stdout.destroy();
@@ -86,6 +93,35 @@ function browser(name) {
       child.unref();
     },
   };
+}
+
+async function splitCapture(app, name) {
+  await app.present();
+  waitingFor = `${name} split capture`;
+
+  const path = join(out, `${name}.png`);
+  execFileSync('magick', ['import', '-window', 'root', path]);
+  const histogram = execFileSync('magick', [path, '-format', '%c', 'histogram:info:'], { encoding: 'utf8' });
+
+  for (const color of ['#147A70', '#FFCC49', '#703496', '#F386B9']) {
+    assert(histogram.includes(color), `${name} did not paint both split pages (missing ${color})`);
+  }
+
+  function horizontalBounds(color) {
+    const output = execFileSync('magick', [
+      path, '-transparent', color, '-alpha', 'extract', '-negate', '-trim',
+      '-format', '%X %w', 'info:',
+    ], { encoding: 'utf8' });
+
+    const [start, width] = output.trim().split(' ').map(Number);
+    assert(Number.isFinite(start) && width > 0, `could not locate ${color} in ${name}`);
+
+    return { start, end: start + width };
+  }
+
+  const left = horizontalBounds('#147A70');
+  const right = horizontalBounds('#703496');
+  assert(left.end <= right.start, `${name} put the fixture pages on the wrong split sides`);
 }
 
 async function capture(name, colors, window = 'root') {
@@ -109,6 +145,13 @@ function active(snapshot) {
   const window = win(snapshot);
 
   return window.spaces[window.activeSpaceId];
+}
+
+function compareShipping(step, snapshot, names) {
+  const space = active(snapshot);
+  const name = id => names.get(id);
+  const actual = { step, today: space.today.map(name), active: name(space.activeTabId), split: space.split?.map(name) ?? null };
+  assert.deepEqual(actual, shippingTrace.find(entry => entry.step === step), `${step} state differs from the shipping TS shell`);
 }
 
 function engine(snapshot, tab, kind, window) {
@@ -169,14 +212,14 @@ async function nativeInput(app, tab) {
   pass('an X11 click and key passed through GPUI into the CEF input field');
 }
 
-async function cookie(app, expected) {
+async function cookie(app, expected, op = 'open') {
   const after = app.events.length;
-  const snapshot = await app.command('open', { url: base + '/cookie/check' });
-  const tab = active(snapshot).activeTabId;
+  const snapshot = await app.command(op, { url: base + '/cookie/check' });
+  const tab = op === 'peek' ? snapshot.peeks[0].tab : active(snapshot).activeTabId;
   await app.loaded(tab, '/cookie/check', after);
 
   const result = await app.wait('cookie fixture response', event =>
-    event.type === 'title' && event.tab === tab && ['Cookie present', 'Cookie absent'].includes(event.title), after);
+    event.type === 'title' && event.tab === tab && ['Cookie present', 'Cookie absent', 'Shared cookie'].includes(event.title), after);
 
   assert.equal(result.title, expected, 'cookie request used the wrong Space context');
 
@@ -199,7 +242,8 @@ try {
   const main = opened.window;
   const shared = win(opened).activeSpaceId;
   const left = active(opened).activeTabId;
-  assert.deepEqual(active(opened).today, [left]);
+  const names = new Map([[left, 'L']]);
+  compareShipping('open', opened, names);
   await app.loaded(left, '/open');
   await app.wait('CEF paint for initial page', event => event.type === 'paint' && event.tab === left);
   const checked = checkProcessEnvironment(app.pid);
@@ -209,12 +253,24 @@ try {
   await nativeInput(app, left);
 
   if (mode !== 'open') {
+    const publicUrl = base.replace('127.0.0.1', 'localtest.me') + '/open';
+    const attempted = await app.command('peek', { url: publicUrl });
+    const [{ tab: publicTab }] = attempted.peeks;
+
+    const navigation = await app.wait('isolated DNS result', event =>
+      ['load_failed', 'loaded'].includes(event.type) && event.tab === publicTab && event.url === publicUrl);
+
+    assert.equal(navigation.type, 'load_failed', 'CEF loaded the loopback fixture through the public name');
+    await app.command('close_peek');
+    pass(`CEF rejected the localtest.me navigation (net error ${navigation.code})`);
+
     const split = await app.command('split', { url: base + '/split' });
-    const [first, right] = active(split).split;
-    assert.equal(first, left);
-    assert.equal(active(split).activeTabId, left);
+    const [, right] = active(split).split;
+    names.set(right, 'R');
+    compareShipping('split', split, names);
     await app.loaded(right, '/split');
-    await capture('split', ['#147A70', '#FFCC49', '#703496', '#F386B9']);
+    await app.wait('paint of the right split pane', event => event.type === 'paint' && event.tab === right);
+    await splitCapture(app, 'split');
     const running = await app.command('snapshot');
     engine(running, left, 'tab', main);
     engine(running, right, 'tab', main);
@@ -231,12 +287,14 @@ try {
     assert.equal(peekDocument.draft, 'unfinished draft');
     const promoted = await app.command('promote');
     assert.deepEqual(promoted.peeks, []);
-    assert.equal(active(promoted).activeTabId, peekTab);
+    names.set(peekTab, 'P');
+    compareShipping('promote', promoted, names);
     assert.equal(engine(promoted, peekTab, 'tab', main), peekBrowser);
     assert.deepEqual(await document(app, peekTab, 'promoted'), peekDocument);
     pass('promoted the transient Peek into Today with its browser, document and draft intact');
 
     const detached = await app.command('detach');
+    compareShipping('detach', detached, names);
     const [{ window: mini, tab: moved }] = detached.flechinhas;
     assert(!detached.core.tabs[peekTab]);
     assert(!detached.core.windows.some(window => window.id === mini));
@@ -246,7 +304,8 @@ try {
     assert((await app.command('snapshot')).nativeWindows.includes(mini), 'GPUI opened the Flechinha window');
     const returned = await app.command('return', { window: mini });
     assert.deepEqual(returned.flechinhas, []);
-    assert.equal(active(returned).activeTabId, moved);
+    names.set(moved, 'M');
+    compareShipping('return', returned, names);
     assert.equal(engine(returned, moved, 'tab', main), peekBrowser);
     assert.deepEqual(await document(app, moved, 'returned'), peekDocument);
     assert(!(await app.command('snapshot')).nativeWindows.includes(mini), 'GPUI closed the emptied Flechinha window');
@@ -254,28 +313,42 @@ try {
 
     const closed = await app.command('close');
     assert(!closed.core.tabs[moved]);
-    assert(closed.core.archive.some(tab => tab.url === base + '/peek'));
-    assert.deepEqual(active(closed).split, [left, right]);
+    assert.deepEqual(closed.core.archive.slice(1), returned.core.archive, 'closing did not add a fresh archive entry');
+    assert.equal(closed.core.archive[0].url, base + '/peek');
+    compareShipping('close', closed, names);
     await app.wait('CEF closure of returned tab', event => event.type === 'closed' && event.tab === moved);
-    pass('closed the returned tab, archived its URL, and received CEF closure');
+    pass('closed the returned tab, added a new archive entry, and matched the shipping TS trace');
 
     const after = app.events.length;
     const selected = await app.command('select', { tab: left });
     assert.equal(active(selected).activeTabId, left);
     const newest = await app.command('recreate', { tab: left });
     await app.loaded(left, '/open', after);
-    const delivered = app.events.slice(after).filter(event => event.type === 'created' && event.tab === left);
-    assert.deepEqual(delivered.map(event => event.browser), [newest], 'stale CEF generation reached the shell');
-    pass('replaced a live browser twice before dispatch and received only the current generation');
+    await app.wait('paint from the replacement browser', event =>
+      event.type === 'paint' && event.tab === left && event.generation === newest.current, after);
+    const delivered = app.events.slice(after).filter(event => event.tab === left);
+    assert.deepEqual(delivered.filter(event => event.generation === newest.retired).map(event => event.type),
+      [], 'stale CEF generation reached the shell');
+    assert.deepEqual(delivered.filter(event => event.type === 'created').map(event => event.browser), [newest.browser]);
+    pass('dropped retired Created, Paint, Title and Address callbacks before shell dispatch');
 
+    const sharedWrite = await app.command('open', { url: base + '/cookie/set-shared' });
+    assert.deepEqual(active(sharedWrite).today, [active(sharedWrite).activeTabId, ...active(closed).today],
+      'foreground open did not prepend Today');
+    await app.loaded(active(sharedWrite).activeTabId, '/cookie/set-shared');
+    await cookie(app, 'Shared cookie');
     const isolated = win(await app.command('new_space')).activeSpaceId;
     const isolatedState = await app.command('isolate');
     assert(isolatedState.core.spaces.find(space => space.id === isolated).isolated);
+    assert.deepEqual(isolatedState.core.windows[0].spaces[isolated]?.today ?? [], []);
+    await cookie(app, 'Cookie absent', 'peek');
+    await app.command('close_peek');
+    pass('Peek in an empty isolated Space did not receive the shared cookie');
     const written = await app.command('open', { url: base + '/cookie/set' });
     await app.loaded(active(written).activeTabId, '/cookie/set');
     await cookie(app, 'Cookie present');
     await app.command('switch', { space: shared });
-    await cookie(app, 'Cookie absent');
+    await cookie(app, 'Shared cookie');
     const before = await app.command('select', { tab: left });
     pass('two tabs in the isolated Space shared the cookie and the ordinary Space did not receive it');
     await app.quit();
@@ -295,12 +368,16 @@ try {
     assert.deepEqual(restored.flechinhas, []);
     await restarted.loaded(left, '/open');
     await restarted.loaded(right, '/split');
-    pass('restarted on the same scratch profile and restored core state and both CEF split panes');
+
+    for (const tab of [left, right]) await restarted.wait('paint from the restored split', event =>
+      event.type === 'paint' && event.tab === tab);
+    await splitCapture(restarted, 'restart-split');
+    pass('restarted on the same scratch profile and captured both restored pages in their original panes');
 
     await restarted.command('switch', { space: isolated });
     await cookie(restarted, 'Cookie present');
     await restarted.command('switch', { space: shared });
-    await cookie(restarted, 'Cookie absent');
+    await cookie(restarted, 'Shared cookie');
     pass('the isolated cookie persisted after restart and stayed out of the ordinary Space');
     await restarted.quit();
   } else {

@@ -201,6 +201,15 @@ wrap_load_handler! {
                 self.slot.emit(Event::Loaded { url: CefString::from(&frame.url()).to_string(), status });
             }
         }
+
+        fn on_load_error(
+            &self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, code: Errorcode,
+            _error: Option<&CefString>, url: Option<&CefString>,
+        ) {
+            if frame.is_some_and(|frame| frame.is_main() != 0) && let Some(url) = url {
+                self.slot.emit(Event::LoadFailed { url: url.to_string(), code: code.get_raw() });
+            }
+        }
     }
 }
 

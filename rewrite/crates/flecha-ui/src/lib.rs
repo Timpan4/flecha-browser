@@ -267,7 +267,7 @@ impl Controller {
     }
 
     fn split(&mut self, window: &WindowId, left: TabId, right: TabId) -> Result<()> {
-        let split = self.model.core.set_split(window, [left, right]);
+        let split = self.model.core.split_to_right(window, left, right, now());
         ensure!(split.result, "could not split these tabs");
         for removed in split.removed {
             self.engine.close(&removed);
@@ -390,7 +390,10 @@ impl Controller {
                     }
                     changed = true;
                 }
-                Event::Loaded { .. } | Event::Created(_) | Event::Closed => {}
+                Event::Loaded { .. }
+                | Event::LoadFailed { .. }
+                | Event::Created(_)
+                | Event::Closed => {}
             }
         }
         if save && let Err(error) = self.save() {

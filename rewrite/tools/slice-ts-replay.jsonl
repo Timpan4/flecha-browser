@@ -1,0 +1,6 @@
+{"step":"open","today":["L"],"active":"L","split":null}
+{"step":"split","today":["L","R"],"active":"R","split":["L","R"]}
+{"step":"promote","today":["L","R","P"],"active":"P","split":["L","R"]}
+{"step":"detach","today":["L","R"],"active":"R","split":["L","R"]}
+{"step":"return","today":["M","L","R"],"active":"M","split":["L","R"]}
+{"step":"close","today":["L","R"],"active":"L","split":["L","R"]}

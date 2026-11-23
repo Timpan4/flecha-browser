@@ -1097,6 +1097,32 @@ impl BrowserState {
     }
 
     pub fn set_split(&mut self, window: &WindowId, tabs: [TabId; 2]) -> TabChange<bool> {
+        let selected = tabs[0].clone();
+        self.set_split_selecting(window, tabs, selected)
+    }
+
+    /// Split with another tab on the right and make that tab active.
+    pub fn split_to_right(
+        &mut self,
+        window: &WindowId,
+        left: TabId,
+        right: TabId,
+        now: EpochMillis,
+    ) -> TabChange<bool> {
+        let selected = right.clone();
+        let change = self.set_split_selecting(window, [left, right], selected.clone());
+        if change.result {
+            self.touch(&selected, now);
+        }
+        change
+    }
+
+    fn set_split_selecting(
+        &mut self,
+        window: &WindowId,
+        tabs: [TabId; 2],
+        selected: TabId,
+    ) -> TabChange<bool> {
         let Some(win) = self.window(window) else {
             return TabChange::unchanged(false);
         };
@@ -1119,7 +1145,7 @@ impl BrowserState {
         if let Some(EndedSplit::Responsive { mirror }) = end_split(ws, &mut self.tabs) {
             change.removed.push(mirror);
         }
-        ws.active_tab_id = Some(tabs[0].clone());
+        ws.active_tab_id = Some(selected);
         ws.split = Some(tabs.clone());
         for id in &tabs {
             self.claim_visible(id, window, &mut change.removed);

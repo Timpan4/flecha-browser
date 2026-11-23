@@ -11,6 +11,12 @@ pub struct BrowserKey {
     generation: Generation,
 }
 
+impl BrowserKey {
+    pub fn generation(&self) -> u64 {
+        self.generation.0
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Owner {
     Tab(WindowId),
