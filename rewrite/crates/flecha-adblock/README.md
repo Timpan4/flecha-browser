@@ -34,13 +34,24 @@ The crate uses adblock 0.13.6, the current release on crates.io (published 2026-
 - License: MPL-2.0. The copyleft is per file, so linking it into this MIT crate is fine, but changes to adblock-rust's own files would have to be published under MPL-2.0.
 - Features: the defaults are off, so `single-thread` is not enabled and `Engine` is `Send + Sync`. `embedded-domain-resolver` (the public suffix list, for third-party checks) and `full-regex-handling` are on.
 - Resources: network blocking and element hiding need no resource file. Scriptlets (`##+js(...)`) and `$redirect` stubs do. Those resources come from uBlock Origin under GPL-3.0, so none are loaded. Redirect filters are left out, scriptlets inject nothing, and procedural filters are not returned.
-- `engine.dat` (6.0 MB for the 2026-11-23 lists) is a cache. adblock-rust rejects a file written by another crate version or with a bad checksum. The crate also rejects one keyed to other list text, and the engine is then rebuilt from the text. Change `RECIPE` in `src/engine.rs` whenever `build_engine` changes what it keeps.
+- `engine.dat` (6.0 MB for the 2026-11-23 lists) is a cache. It holds a magic line, a SHA-256 key over `RECIPE` and each list's id, length and text, the page exception lines with a little-endian `u64` length, then adblock-rust's serialization. adblock-rust rejects a file written by another crate version or with a bad checksum. The crate also rejects one keyed to other list text, and the engine is then rebuilt from the text. Change `RECIPE` in `src/engine.rs` whenever `build_engine` changes what it keeps or the file layout changes.
+
+## Load time and memory
+
+Measured on 2026-11-23 on BIG-CHONKER-cachy (AMD Ryzen 7 9800X3D, Linux 7.3.5-2-cachyos, rustc 1.100.0), release build, with the lists downloaded that day (EasyList 2,053,258 bytes, EasyPrivacy 1,521,678 bytes). Each figure is three runs of `examples/measure.rs`, each run in its own process. Peak memory is `VmHWM` from `/proc/self/status`.
+
+| Load | Time | Peak RSS |
+| --- | --- | --- |
+| Cold: `build_engine` parses both lists | 59–60 ms | 33.5–33.9 MB |
+| Warm: `warm_start` reads both lists, hashes them and deserializes `engine.dat` | 3.7–4.1 ms | 20.6–20.7 MB |
+
+The two timers cover different steps. The cold time leaves out reading the lists and saving `engine.dat`, but the cold peak includes the buffer that serialization allocates. The warm time includes reading and hashing the list text.
 
 ## Malformed input
 
 One bad line or stored entry never fails a whole load.
 
-- adblock-rust skips list lines it can't parse. `build_engine` reports each one with its list, line number and error. On 2026-11-23, 2,981 lines were left out. 2,977 are `$popup` filters. The rest are a `$csp` with a resource type, an empty `$redirect`, a `~document` and an HTML filter. build-adblock.mjs dropped all of them too.
+- adblock-rust skips list lines it can't parse. `build_engine` reports each one with its list, line number and error, along with the redirect filters it leaves out. On 2026-11-23, 3,018 lines were left out. 2,981 didn't parse: 2,977 `$popup` filters, a `$csp` with a resource type, an empty `$redirect`, a `~document` and an HTML filter. The other 37 are `$redirect`, `$redirect-rule` and `$rewrite` filters. build-adblock.mjs dropped all of them too.
 - Saved `adBlockAllowed` entries that aren't request-domain hostnames are dropped one by one. flecha-core counts them in `SnapshotRepairs::skipped_ad_block_sites`. `AdBlocker::new` and `set_allowed_sites` return how many they dropped.
 - Hostnames compare as ASCII bytes. Page hosts come from the WHATWG URL parser (the `url` crate), as `new URL(url).hostname` did in the shell. Allowed entries must already be lowercase ASCII, so U+017F, U+212A and fullwidth forms are never folded into a match.
 
@@ -52,6 +63,8 @@ The shell converted the lists to declarativeNetRequest. adblock-rust has no such
 - There is no 30,000-rule budget and no 2,000-domain merging. Both were declarativeNetRequest limits.
 - Site-specific hiding (`site##sel`) applies. An exception (`site#@#sel`) applies on its own site. The shell skipped site-specific hiding and dropped an excepted selector everywhere.
 - Generic class and id selectors come from the classes and ids the page reports. The shell injected every generic selector into one stylesheet. Selectors with braces or unbalanced quotes, comments, brackets or parentheses are still left out.
+- An `@@…$document` exception exempts the page or frame it matches and everything loaded inside it, as the shell's `allowAllRequests` rules did. adblock-rust lets any exception match a document request, so these lines are matched by a second engine built from them alone. The shell dropped a `$document` exception that also named resource types (`$document,subdocument`). This crate keeps it. Element hiding on an exempted page is unchanged, as in the shell. EasyList had one pure `$document` exception on 2026-11-23 (`optout.networkadvertising.org`).
+- `$important` beats exceptions, as in uBlock Origin. The shell ignored `$important`, so an exception always won there. EasyPrivacy had 10 `$important` filters on 2026-11-23.
 - `$elemhide` and `$ehide` aren't adblock-rust syntax, so those lines are reported and skipped. The shell read them as `$generichide`. EasyList and EasyPrivacy had none on 2026-11-23.
 - A list counts as usable when adblock-rust parses one network filter it keeps, rather than the shell's converter.
 - A saved allow list keeps its valid entries. The shell dropped the whole list for one bad entry, because declarativeNetRequest refuses the whole rule. Turning the switch off for a host that isn't a request domain (`news.example.`) is refused. The shell stored it, and lost the whole list on the next launch.
