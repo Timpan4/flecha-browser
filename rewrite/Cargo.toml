@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "app",
     "crates/flecha-adblock",
+    "crates/flecha-boosts",
     "crates/flecha-cef",
     "crates/flecha-core",
     "crates/flecha-import",
