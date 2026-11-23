@@ -85,6 +85,7 @@ struct Calls {
 
 fn calls(list: &Value) -> Calls {
     let mut calls = Calls::default();
+    let mut warned = false;
     for call in list.as_array().unwrap() {
         let tab = || call["tabId"].as_u64().unwrap();
         if call["refused"] == true {
@@ -142,10 +143,16 @@ fn calls(list: &Value) -> Calls {
                     .scripts
                     .push(("error".into(), str_of(&call["message"]).into()));
             }
-            "unregister" | "warn" => {}
+            "warn" => warned = true,
+            "unregister" => {}
             api => panic!("unexpected call {api}"),
         }
     }
+    // The shell warns when Chromium refuses it. Any other warning is a shell error to look at.
+    assert!(
+        !warned || !calls.refused.is_empty(),
+        "the shell warned without a refused call: {list}"
+    );
     calls
 }
 
