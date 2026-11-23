@@ -1,5 +1,15 @@
 disallowed-methods = [
-    { path = "gpui::BackgroundExecutor::timer", reason = "arm GPUI timers through flecha_cef::Timers::arm" },
+    { path = "gpui::BackgroundExecutor::timer", reason = "schedule deadlines through the single cancellable sweeper" },
     { path = "gpui::BackgroundExecutor::scheduler_executor", reason = "its timer bypasses flecha_cef::Timers::arm" },
     { path = "gpui::ForegroundExecutor::scheduler_executor", reason = "its timer bypasses flecha_cef::Timers::arm" },
+    { path = "gpui::FutureExt::with_timeout", reason = "it arms an uncancellable GPUI timer per call" },
+    { path = "gpui::PlatformDispatcher::dispatch_after", reason = "it queues work on the shared GPUI timer thread" },
+    { path = "gpui::Animation::with_max_fps", reason = "capped animations arm GPUI timers instead of requesting frames" },
+    { path = "gpui::InteractiveText::tooltip", reason = "GPUI tooltips schedule delayed work" },
+    { path = "gpui::StatefulInteractiveElement::tooltip", reason = "GPUI tooltips schedule delayed work" },
+    { path = "gpui::StatefulInteractiveElement::hoverable_tooltip", reason = "GPUI tooltips schedule delayed work" },
+    { path = "gpui::Interactivity::tooltip", reason = "GPUI tooltips schedule delayed work" },
+    { path = "gpui::Interactivity::hoverable_tooltip", reason = "GPUI tooltips schedule delayed work" },
+    { path = "gpui::img", reason = "pending image elements arm GPUI timers in layout" },
+    { path = "gpui::Window::set_pending_input_timeout_paused", reason = "resuming input can arm a GPUI timer" },
 ]

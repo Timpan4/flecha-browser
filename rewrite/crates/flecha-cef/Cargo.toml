@@ -7,8 +7,11 @@ publish.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+async-channel = "2"
+async-io = "2"
 cef.workspace = true
 flecha-core.workspace = true
 flecha-surface.workspace = true
 futures.workspace = true
 gpui.workspace = true
+sha2 = "0.10"

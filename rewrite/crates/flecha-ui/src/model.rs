@@ -18,6 +18,12 @@ pub struct Transient {
     pub partition: Partition,
 }
 
+pub struct Detachment {
+    pub window: WindowId,
+    pub tab: TabId,
+    pub removed: Vec<TabId>,
+}
+
 impl Model {
     pub fn new(core: Option<BrowserState>) -> Self {
         Self {
@@ -72,54 +78,55 @@ impl Model {
         Ok(self.peeks.insert(window, transient).map(|old| old.id))
     }
 
-    pub fn promote(&mut self, window: &WindowId) -> Result<()> {
+    pub fn promote(&mut self, window: &WindowId) -> Result<TabId> {
         let page = self.peeks.remove(window).context("no Peek to promote")?;
         self.adopt(window, page)
     }
 
-    pub fn to_flechinha(&mut self, source: &TabId) -> Result<Vec<TabId>> {
+    pub fn detach(&mut self, source: &TabId) -> Result<Detachment> {
         let mut tab = self.core.tab(source).context("no tab to move")?.clone();
         let partition = self.partition(source).context("tab has no Space")?;
         let id = window_id();
         let change = self.core.close_tab(source, now());
         tab.agent = false;
         let page = Transient {
-            id: source.clone(),
+            id: tab_id(),
             tab,
             partition,
         };
+        let tab = page.id.clone();
         self.flechinhas.insert(id.clone(), page);
-        Ok(change
-            .removed
-            .into_iter()
-            .filter(|id| id != source)
-            .collect())
+        Ok(Detachment {
+            window: id,
+            tab,
+            removed: change
+                .removed
+                .into_iter()
+                .filter(|id| id != source)
+                .collect(),
+        })
     }
 
-    pub fn from_flechinha(&mut self, window: &WindowId) -> Result<WindowId> {
+    pub fn return_page(&mut self, window: &WindowId) -> Result<(WindowId, TabId)> {
         let destination = self.core.focused_window().id.clone();
         let page = self
             .flechinhas
             .remove(window)
             .context("no Flechinha to return")?;
-        self.adopt(&destination, page)?;
-        Ok(destination)
+        let tab = self.adopt(&destination, page)?;
+        Ok((destination, tab))
     }
 
-    fn adopt(&mut self, window: &WindowId, mut page: Transient) -> Result<()> {
+    fn adopt(&mut self, window: &WindowId, mut page: Transient) -> Result<TabId> {
         let after = self.active(window).cloned();
-        // A kept pin can still own the original durable ID.
-        if self.core.tab(&page.id).is_some() {
-            page.id = tab_id();
-        }
         page.tab.home_url = None;
         page.tab.last_active = Some(now() as f64);
         ensure!(
             self.core
-                .open_today(page.id, page.tab, window, after.as_ref(), true),
+                .open_today(page.id.clone(), page.tab, window, after.as_ref(), true),
             "could not adopt page"
         );
-        Ok(())
+        Ok(page.id)
     }
 
     pub fn partition(&self, id: &TabId) -> Option<Partition> {
@@ -191,4 +198,46 @@ pub fn now() -> EpochMillis {
         .ok()
         .and_then(|duration| EpochMillis::try_from(duration.as_millis()).ok())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn peek_is_transient_and_detached_tabs_return_to_the_focused_space() {
+        let mut model = Model::new(None);
+        let main = model.core.focused_window().id.clone();
+        let first_space = model.core.focused_window().active_space_id.clone();
+        let page = model
+            .open(&main, "https://example.test/first".into(), true)
+            .unwrap();
+        model.core.set_isolated(&first_space, true);
+        let isolated = Partition::Isolated(first_space);
+        model
+            .peek(
+                main.clone(),
+                "https://example.test/peek".into(),
+                Some(&page),
+            )
+            .unwrap();
+        let peek = model.peeks[&main].id.clone();
+        assert!(model.core.tab(&peek).is_none());
+        assert_eq!(model.partition(&peek), Some(isolated.clone()));
+        assert_eq!(model.promote(&main).unwrap(), peek);
+        let detached = model.detach(&peek).unwrap();
+        assert!(model.core.tab(&peek).is_none());
+        assert_eq!(model.partition(&detached.tab), Some(isolated));
+
+        let second_space = space_id();
+        assert!(model.core.add_space(second_space.clone()));
+        let second = window_id();
+        assert!(model.core.open_window(second.clone(), Some(&second_space)));
+        assert!(model.core.focus_window(&second));
+        let (window, returned) = model.return_page(&detached.window).unwrap();
+        assert_eq!(window, second);
+        assert_eq!(model.active(&window), Some(&returned));
+        assert_eq!(model.partition(&returned), Some(Partition::Shared));
+        assert!(model.flechinhas.is_empty());
+    }
 }

@@ -1,4 +1,5 @@
 mod model;
+mod verify;
 mod view;
 
 use std::cell::RefCell;
@@ -9,8 +10,9 @@ use std::rc::Rc;
 use anyhow::{Context as _, Result, ensure};
 use flecha_cef::{Engine, Event, Owner, Runtime, Viewport};
 use flecha_core::{
-    SpaceId, TabId, WindowId,
+    Placement, SpaceId, TabId, WindowId,
     storage::{LoadedState, ReadyState},
+    suggestions::pinnable_address,
 };
 use flecha_services::StateStore;
 use gpui::{App, Bounds, WindowBounds, WindowHandle, WindowOptions, px, size};
@@ -41,6 +43,7 @@ pub fn start(
         store,
         snapshots: loaded,
         windows: BTreeMap::new(),
+        front: None,
         ready: false,
         quitting: false,
         verify: options.verify,
@@ -49,9 +52,10 @@ pub fn start(
     }));
     sync_windows(&controller, cx)?;
     if options.verify {
-        install_controls(&controller, cx);
+        verify::install(&controller, cx);
     }
-    if let Some(url) = initial {
+    if let Some(input) = initial {
+        let url = pinnable_address(&input).context("--open requires a browser address")?;
         let window = controller.borrow().model.core.focused_window().id.clone();
         controller.borrow_mut().act(&window, Action::Open(url))?;
     }
@@ -92,6 +96,7 @@ struct Controller {
     store: StateStore,
     snapshots: LoadedState,
     windows: BTreeMap<WindowId, WindowHandle<Shell>>,
+    front: Option<WindowId>,
     ready: bool,
     quitting: bool,
     verify: bool,
@@ -162,7 +167,12 @@ impl Controller {
                 }
                 return Ok(());
             }
-            Action::Promote => self.model.promote(window)?,
+            Action::Promote => {
+                let tab = self.model.promote(window)?;
+                self.reconcile_partition(&tab);
+                self.engine
+                    .transfer(&tab, tab.clone(), Owner::Tab(window.clone()));
+            }
             Action::ClosePeek => {
                 if let Some(page) = self.model.peeks.remove(window) {
                     self.engine.close(&page.id);
@@ -171,7 +181,10 @@ impl Controller {
             }
             Action::Detach => {
                 if let Some(tab) = self.model.active(window).cloned() {
-                    for removed in self.model.to_flechinha(&tab)? {
+                    let detached = self.model.detach(&tab)?;
+                    self.engine
+                        .transfer(&tab, detached.tab, Owner::Flechinha(detached.window));
+                    for removed in detached.removed {
                         self.engine.close(&removed);
                     }
                 }
@@ -184,8 +197,11 @@ impl Controller {
                     .context("no Flechinha page")?
                     .id
                     .clone();
-                self.model.from_flechinha(window)?;
-                self.reconcile_partition(&tab);
+                let (destination, returned) = self.model.return_page(window)?;
+                self.engine
+                    .transfer(&tab, returned.clone(), Owner::Tab(destination.clone()));
+                self.reconcile_partition(&returned);
+                self.front = Some(destination);
             }
             Action::Close => {
                 if let Some(page) = self.model.flechinhas.remove(window) {
@@ -237,7 +253,19 @@ impl Controller {
                 }
             }
         }
+        self.update_visibility();
         self.save()
+    }
+
+    fn update_visibility(&mut self) {
+        let ids = self.engine.ids().cloned().collect::<Vec<_>>();
+        for id in ids {
+            let visible = self
+                .engine
+                .owner(&id)
+                .is_some_and(|owner| self.model.page(owner, &id).is_some());
+            self.engine.set_visible(&id, visible);
+        }
     }
 
     fn split(&mut self, window: &WindowId, left: TabId, right: TabId) -> Result<()> {
@@ -259,6 +287,36 @@ impl Controller {
         }
     }
 
+    fn follow_link(&mut self, source: &TabId, url: &str, foreground: bool) -> Result<()> {
+        let Some(url) = pinnable_address(url) else {
+            return Ok(());
+        };
+        let Some(owner) = self.engine.owner(source) else {
+            return Ok(());
+        };
+        let window = match owner {
+            Owner::Tab(window) | Owner::Peek(window) => window.clone(),
+            Owner::Flechinha(_) => self.model.core.focused_window().id.clone(),
+        };
+        let peek = foreground
+            && matches!(owner, Owner::Tab(_))
+            && self.model.core.settings.peek_pinned_links != Some(false)
+            && matches!(
+                self.model.core.locate(source),
+                Some(Placement::Pinned { .. } | Placement::Favorite)
+            );
+        if peek {
+            if let Some(old) = self.model.peek(window, url, Some(source))? {
+                self.engine.close(&old);
+            }
+        } else {
+            self.model.open(&window, url, foreground)?;
+            self.update_visibility();
+            self.save()?;
+        }
+        Ok(())
+    }
+
     fn pane(&mut self, owner: Owner, id: TabId, viewport: Viewport) -> Result<()> {
         if !self.ready || self.quitting {
             return Ok(());
@@ -270,7 +328,10 @@ impl Controller {
             .model
             .partition(&id)
             .context("page lacks a request context")?;
-        self.engine.ensure(id, owner, partition, &tab.url, viewport)
+        self.engine
+            .ensure(id.clone(), owner, partition, &tab.url, viewport)?;
+        self.engine.set_visible(&id, true);
+        Ok(())
     }
 
     fn fail(&mut self, error: anyhow::Error, cx: &mut App) {
@@ -289,11 +350,17 @@ impl Controller {
                 self.fail(error, cx);
             }
             cx.refresh_windows();
+            if self.verify {
+                verify::ready();
+            }
         }
-        let mut changed = false;
+        let mut changed = self.engine.contexts_changed();
         let mut save = false;
-        for message in self.engine.take_events() {
+        while let Some(message) = self.engine.next_event() {
             let id = &message.key.tab;
+            if self.verify {
+                verify::event(&message);
+            }
             match message.event {
                 Event::Address(address) => {
                     if let Some((tab, durable)) = self.model.tab_mut(id)
@@ -315,25 +382,17 @@ impl Controller {
                 }
                 Event::Paint => {
                     changed = true;
-                    if self.verify
-                        && self
-                            .engine
-                            .frames(id)
-                            .is_some_and(|frames| frames.view.is_some())
-                    {
-                        println!("cef paint");
-                    }
                 }
-                Event::Loaded { status, .. } if self.verify => println!("cef load {status}"),
-                Event::Created(browser) if self.verify => println!("cef created {browser}"),
-                Event::Closed if self.verify => println!("cef closed"),
                 Event::PaintFailed => {
                     self.fail(anyhow::anyhow!("CEF could not copy the page frame"), cx)
                 }
-                Event::OpenLink { .. }
-                | Event::Loaded { .. }
-                | Event::Created(_)
-                | Event::Closed => {}
+                Event::OpenLink { url, foreground } => {
+                    if let Err(error) = self.follow_link(id, &url, foreground) {
+                        self.fail(error, cx);
+                    }
+                    changed = true;
+                }
+                Event::Loaded { .. } | Event::Created(_) | Event::Closed => {}
             }
         }
         if save && let Err(error) = self.save() {
@@ -343,6 +402,7 @@ impl Controller {
             cx.refresh_windows();
         }
         if self.quitting && self.engine.is_drained() {
+            self.engine.release_contexts();
             cx.quit();
             return false;
         }
@@ -355,6 +415,9 @@ type Shared = Rc<RefCell<Controller>>;
 fn dispatch(controller: &Shared, window: &WindowId, action: Action, cx: &mut App) {
     let mut state = controller.borrow_mut();
     state.status.clear();
+    if state.model.core.window(window).is_some() {
+        state.model.core.focus_window(window);
+    }
     if let Err(error) = state.act(window, action) {
         state.status = error.to_string();
         if state.quitting {
@@ -362,32 +425,6 @@ fn dispatch(controller: &Shared, window: &WindowId, action: Action, cx: &mut App
         }
     }
     cx.refresh_windows();
-}
-
-fn install_controls(controller: &Shared, cx: &mut App) {
-    use futures::StreamExt as _;
-    use std::io::BufRead as _;
-
-    let (tx, mut rx) = futures::channel::mpsc::unbounded();
-    std::thread::spawn(move || {
-        for line in std::io::stdin().lock().lines().map_while(Result::ok) {
-            if tx.unbounded_send(line).is_err() {
-                break;
-            }
-        }
-    });
-    let controller = controller.clone();
-    cx.spawn(async move |cx| {
-        while let Some(command) = rx.next().await {
-            cx.update(|cx| {
-                let id = controller.borrow().model.core.focused_window().id.clone();
-                if command == "quit" {
-                    dispatch(&controller, &id, Action::Quit, cx);
-                }
-            });
-        }
-    })
-    .detach();
 }
 
 fn sync_windows(controller: &Shared, cx: &mut App) -> Result<()> {
@@ -444,6 +481,16 @@ fn sync_windows(controller: &Shared, cx: &mut App) -> Result<()> {
             },
         )?;
         controller.borrow_mut().windows.insert(id, handle);
+    }
+    let front = {
+        let mut state = controller.borrow_mut();
+        state
+            .front
+            .take()
+            .and_then(|id| state.windows.get(&id).copied())
+    };
+    if let Some(front) = front {
+        let _ = front.update(cx, |_, window, _| window.activate_window());
     }
     Ok(())
 }

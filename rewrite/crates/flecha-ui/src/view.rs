@@ -1,4 +1,6 @@
+use std::cell::Cell;
 use std::collections::BTreeMap;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use flecha_cef::{Owner, Viewport};
@@ -6,12 +8,14 @@ use flecha_core::{
     TabId, WindowId,
     suggestions::{self, InputResolution, SuggestionAction},
 };
-use flecha_surface::{Frame, surface};
+use flecha_surface::{Frame, input, surface};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, AppContext as _, ClickEvent, ClipboardItem, Context, Div, Entity, FocusHandle,
-    InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Render, RenderImage,
-    StatefulInteractiveElement as _, Styled as _, Window, canvas, div, px, relative, rgb,
+    InteractiveElement as _, IntoElement, KeyDownEvent, KeyUpEvent, MouseButton, MouseDownEvent,
+    MouseExitEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _, Render, RenderImage,
+    ScrollEvent, StatefulInteractiveElement as _, Styled as _, Subscription, Window, canvas, div,
+    px, relative, rgb,
 };
 
 use crate::{Action, Shared, dispatch, now};
@@ -27,22 +31,54 @@ pub(crate) struct Shell {
     state: Shared,
     id: WindowId,
     focus: FocusHandle,
+    page_focus: FocusHandle,
+    focused_page: Option<TabId>,
     input: String,
     command: Command,
     images: BTreeMap<TabId, Vec<Arc<RenderImage>>>,
+    _activation: Subscription,
 }
 
 impl Shell {
     pub fn new(state: Shared, id: WindowId, window: &mut Window, cx: &mut App) -> Entity<Self> {
         let focus = cx.focus_handle();
-        focus.focus(window, cx);
-        cx.new(|_| Self {
-            state,
-            id,
-            focus,
-            input: String::new(),
-            command: Command::Open,
-            images: BTreeMap::new(),
+        let page_focus = cx.focus_handle();
+        let focused_page = state
+            .borrow()
+            .model
+            .flechinhas
+            .get(&id)
+            .map(|page| page.id.clone());
+        if let Some(page) = &focused_page {
+            state.borrow().engine.focused(page, true);
+            page_focus.focus(window, cx);
+        } else {
+            focus.focus(window, cx);
+        }
+        cx.new(|cx| {
+            let activation = cx.observe_window_activation(window, |this: &mut Self, window, _| {
+                let mut state = this.state.borrow_mut();
+                let active = window.is_window_active();
+                if active && state.model.core.window(&this.id).is_some() {
+                    state.model.core.focus_window(&this.id);
+                }
+                if let Some(page) = &this.focused_page {
+                    state
+                        .engine
+                        .focused(page, active && this.page_focus.is_focused(window));
+                }
+            });
+            Self {
+                state,
+                id,
+                focus,
+                page_focus,
+                focused_page,
+                input: String::new(),
+                command: Command::Open,
+                images: BTreeMap::new(),
+                _activation: activation,
+            }
         })
     }
 
@@ -60,6 +96,7 @@ impl Shell {
 
     fn choose(&mut self, command: Command, window: &mut Window, cx: &mut Context<Self>) {
         self.command = command;
+        self.blur_page();
         self.focus.focus(window, cx);
         cx.notify();
     }
@@ -83,7 +120,10 @@ impl Shell {
             .into_iter()
             .next()
             .map(|suggestion| suggestion.action);
-            let resolved = if local.is_none() {
+            let private = suggestions::contains_private_jwt(&input);
+            let local =
+                local.filter(|action| !private || matches!(action, SuggestionAction::Copy(_)));
+            let resolved = if local.is_none() && !private {
                 suggestions::resolve_input(&input, core.settings.search_engine)
             } else {
                 InputResolution::Invalid
@@ -140,9 +180,18 @@ impl Shell {
                     self.input.clear();
                     cx.notify();
                 }
-                _ => return,
+                _ => {
+                    self.page_key(
+                        stroke,
+                        false,
+                        event.is_held,
+                        event.prefer_character_input,
+                        window,
+                    );
+                    return;
+                }
             }
-        } else if stroke.key == "escape" {
+        } else if stroke.key == "escape" && self.state.borrow().model.peeks.contains_key(&self.id) {
             dispatch(&self.state, &self.id, Action::ClosePeek, cx);
             self.input.clear();
         } else if self.focus.is_focused(window) {
@@ -162,9 +211,45 @@ impl Shell {
                 }
             }
         } else {
+            self.page_key(
+                stroke,
+                false,
+                event.is_held,
+                event.prefer_character_input,
+                window,
+            );
             return;
         }
         cx.stop_propagation();
+    }
+
+    fn blur_page(&mut self) {
+        if let Some(page) = self.focused_page.take() {
+            self.state.borrow().engine.focused(&page, false);
+        }
+    }
+
+    fn page_key(
+        &self,
+        stroke: &gpui::Keystroke,
+        up: bool,
+        repeat: bool,
+        character_input: bool,
+        window: &Window,
+    ) {
+        if !self.page_focus.is_focused(window) {
+            return;
+        }
+        let state = self.state.borrow();
+        let host = self.focused_page.as_ref().and_then(|page| {
+            let owner = state.engine.owner(page)?;
+            state.model.page(owner, page)?;
+            state.engine.host(page)
+        });
+        if let Some(host) = host {
+            let altgr = character_input && stroke.modifiers.control && stroke.modifiers.alt;
+            input::key(&host, stroke, up, repeat, altgr);
+        }
     }
 
     fn pane(
@@ -172,6 +257,7 @@ impl Shell {
         owner: Owner,
         id: TabId,
         images: &mut BTreeMap<TabId, Vec<Arc<RenderImage>>>,
+        cx: &Context<Self>,
     ) -> Div {
         let frames = self.state.borrow().engine.frames(&id).unwrap_or_default();
         let pane_images = [
@@ -185,16 +271,20 @@ impl Shell {
         .collect();
         images.insert(id.clone(), pane_images);
         let state = self.state.clone();
-        div()
+        let origin = Rc::new(Cell::new(gpui::Point::default()));
+        let mut element = div()
             .relative()
             .size_full()
             .overflow_hidden()
             .bg(rgb(0x171e22))
             .child(surface(frames.view, frames.popup))
             .child(
-                canvas(
-                    |_, _, _| (),
+                canvas(|_, _, _| (), {
+                    let origin = origin.clone();
+                    let owner = owner.clone();
+                    let id = id.clone();
                     move |pane, (), window, cx| {
+                        origin.set(pane.origin);
                         let screen = window
                             .display(cx)
                             .map_or(window.bounds(), |display| display.bounds());
@@ -207,11 +297,75 @@ impl Shell {
                                 state.fail(error, cx);
                             }
                         });
-                    },
-                )
+                    }
+                })
                 .absolute()
+                .top_0()
+                .left_0()
                 .size_full(),
-            )
+            );
+        macro_rules! pointer {
+            ($event:ty, $handler:ident) => {{
+                let (id, origin) = (id.clone(), origin.clone());
+                cx.listener(move |this, event: &$event, _, _| {
+                    if let Some(host) = this.state.borrow().engine.host(&id) {
+                        input::$handler(&host, event, origin.get());
+                    }
+                })
+            }};
+        }
+        element = element
+            .on_mouse_move(pointer!(MouseMoveEvent, mouse_move))
+            .on_mouse_exit(pointer!(MouseExitEvent, mouse_exit))
+            .on_scroll(pointer!(ScrollEvent, scroll));
+        for button in [MouseButton::Left, MouseButton::Middle, MouseButton::Right] {
+            let (down_id, down_origin, down_owner) = (id.clone(), origin.clone(), owner.clone());
+            let (up_id, up_origin) = (id.clone(), origin.clone());
+            element = element
+                .on_mouse_down(
+                    button,
+                    cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                        if this.focused_page.as_ref() != Some(&down_id) {
+                            this.blur_page();
+                            this.focused_page = Some(down_id.clone());
+                        }
+                        if matches!(down_owner, Owner::Tab(_))
+                            && this.state.borrow().model.active(&this.id) != Some(&down_id)
+                        {
+                            dispatch(&this.state, &this.id, Action::Select(down_id.clone()), cx);
+                        }
+                        this.page_focus.focus(window, cx);
+                        let state = this.state.borrow();
+                        state.engine.focused(&down_id, true);
+                        if let Some(host) = state.engine.host(&down_id) {
+                            input::click(
+                                &host,
+                                event.position - down_origin.get(),
+                                event.modifiers,
+                                event.button,
+                                event.click_count,
+                                false,
+                            );
+                        }
+                    }),
+                )
+                .on_mouse_up(
+                    button,
+                    cx.listener(move |this, event: &MouseUpEvent, _, _| {
+                        if let Some(host) = this.state.borrow().engine.host(&up_id) {
+                            input::click(
+                                &host,
+                                event.position - up_origin.get(),
+                                event.modifiers,
+                                event.button,
+                                event.click_count,
+                                true,
+                            );
+                        }
+                    }),
+                );
+        }
+        element
     }
 }
 
@@ -223,7 +377,11 @@ impl Render for Shell {
             .flex_col()
             .bg(rgb(0x161c20))
             .text_color(rgb(0xe2edf1))
-            .on_key_down(cx.listener(|this, event, window, cx| this.key(event, window, cx)));
+            .track_focus(&self.page_focus)
+            .on_key_down(cx.listener(|this, event, window, cx| this.key(event, window, cx)))
+            .on_key_up(cx.listener(|this, event: &KeyUpEvent, window, _| {
+                this.page_key(&event.keystroke, true, false, false, window);
+            }));
         let mut images = BTreeMap::new();
         let state = self.state.borrow();
         if let Some(page) = state.model.flechinhas.get(&self.id) {
@@ -240,6 +398,7 @@ impl Render for Shell {
                     Owner::Flechinha(self.id.clone()),
                     page.id.clone(),
                     &mut images,
+                    cx,
                 )));
         } else if let Some(current) = state.model.core.window(&self.id) {
             let core = &state.model.core;
@@ -326,27 +485,26 @@ impl Render for Shell {
                     move |this, _: &ClickEvent, window, cx| this.choose(mode, window, cx),
                 )));
             }
-            commands =
-                commands.child(
-                    div()
-                        .id("command-input")
-                        .track_focus(&self.focus)
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .rounded_md()
-                        .px_2()
-                        .py_1()
-                        .bg(rgb(0x33434a))
-                        .child(if self.input.is_empty() {
-                            placeholder.to_owned()
-                        } else {
-                            self.input.clone()
-                        })
-                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                            this.focus.focus(window, cx)
-                        })),
-                );
+            commands = commands.child(
+                div()
+                    .id("command-input")
+                    .track_focus(&self.focus)
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .rounded_md()
+                    .px_2()
+                    .py_1()
+                    .bg(rgb(0x33434a))
+                    .child(if self.input.is_empty() {
+                        placeholder.to_owned()
+                    } else {
+                        self.input.clone()
+                    })
+                    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                        this.choose(this.command, window, cx);
+                    })),
+            );
             if view.len() > 1 {
                 commands = commands.child(self.action_button(
                     "unsplit",
@@ -362,7 +520,7 @@ impl Render for Shell {
             }
             let mut pages = div().flex().size_full().overflow_hidden();
             for (index, tab) in view.iter().enumerate() {
-                let pane = self.pane(Owner::Tab(self.id.clone()), tab.clone(), &mut images);
+                let pane = self.pane(Owner::Tab(self.id.clone()), tab.clone(), &mut images, cx);
                 let ratio = current
                     .spaces
                     .get(active_space)
@@ -380,7 +538,15 @@ impl Render for Shell {
             let mut page_area = div().relative().flex_1().min_h_0().child(pages);
             if let Some(peek) = state.model.peeks.get(&self.id) {
                 page_area = page_area
-                    .child(div().absolute().size_full().bg(gpui::rgba(0x00000088)))
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .size_full()
+                            .occlude()
+                            .bg(gpui::rgba(0x00000088)),
+                    )
                     .child(
                         div()
                             .absolute()
@@ -418,6 +584,7 @@ impl Render for Shell {
                                 Owner::Peek(self.id.clone()),
                                 peek.id.clone(),
                                 &mut images,
+                                cx,
                             ))),
                     );
             }

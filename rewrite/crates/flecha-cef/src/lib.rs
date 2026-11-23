@@ -10,8 +10,8 @@ use std::rc::Rc;
 
 use anyhow::{Context as _, Result, ensure};
 use cef::{
-    BrowserHost, BrowserSettings, CefString, ImplBrowser as _, ImplBrowserHost as _, Rect,
-    RequestContext, RequestContextSettings, RuntimeStyle, WindowInfo,
+    BrowserHost, BrowserSettings, CefString, ImplBrowser as _, ImplBrowserHost as _,
+    ImplFrame as _, Rect, RequestContext, RequestContextSettings, RuntimeStyle, WindowInfo,
     browser_host_create_browser_sync, request_context_create_context,
 };
 use flecha_core::TabId;
@@ -108,11 +108,18 @@ struct Session {
     owner: Owner,
     partition: Partition,
     slot: Rc<Slot>,
+    hidden: bool,
+}
+
+struct PersistentContext {
+    handle: RequestContext,
+    ready: Rc<Cell<bool>>,
 }
 
 pub struct Engine {
     profile: PathBuf,
-    contexts: BTreeMap<Partition, RequestContext>,
+    contexts: BTreeMap<Partition, PersistentContext>,
+    contexts_changed: Rc<Cell<bool>>,
     generations: Generations,
     browsers: BTreeMap<TabId, Session>,
     closing: BTreeSet<BrowserKey>,
@@ -124,6 +131,7 @@ impl Engine {
         Self {
             profile,
             contexts: BTreeMap::new(),
+            contexts_changed: Rc::new(Cell::new(false)),
             generations: Generations::default(),
             browsers: BTreeMap::new(),
             closing: BTreeSet::new(),
@@ -159,10 +167,12 @@ impl Engine {
             return Ok(());
         }
         self.close(&tab);
-        let mut context = self.context(&partition)?;
+        let Some(mut context) = self.context(&partition)? else {
+            return Ok(());
+        };
         let key = self.generations.create(tab.clone());
         let slot = Rc::new(Slot {
-            key: key.clone(),
+            key: RefCell::new(key.clone()),
             browser: RefCell::new(None),
             viewport: Cell::new(viewport),
             surface: RefCell::new(Frames::default()),
@@ -194,6 +204,7 @@ impl Engine {
                 slot,
                 owner,
                 partition,
+                hidden: false,
             },
         );
         let alloy = browser
@@ -203,23 +214,32 @@ impl Engine {
         Ok(())
     }
 
-    fn context(&mut self, partition: &Partition) -> Result<RequestContext> {
+    fn context(&mut self, partition: &Partition) -> Result<Option<RequestContext>> {
         if *partition == Partition::Shared {
             return cef::request_context_get_global_context()
+                .map(Some)
                 .context("get shared CEF request context");
         }
-        if let Some(context) = self.contexts.get(partition) {
-            return Ok(context.clone());
+        if !self.contexts.contains_key(partition) {
+            let settings = RequestContextSettings {
+                cache_path: path_string(&self.profile.join(partition.directory()))?,
+                persist_session_cookies: 1,
+                ..Default::default()
+            };
+            let ready = Rc::new(Cell::new(false));
+            let mut handler =
+                callbacks::ContextReady::new(ready.clone(), self.contexts_changed.clone());
+            let handle = request_context_create_context(Some(&settings), Some(&mut handler))
+                .context("create isolated CEF request context")?;
+            self.contexts
+                .insert(partition.clone(), PersistentContext { handle, ready });
         }
-        let settings = RequestContextSettings {
-            cache_path: path_string(&self.profile.join(partition.directory()))?,
-            persist_session_cookies: 1,
-            ..Default::default()
-        };
-        let context = request_context_create_context(Some(&settings), None)
-            .context("create isolated CEF request context")?;
-        self.contexts.insert(partition.clone(), context.clone());
-        Ok(context)
+        let context = &self.contexts[partition];
+        Ok(context.ready.get().then(|| context.handle.clone()))
+    }
+
+    pub fn contexts_changed(&self) -> bool {
+        self.contexts_changed.replace(false)
     }
 
     pub fn resize(&self, tab: &TabId, viewport: Viewport) {
@@ -253,12 +273,82 @@ impl Engine {
             .host()
     }
 
+    pub fn browser_id(&self, tab: &TabId) -> Option<i32> {
+        Some(
+            self.browsers
+                .get(tab)?
+                .slot
+                .browser
+                .borrow()
+                .as_ref()?
+                .identifier(),
+        )
+    }
+
+    pub fn viewport(&self, tab: &TabId) -> Option<Viewport> {
+        Some(self.browsers.get(tab)?.slot.viewport.get())
+    }
+
+    pub fn ids(&self) -> impl Iterator<Item = &TabId> {
+        self.browsers.keys()
+    }
+
+    pub fn focused(&self, tab: &TabId, focused: bool) {
+        if let Some(host) = self.host(tab) {
+            host.set_focus(i32::from(focused));
+        }
+    }
+
+    pub fn set_visible(&mut self, tab: &TabId, visible: bool) {
+        let Some(session) = self.browsers.get_mut(tab) else {
+            return;
+        };
+        if session.hidden == visible {
+            session.hidden = !visible;
+            if let Some(host) = self.host(tab) {
+                host.was_hidden(i32::from(!visible));
+            }
+        }
+    }
+
+    pub fn release_contexts(&mut self) {
+        assert!(self.is_drained());
+        self.contexts.clear();
+    }
+
+    pub fn transfer(&mut self, from: &TabId, to: TabId, owner: Owner) {
+        let Some(mut session) = self.browsers.remove(from) else {
+            return;
+        };
+        if from != &to {
+            let mut key = session.slot.key.borrow_mut();
+            *key = self.generations.transfer(&key, to.clone());
+            session.slot.paint_pending.set(false);
+        }
+        session.owner = owner;
+        self.browsers.insert(to, session);
+    }
+
+    pub fn execute_script(&self, tab: &TabId, script: &str) -> bool {
+        let frame = self
+            .browsers
+            .get(tab)
+            .and_then(|session| session.slot.browser.borrow().as_ref()?.main_frame());
+        if let Some(frame) = frame {
+            frame.execute_java_script(Some(&CefString::from(script)), None, 0);
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn close(&mut self, tab: &TabId) {
         let Some(session) = self.browsers.remove(tab) else {
             return;
         };
         let slot = &session.slot;
-        self.generations.retire(&slot.key);
+        let key = slot.key.borrow().clone();
+        self.generations.retire(&key);
         slot.retired.set(true);
         let host = slot
             .browser
@@ -266,7 +356,7 @@ impl Engine {
             .as_ref()
             .and_then(|browser| browser.host());
         if let Some(host) = host {
-            self.closing.insert(slot.key.clone());
+            self.closing.insert(key);
             host.close_browser(1);
         }
     }
@@ -281,24 +371,25 @@ impl Engine {
         self.browsers.is_empty() && self.closing.is_empty()
     }
 
-    pub fn take_events(&mut self) -> Vec<BrowserEvent> {
-        let events = self.events.take();
-        events
-            .into_iter()
-            .filter(|message| {
-                match message.event {
-                    Event::Closed if self.closing.remove(&message.key) => return true,
-                    Event::Paint => {
-                        if let Some(session) = self.browsers.get(&message.key.tab)
-                            && session.slot.key == message.key
-                        {
-                            session.slot.paint_pending.set(false);
-                        }
-                    }
-                    _ => {}
+    pub fn next_event(&mut self) -> Option<BrowserEvent> {
+        loop {
+            let message = self.events.borrow_mut().pop_front()?;
+            if message.event == Event::Closed && self.closing.remove(&message.key) {
+                // Always finish a retired generation's shutdown bookkeeping.
+                if self.generations.current(&message.key.tab).is_none() {
+                    return Some(message);
                 }
-                self.generations.accepts(&message.key)
-            })
-            .collect()
+                continue;
+            }
+            if !self.generations.accepts(&message.key) {
+                continue;
+            }
+            if message.event == Event::Paint
+                && let Some(session) = self.browsers.get(&message.key.tab)
+            {
+                session.slot.paint_pending.set(false);
+            }
+            return Some(message);
+        }
     }
 }

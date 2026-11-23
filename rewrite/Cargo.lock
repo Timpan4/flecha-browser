@@ -1777,11 +1777,14 @@ name = "flecha-cef"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-channel",
+ "async-io",
  "cef",
  "flecha-core",
  "flecha-surface",
  "futures",
  "gpui",
+ "sha2",
 ]
 
 [[package]]
@@ -1832,6 +1835,8 @@ dependencies = [
  "flecha-surface",
  "futures",
  "gpui",
+ "serde",
+ "serde_json",
  "uuid",
 ]
 

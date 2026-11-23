@@ -2,13 +2,14 @@
 set -euo pipefail
 
 backend=$1
-shift
+cef_runtime=$2
+cef_sha1=$3
+shift 3
 export HOME=/mnt/scratch/home XDG_CONFIG_HOME=/mnt/scratch/config XDG_CACHE_HOME=/mnt/scratch/cache
 export XDG_DATA_HOME=/mnt/scratch/data XDG_STATE_HOME=/mnt/scratch/state XDG_RUNTIME_DIR=/mnt/scratch/runtime
 export TMPDIR=/mnt/scratch/tmp XDG_SESSION_TYPE="$backend"
 export DBUS_SESSION_BUS_ADDRESS=unix:path=/mnt/scratch/runtime/bus
 export DBUS_SYSTEM_BUS_ADDRESS=unix:path=/mnt/scratch/runtime/no-system-bus
-export LD_LIBRARY_PATH="$FLECHA_CEF_RUNTIME_DIR"
 export FLECHA_PROFILE=/mnt/scratch/profile FLECHA_LAUNCHER=isolated
 umask 077
 mkdir -p "$HOME" "$XDG_RUNTIME_DIR" "$TMPDIR" "$FLECHA_PROFILE"
@@ -45,4 +46,17 @@ if dbus-send --bus="$DBUS_SESSION_BUS_ADDRESS" --print-reply \
   printf 'Private bus did not reject keyring activation\n' >&2
   exit 1
 fi
-exec "$@"
+if [[ $backend == x11 ]]; then
+  display_env=(DISPLAY="$DISPLAY")
+else
+  display_env=(WAYLAND_DISPLAY="$WAYLAND_DISPLAY")
+fi
+exec env -i PATH=/mnt/bin:/usr/bin:/bin LANG=C.UTF-8 \
+  HOME="$HOME" TMPDIR="$TMPDIR" XDG_CONFIG_HOME="$XDG_CONFIG_HOME" \
+  XDG_CACHE_HOME="$XDG_CACHE_HOME" XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" \
+  XDG_DATA_HOME="$XDG_DATA_HOME" XDG_STATE_HOME="$XDG_STATE_HOME" \
+  XDG_SESSION_TYPE="$XDG_SESSION_TYPE" "${display_env[@]}" \
+  DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" DBUS_SYSTEM_BUS_ADDRESS="$DBUS_SYSTEM_BUS_ADDRESS" \
+  FLECHA_PROFILE="$FLECHA_PROFILE" FLECHA_LAUNCHER="$FLECHA_LAUNCHER" \
+  FLECHA_CEF_RUNTIME_DIR="$cef_runtime" FLECHA_CEF_RUNTIME_SHA1="$cef_sha1" \
+  LD_LIBRARY_PATH="$cef_runtime" "$@"

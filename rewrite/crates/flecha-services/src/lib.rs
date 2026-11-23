@@ -50,3 +50,28 @@ impl StateStore {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flecha_core::{BrowserState, SpaceId, WindowId};
+
+    #[test]
+    fn damaged_bytes_are_set_aside_before_restoring_the_last_good_file() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let (store, mut loaded) = StateStore::open(directory.path())?;
+        let original = BrowserState::new(SpaceId::new("personal"), WindowId::new("initial"));
+        store.write(&loaded.ready().unwrap().save_current(&original)?)?;
+        let (_, mut loaded) = StateStore::open(directory.path())?;
+        store.write(&loaded.ready().unwrap().started().unwrap())?;
+
+        let broken = [0xff, b'{'];
+        fs::write(store.path(Slot::Current), broken)?;
+        let (_, mut loaded) = StateStore::open(directory.path())?;
+        assert!(loaded.ready().is_none());
+        let restored = loaded.apply_recovery(|write| store.write(write))?;
+        assert_eq!(restored.state.as_ref(), Some(&original));
+        assert_eq!(store.read(Slot::Damaged)?, Some(serde_json::json!(broken)));
+        Ok(())
+    }
+}

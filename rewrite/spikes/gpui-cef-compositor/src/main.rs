@@ -1,4 +1,3 @@
-mod input;
 #[cfg(target_os = "linux")]
 mod linux;
 
@@ -15,7 +14,7 @@ use std::{
 use anyhow::{Context as _, Result, bail, ensure};
 use base64::Engine as _;
 use cef::{rc::Rc as _, *};
-use flecha_surface::{Frame as SurfaceFrame, SurfaceTarget, surface};
+use flecha_surface::{Frame as SurfaceFrame, SurfaceTarget, input, surface};
 use gpui::{
     App as GpuiApp, AppContext as _, Bounds, Context, ElementInputHandler, Entity,
     EntityInputHandler, FocusHandle, InteractiveElement as _, IntoElement, MouseButton,
@@ -744,17 +743,17 @@ impl Render for Demo {
             }))
             .on_mouse_move(cx.listener(|demo, event: &gpui::MouseMoveEvent, _, _| {
                 if let Some(host) = demo.host() {
-                    input::mouse_move(&host, event);
+                    input::mouse_move(&host, event, point(px(0.), px(0.)));
                 }
             }))
             .on_mouse_exit(cx.listener(|demo, event: &gpui::MouseExitEvent, _, _| {
                 if let Some(host) = demo.host() {
-                    input::mouse_exit(&host, event);
+                    input::mouse_exit(&host, event, point(px(0.), px(0.)));
                 }
             }))
             .on_scroll(cx.listener(|demo, event: &gpui::ScrollEvent, _, _| {
                 if let Some(host) = demo.host() {
-                    input::scroll(&host, event);
+                    input::scroll(&host, event, point(px(0.), px(0.)));
                 }
             }))
             .child(surface(view, popup))

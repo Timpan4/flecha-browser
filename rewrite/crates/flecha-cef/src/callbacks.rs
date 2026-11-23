@@ -1,4 +1,5 @@
 use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
 use std::rc::Rc;
 
 use cef::{rc::Rc as _, *};
@@ -7,10 +8,23 @@ use gpui::{Bounds, Pixels, point, px, size};
 
 use crate::{BrowserEvent, BrowserKey, Event, Viewport};
 
-pub(crate) type Queue = Rc<RefCell<Vec<BrowserEvent>>>;
+pub(crate) type Queue = Rc<RefCell<VecDeque<BrowserEvent>>>;
+
+wrap_request_context_handler! {
+    pub(crate) struct ContextReady {
+        ready: Rc<Cell<bool>>,
+        changed: Rc<Cell<bool>>,
+    }
+    impl RequestContextHandler {
+        fn on_request_context_initialized(&self, _context: Option<&mut RequestContext>) {
+            self.ready.set(true);
+            self.changed.set(true);
+        }
+    }
+}
 
 pub(crate) struct Slot {
-    pub key: BrowserKey,
+    pub key: RefCell<BrowserKey>,
     pub browser: RefCell<Option<Browser>>,
     pub viewport: Cell<Viewport>,
     pub surface: RefCell<Frames>,
@@ -21,8 +35,8 @@ pub(crate) struct Slot {
 
 impl Slot {
     pub fn emit(&self, event: Event) {
-        self.events.borrow_mut().push(BrowserEvent {
-            key: self.key.clone(),
+        self.events.borrow_mut().push_back(BrowserEvent {
+            key: self.key.borrow().clone(),
             event,
         });
     }
