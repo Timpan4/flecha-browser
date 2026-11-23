@@ -18,6 +18,12 @@ use std::time::{Duration, Instant};
 
 pub type Report = Rc<RefCell<Map<String, Value>>>;
 
+/// Chromium 158 `third_party/blink/common/widget/constants.cc`:
+/// `kNewContentRenderingDelay = base::Seconds(4)`, the paint-holding timeout.
+/// `RenderWidgetHostImpl::InitializePaintHolding` starts it at navigation, and
+/// on expiry `ClearDisplayedGraphics` makes the renderer repaint once.
+const PAINT_HOLDING_TIMEOUT: Duration = Duration::from_secs(4);
+
 pub struct Run {
     pub cfg: Config,
     pub hub: Rc<Hub>,
@@ -28,6 +34,8 @@ pub struct Run {
     pub report: Report,
     /// Descendant processes snapshotted just before closing browsers.
     pub children_before_shutdown: Rc<RefCell<Vec<Proc>>>,
+    /// When page 0's `CreateBrowserSync` started its navigation.
+    pub navigation_started: Option<Instant>,
 }
 
 /// Counters from both sides at one instant.
@@ -112,12 +120,25 @@ impl Run {
         })
     }
 
+    /// The tree's references to the desktop session (see `probe::forbidden_refs`).
+    fn isolation(&self) -> Value {
+        probe::forbidden_refs(&probe::tree(probe::self_pid()), &self.cfg.forbidden_paths)
+    }
+
     pub async fn run(mut self, cx: &mut AsyncApp) {
         let started = Instant::now();
+        // main.rs skips CefShutdown unless this turns true.
+        self.put("browsers_closed", json!(false));
         let outcome = self.scenario(cx).await;
         if let Err(err) = &outcome {
             self.put("error", json!(format!("{err:#}")));
         }
+        let before_shutdown = self.isolation();
+        let clean = before_shutdown["clean"] == true
+            && self.report.borrow().get("isolation_after_load").map(|v| &v["clean"])
+                == Some(&json!(true));
+        self.put("isolation_before_shutdown", before_shutdown);
+        self.put("isolation_clean", json!(clean));
         if let Err(err) = self.shutdown(cx).await {
             self.put("shutdown_error", json!(format!("{err:#}")));
         }
@@ -129,6 +150,7 @@ impl Run {
                 "gpui_animation_steps": self.stats.animation_steps.get(),
                 "gpui_images_uploaded": self.stats.frames_uploaded.get(),
                 "gpui_images_dropped": self.stats.images_dropped.get(),
+                "gpui_frames_never_drawn": self.stats.frames_never_drawn.get(),
                 "on_paint_by_page": *self.hub.paints.borrow(),
             }),
         );
@@ -148,6 +170,9 @@ impl Run {
             json!(waited.elapsed().as_secs_f64() * 1e3),
         );
         for index in 0..count {
+            if index == 0 {
+                self.navigation_started = Some(Instant::now());
+            }
             engine::create_page(&self.hub, index, &self.cfg.url)
                 .with_context(|| format!("CreateBrowserSync failed for page {index}"))?;
         }
@@ -158,6 +183,8 @@ impl Run {
             })
             .await?;
         self.put("page_load_ms", json!(load.as_secs_f64() * 1e3));
+        let isolation = self.isolation();
+        self.put("isolation_after_load", isolation);
         let bridge = Bridge::new(cx.background_executor().clone(), self.cfg.step_timeout);
         for index in 0..count {
             let browser = self.hub.page(index).context("page not tracked")?;
@@ -192,24 +219,57 @@ impl Run {
         let b = self.snap();
         let delta = self.delta(&a, &b);
         let analysis = pump::analyze(&trace);
-        let pass = delta["gpui_renders"] == 0 && analysis["unexplained_calls"] == 0;
-        // Every OnPaint of the static page, timed from its first paint, to explain any repaint.
-        let paints: Vec<Value> = {
+        let navigation = self.navigation_started.context("no navigation time")?;
+        let full_view = [0, 0, self.hub.view_width, self.hub.view_height];
+        // Every OnPaint of the static page, timed from navigation, to explain any repaint.
+        let (paints, in_window, paint_holding): (Vec<Value>, usize, usize) = {
             let log = self.hub.paint_log.borrow();
-            let first = log.first().map(|(t, _)| *t);
-            log.iter()
+            let mut in_window = 0;
+            let mut paint_holding = 0;
+            let rows = log
+                .iter()
                 .map(|(t, rects)| {
+                    let inside = *t >= a.at && *t <= b.at;
+                    // The paint-holding repaint: the whole view, once the
+                    // timeout has passed since navigation. Chromium clears
+                    // paint holding once per navigation.
+                    let holding = *t >= navigation + PAINT_HOLDING_TIMEOUT
+                        && rects.as_slice() == [full_view];
+                    if inside {
+                        in_window += 1;
+                        paint_holding += holding as usize;
+                    }
                     json!({
-                        "ms_after_first_paint": first.map(|f| (*t - f).as_secs_f64() * 1e3),
-                        "in_measured_window": *t >= a.at && *t <= b.at,
+                        "ms_after_navigation": (*t - navigation).as_secs_f64() * 1e3,
+                        "in_measured_window": inside,
+                        "paint_holding_repaint": holding,
                         "dirty_rects": rects,
                     })
                 })
-                .collect()
+                .collect();
+            (rows, in_window, paint_holding)
         };
+        let renders = delta["gpui_renders"].as_u64().unwrap_or(u64::MAX);
+        // GPUI may draw only for CEF frames, and CEF may paint only the one
+        // paint-holding repaint.
+        let explained_paints = in_window == paint_holding && paint_holding <= 1;
+        let strict = renders == 0;
+        let pass = analysis["unexplained_calls"] == 0
+            && explained_paints
+            && renders <= in_window as u64;
         self.put("idle_paint_log", json!(paints));
         self.put("idle", delta);
         self.put("idle_pump_trace", analysis);
+        self.put(
+            "idle_frames",
+            json!({
+                "gpui_renders_in_window": renders,
+                "on_paint_in_window": in_window,
+                "paint_holding_repaints_in_window": paint_holding,
+                "paint_holding_timeout_ms": PAINT_HOLDING_TIMEOUT.as_secs_f64() * 1e3,
+                "strict_no_frames": strict,
+            }),
+        );
         self.put("idle_pass", json!(pass));
         Ok(())
     }
@@ -276,14 +336,19 @@ impl Run {
         self.put("cdp_list_tabs", json!(tabs));
 
         let before = self.page_counters(bridge).await?;
+        let before_at = Instant::now();
         // Keep the DevTools session busy for the measured window and read
         // navigator.webdriver from both the call and the page's own rAF sampler.
         let start = Instant::now();
         let mut calls = 0u64;
         let mut true_replies = 0u64;
         let mut errors = Vec::new();
+        let mut latencies_ms: Vec<f64> = Vec::new();
         while start.elapsed() < self.cfg.measure {
-            match bridge.evaluate(tab, "navigator.webdriver").await {
+            let t = Instant::now();
+            let reply = bridge.evaluate(tab, "navigator.webdriver").await;
+            latencies_ms.push(t.elapsed().as_secs_f64() * 1e3);
+            match reply {
                 Ok(Value::Bool(false)) => {}
                 Ok(other) => {
                     true_replies += 1;
@@ -293,10 +358,18 @@ impl Run {
             }
             calls += 1;
         }
+        let loop_seconds = start.elapsed().as_secs_f64();
+        let after = self.page_counters(bridge).await?;
+        let page_seconds = before_at.elapsed().as_secs_f64();
+        latencies_ms.sort_by(f64::total_cmp);
+        let pct = |q: f64| {
+            (!latencies_ms.is_empty())
+                .then(|| latencies_ms[((latencies_ms.len() - 1) as f64 * q).round() as usize])
+        };
+        let latency = json!({ "p50": pct(0.5), "p99": pct(0.99), "max": pct(1.0) });
         let shot_start = Instant::now();
         let png = bridge.screenshot(tab).await;
         let shot_ms = shot_start.elapsed().as_secs_f64() * 1e3;
-        let after = self.page_counters(bridge).await?;
 
         let screenshot = match png {
             Ok(bytes) => {
@@ -333,12 +406,19 @@ impl Run {
             && page_true == 0
             && screenshot["png_signature"] == true
             && switches.is_empty()
+            && sockets["complete"] == true
             && tcp_listeners == 0;
+        let raf = after["raf"].as_f64().unwrap_or(0.0) - before["raf"].as_f64().unwrap_or(0.0);
         self.put(
             "cdp_evaluate_loop",
             json!({
                 "calls": calls,
-                "seconds": start.elapsed().as_secs_f64(),
+                "measure_ms": self.cfg.measure.as_secs_f64() * 1e3,
+                "loop_seconds": loop_seconds,
+                "call_latency_ms": latency,
+                "page_raf_frames": raf,
+                "page_raf_per_second": raf / page_seconds,
+                "page_counter_seconds": page_seconds,
                 "webdriver_true_replies": true_replies,
                 "errors": errors.iter().take(10).collect::<Vec<_>>(),
                 "page_webdriver_samples_during_calls": samples,
@@ -411,8 +491,10 @@ impl Run {
                 .map(|h| format!("{:?}", h.runtime_style()))
         };
         // Reading /proc takes time, so the tree is captured only when the close is not yet due.
+        let scan_start = Instant::now();
         let tree_open = (shown_at.elapsed() < self.cfg.devtools_close_after)
             .then(|| probe::tree(probe::self_pid()));
+        let tree_scan = scan_start.elapsed();
         let due =
             (shown_at + self.cfg.devtools_close_after).saturating_duration_since(Instant::now());
         self.sleep(cx, due).await;
@@ -446,6 +528,8 @@ impl Run {
             "show_devtools_call_ms": show_call.as_secs_f64() * 1e3,
             "devtools_created_after_show_ms": created.as_secs_f64() * 1e3,
             "close_devtools_after_show_ms": close_at.as_secs_f64() * 1e3,
+            "close_late_ms": close_at.saturating_sub(self.cfg.devtools_close_after).as_secs_f64() * 1e3,
+            "tree_scan_while_open_ms": tree_scan.as_secs_f64() * 1e3,
             "devtools_closed_after_close_ms": closed.as_secs_f64() * 1e3,
             "health_before": health_before,
             "health_after": health_after,
@@ -470,7 +554,6 @@ impl Run {
             .tracked
             .borrow()
             .iter()
-            .filter(|t| !t.closed)
             .map(|t| t.browser.clone())
             .collect();
         for browser in &open {
@@ -479,17 +562,18 @@ impl Run {
             }
         }
         drop(open);
+        // OnBeforeClose removes each browser from `tracked`. On a timeout the
+        // rest stay tracked and `browsers_closed` stays false, so main.rs
+        // skips CefShutdown rather than calling it with live browsers.
         let waited = self
             .wait_for(cx, "every OnBeforeClose", |h| h.open_count() == 0)
             .await;
-        self.hub.tracked.borrow_mut().clear();
         self.hub.frame.borrow_mut().take();
         self.window
             .update(cx, |view, window, _| view.release_images(window))?;
-        self.put(
-            "browsers_closed_after_ms",
-            json!(waited?.as_secs_f64() * 1e3),
-        );
+        let waited = waited?;
+        self.put("browsers_closed_after_ms", json!(waited.as_secs_f64() * 1e3));
+        self.put("browsers_closed", json!(true));
         Ok(())
     }
 }

@@ -1,5 +1,7 @@
 fn main() {
-    // cef-dll-sys copies libcef.so and CEF's resources next to the binary on Linux.
-    #[cfg(target_os = "linux")]
-    println!("cargo::rustc-link-arg-bins=-Wl,-rpath,$ORIGIN");
+    // The runner stages libcef.so next to the binary (see scripts/run-checks.sh).
+    // Build scripts run on the host, so check the target through Cargo's env.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
+        println!("cargo::rustc-link-arg-bins=-Wl,-rpath,$ORIGIN");
+    }
 }

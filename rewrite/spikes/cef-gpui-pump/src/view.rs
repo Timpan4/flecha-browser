@@ -25,12 +25,18 @@ pub struct ViewStats {
     /// OnPaint frames turned into GPUI images.
     pub frames_uploaded: Cell<u64>,
     pub images_dropped: Cell<u64>,
+    /// OnPaint frames replaced before GPUI drew them.
+    pub frames_never_drawn: Cell<u64>,
 }
 
 pub struct PageView {
     hub: Rc<Hub>,
     stats: Rc<ViewStats>,
     current: Option<Arc<RenderImage>>,
+    /// Whether `current` was drawn, so it may hold atlas tiles.
+    current_drawn: bool,
+    /// Drawn images replaced since the last frame; their tiles leave the atlas
+    /// at the next render.
     retired: Vec<Arc<RenderImage>>,
     pub gpui_animation: bool,
 }
@@ -59,6 +65,7 @@ impl PageView {
             hub,
             stats,
             current: None,
+            current_drawn: false,
             retired: Vec::new(),
             gpui_animation: false,
         }
@@ -73,8 +80,15 @@ impl PageView {
             return false;
         };
         let image = Arc::new(RenderImage::new([Frame::new(buffer)]));
+        // A frame that was never drawn has no atlas tiles; dropping it frees it,
+        // so frames arriving faster than GPUI draws do not pile up.
         if let Some(old) = self.current.replace(image) {
-            self.retired.push(old);
+            if std::mem::replace(&mut self.current_drawn, false) {
+                self.retired.push(old);
+            } else {
+                let skipped = &self.stats.frames_never_drawn;
+                skipped.set(skipped.get() + 1);
+            }
         }
         self.stats
             .frames_uploaded
@@ -85,6 +99,7 @@ impl PageView {
     /// Drops all images so the window releases their atlas tiles.
     pub fn release_images(&mut self, window: &mut Window) {
         self.retired.extend(self.current.take());
+        self.current_drawn = false;
         self.drop_retired(window);
     }
 
@@ -104,6 +119,7 @@ impl Render for PageView {
     fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         self.stats.renders.set(self.stats.renders.get() + 1);
         self.drop_retired(window);
+        self.current_drawn = self.current.is_some();
 
         let width = px(self.hub.view_width as f32);
         let height = px(self.hub.view_height as f32);

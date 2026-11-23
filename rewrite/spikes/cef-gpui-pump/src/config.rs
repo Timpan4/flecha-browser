@@ -37,6 +37,9 @@ pub struct Config {
     /// Turn off GPUI's frame-rate cap for inactive windows. Under Xvfb with no
     /// window manager the window never becomes active.
     pub no_inactive_throttle: bool,
+    /// Paths the process tree must not have open, mapped or connected to
+    /// (the desktop session's runtime dir, the system bus socket).
+    pub forbidden_paths: Vec<String>,
 }
 
 impl Config {
@@ -66,6 +69,14 @@ impl Config {
             "devtools" => Scenario::DevTools,
             other => bail!("unknown scenario {other}"),
         };
+        // A zero window or wait would let a check pass without observing anything.
+        let nonzero_ms = |k: &str| -> Result<Duration> {
+            let d = ms(k)?;
+            if d.is_zero() {
+                bail!("--pump-{k} must be greater than 0");
+            }
+            Ok(d)
+        };
         let devtools = scenario == Scenario::DevTools;
         Ok(Self {
             scenario,
@@ -73,9 +84,9 @@ impl Config {
             out: get("out")?.into(),
             cache_dir: get("cache-dir")?.into(),
             no_sandbox: opts.contains_key("no-sandbox"),
-            step_timeout: ms("step-timeout-ms")?,
+            step_timeout: nonzero_ms("step-timeout-ms")?,
             warmup: ms("warmup-ms")?,
-            measure: ms("measure-ms")?,
+            measure: nonzero_ms("measure-ms")?,
             devtools_close_after: if devtools {
                 ms("devtools-close-ms")?
             } else {
@@ -83,6 +94,17 @@ impl Config {
             },
             second_browser: opts.contains_key("second-browser"),
             no_inactive_throttle: opts.contains_key("no-inactive-throttle"),
+            forbidden_paths: {
+                let paths: Vec<String> = get("forbid-paths")?
+                    .split(':')
+                    .filter(|p| !p.is_empty())
+                    .map(str::to_string)
+                    .collect();
+                if paths.is_empty() {
+                    bail!("--pump-forbid-paths names no path");
+                }
+                paths
+            },
         })
     }
 }

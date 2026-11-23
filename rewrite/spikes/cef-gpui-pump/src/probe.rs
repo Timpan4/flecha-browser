@@ -286,13 +286,17 @@ pub fn listening_sockets(procs: &[Proc]) -> Value {
     }
     let owned: HashSet<u64> = owner.keys().copied().collect();
     let mut listening = Vec::new();
+    let mut table_errors = Vec::new();
+    let mut read_table = |table: &str| match fs::read_to_string(table) {
+        Ok(text) => text,
+        Err(e) => {
+            table_errors.push(json!({ "table": table, "error": e.to_string() }));
+            String::new()
+        }
+    };
     // /proc/net/tcp{,6}: field 3 is the state, 0A is TCP_LISTEN; field 9 is the inode.
     for table in ["/proc/net/tcp", "/proc/net/tcp6"] {
-        for line in fs::read_to_string(table)
-            .unwrap_or_default()
-            .lines()
-            .skip(1)
-        {
+        for line in read_table(table).lines().skip(1) {
             let f: Vec<&str> = line.split_whitespace().collect();
             if f.get(3) == Some(&"0A")
                 && let Some(inode) = f.get(9).and_then(|s| s.parse::<u64>().ok())
@@ -303,11 +307,7 @@ pub fn listening_sockets(procs: &[Proc]) -> Value {
         }
     }
     // /proc/net/unix: field 3 is flags; __SO_ACCEPTCON (0x10000) marks a listening socket.
-    for line in fs::read_to_string("/proc/net/unix")
-        .unwrap_or_default()
-        .lines()
-        .skip(1)
-    {
+    for line in read_table("/proc/net/unix").lines().skip(1) {
         let f: Vec<&str> = line.split_whitespace().collect();
         let flags = f
             .get(3)
@@ -321,7 +321,119 @@ pub fn listening_sockets(procs: &[Proc]) -> Value {
                 .push(json!({ "table": "/proc/net/unix", "path": f.get(7), "pid": owner[&inode] }));
         }
     }
-    json!({ "listening": listening, "sockets_seen": owned.len(), "unreadable_fd_tables": unreadable })
+    // Zero listeners proves nothing unless every fd table and socket table was read.
+    let complete = unreadable.is_empty() && table_errors.is_empty();
+    json!({
+        "listening": listening,
+        "sockets_seen": owned.len(),
+        "unreadable_fd_tables": unreadable,
+        "table_errors": table_errors,
+        "complete": complete,
+    })
+}
+
+/// Open files, memory-mapped files and Unix socket peers of `procs` that lie
+/// under any of `forbidden` (path prefixes).
+///
+/// Socket peers come from `ss -x`, which lists the Unix sockets of this network
+/// namespace. Sandboxed renderers run in their own network namespace, so their
+/// sockets are counted in `sockets_without_peer_info` instead of resolved.
+pub fn forbidden_refs(procs: &[Proc], forbidden: &[String]) -> Value {
+    let under = |path: &str| forbidden.iter().any(|f| path.starts_with(f.as_str()));
+    let mut open = Vec::new();
+    let mut mapped = Vec::new();
+    let mut unreadable = Vec::new();
+    let mut sockets: Vec<(u64, i32)> = Vec::new();
+    for p in procs {
+        let Ok(fds) = fs::read_dir(format!("/proc/{}/fd", p.pid)) else {
+            unreadable.push(json!({ "pid": p.pid, "what": "fd" }));
+            continue;
+        };
+        for fd in fds.flatten() {
+            let Ok(target) = fs::read_link(fd.path()) else {
+                continue;
+            };
+            let target = target.to_string_lossy();
+            if let Some(inode) = target
+                .strip_prefix("socket:[")
+                .and_then(|s| s.strip_suffix(']'))
+                .and_then(|s| s.parse().ok())
+            {
+                sockets.push((inode, p.pid));
+            } else if under(&target) {
+                open.push(json!({ "pid": p.pid, "path": target }));
+            }
+        }
+        match fs::read_to_string(format!("/proc/{}/maps", p.pid)) {
+            Ok(maps) => {
+                for path in maps.lines().filter_map(|l| l.split_whitespace().nth(5)) {
+                    if under(path) {
+                        mapped.push(json!({ "pid": p.pid, "path": path }));
+                    }
+                }
+            }
+            Err(_) => unreadable.push(json!({ "pid": p.pid, "what": "maps" })),
+        }
+    }
+
+    // `ss -xan` rows: Netid State Recv-Q Send-Q Local Inode Peer PeerInode.
+    // A connected client shows `*` as its own address, so the server's path is
+    // found by looking up the peer inode's local address.
+    let mut local: HashMap<u64, String> = HashMap::new();
+    let mut peer: HashMap<u64, u64> = HashMap::new();
+    let ss = std::process::Command::new("ss").arg("-xan").output();
+    let ss_error = match &ss {
+        Ok(out) if out.status.success() => None,
+        Ok(out) => Some(format!("ss exited with {}", out.status)),
+        Err(e) => Some(format!("ss: {e}")),
+    };
+    if let Ok(out) = &ss {
+        for line in String::from_utf8_lossy(&out.stdout).lines().skip(1) {
+            let f: Vec<&str> = line.split_whitespace().collect();
+            if f.len() < 8 {
+                continue;
+            }
+            let (Ok(inode), Ok(peer_inode)) = (f[5].parse::<u64>(), f[7].parse::<u64>()) else {
+                continue;
+            };
+            local.insert(inode, f[4].to_string());
+            if peer_inode != 0 {
+                peer.insert(inode, peer_inode);
+            }
+        }
+    }
+    let mut peers = Vec::new();
+    let mut without_info = 0usize;
+    for (inode, pid) in &sockets {
+        if !local.contains_key(inode) {
+            without_info += 1;
+            continue;
+        }
+        let own = &local[inode];
+        let remote = peer.get(inode).and_then(|p| local.get(p));
+        for path in [Some(own), remote].into_iter().flatten() {
+            if under(path) {
+                peers.push(json!({ "pid": pid, "inode": inode, "path": path }));
+            }
+        }
+    }
+    let clean = open.is_empty()
+        && mapped.is_empty()
+        && peers.is_empty()
+        && unreadable.is_empty()
+        && ss_error.is_none();
+    json!({
+        "forbidden": forbidden,
+        "processes": procs.len(),
+        "open_files": open,
+        "mapped_files": mapped,
+        "unix_socket_peers": peers,
+        "sockets": sockets.len(),
+        "sockets_without_peer_info": without_info,
+        "unreadable": unreadable,
+        "ss_error": ss_error,
+        "clean": clean,
+    })
 }
 
 /// Waits until each `(pid, start_time)` has exited, bounded by `timeout`.
@@ -331,11 +443,18 @@ pub fn wait_gone(procs: &[(i32, u64)], timeout: std::time::Duration) -> Value {
     let start = Instant::now();
     let mut rows = Vec::new();
     let mut waiting: Vec<(i32, u64, libc::c_int)> = Vec::new();
+    let mut inconclusive = Vec::new();
     for &(pid, start_time) in procs {
         // SAFETY: pidfd_open takes a pid and flags and returns a new fd or -1.
         let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) } as libc::c_int;
         if fd < 0 {
-            rows.push(json!({ "pid": pid, "gone_after_ms": 0.0, "note": "gone before wait" }));
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() == Some(libc::ESRCH) {
+                rows.push(json!({ "pid": pid, "gone_after_ms": 0.0, "note": "gone before wait" }));
+            } else {
+                // ENOSYS, EMFILE and the like say nothing about the process.
+                inconclusive.push(json!({ "pid": pid, "start_time": start_time, "error": err.to_string() }));
+            }
         } else if !alive(pid, start_time) {
             // The PID exists but is a zombie or a different process now.
             // SAFETY: fd came from pidfd_open above.
@@ -390,6 +509,8 @@ pub fn wait_gone(procs: &[(i32, u64)], timeout: std::time::Duration) -> Value {
     json!({
         "timeout_ms": timeout.as_secs_f64() * 1e3,
         "exited": rows,
+        "clean": leaked.is_empty() && inconclusive.is_empty(),
         "still_alive_at_timeout": leaked,
+        "inconclusive": inconclusive,
     })
 }

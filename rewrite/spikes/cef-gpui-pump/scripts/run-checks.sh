@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# Runs every Spike 2 check on a private Xvfb display and a private D-Bus session.
-# Never touches the desktop session. Stops what it starts by PID.
+# Runs every Spike 2 check on a private Xvfb display, a private D-Bus session
+# with no service activation, a scratch XDG_RUNTIME_DIR per run, and a system
+# bus address that points nowhere. Each app run checks that its process tree
+# holds nothing under the desktop session's runtime dir or the system bus
+# socket (`isolation_clean` in the report). Stops what it starts by PID.
+# Exits nonzero if any run fails.
 #
 # Usage: scripts/run-checks.sh RESULTS_DIR [SCENARIO...]
 #   SCENARIO: idle animate animate-unthrottled cdp devtools (default: all)
@@ -47,49 +51,77 @@ cp --reflink=auto -f "$profile_dir/cef-gpui-pump" "$bundle/"
 bin=$bundle/cef-gpui-pump
 echo "bundle $bundle (CEF from $cef_dir)"
 
+# What the app must not reach: the caller's runtime dir and the system bus.
+desktop_runtime=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+system_bus_socket=/run/dbus/system_bus_socket
+
 xvfb_pid=
+scratch=()
 cleanup() {
     if [[ -n $xvfb_pid ]] && kill -0 "$xvfb_pid" 2>/dev/null; then
         kill "$xvfb_pid"
         wait "$xvfb_pid" 2>/dev/null || true
     fi
+    local d
+    for d in "${scratch[@]}"; do
+        [[ -d $d ]] && rm -rf -- "$d"
+    done
 }
 trap cleanup EXIT
 
 # -displayfd picks a free display number and writes it once the server is ready.
+# The shell holds the pipe's write end too, so a dead Xvfb would never give EOF;
+# the read is bounded by STEP_TIMEOUT_MS.
 exec {dfd}<> <(:)
 Xvfb -displayfd "$dfd" -screen 0 1920x1200x24 -nolisten tcp >"$results/xvfb.log" 2>&1 &
 xvfb_pid=$!
-read -r -u "$dfd" display_number
+if ! read -r -t "$(( (STEP_TIMEOUT_MS + 999) / 1000 ))" -u "$dfd" display_number || [[ -z $display_number ]]; then
+    echo "Xvfb gave no display within ${STEP_TIMEOUT_MS} ms; see $results/xvfb.log" >&2
+    exit 1
+fi
 exec {dfd}>&-
 display=:$display_number
 echo "Xvfb pid $xvfb_pid on $display"
 
+failures=0
 run_one() {
     local name=$1 url=$2
     shift 2
     local out=$results/$name.json
-    # A fresh, throwaway CEF profile per run; never the owner's profiles.
-    local cache
+    # A crash must not leave an older report to be read as this run's.
+    rm -f -- "$out" "${out%.json}.png"
+    # A fresh, throwaway CEF profile and runtime dir per run (mktemp -d makes
+    # them mode 700); never the owner's profiles or session runtime dir.
+    local cache runtime
     cache=$(mktemp -d -t cef-gpui-pump-cache.XXXXXX)
+    runtime=$(mktemp -d -t cef-gpui-pump-runtime.XXXXXX)
+    scratch+=("$cache" "$runtime")
     echo "== $name"
     local status=0
-    env -u WAYLAND_DISPLAY -u WAYLAND_SOCKET DISPLAY="$display" XDG_SESSION_TYPE=x11 \
+    env -u WAYLAND_DISPLAY -u WAYLAND_SOCKET -u DBUS_SESSION_BUS_ADDRESS \
+        DISPLAY="$display" XDG_SESSION_TYPE=x11 XDG_RUNTIME_DIR="$runtime" \
+        DBUS_SYSTEM_BUS_ADDRESS=unix:path=/nonexistent \
         dbus-run-session --config-file="$here/scripts/isolated-session-bus.conf" -- "$bin" \
         --ozone-platform=x11 --password-store=basic \
         --pump-url="$url" --pump-out="$out" --pump-cache-dir="$cache" \
         --pump-warmup-ms="$WARMUP_MS" --pump-measure-ms="$MEASURE_MS" \
         --pump-step-timeout-ms="$STEP_TIMEOUT_MS" \
+        --pump-forbid-paths="$desktop_runtime:$system_bus_socket" \
         ${EXTRA_ARGS:-} "$@" >/dev/null 2>"$results/$name.stderr" || status=$?
-    rm -rf -- "$cache"
+    # What landed in the scratch runtime dir would otherwise have gone to the desktop's.
+    (cd "$runtime" && find . -mindepth 1 -printf '%y %m %P\n' | sort) >"$results/$name.runtime-dir.txt"
+    rm -rf -- "$cache" "$runtime"
     # Zygotes exit once the browser process has closed their sockets. Wait for
     # every child the app saw before CefShutdown to exit (pidfd, bounded by STEP_TIMEOUT_MS).
+    local verdict=fail
     if [[ -f $out ]]; then
         "$bin" --pump-wait-gone="$out" || true
-        echo "   exit=$status scenario_pass=$(jq .scenario_pass "$out") shutdown_clean=$(jq .shutdown_clean "$out") pass=$(jq .pass "$out")"
+        [[ $status -eq 0 && $(jq .pass "$out") == true ]] && verdict=pass
+        echo "   exit=$status scenario_pass=$(jq .scenario_pass "$out") isolation_clean=$(jq .isolation_clean "$out") shutdown_clean=$(jq .shutdown_clean "$out") pass=$(jq .pass "$out")"
     else
         echo "   exit=$status, no report written (see $name.stderr)"
     fi
+    [[ $verdict == pass ]] || failures=$((failures + 1))
 }
 
 for s in "${scenarios[@]}"; do
@@ -110,3 +142,9 @@ for s in "${scenarios[@]}"; do
         *) echo "unknown scenario $s" >&2; exit 2 ;;
     esac
 done
+
+if (( failures )); then
+    echo "$failures run(s) failed" >&2
+    exit 1
+fi
+echo "all runs passed"

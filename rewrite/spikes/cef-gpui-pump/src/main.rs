@@ -112,10 +112,15 @@ fn browser_main(args: cef::args::Args, mut app: cef::App) -> Result<bool> {
         });
     }
 
-    // CefShutdown must follow every browser closing, which the scenario waits for.
-    let t = Instant::now();
-    cef::shutdown();
-    let shutdown_ms = t.elapsed().as_secs_f64() * 1e3;
+    // CefShutdown must follow every browser closing. The scenario records
+    // `browsers_closed` false when it starts and true once every OnBeforeClose
+    // arrived; with no record, no scenario ran and no browser exists.
+    let browsers_closed = report.borrow().get("browsers_closed") != Some(&json!(false));
+    let shutdown_ms = browsers_closed.then(|| {
+        let t = Instant::now();
+        cef::shutdown();
+        t.elapsed().as_secs_f64() * 1e3
+    });
 
     // Zygotes exit when this process closes their sockets, so some are still
     // alive here; `--pump-wait-gone` checks them after exit.
@@ -154,7 +159,8 @@ fn browser_main(args: cef::args::Args, mut app: cef::App) -> Result<bool> {
     report.insert(
         "shutdown".into(),
         json!({
-            "cef_shutdown_returned": true,
+            "cef_shutdown_called": shutdown_ms.is_some(),
+            "cef_shutdown_skipped_reason": (!browsers_closed).then_some("browsers still open"),
             "cef_shutdown_ms": shutdown_ms,
             "children_before_shutdown": children.borrow().iter().map(probe::Proc::summary).collect::<Vec<_>>(),
             "children_alive_right_after_cef_shutdown": alive_now,
@@ -168,6 +174,8 @@ fn browser_main(args: cef::args::Args, mut app: cef::App) -> Result<bool> {
         config::Scenario::DevTools => "devtools_pass",
     };
     let pass = report.get(pass_key) == Some(&json!(true))
+        && report.get("isolation_clean") == Some(&json!(true))
+        && browsers_closed
         && !report.contains_key("error")
         && !report.contains_key("shutdown_error");
     report.insert("scenario_pass".into(), json!(pass));
@@ -187,16 +195,25 @@ fn wait_gone(path: &str) -> Result<bool> {
             .context("report has no step_timeout_ms")?
             / 1e3,
     );
-    let children: Vec<(i32, u64)> = report["shutdown"]["children_before_shutdown"]
+    // Every recorded child must parse, or the check could skip one and call it clean.
+    let children = report["shutdown"]["children_before_shutdown"]
         .as_array()
         .context("report has no children_before_shutdown")?
         .iter()
-        .filter_map(|p| Some((p["pid"].as_i64()? as i32, p["start_time"].as_u64()?)))
-        .collect();
+        .map(|p| {
+            let pid = p["pid"]
+                .as_i64()
+                .and_then(|n| i32::try_from(n).ok())
+                .filter(|n| *n > 0)
+                .with_context(|| format!("bad pid in child record {p}"))?;
+            let start = p["start_time"]
+                .as_u64()
+                .with_context(|| format!("bad start_time in child record {p}"))?;
+            Ok((pid, start))
+        })
+        .collect::<Result<Vec<(i32, u64)>>>()?;
     let result = probe::wait_gone(&children, timeout);
-    let clean = result["still_alive_at_timeout"]
-        .as_array()
-        .is_some_and(Vec::is_empty);
+    let clean = result["clean"] == json!(true);
     let pass = report.get("scenario_pass") == Some(&json!(true)) && clean;
     report.insert("children_after_exit".into(), result);
     report.insert("shutdown_clean".into(), json!(clean));
@@ -278,6 +295,7 @@ fn start(
         context_ready,
         report,
         children_before_shutdown: children,
+        navigation_started: None,
     };
     cx.spawn(async move |cx| run.run(cx).await).detach();
     Ok(())

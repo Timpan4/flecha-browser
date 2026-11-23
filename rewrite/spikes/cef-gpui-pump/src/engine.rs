@@ -58,10 +58,10 @@ pub enum Kind {
     DevTools,
 }
 
+/// A browser between `OnAfterCreated` and `OnBeforeClose`.
 pub struct Tracked {
     pub kind: Kind,
     pub browser: Browser,
-    pub closed: bool,
 }
 
 /// Latest BGRA frame from `OnPaint` for the drawn browser.
@@ -97,7 +97,7 @@ impl Hub {
         self.tracked
             .borrow()
             .iter()
-            .find(|t| t.kind == Kind::Page(index) && !t.closed)
+            .find(|t| t.kind == Kind::Page(index))
             .map(|t| t.browser.clone())
     }
 
@@ -105,11 +105,11 @@ impl Hub {
         self.tracked
             .borrow()
             .iter()
-            .any(|t| t.kind == Kind::DevTools && !t.closed)
+            .any(|t| t.kind == Kind::DevTools)
     }
 
     pub fn open_count(&self) -> usize {
-        self.tracked.borrow().iter().filter(|t| !t.closed).count()
+        self.tracked.borrow().len()
     }
 
     fn ping(&self) {
@@ -262,7 +262,6 @@ wrap_life_span_handler! {
             self.hub.tracked.borrow_mut().push(Tracked {
                 kind: self.kind,
                 browser: browser.clone(),
-                closed: false,
             });
             self.hub.ping();
         }
@@ -271,11 +270,16 @@ wrap_life_span_handler! {
             let Some(browser) = browser else { return };
             let id = browser.identifier();
             eprintln!("[engine] before_close {:?} id={id}", self.kind);
-            for t in self.hub.tracked.borrow_mut().iter_mut() {
-                if t.browser.identifier() == id {
-                    t.closed = true;
-                }
-            }
+            // Drop the handle after the borrow ends: releasing a CEF reference
+            // must not run while `tracked` is borrowed.
+            let removed: Vec<Tracked> = {
+                let mut tracked = self.hub.tracked.borrow_mut();
+                let (gone, kept): (Vec<Tracked>, Vec<Tracked>) =
+                    tracked.drain(..).partition(|t| t.browser.identifier() == id);
+                *tracked = kept;
+                gone
+            };
+            drop(removed);
             self.hub.ping();
         }
     }
