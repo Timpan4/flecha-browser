@@ -114,6 +114,12 @@ async fn thousands_of_waits_share_the_server_thread_and_leave_no_timers() {
     }
     let all_dispatched = started.elapsed();
     assert_eq!(dispatched(), CALLS, "every call reached the backend");
+    // Every call started after `started` and the `#ready` ones cannot finish yet, so before the
+    // shortest deadline no server-side wait can have ended.
+    assert!(
+        all_dispatched < Duration::from_millis(TIMEOUT_MS),
+        "dispatching took {all_dispatched:?}, past the {TIMEOUT_MS}ms deadline, so the calls may not all have overlapped"
+    );
     assert!(
         calls.iter().all(|call| !call.is_finished()),
         "a call finished before the last one was dispatched, so they did not all overlap"

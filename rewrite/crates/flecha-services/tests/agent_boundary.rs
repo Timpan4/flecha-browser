@@ -381,10 +381,15 @@ mod token_file {
         let dir = TempDir::new();
         let path = dir.path.join("agent-token");
         let token = AgentToken::open(&path).unwrap();
-        let workers = std::thread::available_parallelism().unwrap().get();
+        // Two renewals is the least that can race; a barrier starts them together.
+        let workers = std::thread::available_parallelism().unwrap().get().max(2);
+        let start = std::sync::Barrier::new(workers);
         std::thread::scope(|scope| {
             for _ in 0..workers {
-                scope.spawn(|| token.renew().unwrap());
+                scope.spawn(|| {
+                    start.wait();
+                    token.renew().unwrap()
+                });
             }
         });
         assert_eq!(std::fs::read_to_string(&path).unwrap(), token.reveal());
