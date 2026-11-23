@@ -1,0 +1,495 @@
+//! The scripted checks. Each scenario runs as a GPUI foreground task, writes
+//! its results into the report, then closes every browser and quits GPUI.
+
+use crate::bridge::Bridge;
+use crate::config::{Config, Scenario};
+use crate::engine::{self, Hub, Kind};
+use crate::probe::{self, Proc};
+use crate::pump;
+use crate::view::{PageView, ViewStats};
+use anyhow::{Context as _, Result, bail};
+use cef::{ImplBrowser as _, ImplBrowserHost as _};
+use futures::{FutureExt as _, StreamExt as _, channel::mpsc};
+use gpui::{AsyncApp, WindowHandle};
+use serde_json::{Map, Value, json};
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::time::{Duration, Instant};
+
+pub type Report = Rc<RefCell<Map<String, Value>>>;
+
+pub struct Run {
+    pub cfg: Config,
+    pub hub: Rc<Hub>,
+    pub stats: Rc<ViewStats>,
+    pub window: WindowHandle<PageView>,
+    pub lifecycle: mpsc::UnboundedReceiver<()>,
+    pub context_ready: mpsc::UnboundedReceiver<()>,
+    pub report: Report,
+    /// Descendant processes snapshotted just before closing browsers.
+    pub children_before_shutdown: Rc<RefCell<Vec<Proc>>>,
+}
+
+/// Counters from both sides at one instant.
+struct Snap {
+    at: Instant,
+    pump: pump::Counts,
+    renders: u64,
+    animation_steps: u64,
+    uploads: u64,
+    paints: Vec<u64>,
+    tree: Vec<Proc>,
+}
+
+impl Run {
+    fn put(&self, key: &str, value: Value) {
+        eprintln!("[scenario] {key}: {value}");
+        self.report.borrow_mut().insert(key.to_string(), value);
+    }
+
+    async fn sleep(&self, cx: &mut AsyncApp, d: Duration) {
+        cx.background_executor().timer(d).await;
+    }
+
+    /// Waits until `pred` holds, re-checking after each lifecycle event, bounded by the step timeout.
+    async fn wait_for(
+        &mut self,
+        cx: &mut AsyncApp,
+        what: &str,
+        pred: impl Fn(&Hub) -> bool,
+    ) -> Result<Duration> {
+        let start = Instant::now();
+        let deadline = start + self.cfg.step_timeout;
+        loop {
+            if pred(&self.hub) {
+                return Ok(start.elapsed());
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                bail!(
+                    "timed out after {:?} waiting for {what}",
+                    self.cfg.step_timeout
+                );
+            }
+            let mut timer = cx.background_executor().timer(remaining).fuse();
+            futures::select_biased! {
+                _ = self.lifecycle.next() => {}
+                _ = timer => {}
+            }
+        }
+    }
+
+    fn snap(&self) -> Snap {
+        let pages = self.hub.paints.borrow().len();
+        Snap {
+            at: Instant::now(),
+            pump: pump::counts(),
+            renders: self.stats.renders.get(),
+            animation_steps: self.stats.animation_steps.get(),
+            uploads: self.stats.frames_uploaded.get(),
+            paints: (0..pages).map(|i| self.hub.paints(i)).collect(),
+            tree: probe::tree(probe::self_pid()),
+        }
+    }
+
+    fn delta(&self, a: &Snap, b: &Snap) -> Value {
+        let secs = (b.at - a.at).as_secs_f64();
+        let paints: Vec<Value> = a
+            .paints
+            .iter()
+            .zip(&b.paints)
+            .map(|(x, y)| json!({ "count": y - x, "per_second": (y - x) as f64 / secs }))
+            .collect();
+        json!({
+            "seconds": secs,
+            "pump": pump::counts_json(pump::counts_delta(a.pump, b.pump)),
+            "gpui_renders": b.renders - a.renders,
+            "gpui_renders_per_second": (b.renders - a.renders) as f64 / secs,
+            "gpui_animation_steps": b.animation_steps - a.animation_steps,
+            "gpui_images_uploaded": b.uploads - a.uploads,
+            "on_paint_by_page": paints,
+            "cpu": probe::cpu_delta(&a.tree, &b.tree, secs),
+        })
+    }
+
+    pub async fn run(mut self, cx: &mut AsyncApp) {
+        let started = Instant::now();
+        let outcome = self.scenario(cx).await;
+        if let Err(err) = &outcome {
+            self.put("error", json!(format!("{err:#}")));
+        }
+        if let Err(err) = self.shutdown(cx).await {
+            self.put("shutdown_error", json!(format!("{err:#}")));
+        }
+        self.put("scenario_seconds", json!(started.elapsed().as_secs_f64()));
+        self.put(
+            "totals",
+            json!({
+                "gpui_renders": self.stats.renders.get(),
+                "gpui_animation_steps": self.stats.animation_steps.get(),
+                "gpui_images_uploaded": self.stats.frames_uploaded.get(),
+                "gpui_images_dropped": self.stats.images_dropped.get(),
+                "on_paint_by_page": *self.hub.paints.borrow(),
+            }),
+        );
+        cx.update(|cx| cx.quit());
+    }
+
+    async fn start_pages(&mut self, cx: &mut AsyncApp, count: usize) -> Result<Bridge> {
+        let waited = Instant::now();
+        let ready = self.context_ready.next();
+        let mut timer = cx.background_executor().timer(self.cfg.step_timeout).fuse();
+        futures::select_biased! {
+            r = ready.fuse() => r.context("context channel closed")?,
+            _ = timer => bail!("CEF context not initialized within {:?}", self.cfg.step_timeout),
+        }
+        self.put(
+            "context_initialized_after_ms",
+            json!(waited.elapsed().as_secs_f64() * 1e3),
+        );
+        for index in 0..count {
+            engine::create_page(&self.hub, index, &self.cfg.url)
+                .with_context(|| format!("CreateBrowserSync failed for page {index}"))?;
+        }
+        let load = self
+            .wait_for(cx, "page load", |hub| {
+                let loaded = hub.loaded.borrow();
+                loaded.len() >= count && loaded.iter().all(|l| *l)
+            })
+            .await?;
+        self.put("page_load_ms", json!(load.as_secs_f64() * 1e3));
+        let bridge = Bridge::new(cx.background_executor().clone(), self.cfg.step_timeout);
+        for index in 0..count {
+            let browser = self.hub.page(index).context("page not tracked")?;
+            bridge.attach(&browser)?;
+        }
+        Ok(bridge)
+    }
+
+    async fn scenario(&mut self, cx: &mut AsyncApp) -> Result<()> {
+        let pages = if self.cfg.scenario == Scenario::DevTools && self.cfg.second_browser {
+            2
+        } else {
+            1
+        };
+        let bridge = self.start_pages(cx, pages).await?;
+        let result = match self.cfg.scenario {
+            Scenario::Idle => self.idle(cx).await,
+            Scenario::Animate => self.animate(cx, &bridge).await,
+            Scenario::Cdp => self.cdp(cx, &bridge).await,
+            Scenario::DevTools => self.devtools(cx, &bridge).await,
+        };
+        bridge.detach_all();
+        result
+    }
+
+    async fn idle(&mut self, cx: &mut AsyncApp) -> Result<()> {
+        self.sleep(cx, self.cfg.warmup).await;
+        let a = self.snap();
+        pump::start_trace();
+        self.sleep(cx, self.cfg.measure).await;
+        let trace = pump::stop_trace();
+        let b = self.snap();
+        let delta = self.delta(&a, &b);
+        let analysis = pump::analyze(&trace);
+        let pass = delta["gpui_renders"] == 0 && analysis["unexplained_calls"] == 0;
+        // Every OnPaint of the static page, timed from its first paint, to explain any repaint.
+        let paints: Vec<Value> = {
+            let log = self.hub.paint_log.borrow();
+            let first = log.first().map(|(t, _)| *t);
+            log.iter()
+                .map(|(t, rects)| {
+                    json!({
+                        "ms_after_first_paint": first.map(|f| (*t - f).as_secs_f64() * 1e3),
+                        "in_measured_window": *t >= a.at && *t <= b.at,
+                        "dirty_rects": rects,
+                    })
+                })
+                .collect()
+        };
+        self.put("idle_paint_log", json!(paints));
+        self.put("idle", delta);
+        self.put("idle_pump_trace", analysis);
+        self.put("idle_pass", json!(pass));
+        Ok(())
+    }
+
+    async fn page_counters(&self, bridge: &Bridge) -> Result<Value> {
+        let tab = bridge.tab_ids()[0];
+        bridge
+            .evaluate(
+                tab,
+                "({ raf: window.__raf || 0, css_time: (document.getAnimations()[0] || {}).currentTime ?? null, \
+                   webdriver_samples: window.__wd ? window.__wd.samples : null, \
+                   webdriver_true: window.__wd ? window.__wd.trues : null, \
+                   webdriver_now: navigator.webdriver })",
+            )
+            .await
+    }
+
+    async fn animate_phase(&mut self, cx: &mut AsyncApp, bridge: &Bridge) -> Result<Value> {
+        self.sleep(cx, self.cfg.warmup).await;
+        let page_a = self.page_counters(bridge).await?;
+        let a = self.snap();
+        self.sleep(cx, self.cfg.measure).await;
+        let b = self.snap();
+        let page_b = self.page_counters(bridge).await?;
+        let mut delta = self.delta(&a, &b);
+        let secs = delta["seconds"].as_f64().unwrap_or(1.0);
+        let raf = page_b["raf"].as_f64().unwrap_or(0.0) - page_a["raf"].as_f64().unwrap_or(0.0);
+        let css = match (page_a["css_time"].as_f64(), page_b["css_time"].as_f64()) {
+            (Some(x), Some(y)) => json!(y - x),
+            _ => Value::Null,
+        };
+        delta["page_raf_frames"] = json!(raf);
+        delta["page_raf_per_second"] = json!(raf / secs);
+        delta["page_css_animation_ms_advanced"] = css;
+        Ok(delta)
+    }
+
+    async fn animate(&mut self, cx: &mut AsyncApp, bridge: &Bridge) -> Result<()> {
+        let off = self.animate_phase(cx, bridge).await?;
+        self.window.update(cx, |view, _, cx| {
+            view.gpui_animation = true;
+            cx.notify();
+        })?;
+        let on = self.animate_phase(cx, bridge).await?;
+        let advancing = |d: &Value| {
+            d["page_raf_frames"].as_f64().unwrap_or(0.0) > 0.0
+                && d["page_css_animation_ms_advanced"].as_f64().unwrap_or(0.0) > 0.0
+                && d["on_paint_by_page"][0]["count"].as_u64().unwrap_or(0) > 0
+                && d["gpui_images_uploaded"].as_u64().unwrap_or(0) > 0
+        };
+        let pass = advancing(&off)
+            && advancing(&on)
+            && on["gpui_animation_steps"].as_u64().unwrap_or(0) > 0;
+        self.put("animate_gpui_off", off);
+        self.put("animate_gpui_on", on);
+        self.put("animate_pass", json!(pass));
+        Ok(())
+    }
+
+    async fn cdp(&mut self, cx: &mut AsyncApp, bridge: &Bridge) -> Result<()> {
+        let tab = bridge.tab_ids()[0];
+        self.sleep(cx, self.cfg.warmup).await;
+        let tabs = bridge.list_tabs().await;
+        self.put("cdp_list_tabs", json!(tabs));
+
+        let before = self.page_counters(bridge).await?;
+        // Keep the DevTools session busy for the measured window and read
+        // navigator.webdriver from both the call and the page's own rAF sampler.
+        let start = Instant::now();
+        let mut calls = 0u64;
+        let mut true_replies = 0u64;
+        let mut errors = Vec::new();
+        while start.elapsed() < self.cfg.measure {
+            match bridge.evaluate(tab, "navigator.webdriver").await {
+                Ok(Value::Bool(false)) => {}
+                Ok(other) => {
+                    true_replies += 1;
+                    errors.push(format!("navigator.webdriver = {other}"));
+                }
+                Err(e) => errors.push(format!("{e:#}")),
+            }
+            calls += 1;
+        }
+        let shot_start = Instant::now();
+        let png = bridge.screenshot(tab).await;
+        let shot_ms = shot_start.elapsed().as_secs_f64() * 1e3;
+        let after = self.page_counters(bridge).await?;
+
+        let screenshot = match png {
+            Ok(bytes) => {
+                let path = self.cfg.out.with_extension("png");
+                std::fs::write(&path, &bytes)?;
+                let is_png = bytes.starts_with(b"\x89PNG\r\n\x1a\n");
+                let dims = (bytes.len() >= 24)
+                    .then(|| {
+                        let w = u32::from_be_bytes(bytes[16..20].try_into().ok()?);
+                        let h = u32::from_be_bytes(bytes[20..24].try_into().ok()?);
+                        Some([w, h])
+                    })
+                    .flatten();
+                json!({ "path": path, "bytes": bytes.len(), "png_signature": is_png, "size": dims, "took_ms": shot_ms })
+            }
+            Err(e) => json!({ "error": format!("{e:#}") }),
+        };
+        let samples = after["webdriver_samples"]
+            .as_u64()
+            .unwrap_or(0)
+            .saturating_sub(before["webdriver_samples"].as_u64().unwrap_or(0));
+        let page_true = after["webdriver_true"].as_u64().unwrap_or(u64::MAX);
+        let tree = probe::tree(probe::self_pid());
+        let switches = probe::devtools_switches(&tree);
+        let sockets = probe::listening_sockets(&tree);
+        let tcp_listeners = sockets["listening"]
+            .as_array()
+            .map(|l| l.iter().filter(|s| s["table"] != "/proc/net/unix").count())
+            .unwrap_or(0);
+        let pass = calls > 0
+            && true_replies == 0
+            && errors.is_empty()
+            && samples > 0
+            && page_true == 0
+            && screenshot["png_signature"] == true
+            && switches.is_empty()
+            && tcp_listeners == 0;
+        self.put(
+            "cdp_evaluate_loop",
+            json!({
+                "calls": calls,
+                "seconds": start.elapsed().as_secs_f64(),
+                "webdriver_true_replies": true_replies,
+                "errors": errors.iter().take(10).collect::<Vec<_>>(),
+                "page_webdriver_samples_during_calls": samples,
+                "page_webdriver_true_total": page_true,
+                "page_before": before,
+                "page_after": after,
+            }),
+        );
+        self.put("cdp_screenshot", screenshot);
+        self.put("cdp_events_received", json!(bridge.events_received()));
+        self.put(
+            "process_tree",
+            json!(tree.iter().map(Proc::summary).collect::<Vec<_>>()),
+        );
+        self.put("devtools_switches_in_cmdlines", json!(switches));
+        self.put("listening_sockets", sockets);
+        self.put("cdp_pass", json!(pass));
+        Ok(())
+    }
+
+    fn renderers() -> Vec<Proc> {
+        probe::tree(probe::self_pid())
+            .into_iter()
+            .filter(|p| matches!(p.kind().as_str(), "renderer" | "zygote-forked"))
+            .collect()
+    }
+
+    async fn page_health(&mut self, cx: &mut AsyncApp, bridge: &Bridge) -> Value {
+        let a = self.snap();
+        self.sleep(cx, self.cfg.measure).await;
+        let b = self.snap();
+        let secs = (b.at - a.at).as_secs_f64();
+        let mut pages = Vec::new();
+        for (index, tab) in bridge.tab_ids().into_iter().enumerate() {
+            let t = Instant::now();
+            let eval = bridge.evaluate(tab, "1 + 1").await;
+            pages.push(json!({
+                "page": index,
+                "on_paint_in_window": b.paints[index] - a.paints[index],
+                "on_paint_per_second": (b.paints[index] - a.paints[index]) as f64 / secs,
+                "evaluate": eval.as_ref().ok(),
+                "evaluate_error": eval.as_ref().err().map(|e| format!("{e:#}")),
+                "evaluate_ms": t.elapsed().as_secs_f64() * 1e3,
+            }));
+        }
+        json!(pages)
+    }
+
+    async fn devtools(&mut self, cx: &mut AsyncApp, bridge: &Bridge) -> Result<()> {
+        self.sleep(cx, self.cfg.warmup).await;
+        let health_before = self.page_health(cx, bridge).await;
+        let renderers_before = Self::renderers();
+
+        // CEF #4353 times the close from the ShowDevTools() call, so this does too.
+        let inspected = self.hub.page(0).context("page 0")?;
+        let shown_at = Instant::now();
+        if !engine::show_devtools(&self.hub, &inspected) {
+            bail!("ShowDevTools: no host");
+        }
+        let show_call = shown_at.elapsed();
+        self.wait_for(cx, "DevTools OnAfterCreated", Hub::devtools_open)
+            .await?;
+        let created = shown_at.elapsed();
+        let devtools_style = {
+            let tracked = self.hub.tracked.borrow();
+            tracked
+                .iter()
+                .find(|t| t.kind == Kind::DevTools)
+                .and_then(|t| t.browser.host())
+                .map(|h| format!("{:?}", h.runtime_style()))
+        };
+        // Reading /proc takes time, so the tree is captured only when the close is not yet due.
+        let tree_open = (shown_at.elapsed() < self.cfg.devtools_close_after)
+            .then(|| probe::tree(probe::self_pid()));
+        let due =
+            (shown_at + self.cfg.devtools_close_after).saturating_duration_since(Instant::now());
+        self.sleep(cx, due).await;
+        let close_at = shown_at.elapsed();
+        inspected.host().context("host")?.close_dev_tools();
+        let closed = self
+            .wait_for(cx, "DevTools OnBeforeClose", |h| !h.devtools_open())
+            .await?;
+        self.sleep(cx, self.cfg.warmup).await;
+        let health_after = self.page_health(cx, bridge).await;
+        let renderers_after = Self::renderers();
+
+        let gone: Vec<Value> = renderers_before
+            .iter()
+            .filter(|p| !probe::alive(p.pid, p.start_time))
+            .map(Proc::summary)
+            .collect();
+        let healthy = |pages: &Value| {
+            pages.as_array().is_some_and(|ps| {
+                ps.iter().all(|p| {
+                    p["on_paint_in_window"].as_u64().unwrap_or(0) > 0 && p["evaluate"] == 2
+                })
+            })
+        };
+        let pass = healthy(&health_before)
+            && healthy(&health_after)
+            && self.hub.render_process_terminations.borrow().is_empty();
+        self.put("devtools", json!({
+            "second_browser": self.cfg.second_browser,
+            "runtime_style": devtools_style,
+            "show_devtools_call_ms": show_call.as_secs_f64() * 1e3,
+            "devtools_created_after_show_ms": created.as_secs_f64() * 1e3,
+            "close_devtools_after_show_ms": close_at.as_secs_f64() * 1e3,
+            "devtools_closed_after_close_ms": closed.as_secs_f64() * 1e3,
+            "health_before": health_before,
+            "health_after": health_after,
+            "renderers_before": renderers_before.iter().map(Proc::summary).collect::<Vec<_>>(),
+            "tree_while_open": tree_open.map(|t| t.iter().map(Proc::summary).collect::<Vec<_>>()),
+            "renderers_after": renderers_after.iter().map(Proc::summary).collect::<Vec<_>>(),
+            "renderers_before_now_gone": gone,
+            "render_process_terminations": *self.hub.render_process_terminations.borrow(),
+        }));
+        self.put("devtools_pass", json!(pass));
+        Ok(())
+    }
+
+    async fn shutdown(&mut self, cx: &mut AsyncApp) -> Result<()> {
+        let me = probe::self_pid();
+        *self.children_before_shutdown.borrow_mut() = probe::tree(me)
+            .into_iter()
+            .filter(|p| p.pid != me)
+            .collect();
+        let open: Vec<_> = self
+            .hub
+            .tracked
+            .borrow()
+            .iter()
+            .filter(|t| !t.closed)
+            .map(|t| t.browser.clone())
+            .collect();
+        for browser in &open {
+            if let Some(host) = browser.host() {
+                host.close_browser(1);
+            }
+        }
+        drop(open);
+        let waited = self
+            .wait_for(cx, "every OnBeforeClose", |h| h.open_count() == 0)
+            .await;
+        self.hub.tracked.borrow_mut().clear();
+        self.hub.frame.borrow_mut().take();
+        self.window
+            .update(cx, |view, window, _| view.release_images(window))?;
+        self.put(
+            "browsers_closed_after_ms",
+            json!(waited?.as_secs_f64() * 1e3),
+        );
+        Ok(())
+    }
+}
