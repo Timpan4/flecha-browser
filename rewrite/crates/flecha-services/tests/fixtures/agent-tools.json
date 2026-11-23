@@ -1,0 +1,869 @@
+{
+  "source": "chromium/shared/agentTools.ts through @modelcontextprotocol/sdk 1.32.1; regenerate with scripts/agent-tools-fixture.mjs",
+  "serverInfo": {
+    "name": "flecha",
+    "version": "0.1.0"
+  },
+  "capabilities": {
+    "tools": {
+      "listChanged": true
+    }
+  },
+  "protocolVersions": {
+    "latest": "2025-11-25",
+    "supported": [
+      "2025-11-25",
+      "2025-06-18",
+      "2025-03-26",
+      "2024-11-05",
+      "2024-10-07"
+    ]
+  },
+  "constants": {
+    "TOOL_TIMEOUT": 60000,
+    "MAX_TOOL_WAIT": 2147363647
+  },
+  "tools": [
+    {
+      "name": "list_tabs",
+      "description": "List open tabs in Flecha with their ids, titles, URLs and Space. `active` marks the tabs the user is looking at; `agent` marks tabs coding agents opened.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "open_tab",
+      "description": "Open a URL in a new background tab, in the sidebar's agent folder, and return its id for the other tools. The user's view and keyboard stay where they are; the other tools work on the tab without showing it.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "activate_tab",
+      "description": "Switch the user's view to a tab. Only when the user asks to see it: the other tools don't need the tab on screen.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tabId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "tabId"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "close_tab",
+      "description": "Close a tab (pinned tabs and favorites are unloaded instead).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tabId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "tabId"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "navigate",
+      "description": "Load a URL in a tab, or go back/forward/reload, and wait for the page to settle.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tabId": {
+            "type": "string",
+            "description": "Flecha tab id, from open_tab or list_tabs"
+          },
+          "url": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "back",
+              "forward",
+              "reload"
+            ]
+          }
+        },
+        "required": [
+          "tabId"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "read_page",
+      "description": "Read a tab's content: visible text (default), full HTML, or its links.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tabId": {
+            "type": "string",
+            "description": "Flecha tab id, from open_tab or list_tabs"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "text",
+              "html",
+              "links"
+            ]
+          },
+          "maxChars": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "tabId"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "screenshot",
+      "description": "Screenshot a tab's viewport, in the background.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tabId": {
+            "type": "string",
+            "description": "Flecha tab id, from open_tab or list_tabs"
+          }
+        },
+        "required": [
+          "tabId"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "console_logs",
+      "description": "A tab's recent console messages (errors, warnings, logs), newest last.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tabId": {
+            "type": "string",
+            "description": "Flecha tab id, from open_tab or list_tabs"
+          },
+          "level": {
+            "type": "string",
+            "enum": [
+              "error",
+              "warning",
+              "info",
+              "debug"
+            ]
+          },
+          "limit": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "tabId"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "click",
+      "description": "Click the element matching a CSS selector, with a real mouse event.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tabId": {
+            "type": "string",
+            "description": "Flecha tab id, from open_tab or list_tabs"
+          },
+          "selector": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "tabId",
+          "selector"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "type",
+      "description": "Type text into the element matching a selector (or the focused one), optionally clearing it first and pressing Enter.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tabId": {
+            "type": "string",
+            "description": "Flecha tab id, from open_tab or list_tabs"
+          },
+          "selector": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "clear": {
+            "type": "boolean"
+          },
+          "submit": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "tabId",
+          "text"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "press_key",
+      "description": "Press a key such as Enter, Tab, Escape or ArrowDown in a tab.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tabId": {
+            "type": "string",
+            "description": "Flecha tab id, from open_tab or list_tabs"
+          },
+          "key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "tabId",
+          "key"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "evaluate",
+      "description": "Run JavaScript in a tab's page and return the result (promises are awaited, values are JSON-serialized).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tabId": {
+            "type": "string",
+            "description": "Flecha tab id, from open_tab or list_tabs"
+          },
+          "expression": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "tabId",
+          "expression"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "wait_for",
+      "description": "Wait until an element matching a selector exists (or the page finishes loading when no selector is given).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tabId": {
+            "type": "string",
+            "description": "Flecha tab id, from open_tab or list_tabs"
+          },
+          "selector": {
+            "type": "string"
+          },
+          "timeoutMs": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147363647
+          }
+        },
+        "required": [
+          "tabId"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    }
+  ],
+  "validation": [
+    {
+      "tool": "list_tabs",
+      "arguments": null,
+      "ok": true,
+      "parsed": {}
+    },
+    {
+      "tool": "list_tabs",
+      "arguments": "{}",
+      "ok": true,
+      "parsed": {}
+    },
+    {
+      "tool": "list_tabs",
+      "arguments": "{\"tabId\":5}",
+      "ok": true,
+      "parsed": {}
+    },
+    {
+      "tool": "open_tab",
+      "arguments": "{\"url\":\"https://example.com/\"}",
+      "ok": true,
+      "parsed": {
+        "url": "https://example.com/"
+      }
+    },
+    {
+      "tool": "open_tab",
+      "arguments": "{\"url\":\"example.com\",\"extra\":true}",
+      "ok": true,
+      "parsed": {
+        "url": "example.com"
+      }
+    },
+    {
+      "tool": "open_tab",
+      "arguments": "{}",
+      "ok": false,
+      "error": "MCP error -32602: Input validation error: Invalid arguments for tool open_tab: Invalid input: expected string, received undefined at url"
+    },
+    {
+      "tool": "open_tab",
+      "arguments": null,
+      "ok": false,
+      "error": "MCP error -32602: Input validation error: Invalid arguments for tool open_tab: Invalid input: expected string, received undefined at url"
+    },
+    {
+      "tool": "open_tab",
+      "arguments": "{\"url\":null}",
+      "ok": false,
+      "error": "MCP error -32602: Input validation error: Invalid arguments for tool open_tab: Invalid input: expected string, received null at url"
+    },
+    {
+      "tool": "open_tab",
+      "arguments": "{\"url\":1}",
+      "ok": false,
+      "error": "MCP error -32602: Input validation error: Invalid arguments for tool open_tab: Invalid input: expected string, received number at url"
+    },
+    {
+      "tool": "open_tab",
+      "arguments": "{\"url\":[\"a\"]}",
+      "ok": false,
+      "error": "MCP error -32602: Input validation error: Invalid arguments for tool open_tab: Invalid input: expected string, received array at url"
+    },
+    {
+      "tool": "open_tab",
+      "arguments": "{\"url\":{\"href\":\"a\"}}",
+      "ok": false,
+      "error": "MCP error -32602: Input validation error: Invalid arguments for tool open_tab: Invalid input: expected string, received object at url"
+    },
+    {
+      "tool": "activate_tab",
+      "arguments": "{\"tabId\":\"t1\"}",
+      "ok": true,
+      "parsed": {
+        "tabId": "t1"
+      }
+    },
+    {
+      "tool": "activate_tab",
+      "arguments": "{\"tabId\":1}",
+      "ok": false,
+      "error": "MCP error -32602: Input validation error: Invalid arguments for tool activate_tab: Invalid input: expected string, received number at tabId"
+    },
+    {
+      "tool": "activate_tab",
+      "arguments": "{\"tabId\":\"t1\",\"tabId\":2}",
+      "ok": false,
+      "error": "MCP error -32602: Input validation error: Invalid arguments for tool activate_tab: Invalid input: expected string, received number at tabId"
+    },
+    {
+      "tool": "activate_tab",
+      "arguments": "{\"tabId\":\"t1\",\"__proto__\":{\"polluted\":true}}",
+      "ok": true,
+      "parsed": {
+        "tabId": "t1"
+      }
+    },
+    {
+      "tool": "close_tab",
+      "arguments": "{\"tabId\":\"t1\"}",
+      "ok": true,
+      "parsed": {
+        "tabId": "t1"
+      }
+    },
+    {
+      "tool": "close_tab",
+      "arguments": "{\"tabId\":false}",
+      "ok": false,
+      "error": "MCP error -32602: Input validation error: Invalid arguments for tool close_tab: Invalid input: expected string, received boolean at tabId"
+    },
+    {
+      "tool": "navigate",
+      "arguments": "{\"tabId\":\"t1\"}",
+      "ok": true,
+      "parsed": {
+        "tabId": "t1"
+      }
+    },
+    {
+      "tool": "navigate",
+      "arguments": "{\"tabId\":\"t1\",\"url\":\"https://example.com/\"}",
+      "ok": true,
+      "parsed": {
+        "tabId": "t1",
+        "url": "https://example.com/"
+      }
+    },
+    {
+      "tool": "navigate",
+      "arguments": "{\"tabId\":\"t1\",\"action\":\"back\"}",
+      "ok": true,
+      "parsed": {
+        "tabId": "t1",
+        "action": "back"
+      }
+    },
+    {
+      "tool": "navigate",
+      "arguments": "{\"tabId\":\"t1\",\"action\":\"reload\",\"url\":\"x\"}",
+      "ok": true,
+      "parsed": {
+        "tabId": "t1",
+        "url": "x",
+        "action": "reload"
+      }
+    },
+    {
+      "tool": "navigate",
+      "arguments": "{\"tabId\":\"t1\",\"action\":\"up\"}",
+      "ok": false,
+      "error": "MCP error -32602: Input validation error: Invalid arguments for tool navigate: Invalid option: expected one of \"back\"|\"forward\"|\"reload\" at action"
+    },
+    {
+      "tool": "navigate",
+      "arguments": "{\"tabId\":\"t1\",\"action\":\"BACK\"}",
+      "ok": false,
+      "error": "MCP error -32602: Input validation error: Invalid arguments for tool navigate: Invalid option: expected one of \"back\"|\"forward\"|\"reload\" at action"
+    },
+    {
+      "tool": "navigate",
+      "arguments": "{\"tabId\":\"t1\",\"action\":null}",
+      "ok": false,
+      "error": "MCP error -32602: Input validation error: Invalid arguments for tool navigate: Invalid option: expected one of \"back\"|\"forward\"|\"reload\" at action"
+    },
+    {
+      "tool": "navigate",
+      "arguments": "{\"tabId\":\"t1\",\"url\":null}",
+      "ok": false,
+      "error": "MCP error -32602: Input validation error: Invalid arguments for tool navigate: Invalid input: expected string, received null at url"
+    },
+    {
+      "tool": "navigate",
+      "arguments": "{\"tabId\":\"t1\",\"action\":1}",
+      "ok": false,
+      "error": "MCP error -32602: Input validation error: Invalid arguments for tool navigate: Invalid option: expected one of \"back\"|\"forward\"|\"reload\" at action"
+    },
+    {
+      "tool": "read_page",
+      "arguments": "{\"tabId\":\"t1\"}",
+      "ok": true,
+      "parsed": {
+        "tabId": "t1"
+      }
+    },
+    {
+      "tool": "read_page",
+      "arguments": "{\"tabId\":\"t1\",\"format\":\"links\",\"maxChars\":10}",
+      "ok": true,
+      "parsed": {
+        "tabId": "t1",
+        "format": "links",
+        "maxChars": 10
+      }
+    },
+    {
+      "tool": "read_page",
+      "arguments": "{\"tabId\":\"t1\",\"format\":\"html\",\"maxChars\":2.5}",
+      "ok": true,
+      "parsed": {
+        "tabId": "t1",
+        "format": "html",
+        "maxChars": 2.5
+      }
+    },
+    {
+      "tool": "read_page",
+      "arguments": "{\"tabId\":\"t1\",\"maxChars\":-3}",
+      "ok": true,
+      "parsed": {
+        "tabId": "t1",
+        "maxChars": -3
+      }
+    },
+    {
+      "tool": "read_page",
+      "arguments": "{\"tabId\":\"t1\",\"maxChars\":1e300}",
+      "ok": true,
+      "parsed": {
+        "tabId": "t1",
+        "maxChars": 1e+300
+      }
+    },
+    {
+      "tool": "read_page",
+      "arguments": "{\"tabId\":\"t1\",\"maxChars\":-0.0}",
+      "ok": true,
+      "parsed": {
+        "tabId": "t1",
+        "maxChars": 0
+      }
+    },
+    {
+      "tool": "read_page",
+      "arguments": "{\"tabId\":\"t1\",\"maxChars\":\"10\"}",
+      "ok": false,
+      "error": "MCP error -32602: Input validation error: Invalid arguments for tool read_page: Invalid input: expected number, received string at maxChars"
+    },
+    {
+      "tool": "read_page",
+      "arguments": "{\"tabId\":\"t1\",\"maxChars\":null}",
+      "ok": false,
+      "error": "MCP error -32602: Input validation error: Invalid arguments for tool read_page: Invalid input: expected number, received null at maxChars"
+    },
+    {
+      "tool": "read_page",
+      "arguments": "{\"tabId\":\"t1\",\"format\":\"pdf\"}",
+      "ok": false,
+      "error": "MCP error -32602: Input validation error: Invalid arguments for tool read_page: Invalid option: expected one of \"text\"|\"html\"|\"links\" at format"
+    },
+    {
+      "tool": "read_page",
+      "arguments": "{\"tabId\":\"t1\",\"format\":null}",
+      "ok": false,
+      "error": "MCP error -32602: Input validation error: Invalid arguments for tool read_page: Invalid option: expected one of \"text\"|\"html\"|\"links\" at format"
+    },
+    {
+      "tool": "screenshot",
+      "arguments": "{\"tabId\":\"t1\"}",
+      "ok": true,
+      "parsed": {
+        "tabId": "t1"
+      }
+    },
+    {
+      "tool": "screenshot",
+      "arguments": "{\"tabId\":null}",
+      "ok": false,
+      "error": "MCP error -32602: Input validation error: Invalid arguments for tool screenshot: Invalid input: expected string, received null at tabId"
+    },
+    {
+      "tool": "console_logs",
+      "arguments": "{\"tabId\":\"t1\",\"level\":\"warning\",\"limit\":5}",
+      "ok": true,
+      "parsed": {
+        "tabId": "t1",
+        "level": "warning",
+        "limit": 5
+      }
+    },
+    {
+      "tool": "console_logs",
+      "arguments": "{\"tabId\":\"t1\",\"level\":\"warn\"}",
+      "ok": false,
+      "error": "MCP error -32602: Input validation error: Invalid arguments for tool console_logs: Invalid option: expected one of \"error\"|\"warning\"|\"info\"|\"debug\" at level"
+    },
+    {
+      "tool": "console_logs",
+      "arguments": "{\"tabId\":\"t1\",\"limit\":-1}",
+      "ok": true,
+      "parsed": {
+        "tabId": "t1",
+        "limit": -1
+      }
+    },
+    {
+      "tool": "console_logs",
+      "arguments": "{\"tabId\":\"t1\",\"limit\":0.5}",
+      "ok": true,
+      "parsed": {
+        "tabId": "t1",
+        "limit": 0.5
+      }
+    },
+    {
+      "tool": "console_logs",
+      "arguments": "{\"tabId\":\"t1\",\"limit\":true}",
+      "ok": false,
+      "error": "MCP error -32602: Input validation error: Invalid arguments for tool console_logs: Invalid input: expected number, received boolean at limit"
+    },
+    {
+      "tool": "click",
+      "arguments": "{\"tabId\":\"t1\",\"selector\":\"#go\"}",
+      "ok": true,
+      "parsed": {
+        "tabId": "t1",
+        "selector": "#go"
+      }
+    },
+    {
+      "tool": "click",
+      "arguments": "{\"tabId\":5,\"selector\":5}",
+      "ok": false,
+      "error": "MCP error -32602: Input validation error: Invalid arguments for tool click: Invalid input: expected string, received number at tabId\nInvalid input: expected string, received number at selector"
+    },
+    {
+      "tool": "click",
+      "arguments": "{\"tabId\":\"t1\"}",
+      "ok": false,
+      "error": "MCP error -32602: Input validation error: Invalid arguments for tool click: Invalid input: expected string, received undefined at selector"
+    },
+    {
+      "tool": "type",
+      "arguments": "{\"tabId\":\"t1\",\"text\":\"hi\",\"clear\":true,\"submit\":false}",
+      "ok": true,
+      "parsed": {
+        "tabId": "t1",
+        "text": "hi",
+        "clear": true,
+        "submit": false
+      }
+    },
+    {
+      "tool": "type",
+      "arguments": "{\"tabId\":\"t1\",\"selector\":\"input\",\"text\":\"\"}",
+      "ok": true,
+      "parsed": {
+        "tabId": "t1",
+        "selector": "input",
+        "text": ""
+      }
+    },
+    {
+      "tool": "type",
+      "arguments": "{\"tabId\":\"t1\",\"text\":\"hi\",\"clear\":\"yes\"}",
+      "ok": false,
+      "error": "MCP error -32602: Input validation error: Invalid arguments for tool type: Invalid input: expected boolean, received string at clear"
+    },
+    {
+      "tool": "type",
+      "arguments": "{\"tabId\":\"t1\",\"text\":\"hi\",\"clear\":0}",
+      "ok": false,
+      "error": "MCP error -32602: Input validation error: Invalid arguments for tool type: Invalid input: expected boolean, received number at clear"
+    },
+    {
+      "tool": "type",
+      "arguments": "{\"tabId\":\"t1\",\"selector\":null,\"text\":\"hi\"}",
+      "ok": false,
+      "error": "MCP error -32602: Input validation error: Invalid arguments for tool type: Invalid input: expected string, received null at selector"
+    },
+    {
+      "tool": "type",
+      "arguments": "{\"tabId\":\"t1\"}",
+      "ok": false,
+      "error": "MCP error -32602: Input validation error: Invalid arguments for tool type: Invalid input: expected string, received undefined at text"
+    },
+    {
+      "tool": "press_key",
+      "arguments": "{\"tabId\":\"t1\",\"key\":\"Enter\"}",
+      "ok": true,
+      "parsed": {
+        "tabId": "t1",
+        "key": "Enter"
+      }
+    },
+    {
+      "tool": "press_key",
+      "arguments": "{\"tabId\":\"t1\",\"key\":13}",
+      "ok": false,
+      "error": "MCP error -32602: Input validation error: Invalid arguments for tool press_key: Invalid input: expected string, received number at key"
+    },
+    {
+      "tool": "evaluate",
+      "arguments": "{\"tabId\":\"t1\",\"expression\":\"1+1\"}",
+      "ok": true,
+      "parsed": {
+        "tabId": "t1",
+        "expression": "1+1"
+      }
+    },
+    {
+      "tool": "evaluate",
+      "arguments": "{\"tabId\":\"t1\",\"expression\":5}",
+      "ok": false,
+      "error": "MCP error -32602: Input validation error: Invalid arguments for tool evaluate: Invalid input: expected string, received number at expression"
+    },
+    {
+      "tool": "evaluate",
+      "arguments": "{}",
+      "ok": false,
+      "error": "MCP error -32602: Input validation error: Invalid arguments for tool evaluate: Invalid input: expected string, received undefined at tabId\nInvalid input: expected string, received undefined at expression"
+    },
+    {
+      "tool": "wait_for",
+      "arguments": "{\"tabId\":\"t1\"}",
+      "ok": true,
+      "parsed": {
+        "tabId": "t1"
+      }
+    },
+    {
+      "tool": "wait_for",
+      "arguments": "{\"tabId\":\"t1\",\"selector\":\"#done\",\"timeoutMs\":0}",
+      "ok": true,
+      "parsed": {
+        "tabId": "t1",
+        "selector": "#done",
+        "timeoutMs": 0
+      }
+    },
+    {
+      "tool": "wait_for",
+      "arguments": "{\"tabId\":\"t1\",\"timeoutMs\":10000}",
+      "ok": true,
+      "parsed": {
+        "tabId": "t1",
+        "timeoutMs": 10000
+      }
+    },
+    {
+      "tool": "wait_for",
+      "arguments": "{\"tabId\":\"t1\",\"timeoutMs\":10000.0}",
+      "ok": true,
+      "parsed": {
+        "tabId": "t1",
+        "timeoutMs": 10000
+      }
+    },
+    {
+      "tool": "wait_for",
+      "arguments": "{\"tabId\":\"t1\",\"timeoutMs\":1e4}",
+      "ok": true,
+      "parsed": {
+        "tabId": "t1",
+        "timeoutMs": 10000
+      }
+    },
+    {
+      "tool": "wait_for",
+      "arguments": "{\"tabId\":\"t1\",\"timeoutMs\":-0.0}",
+      "ok": true,
+      "parsed": {
+        "tabId": "t1",
+        "timeoutMs": 0
+      }
+    },
+    {
+      "tool": "wait_for",
+      "arguments": "{\"tabId\":\"t1\",\"timeoutMs\":2147363647}",
+      "ok": true,
+      "parsed": {
+        "tabId": "t1",
+        "timeoutMs": 2147363647
+      }
+    },
+    {
+      "tool": "wait_for",
+      "arguments": "{\"tabId\":\"t1\",\"timeoutMs\":2147363648}",
+      "ok": false,
+      "error": "MCP error -32602: Input validation error: Invalid arguments for tool wait_for: Too big: expected number to be <=2147363647 at timeoutMs"
+    },
+    {
+      "tool": "wait_for",
+      "arguments": "{\"tabId\":\"t1\",\"timeoutMs\":-1}",
+      "ok": false,
+      "error": "MCP error -32602: Input validation error: Invalid arguments for tool wait_for: Too small: expected number to be >=0 at timeoutMs"
+    },
+    {
+      "tool": "wait_for",
+      "arguments": "{\"tabId\":\"t1\",\"timeoutMs\":1.5}",
+      "ok": false,
+      "error": "MCP error -32602: Input validation error: Invalid arguments for tool wait_for: Invalid input: expected int, received number at timeoutMs"
+    },
+    {
+      "tool": "wait_for",
+      "arguments": "{\"tabId\":\"t1\",\"timeoutMs\":-1.5}",
+      "ok": false,
+      "error": "MCP error -32602: Input validation error: Invalid arguments for tool wait_for: Invalid input: expected int, received number at timeoutMs"
+    },
+    {
+      "tool": "wait_for",
+      "arguments": "{\"tabId\":\"t1\",\"timeoutMs\":9007199254740993}",
+      "ok": false,
+      "error": "MCP error -32602: Input validation error: Invalid arguments for tool wait_for: Too big: expected int to be <=9007199254740991 at timeoutMs\nToo big: expected number to be <=2147363647 at timeoutMs"
+    },
+    {
+      "tool": "wait_for",
+      "arguments": "{\"tabId\":\"t1\",\"timeoutMs\":\"5\"}",
+      "ok": false,
+      "error": "MCP error -32602: Input validation error: Invalid arguments for tool wait_for: Invalid input: expected number, received string at timeoutMs"
+    },
+    {
+      "tool": "wait_for",
+      "arguments": "{\"tabId\":\"t1\",\"timeoutMs\":null}",
+      "ok": false,
+      "error": "MCP error -32602: Input validation error: Invalid arguments for tool wait_for: Invalid input: expected number, received null at timeoutMs"
+    },
+    {
+      "tool": "wait_for",
+      "arguments": "{\"tabId\":\"t1\",\"selector\":null}",
+      "ok": false,
+      "error": "MCP error -32602: Input validation error: Invalid arguments for tool wait_for: Invalid input: expected string, received null at selector"
+    }
+  ]
+}
