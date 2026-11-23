@@ -2,7 +2,7 @@
 
 Date: 2026-11-23. Pins from `rewrite/pins.toml`: CEF `158.0.3+g8c29be2+chromium-158.0.8127.18` (beta-channel minimal archive), cef-rs `32d6bc55` (Timpan4/cef-rs), Zed/GPUI `f126950f`. cef-rs and Zed are the sources Spike 1's `prepare.sh` stages and patches (see "Dependencies").
 
-Current results: `results/2026-11-23-r6/`, one full suite at `d530b37`, `results/2026-11-23-r6b/`, one cdp and one idle run at `5cebba2`, `results/2026-11-23-r6c/`, the same two at `70e99af`, and `results/2026-11-23-r7/`, the same two at `8321ba3`, the last code change, which has every verdict rule this report describes (see "r6: the current head" and "r6b, r6c and r7"). The detailed figures in the sections below come from `results/2026-11-23-r5/`, the round before. r6 kept r5's pump and bridge behavior and changed verdicts, timer accounting, measurement fields and the harness, so r5's figures still describe the pump and the bridge; r6's are in its own section. `results/2026-11-23-r5-cdp-repeats/` holds 3 more r5 cdp runs with the browser's threads sampled. `results/2026-11-23-r5-controls/`, `results/2026-11-23-r6-controls/` and `results/2026-11-23-r7-controls/` hold the negative controls. `build.txt` in each names the commit and `cef-archive.json` the CEF archive. History, cited only where this report says so: `results/2026-11-23/` is the first round, `results/2026-11-23-r3/` the first fix round (its `review-evidence/` holds that round's repro inputs and outputs, not to be rerun), and `results/2026-11-23-r4/` the second. r4 used the CDP bridge that starved the pump (see "The CDP slowdown").
+Current results: `results/2026-11-23-r6/`, one full suite at `d530b37`, `results/2026-11-23-r6b/`, one cdp and one idle run at `5cebba2`, `results/2026-11-23-r6c/`, the same two at `70e99af`, `results/2026-11-23-r7/`, the same two at `8321ba3`, and `results/2026-11-23-r8/`, the same two at `ded93fb`, the last code change, which has every verdict rule this report describes (see "r6: the current head" and "r6b, r6c, r7 and r8"). The detailed figures in the sections below come from `results/2026-11-23-r5/`, the round before. r6 kept r5's pump and bridge behavior and changed verdicts, timer accounting, measurement fields and the harness, so r5's figures still describe the pump and the bridge; r6's are in its own section. `results/2026-11-23-r5-cdp-repeats/` holds 3 more r5 cdp runs with the browser's threads sampled. `results/2026-11-23-r5-controls/`, `results/2026-11-23-r6-controls/`, `results/2026-11-23-r7-controls/` and `results/2026-11-23-r8-controls/` hold the negative controls. `build.txt` in each names the commit and `cef-archive.json` the CEF archive. History, cited only where this report says so: `results/2026-11-23/` is the first round, `results/2026-11-23-r3/` the first fix round (its `review-evidence/` holds that round's repro inputs and outputs, not to be rerun), and `results/2026-11-23-r4/` the second. r4 used the CDP bridge that starved the pump (see "The CDP slowdown").
 
 ## Verdict
 
@@ -35,7 +35,7 @@ Current results: `results/2026-11-23-r6/`, one full suite at `d530b37`, `results
 
 `results/2026-11-23-r6-controls/startup-race/` is the startup control (`startup-race-control.sh`, review thread 4666506419). A `timeout` shim first on `PATH` records its PID and waits `STEP_TIMEOUT_MS` with a shell builtin before it execs the real `timeout`, which is what creates the session's process group. While the shim waits, still in the runner's own group, the control sends SIGTERM to the runner. At `70e99af` the runner exited 143, the shim was gone and no process of the run started. Against `af63dea`'s runner, from a disposable `git archive` copy (`startup-race-af63dea/`), the shim was still alive after the runner exited, so the control failed and killed the shim itself before it could exec `timeout`. Earlier versions of the control were discarded: one matched `--pump-out` alone and stopped `timeout` itself, and one stopped the browser about 100 ms after exec, before any Chromium child existed, so it showed the expiry but not a tree kill.
 
-## r6b, r6c and r7
+## r6b, r6c, r7 and r8
 
 ### r6b: `5cebba2`
 
@@ -57,7 +57,7 @@ Current results: `results/2026-11-23-r6/`, one full suite at `d530b37`, `results
 - Shutdown: `CefShutdown()` returned in 47.7 and 49.1 ms, all 8 children of each run had exited before the wait began, and the runner's sweep found nothing after either run.
 - Controls at `70e99af`: the watchdog control, the startup control and the Clippy guard control.
 
-### r7: `8321ba3`, the last code change
+### r7: `8321ba3`
 
 `8321ba3` follows the merge of main (`186ae9d`, which brings in `c2fe8c1`, flecha-core) and changes only how the runner ends a run, after a fourth review. The commits after it change only comments, results and this report. Group members get no per-PID `kill`: the group kill covers them, sent while the inventory still lists a member of the group, since an empty group's ID can be reused once its leader is reaped. A marked member still alive at the sweeper's scan may also be signaled through its identity-checked pidfd. Processes carrying the run's `XDG_RUNTIME_DIR` are killed by the app binary's `--pump-sweep-kill` mode (`src/sweep.rs`), because Bash cannot open a pidfd: it opens a pidfd for each process the scan found, re-reads its start time and environment, and signals through that pidfd only if both still match, so a reused PID is skipped. A failed inventory, on the first pass or any retry, or a failed marker sweep is an incomplete sweep and fails the run. The EXIT trap sweeps by marker whenever a run's runtime dir is set, even if no group was recorded. The sweep code lives in `scripts/sweep.sh`. `results/2026-11-23-r7/` holds one cdp and one idle run through the runner with this report's knobs, and both passed (`run.log`).
 
@@ -71,6 +71,26 @@ Current results: `results/2026-11-23-r6/`, one full suite at `d530b37`, `results
   - `test-sweep.out` (`scripts/test-sweep.sh`, no CEF): `end_group` returns 3 when `ps` fails on the first pass, when it fails on a retry, and when the marker sweep fails. `stop_run`, called as the EXIT trap calls it, with a runtime dir but no group and no launcher in `jobs -p`, kills a marked process that is not a child of the shell.
 - Every scan printed 4 of this user's processes whose `environ` it cannot read: `systemd --user`, `(sd-pam)`, `gpg-agent` and `scdaemon`. Being non-dumpable is the likely cause, which was not checked; the marker sweep cannot see them (see "Known limits").
 
+
+### r8: `ded93fb`, the last code change
+
+r8 fixes the independent verifier's two blockers at `56d12e9` and one of its notes, and merges main again (`9e0a7bc`, which brings in `dcee482`, CI workflow changes). The code changes are in `c4c0713` and `6cadc2a`; `ded93fb` adds controls and this report.
+
+- Timer guard: `clippy.toml` lists every public GPUI API at `f126950f` that ends in a GPUI timer or a delayed dispatch, `gpui::FutureExt::with_timeout` and `gpui::PlatformDispatcher::dispatch_after` among them (see "The CDP slowdown" and "Phase 1 risk").
+- Process discovery fails closed, and an inconclusive snapshot fails `isolation_clean`, the listener scan and `shutdown_clean` (see "Isolation"; review thread 4667057847).
+- The session starts from an empty environment plus what the runner sets (see "Isolation").
+
+`results/2026-11-23-r8/` holds one cdp and one idle run through the runner with this report's knobs, and both passed (`run.log`).
+
+- CDP: 654,465 calls in 30.000 s, max 38.9 ms. The page counted 30.00 rAF frames/s, the largest pump gap was 48.5 ms, and the timeout probe returned after 20,000.04 ms. The listener scan was complete over 9 processes with no discovery error.
+- Idle: first paint at 65.9 ms after navigation, the paint-holding repaint at 4041.5 ms, inside the window. GPUI drew 1 frame, the tree used 0.75 % of one core, and the largest pump gap was 58.0 ms.
+- Isolation and shutdown: both isolation samples in each run covered 9 processes with no discovery error, and neither shutdown snapshot had one. `CefShutdown()` returned in 53.1 and 100.3 ms, and the runner's sweep found nothing after either run.
+
+Controls in `results/2026-11-23-r8-controls/`, each on the committed tree:
+
+- `timer-guard-control.sh`: workspace Clippy on a disposable copy passes unmodified, with no unresolved path, and rejects the verifier's mutant C at `bridge.rs:230:21` and each of the 13 listed paths at its own use in `timer_mutants.rs` (`timer-guard-control.out`).
+- `discovery-control.sh`: mutant D (`root-stat-fails.patch`: the browser's own stat read fails with EMFILE), built in a disposable copy and run through the copy's runner. The verifier's dirty idle run (`EXTRA_ARGS=--pump-forbid-paths=/tmp`), which mutant D passed at `56d12e9`, now fails with `isolation_clean` and `shutdown_clean` false and discovery errors naming the missing root. A cdp run fails with `listening_sockets.complete` and `cdp_pass` false (`discovery-control.out`).
+- `env-control.sh`: sets `SSH_AUTH_SOCK`, `AT_SPI_BUS_ADDRESS`, `PULSE_SERVER` and `XAUTHORITY` in the runner's environment and reads `/proc/PID/environ` during an idle run. With this runner (`env/`) none reached the browser or any of the 6 session processes; the browser held 9 variables, all set by the runner or `dbus-run-session`, and the run passed. With the runner at `6cadc2a`, from a disposable copy (`env-before-fix/`), the browser held 81 variables, all four of them included, and the control failed. Only variable names were recorded.
 
 ## What the spike is
 
@@ -304,7 +324,9 @@ Process types come from `--type=`, but zygote-forked processes keep `--type=zygo
 
 ## Unit tests
 
-`cargo test --release -p cef-gpui-pump` runs 32 tests without CEF: 11 in `src/schedule.rs`, 7 in `src/idle.rs`, 7 in `src/procfs.rs`, 4 in `src/sweep.rs` and 3 in `src/lib.rs`.
+`cargo test --release -p cef-gpui-pump` runs 39 tests without CEF: 11 in `src/schedule.rs`, 7 in `src/idle.rs`, 7 in `src/procfs.rs`, 7 in `src/proctree.rs`, 4 in `src/sweep.rs` and 3 in `src/lib.rs`.
+
+`src/proctree.rs` tests discovery on fake `/proc` dirs: a complete listing gives the tree below the root, root first. A missing root, an entry whose stat cannot be read (a directory in its place, which fails with EISDIR whatever the test's privileges), a stat that does not parse, the root's own stat failing to parse, and a `/proc` dir that cannot be listed each make the tree inconclusive. A process whose stat is gone by the time it is read is left out without an error. On the live `/proc`, the test process is a complete root.
 
 `src/sweep.rs`: a stat line whose `comm` holds spaces and parentheses parses, and the marker matches whole environment entries only. A re-read whose start time differs from the scan's is skipped (`StartTimeChanged`), as are a zombie, a missing process and one that lost the marker. A live test starts a marked `sleep`, finds it by scan, and calls the kill with its start time plus 1, as a reused PID would show: the kill skips it and the child keeps running. With the scanned start time the kill sends SIGKILL through the pidfd, and the child dies by signal 9.
 
@@ -384,6 +406,11 @@ From the PR #93 verifiers and the OpenCodeReview threads. "Reproduced" means sho
 | `kill -0` counts zombies in the watchdog control (4666737120) | By reading | Known limit |
 | `canonicalize` error test skipped under privileges (4666737174) | By reading | Known limit |
 | Startup control robustness (4666737069, 4666737078, 4666737085, 4666737091, 4666737099) | By reading | Known limit |
+| The timer guard misses `gpui::FutureExt::with_timeout` (verifier, mutant C) | Yes, by the verifier: mutant C passed Clippy and `cdp_pass`, with an 11 s stall in one of three runs | Every public GPUI timer API at `f126950f` disallowed; timer guard control |
+| Process discovery fails open (4667057847) | Yes, by the verifier: mutant D passed a run made dirty on purpose | Discovery fails closed; isolation, listener and shutdown verdicts fail on discovery errors; unit tests; discovery control |
+| The browser inherits the caller's environment (verifier) | Yes: with the old runner, all four canaries reached the browser | `env -i` with a runner-set allowlist; environment control |
+| Group-ID reuse after the leader is reaped (4667057781) | By reading; the verifier's numbers | Known limit |
+| A newline in argv forges a sweep record (4667057920) | Yes, by the verifier | Known limit |
 
 | CDP bridge starves the pump | Yes, by the verifier (5 of 5 runs) and controls 1 and 3 here | One bridge timer at a time, lazy pump timers, timeout probe, latency bounds and the timer ledger in `cdp_pass` (see "The CDP slowdown") |
 | `idle_pass` rule untested; an 8 s repaint passes after an earlier paint-holding repaint (`scenario.rs:241`) | Yes, the mutants passed all 9 tests of the second round | Rule moved to `src/idle.rs`, allowance counted over the whole navigation, tests and mutants above |
@@ -456,6 +483,13 @@ From the fourth review of round 6, kept without a change:
 - The watchdog control's `alive` uses `kill -0`, which counts a zombie as alive, so an unreaped orphan gives a false failure (4666737120).
 - The test that `canonicalize` errors other than `NotFound` reach the caller is skipped when the tests run with privileges that can read a mode 000 dir (4666737174).
 - The startup control can mislead with a shared `OUT_DIR`, an `OUT_DIR` holding shell or regex characters, a runner that hangs or ignores SIGTERM, or a shim that execs between the group sample and SIGTERM (4666737069, 4666737078, 4666737085, 4666737091, 4666737099). Its checked-in shims are historical captures and no longer executable (4666737062, 4666737110).
+
+From the verifier at `56d12e9` (round 8), kept without a change:
+
+- `run_one` reaps the `timeout` leader before `end_group`, so nothing reserves the group ID, and a group kill could reach a new group that took the ID after the run's group emptied (4667057781). The verifier read pid_max 4,194,304 and measured 108 PIDs/s during the suite, about 10.8 h per wrap, against runs of at most 348 s. Phase 1's launcher should contain each run in a cgroup or signal only through pidfds.
+- A newline in a marked process's argv can forge a `pid pgid` line in `--pump-sweep` output, which can drive a group kill for a group with no member; its harm depends on the group-ID reuse above (4667057920).
+- Operator inputs can weaken the checks: `EXTRA_ARGS=--pump-forbid-paths=...` replaces the runner's forbidden roots, because the app keeps a repeated flag's last value, and `DEVTOOLS_TRIALS=0` runs no devtools trial yet prints `all runs passed`.
+- The idle rule accepts an empty paint log.
 
 Review notes the parent kept without a change:
 
