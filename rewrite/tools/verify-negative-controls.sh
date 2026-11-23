@@ -23,7 +23,8 @@ expect_failure() {
     printf 'FAIL %s unexpectedly passed\n' "$name" >&2
     return 1
   fi
-  if [[ $expected == 'RETRY '* ]]; then
+  # A control that loses input or a frame waits for the watchdog after its last step.
+  if [[ $expected == 'RETRY '* || $expected == 'PASS '* ]]; then
     local progress
     progress=$(grep -E '^(PASS|READY|FAIL|RETRY) ' "$logs/$name.log" | tail -n 1) || progress=''
     if (( status == 124 )) && [[ $progress == "$expected"* ]]; then
@@ -57,7 +58,7 @@ binary="./target/${suite##*/}/rewrite/target/debug/flecha"
 slice_mutations=(cookie stale stale-paint stale-title split-swap blank-restart close-archive
   peek-shared pane-size pane-height archive-dup stale-closedat-ui stale-closedat
   pane-offset ratio-002 ratio-001 right-both pane-size-restart peek-blind-click flechinha-old-partition
-  popups-allowed)
+  popups-allowed popup-keyboard)
 for mutation in "${slice_mutations[@]}"; do
   case "$mutation" in
     cookie|peek-shared) expected='cookie request used the wrong Space context' ;;
@@ -72,6 +73,7 @@ for mutation in "${slice_mutations[@]}"; do
     peek-blind-click) expected='Peek backdrop passed the click through to Separate cookies' ;;
     flechinha-old-partition) expected='partition change left a Flechinha on the previous cookie jar' ;;
     popups-allowed) expected='a popup without a user gesture opened' ;;
+    popup-keyboard) expected='PASS a scripted popup opened in its own window' ;;
   esac
   (
     cd "$shadow"
