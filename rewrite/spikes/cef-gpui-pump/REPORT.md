@@ -8,14 +8,14 @@ Current results: `results/2026-11-23-r3/`, one run of `scripts/run-checks.sh` as
 
 | Done check | Result |
 |---|---|
-| Pump runs only on CEF requests or CEF's documented periodic wake-up | Pass. 0 unexplained calls in 966IDLE_CALLS966 calls over 30 s |
-| Static page: GPUI draws no frames | Pass, with one explained frame. GPUI drew 1 frame for CEF's one paint-holding repaint at 966HOLD_MS966 ms after navigation, and nothing else (see "Pump and idle") |
-| Idle CPU (measurement only) | 966IDLE_CPU966 % of one core for the whole process tree |
+| Pump runs only on CEF requests or CEF's documented periodic wake-up | Pass. 0 unexplained calls in @IDLE_CALLS@ calls over 30 s |
+| Static page: GPUI draws no frames | Pass, with one explained frame. GPUI drew 1 frame for CEF's one paint-holding repaint at @HOLD_MS@ ms after navigation, and nothing else (see "Pump and idle") |
+| Idle CPU (measurement only) | @IDLE_CPU@ % of one core for the whole process tree |
 | Page and GPUI animate together | Pass. Both frame counters advance |
-| `navigator.webdriver === false` during CDP calls | Pass. 966CDP_CALLS966 calls in 30.0 s, 966CDP_SAMPLES966 page samples, 0 true. A control run with `--enable-automation` fails |
+| `navigator.webdriver === false` during CDP calls | Pass. @CDP_CALLS@ calls in 30.0 s, @CDP_SAMPLES@ page samples, 0 true. A control run with `--enable-automation` fails |
 | CDP without a port or pipe | Pass. No `remote-debugging` switch, no listening TCP socket, every fd and socket table read |
 | DevTools close does not kill OSR renderers (CEF #4353) | Pass in 15 of 15 fresh processes. No workaround needed |
-| Clean shutdown | Pass. `CefShutdown()` returns in 966SHUT_RANGE966 ms. Every child exited in all 19 runs |
+| Clean shutdown | Pass. `CefShutdown()` returns in @SHUT_RANGE@ ms. Every child exited in all 19 runs |
 | Runs isolated from the desktop session | Pass in 19 of 19 runs. A control run with the first round's environment fails |
 
 ## What the spike is
@@ -53,7 +53,7 @@ Each app run gets:
 - `dbus-run-session` with `scripts/isolated-session-bus.conf`: no service directories, so nothing is activated, and the bus listens at `$XDG_RUNTIME_DIR/bus` in the scratch dir. That config must only run with a scratch runtime dir. A test with two buses on one scratch dir showed dbus-daemon replacing an existing socket at its path and deleting it on exit, so with the desktop's runtime dir it would remove `/run/user/1000/bus`. The runner always passes a new `mktemp -d` dir.
 - `DBUS_SYSTEM_BUS_ADDRESS=unix:path=/nonexistent`.
 
-The app checks this itself. After the page loads and again before shutdown, `probe::forbidden_refs` lists every file the process tree has open or memory-mapped and every Unix socket peer (from `ss -xan`), and fails the run if any lies under the caller's `XDG_RUNTIME_DIR` (`/run/user/1000`) or `/run/dbus/system_bus_socket`. In r3 all 38 samples were clean, with every fd table and map readable. The limits: it samples twice, so a connection opened and closed between samples is missed, and sandboxed renderers live in their own network namespace, so their sockets (966NO_PEER966 per sample) get no peer path from `ss`. Their open and mapped files are still scanned.
+The app checks this itself. After the page loads and again before shutdown, `probe::forbidden_refs` lists every file the process tree has open or memory-mapped and every Unix socket peer (from `ss -xan`), and fails the run if any lies under the caller's `XDG_RUNTIME_DIR` (`/run/user/1000`) or `/run/dbus/system_bus_socket`. In r3 all 38 samples were clean, with every fd table and map readable. The limits: it samples twice, so a connection opened and closed between samples is missed, and sandboxed renderers live in their own network namespace, so their sockets (@NO_PEER@ per sample) get no peer path from `ss`. Their open and mapped files are still scanned.
 
 What used to reach the desktop session now lands in the scratch dir. Every run's listing shows `dconf/user` there (`*.runtime-dir.txt`).
 
@@ -61,7 +61,7 @@ Negative control: one manual idle run with the first round's environment (the ca
 
 The first round's very first smoke run used stock `dbus-run-session`, which activated a private gvfs daemon, xdg-desktop-portal, the document portal, the gtk and cosmic portal backends and the a11y bus. gvfs failed to mount `/run/user/1000/gvfs` (permission denied). No process from that run survives, and the desktop session's gvfs mount is intact.
 
-Related host state, not caused by this spike as far as the journal shows: the desktop session's `xdg-document-portal.service` exited with status 21 at 08:41:56 and stayed failed, so `/run/user/1000/doc` is not mounted. The first smoke run's Xvfb started at 08:42:00, after that exit. The portal processes logging in that second (`gnome-keyring-daemon` 23676, `xdg-desktop-portal-cosmic` 23705) ran in another agent session's systemd scope. The cause is undetermined. The service was not restarted, because that needs the owner's approval.
+Related host state, not caused by this spike as far as the journal shows: the desktop session's `xdg-document-portal.service` exited with status 21 at 08:41:56 and stayed failed, so `/run/user/1000/doc` was not mounted. The first smoke run's Xvfb started at 08:42:00, after that exit. The portal processes logging in that second (`gnome-keyring-daemon` 23676, `xdg-desktop-portal-cosmic` 23705) ran in another agent session's systemd scope. The cause is undetermined. With the owner's approval the service was restarted. At 10:41:30 CET it became active with exit status 0, and `/run/user/1000/doc` is mounted again (`fuse.portal`).
 
 No test window opened on the desktop session, and the owner's Flecha install and profiles were not touched.
 
@@ -71,19 +71,19 @@ Static page `pages/static.html`: text only, no animation, timers, focusable inpu
 
 | Measure | Value |
 |---|---|
-| Pump calls | 966IDLE_CALLS966: 966IDLE_PERIODIC966 periodic, 966IDLE_IMM966 for immediate requests, 0 delayed, 0 rerun |
-| CEF requests | 966IDLE_IMM966, all `delay_ms <= 0` |
+| Pump calls | @IDLE_CALLS@: @IDLE_PERIODIC@ periodic, @IDLE_IMM@ for immediate requests, 0 delayed, 0 rerun |
+| CEF requests | @IDLE_IMM@, all `delay_ms <= 0` |
 | Unexplained calls | 0 (each periodic call came at least 33 ms after the previous call ended) |
-| Gap between calls | p50 966GAP50966 ms, p99 966GAP99966 ms, max 966GAPMAX966 ms |
-| Time inside `CefDoMessageLoopWork` | 966WORK_TOTAL966 ms total, p50 966WORK50966 ms, p99 966WORK99966 ms, max 966WORKMAX966 ms |
-| CPU, whole tree | 966IDLE_CPU966 % of one core (966IDLE_RUN_MS966 ms run time in 30 s) |
+| Gap between calls | p50 @GAP50@ ms, p99 @GAP99@ ms, max @GAPMAX@ ms |
+| Time inside `CefDoMessageLoopWork` | @WORK_TOTAL@ ms total, p50 @WORK50@ ms, p99 @WORK99@ ms, max @WORKMAX@ ms |
+| CPU, whole tree | @IDLE_CPU@ % of one core (@IDLE_RUN_MS@ ms run time in 30 s) |
 | GPUI renders / OnPaint in the window | 1 / 1, the paint-holding repaint |
 
 CPU method: sum over the process tree of `/proc/PID/task/*/schedstat` run time, between snapshots at the window's edges. `utime + stime` ticks from `/proc/PID/stat` are in the report too.
 
 ### The one frame: paint holding
 
-The one paint is a full-view repaint (`[0, 0, 1024, 640]`) 966HOLD_MS966 ms after navigation. The first round saw it in 4 of 4 runs with a 3 s warmup, 3995 to 4007 ms after the first paint, and never with a 6 s warmup.
+The one paint is a full-view repaint (`[0, 0, 1024, 640]`) @HOLD_MS@ ms after navigation. The first round saw it in 4 of 4 runs with a 3 s warmup, 3995 to 4007 ms after the first paint, and never with a 6 s warmup.
 
 It is Chromium's paint-holding timeout. In the local Chromium 158.0.8119.0 tree, `third_party/blink/common/widget/constants.cc:15` sets `kNewContentRenderingDelay = base::Seconds(4)`. `RenderWidgetHostImpl::InitializePaintHolding` starts it at navigation, and on expiry `ClearDisplayedGraphics` makes the renderer repaint once. The PR verifier confirmed the cause: a CDP `Input.dispatchMouseEvent` about 1.5 s after load moved the repaint to 1503 ms and removed the 4 s paint. That path is `content/browser/devtools/protocol/input_handler.cc:694`, which calls `ForceFirstFrameAfterNavigationTimeout()`.
 
@@ -91,7 +91,7 @@ The parent agent's decision for this fix round: the idle check passes with that 
 
 ### 10 ms calls: CEF's pump time slice
 
-The slowest `CefDoMessageLoopWork()` calls take 10.00 ms (966WORKMAX966 ms max in r3). That is CEF's external pump time slice. CEF 8c29be2 `libcef/browser/browser_message_loop.cc:107` creates `MessagePumpExternal(0.01f, handler)`, and its `Run()` (lines 29 to 49) keeps running work until the next task is more than `max_time_slice_` (10 ms) past the call's start. When a delayed task is due within 10 ms, the call waits for it. So one pump call can hold GPUI's main thread for up to 10 ms, which is most of a 16.7 ms frame at 60 Hz. Phase 1's frame budget has to allow for it.
+The slowest `CefDoMessageLoopWork()` calls take 10.00 ms (@WORKMAX@ ms max in r3). That is CEF's external pump time slice. CEF 8c29be2 `libcef/browser/browser_message_loop.cc:107` creates `MessagePumpExternal(0.01f, handler)`, and its `Run()` (lines 29 to 49) keeps running work until the next task is more than `max_time_slice_` (10 ms) past the call's start. When a delayed task is due within 10 ms, the call waits for it. So one pump call can hold GPUI's main thread for up to 10 ms, which is most of a 16.7 ms frame at 60 Hz. Phase 1's frame budget has to allow for it.
 
 ### Why CEF never asks for delayed work
 
@@ -99,11 +99,11 @@ The slowest `CefDoMessageLoopWork()` calls take 10.00 ms (966WORKMAX966 ms max i
 
 ## Page and GPUI animation together
 
-Page `pages/anim.html`: a CSS `966keyframes` box and a `requestAnimationFrame` counter. Page counters were read over CDP at the window's edges. Each phase: 3 s warmup, 30 s window.
+Page `pages/anim.html`: a CSS `@keyframes` box and a `requestAnimationFrame` counter. Page counters were read over CDP at the window's edges. Each phase: 3 s warmup, 30 s window.
 
 | Run | GPUI animation | Page rAF/s | CSS time advanced | OnPaint/s | GPUI renders/s | GPUI animation steps | CPU, tree |
 |---|---|---|---|---|---|---|---|
-966ANIM_ROWS966
+@ANIM_ROWS@
 
 The page holds 30 frames/s in every case. `include/internal/cef_types.h` gives `windowless_frame_rate` "the default value is 30", and the spike does not change it. With default window options, GPUI draws about 21 frames/s. The window is never focused under Xvfb with no window manager, so GPUI's `inactive_frame_interval` (default 33.3 ms, "approximately 30 fps") applies. With `inactive_frame_interval: None` (`--pump-no-inactive-throttle`), GPUI shows every page frame, and draws more while its own animation runs. Its CPU numbers include those extra frames. On a focused window on a real session, the default throttle should not apply. That is unverified here.
 
@@ -112,8 +112,8 @@ The page holds 30 frames/s in every case. `include/internal/cef_types.h` gives `
 `results/2026-11-23-r3/cdp.json`:
 
 - List tabs: 1 tab, `Target.getTargetInfo` returned `type: page`, title `anim`, the file URL.
-- Evaluate: `Runtime.evaluate("navigator.webdriver")` back to back. The loop itself ran 966CDP_LOOP_S966 s for a 30 s window: 966CDP_CALLS966 calls, every reply `false`, no errors. Per-call latency: p50 966LAT50966 ms, p99 966LAT99966 ms, max 966LATMAX966 ms. The page counted `navigator.webdriver` on every animation frame: 966CDP_SAMPLES966 samples during the loop, 0 not `false`, and its rAF rate over the loop was 966CDP_RAF966 frames/s.
-- Screenshot: `Page.captureScreenshot` returned a 1024 × 640 PNG (`cdp.png`) in 966SHOT_MS966 ms.
+- Evaluate: `Runtime.evaluate("navigator.webdriver")` back to back. The loop itself ran @CDP_LOOP_S@ s for a 30 s window: @CDP_CALLS@ calls, every reply `false`, no errors. Per-call latency: p50 @LAT50@ ms, p99 @LAT99@ ms, max @LATMAX@ ms. The page counted `navigator.webdriver` on every animation frame: @CDP_SAMPLES@ samples during the loop, 0 not `false`, and its rAF rate over the loop was @CDP_RAF@ frames/s.
+- Screenshot: `Page.captureScreenshot` returned a 1024 × 640 PNG (`cdp.png`) in @SHOT_MS@ ms.
 - Correction to the first round: its report quoted 30.13 s, which was measured after the screenshot and the `/proc` scans, not the loop alone. The PR verifier reported 47.3, 33.4 and 34.7 s from that same field, and 903, 817 and 818 page frames. Only the frame counts show the page slowing down, and this round did not reproduce it: the loop ran 30.000 s and 30.006 s in two full runs, at 30 page frames/s. The loop's length, per-call latency and page frame rate are now recorded separately, before the screenshot. In r3 the loop ended within one call of 30 s, and the page kept 30 frames/s.
 - Negative control (`results/2026-11-23/cdp-enable-automation/`, first-round build): the same check with `EXTRA_ARGS=--enable-automation`, 3 s warmup and a 5 s window. All 58,080 replies and all 153 page samples were `true`, and the run failed. The check detects `navigator.webdriver` turning on.
 - No port or pipe: no process in the tree has `remote-debugging` or `enable-automation` on its command line. No process in the tree has a listening TCP socket. The run now fails unless every fd table and socket table was read (`listening_sockets.complete`), and in r3 all were. The one listening socket is Chromium's ProcessSingleton Unix socket (`/tmp/org.chromium.Chromium.*/SingletonSocket`), which is not a DevTools endpoint.
@@ -126,15 +126,15 @@ Test: 2 windowless browsers on the animation page. Page 0 is inspected, page 1 i
 
 | Close delay | Close after `ShowDevTools` | `ShowDevTools` call | Pages' OnPaint/s after | Evaluate after | Renderer terminations |
 |---|---|---|---|---|---|
-966DT_ROWS966
+@DT_ROWS@
 
-`ShowDevTools()` is synchronous: it returns after creating the DevTools browser, and that took up to 966SHOW_MAX966 ms. A close requested sooner than that runs when the call returns, so the 0 ms and 100 ms delays land later than asked. The DevTools browser was `CEF_RUNTIME_STYLE_CHROME` in its own X11 window. The `/proc` scan while DevTools is open now runs only if a scan as long as the one timed just before fits before the close. 966DT_SCAN_NOTE966
+`ShowDevTools()` is synchronous: it returns after creating the DevTools browser, and that took up to @SHOW_MAX@ ms. A close requested sooner than that runs when the call returns, so the 0 ms and 100 ms delays land later than asked. The DevTools browser was `CEF_RUNTIME_STYLE_CHROME` in its own X11 window. The `/proc` scan while DevTools is open now runs only if a scan as long as the one timed just before fits before the close. @DT_SCAN_NOTE@
 
 Result: #4353 does not reproduce on CEF 158.0.3, and no workaround is needed. The check was not run against a build without the fix (for example CEF 156), so its ability to catch the freeze is not shown here.
 
 ## Shutdown
 
-Each run closes every browser with `CloseBrowser(true)` and waits for every `OnBeforeClose`, which removes that browser's handle. Then it drops the observer registrations, quits GPUI, and calls `CefShutdown()`. If any browser is still open when the wait times out, the app skips `CefShutdown()` (calling it with live browsers is not allowed), records why, and fails the run. `CefShutdown()` returned in 966SHUT_RANGE966 ms. Right after it returns, some zygote processes are still alive. They exit when the browser process exits and closes their sockets. So after the app exits, the runner calls `cef-gpui-pump --pump-wait-gone=REPORT`. It waits on a pidfd for each child the app saw before shutdown, bounded by `STEP_TIMEOUT_MS`. A malformed child record, or a `/proc` or `pidfd_open` error other than "no such process", fails the check instead of counting as gone. In all 19 runs, every child had exited before that wait began.
+Each run closes every browser with `CloseBrowser(true)` and waits for every `OnBeforeClose`, which removes that browser's handle. Then it drops the observer registrations, quits GPUI, and calls `CefShutdown()`. If any browser is still open when the wait times out, the app skips `CefShutdown()` (calling it with live browsers is not allowed), records why, and fails the run. `CefShutdown()` returned in @SHUT_RANGE@ ms. Right after it returns, some zygote processes are still alive. They exit when the browser process exits and closes their sockets. So after the app exits, the runner calls `cef-gpui-pump --pump-wait-gone=REPORT`. It waits on a pidfd for each child the app saw before shutdown, bounded by `STEP_TIMEOUT_MS`. A malformed child record, or a `/proc` or `pidfd_open` error other than "no such process", fails the check instead of counting as gone. In all 19 runs, every child had exited before that wait began.
 
 Process types come from `--type=`, but zygote-forked processes keep `--type=zygote` on this build. `probe::Proc::kind` labels them by tree shape. The sandboxed layout seen here is browser, then the sandboxed zygote (PID-namespace init), then the zygote worker, then one process per renderer, each in its own PID namespace.
 

@@ -2,14 +2,15 @@
  "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
 <!-- A private session bus with no service directories, so nothing (portals,
      gvfs, a11y) is auto-started and nothing reaches the owner's session.
-     It listens at $XDG_RUNTIME_DIR/bus, which the runner points at a scratch dir.
-     Never use it with the desktop's XDG_RUNTIME_DIR: dbus-daemon replaces an
-     existing socket at that path and deletes it on exit, which would remove
-     the desktop session's bus socket. -->
+     scripts/run-checks.sh writes a copy per run with __SCRATCH_RUNTIME_DIR__
+     replaced by that run's scratch dir. `unix:dir=` makes dbus-daemon pick a
+     new random socket name there, so it never replaces an existing socket.
+     (`unix:path=` and `unix:runtime=yes` replace a socket at their path and
+     delete it on exit.) This template is not a usable config by itself. -->
 <busconfig>
   <type>session</type>
   <keep_umask/>
-  <listen>unix:runtime=yes</listen>
+  <listen>unix:dir=__SCRATCH_RUNTIME_DIR__</listen>
   <auth>EXTERNAL</auth>
   <policy context="default">
     <allow send_destination="*" eavesdrop="true"/>

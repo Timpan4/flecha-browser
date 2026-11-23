@@ -51,6 +51,9 @@ cp --reflink=auto -f "$profile_dir/cef-gpui-pump" "$bundle/"
 bin=$bundle/cef-gpui-pump
 echo "bundle $bundle (CEF from $cef_dir)"
 
+# The private bus must never take over an existing socket path.
+"$here/scripts/check-bus-listener.sh"
+
 # What the app must not reach: the caller's runtime dir and the system bus.
 desktop_runtime=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
 system_bus_socket=/run/dbus/system_bus_socket
@@ -99,12 +102,14 @@ run_one() {
     cache=$(mktemp -d -t cef-gpui-pump-cache.XXXXXX)
     runtime=$(mktemp -d -t cef-gpui-pump-runtime.XXXXXX)
     scratch+=("$cache" "$runtime")
+    # The bus config names this run's scratch dir; dbus-daemon picks a new socket name in it.
+    sed "s|__SCRATCH_RUNTIME_DIR__|$runtime|" "$here/scripts/isolated-session-bus.conf.in" >"$runtime/session-bus.conf"
     echo "== $name"
     local status=0
     env -u WAYLAND_DISPLAY -u WAYLAND_SOCKET -u DBUS_SESSION_BUS_ADDRESS \
         DISPLAY="$display" XDG_SESSION_TYPE=x11 XDG_RUNTIME_DIR="$runtime" \
         DBUS_SYSTEM_BUS_ADDRESS=unix:path=/nonexistent \
-        dbus-run-session --config-file="$here/scripts/isolated-session-bus.conf" -- "$bin" \
+        dbus-run-session --config-file="$runtime/session-bus.conf" -- "$bin" \
         --ozone-platform=x11 --password-store=basic \
         --pump-url="$url" --pump-out="$out" --pump-cache-dir="$cache" \
         --pump-warmup-ms="$WARMUP_MS" --pump-measure-ms="$MEASURE_MS" \
