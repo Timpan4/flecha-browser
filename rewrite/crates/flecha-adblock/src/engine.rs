@@ -27,7 +27,7 @@ pub type EngineKey = [u8; 32];
 /// What [`build_engine`] keeps from a list, and the `engine.dat` layout. Change it whenever
 /// either changes, so an `engine.dat` built the old way is rebuilt.
 const RECIPE: &[u8] =
-    b"flecha-adblock recipe 4: parse errors and redirects left out, ||host:port as regex, typed page exceptions kept and hashed\n";
+    b"flecha-adblock recipe 5: parse errors and redirects left out, ||host:port as regex, exceptions naming document kept as page exceptions and hashed\n";
 
 const NO_REDIRECTS: &str = "redirect and rewrite filters need resources this engine doesn't load";
 
@@ -68,8 +68,12 @@ impl Filters {
     /// priority-3 `allowAllRequests` rules did. adblock-rust lets any exception match a document
     /// request (uBlock Origin's rule for letting a page load), so the main engine can't answer
     /// this; only filters that name `$document` count.
-    pub fn exempts_page(&self, page_url: &str) -> bool {
-        Request::new(page_url, page_url, "document", "get").is_ok_and(|request| {
+    ///
+    /// `initiator_url` is the document that loaded the page: the page itself for a tab's
+    /// top-level page, and the embedding page for a frame. Party and `$domain=` options match
+    /// against it, as the shell's rules matched a frame against its initiator.
+    pub fn exempts_page(&self, page_url: &str, initiator_url: &str) -> bool {
+        Request::new(page_url, initiator_url, "document", "get").is_ok_and(|request| {
             self.page_exceptions
                 .check_network_request(&request)
                 .should_block()
@@ -110,20 +114,31 @@ pub fn build_engine<'a>(
     (Filters::new(engine, page_exceptions), skipped)
 }
 
-/// An exception that names `$document` among its resource types: it exempts whole pages.
+/// An exception whose line names `$document`: it exempts whole pages.
 ///
-/// adblock-rust also gives the document type to an exception that names no type at all and is
-/// shaped `||host^` (uBlock Origin's implicit page exception), and to `$all`. Those set every
-/// network type as well; one that names `$document` sets only the types it lists. The shell made
-/// such exceptions allow requests to their host and nothing more, and so does the main engine.
+/// The decision comes from the options the line names, not from adblock-rust's type mask.
+/// adblock-rust also gives the document type to an exception shaped `||host^` that names no type
+/// (uBlock Origin's implicit page exception) and to `$all`, with or without negated types. The
+/// shell made those allow requests to their host and nothing more, and so does the main engine.
 /// `$csp` and `$removeparam` filters also carry the document type, but only change what a page
 /// gets.
-fn is_page_exception(filter: &NetworkFilter) -> bool {
+fn is_page_exception(filter: &NetworkFilter, line: &str) -> bool {
     filter.mask.contains(NetworkFilterMask::IS_EXCEPTION)
         && filter.mask.contains(NetworkFilterMask::FROM_DOCUMENT)
-        && !filter.mask.contains(NetworkFilterMask::FROM_NETWORK_TYPES)
+        && names_document(line)
         && !filter.is_csp()
         && !filter.is_removeparam()
+}
+
+/// Whether the line's options name `document`, or adblock-rust's `doc`, without `~`. adblock-rust
+/// takes everything after the last `$` as the options, splits them on `,`, and compares names
+/// exactly.
+fn names_document(line: &str) -> bool {
+    line.trim().rsplit_once('$').is_some_and(|(_, options)| {
+        options
+            .split(',')
+            .any(|option| matches!(option, "document" | "doc"))
+    })
 }
 
 /// adblock-rust never matches a `||host:port` filter: its hostname anchor ends at the port. Such
@@ -189,7 +204,7 @@ fn kept_lines(
             Ok(ParsedLine::Network(filter)) if filter.is_redirect() => NO_REDIRECTS.to_owned(),
             Ok(parsed) => {
                 if let ParsedLine::Network(filter) = &parsed
-                    && is_page_exception(filter)
+                    && is_page_exception(filter, filter_text)
                 {
                     page_exceptions.push_str(filter_text.trim().trim_start_matches("@@"));
                     page_exceptions.push('\n');
@@ -316,6 +331,12 @@ mod tests {
             ("$important", false),
             ("$xmlhttprequest", false),
             ("$csp=script-src 'none'", false),
+            // `$all` gives the document type, also with a type negated; the shell ignored it.
+            ("$all,~script", false),
+            ("$all,~image", false),
+            ("$all,document", true),
+            ("$doc", true),
+            ("$document,~third-party", true),
         ];
         for (option, expected) in options {
             let line = format!("@@||page.example^{option}");
@@ -324,14 +345,14 @@ mod tests {
             else {
                 panic!("{line} did not parse");
             };
-            assert_eq!(is_page_exception(&filter), expected, "{line}");
+            assert_eq!(is_page_exception(&filter, &line), expected, "{line}");
         }
         // A blocking filter never is, `$document` or not.
-        let Ok(ParsedLine::Network(filter)) =
-            parse_filter("||page.example^$document", false, ParseOptions::default())
+        let line = "||page.example^$document";
+        let Ok(ParsedLine::Network(filter)) = parse_filter(line, false, ParseOptions::default())
         else {
             panic!();
         };
-        assert!(!is_page_exception(&filter));
+        assert!(!is_page_exception(&filter, line));
     }
 }

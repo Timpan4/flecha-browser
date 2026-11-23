@@ -202,6 +202,28 @@ fn a_document_exception_exempts_the_page_and_frames_it_covers() {
         Script,
         "https://www.google-analytics.com/analytics.js"
     ));
+    // `$all` with a type negated still names no `$document`. The shell ignored `$all`.
+    let allbut = "https://allbut.example/";
+    assert!(ad(allbut, allbut, Script, "https://ads.example/a.js"));
+    assert!(ad(allbut, news, Script, "https://ads.example/a.js"));
+    // `$document` with a party option: a frame is first-party only to a page of its own site, as
+    // the shell matched a frame against the page that loaded it.
+    for host in ["partyframe.example", "firstframe.example"] {
+        let page = format!("https://{host}/");
+        let frame = format!("https://{host}/f");
+        assert!(
+            !ad(&page, &page, Script, "https://ads.example/a.js"),
+            "{host}"
+        );
+        assert!(
+            ad(&frame, news, Script, "https://ads.example/a.js"),
+            "{host}"
+        );
+        assert!(
+            ad(&frame, news, SubFrame, "https://frames.example/x"),
+            "{host}"
+        );
+    }
 }
 
 #[test]

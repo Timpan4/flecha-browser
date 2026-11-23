@@ -153,13 +153,15 @@ impl AdBlocker {
             return false;
         }
         // Pages and frames the lists exempt whole, as the shell's `allowAllRequests` rules for
-        // main and sub frames did: the frame itself and everything inside it.
-        let frame_exempt =
-            request.request_type == RequestType::SubFrame && filters.exempts_page(request.url);
+        // main and sub frames did: the frame itself and everything inside it. A frame is matched
+        // with the page that embeds it as its initiator. `Request` doesn't carry a frame's
+        // parent, so a frame other than the tab's page is taken to be embedded by the tab's page.
+        let frame_exempt = request.request_type == RequestType::SubFrame
+            && filters.exempts_page(request.url, request.source_url);
         if frame_exempt
-            || filters.exempts_page(request.top_level_url)
+            || filters.exempts_page(request.top_level_url, request.top_level_url)
             || (request.source_url != request.top_level_url
-                && filters.exempts_page(request.source_url))
+                && filters.exempts_page(request.source_url, request.top_level_url))
         {
             return false;
         }

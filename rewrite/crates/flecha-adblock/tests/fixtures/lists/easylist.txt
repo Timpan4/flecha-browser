@@ -32,3 +32,6 @@ example.com##
 @@||important.example^$important
 @@||cloud.google.com^$generichide
 @@||cloud.google.com^$~third-party
+@@||partyframe.example^$document,~third-party
+@@||firstframe.example^$document,first-party
+@@||allbut.example^$all,~script
