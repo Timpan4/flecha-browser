@@ -91,7 +91,9 @@ fn tools_match_agent_tools_ts() {
             if actual.get(key.as_str()) == expected.get(key.as_str()) {
                 continue;
             }
-            if !allowed(&format!("tools/*/{key}")) {
+            if !(expected_difference(key, actual.get(key.as_str()), expected.get(key.as_str()))
+                && allowed(&format!("tools/*/{key}")))
+            {
                 mismatches.push(format!(
                     "{name}.{key}: rust {} ts {}",
                     actual.get(key.as_str()).unwrap_or(&Value::Null),
@@ -106,6 +108,17 @@ fn tools_match_agent_tools_ts() {
         mismatches.join("\n")
     );
     assert_used(&["tools/*/execution"]);
+}
+
+/// The exact values a recorded tool difference covers, so a different mismatch at the same
+/// key, such as TS starting to advertise task support, still fails.
+fn expected_difference(key: &str, rust: Option<&Value>, ts: Option<&Value>) -> bool {
+    match key {
+        "execution" => {
+            rust.is_none() && ts == Some(&serde_json::json!({ "taskSupport": "forbidden" }))
+        }
+        _ => false,
+    }
 }
 
 #[test]

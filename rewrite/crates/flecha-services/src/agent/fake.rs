@@ -44,6 +44,8 @@ pub struct FakePage {
 pub struct FakeStats {
     /// `probe` calls.
     pub probes: AtomicU64,
+    /// Every selector `probe` was asked about.
+    pub probed: Mutex<BTreeSet<String>>,
     /// Engine calls dropped before they finished, as when a deadline passes.
     pub dropped: AtomicU64,
 }
@@ -288,6 +290,13 @@ impl BrowserControl for FakeBrowser {
 
     async fn probe(&self, tab: &TabId, selector: Option<&str>) -> ToolResult<bool> {
         self.stats.probes.fetch_add(1, Ordering::Relaxed);
+        if let Some(selector) = selector {
+            self.stats
+                .probed
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .insert(selector.to_owned());
+        }
         self.engine(tab, |page| match selector {
             Some(selector) => page.elements.contains(selector),
             None => page.loaded,

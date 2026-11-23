@@ -70,6 +70,12 @@ async fn logs_carry_no_token_page_contents_or_addresses() {
         json!({ "url": "https://secret-host.example/private?q=SENTINEL_URL" }),
     )
     .await;
+    // Each sensitive value must reach the client, or its absence from the logs proves nothing.
+    let produced = |result: &Value, sentinel: &str| {
+        assert_eq!(result["isError"], Value::Null, "{result}");
+        assert!(text_of(result).contains(sentinel), "{result}");
+    };
+    produced(&opened, "SENTINEL_URL");
     let tab: Value = serde_json::from_str(text_of(&opened)).unwrap();
     let tab = tab["tabId"].as_str().unwrap().to_owned();
     run.browser.page(&TabId::new(tab.as_str()), |page| {
@@ -78,37 +84,59 @@ async fn logs_carry_no_token_page_contents_or_addresses() {
         page.evaluations
             .insert("secret()".into(), Evaluated::Value(json!("SENTINEL_EVAL")));
     });
-    call_tool(&run, "list_tabs", json!({})).await;
-    call_tool(&run, "read_page", json!({ "tabId": tab })).await;
-    call_tool(&run, "read_page", json!({ "tabId": tab, "format": "html" })).await;
-    call_tool(
-        &run,
-        "evaluate",
-        json!({ "tabId": tab, "expression": "secret()" }),
-    )
-    .await;
-    call_tool(
-        &run,
-        "navigate",
-        json!({ "tabId": tab, "url": "https://secret-host.example/next?q=SENTINEL_URL" }),
-    )
-    .await;
-    call_tool(
-        &run,
-        "type",
-        json!({ "tabId": tab, "text": "SENTINEL_TYPED" }),
-    )
-    .await;
+    produced(
+        &call_tool(&run, "list_tabs", json!({})).await,
+        "SENTINEL_URL",
+    );
+    produced(
+        &call_tool(&run, "read_page", json!({ "tabId": tab })).await,
+        "SENTINEL_PAGE_TEXT",
+    );
+    produced(
+        &call_tool(&run, "read_page", json!({ "tabId": tab, "format": "html" })).await,
+        "SENTINEL_PAGE_HTML",
+    );
+    produced(
+        &call_tool(
+            &run,
+            "evaluate",
+            json!({ "tabId": tab, "expression": "secret()" }),
+        )
+        .await,
+        "SENTINEL_EVAL",
+    );
+    produced(
+        &call_tool(
+            &run,
+            "navigate",
+            json!({ "tabId": tab, "url": "https://secret-host.example/next?q=SENTINEL_URL" }),
+        )
+        .await,
+        "SENTINEL_URL",
+    );
+    produced(
+        &call_tool(
+            &run,
+            "type",
+            json!({ "tabId": tab, "text": "SENTINEL_TYPED" }),
+        )
+        .await,
+        "ok",
+    );
+    run.browser.page(&TabId::new(tab.as_str()), |page| {
+        assert_eq!(page.typed, ["SENTINEL_TYPED"]);
+    });
     let initialize = rpc(
         "initialize",
         json!({ "protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": { "name": "t", "version": "1" } }),
     );
-    exchange(
+    let accepted = exchange(
         run.port(),
         &post(run.port(), Some(&run.bearer()), &[], &initialize),
     )
     .await;
-    exchange(
+    assert_eq!(accepted.status, 200, "{accepted:?}");
+    let refused = exchange(
         run.port(),
         &post(
             run.port(),
@@ -118,6 +146,7 @@ async fn logs_carry_no_token_page_contents_or_addresses() {
         ),
     )
     .await;
+    assert_eq!(refused.status, 401, "{refused:?}");
     let token = run.token.reveal();
     let port = run.port();
     drop(run);

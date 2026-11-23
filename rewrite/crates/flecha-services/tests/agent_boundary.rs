@@ -377,6 +377,21 @@ mod token_file {
     }
 
     #[test]
+    fn concurrent_renewals_leave_the_file_and_the_server_agreeing() {
+        let dir = TempDir::new();
+        let path = dir.path.join("agent-token");
+        let token = AgentToken::open(&path).unwrap();
+        let workers = std::thread::available_parallelism().unwrap().get();
+        std::thread::scope(|scope| {
+            for _ in 0..workers {
+                scope.spawn(|| token.renew().unwrap());
+            }
+        });
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), token.reveal());
+        assert_eq!(std::fs::read_dir(&dir.path).unwrap().count(), 1);
+    }
+
+    #[test]
     fn replaces_a_token_others_could_read() {
         let dir = TempDir::new();
         let path = dir.path.join("agent-token");

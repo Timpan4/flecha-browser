@@ -9,7 +9,7 @@ use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::RwLock;
+use std::sync::{Mutex, RwLock};
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -20,10 +20,15 @@ const TOKEN_BYTES: usize = 24;
 /// Unpadded base64 of `TOKEN_BYTES`.
 const TOKEN_CHARS: usize = TOKEN_BYTES.div_ceil(3) * 4;
 
+/// The one owner of the token file at its path. Two `AgentToken`s on the same path would each
+/// accept only the token they last wrote.
 pub struct AgentToken {
     path: PathBuf,
     /// `Bearer <token>`, the whole `Authorization` value a request must carry.
     header: RwLock<Vec<u8>>,
+    /// Held across a renewal's write and publish, so the file and `header` change in the same
+    /// order. Requests read `header` without waiting on the disk.
+    renewing: Mutex<()>,
 }
 
 impl fmt::Debug for AgentToken {
@@ -44,22 +49,27 @@ impl AgentToken {
             Some(token) => token,
             None => {
                 let token = generate()?;
-                write_private(&path, &token)?;
+                replace_private(&path, &token)?;
+                sync_parent(&path)?;
                 token
             }
         };
         Ok(Self {
             header: RwLock::new(bearer(&token)),
             path,
+            renewing: Mutex::new(()),
         })
     }
 
-    /// Replaces the token. Requests with the old one fail from the next request on.
+    /// Replaces the token. Requests with the old one fail from the next request on. Once the
+    /// file holds the new token the old one is refused, even when making the rename durable
+    /// then fails and this returns the error.
     pub fn renew(&self) -> io::Result<()> {
+        let _renewing = self.renewing.lock().unwrap_or_else(|err| err.into_inner());
         let token = generate()?;
-        write_private(&self.path, &token)?;
+        replace_private(&self.path, &token)?;
         *self.header.write().unwrap_or_else(|err| err.into_inner()) = bearer(&token);
-        Ok(())
+        sync_parent(&self.path)
     }
 
     /// The token, for Settings to show the user.
@@ -127,38 +137,47 @@ fn read_private(path: &Path) -> io::Result<Option<String>> {
     Ok(well_formed(&token).then_some(token))
 }
 
-/// Writes a sibling file with mode 0600 and renames it over `path`, so the token is never
-/// readable by others and a crash leaves the old token or the new one.
 #[cfg(unix)]
-fn write_private(path: &Path, token: &str) -> io::Result<()> {
+fn parent(path: &Path) -> &Path {
+    path.parent()
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .unwrap_or(Path::new("."))
+}
+
+/// Writes a sibling file with mode 0600 and renames it over `path`, so the token is never
+/// readable by others and a crash leaves the old token or the new one. The sibling's name is
+/// random, so no other writer's file, nor a crashed run's leftover, can collide with it.
+#[cfg(unix)]
+fn replace_private(path: &Path, token: &str) -> io::Result<()> {
     use std::os::unix::fs::OpenOptionsExt;
 
-    let dir = path
-        .parent()
-        .filter(|dir| !dir.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
     let mut name = path
         .file_name()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "token path has no file name"))?
         .to_owned();
-    name.push(format!(".{}.tmp", std::process::id()));
-    let temp = dir.join(name);
+    name.push(format!(".{}.tmp", generate()?));
+    let temp = parent(path).join(name);
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&temp)?;
     let written = (|| {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&temp)?;
         file.write_all(token.as_bytes())?;
         file.sync_all()?;
-        fs::rename(&temp, path)?;
-        File::open(dir)?.sync_all()
+        fs::rename(&temp, path)
     })();
     if written.is_err() {
         let _ = fs::remove_file(&temp);
     }
     written
+}
+
+/// Makes a rename into `path`'s directory durable.
+#[cfg(unix)]
+fn sync_parent(path: &Path) -> io::Result<()> {
+    File::open(parent(path))?.sync_all()
 }
 
 #[cfg(not(unix))]
@@ -170,9 +189,14 @@ fn read_private(_: &Path) -> io::Result<Option<String>> {
 }
 
 #[cfg(not(unix))]
-fn write_private(_: &Path, _: &str) -> io::Result<()> {
+fn replace_private(_: &Path, _: &str) -> io::Result<()> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         "the agent token needs owner-only file permissions, implemented for Unix only",
     ))
+}
+
+#[cfg(not(unix))]
+fn sync_parent(_: &Path) -> io::Result<()> {
+    Ok(())
 }

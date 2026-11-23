@@ -15,9 +15,9 @@ use serde_json::json;
 
 /// "Thousands of concurrent tool calls", from the task that asked for this test.
 const CALLS: usize = 4000;
-/// Half the calls time out after this; it is the `wait_for` default divided by ten so the
-/// test stays short while each call still polls several times at `WAIT_POLL`.
-const TIMEOUT_MS: u64 = flecha_services::agent::tools::DEFAULT_WAIT_MS / 10;
+/// Half the calls time out after the `wait_for` default, which leaves every call open while
+/// the rest connect.
+const TIMEOUT_MS: u64 = flecha_services::agent::tools::DEFAULT_WAIT_MS;
 
 #[derive(Clone, Copy, Debug, Default)]
 struct ThreadStat {
@@ -91,10 +91,11 @@ async fn thousands_of_waits_share_the_server_thread_and_leave_no_timers() {
         // Connect one at a time so the test measures the server, not the kernel's SYN retries.
         let stream = connect(port).await;
         let bearer = bearer.clone();
+        // A selector per call, so the fake can tell which calls the server has dispatched.
         let arguments = if index % 2 == 0 {
-            json!({ "tabId": "mine", "selector": "#ready", "timeoutMs": 60_000 })
+            json!({ "tabId": "mine", "selector": format!("#ready-{index}"), "timeoutMs": 60_000 })
         } else {
-            json!({ "tabId": "mine", "selector": "#never", "timeoutMs": TIMEOUT_MS })
+            json!({ "tabId": "mine", "selector": format!("#never-{index}"), "timeoutMs": TIMEOUT_MS })
         };
         calls.push(tokio::spawn(async move {
             let reply = exchange_on(
@@ -107,11 +108,26 @@ async fn thousands_of_waits_share_the_server_thread_and_leave_no_timers() {
         }));
     }
     let all_connected = started.elapsed();
+    let dispatched = || run.browser.stats.probed.lock().unwrap().len();
+    while dispatched() < CALLS && !calls.iter().any(|call| call.is_finished()) {
+        tokio::time::sleep(flecha_services::agent::tools::WAIT_POLL).await;
+    }
+    let all_dispatched = started.elapsed();
+    assert_eq!(dispatched(), CALLS, "every call reached the backend");
+    assert!(
+        calls.iter().all(|call| !call.is_finished()),
+        "a call finished before the last one was dispatched, so they did not all overlap"
+    );
     let peak_threads = process_threads();
+    assert_eq!(
+        peak_threads, threads_before,
+        "the server started threads for its calls"
+    );
     // Both ends of every open connection live in this process.
     let open_sockets = std::fs::read_dir("/proc/self/fd").unwrap().count();
     run.browser.page(&tab, |page| {
-        page.elements.insert("#ready".into());
+        page.elements
+            .extend((0..CALLS).step_by(2).map(|index| format!("#ready-{index}")));
     });
     let mut ready = 0;
     let mut timed_out = 0;
@@ -134,9 +150,10 @@ async fn thousands_of_waits_share_the_server_thread_and_leave_no_timers() {
     let idle_end = thread_stat(&task);
 
     eprintln!(
-        "{CALLS} concurrent wait_for calls in {:.2}s (all connected after {:.2}s): {ready} ready, {timed_out} timed out after {TIMEOUT_MS}ms",
+        "{CALLS} concurrent wait_for calls in {:.2}s (all connected after {:.2}s, all open in the backend at once after {:.2}s): {ready} ready, {timed_out} timed out after {TIMEOUT_MS}ms",
         elapsed.as_secs_f64(),
-        all_connected.as_secs_f64()
+        all_connected.as_secs_f64(),
+        all_dispatched.as_secs_f64()
     );
     eprintln!(
         "server thread under load: {:.2}s CPU ({:.0}% of wall time), {} voluntary and {} involuntary context switches; {probes} backend probes ({:.0}/s)",
