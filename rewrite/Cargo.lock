@@ -2063,6 +2063,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "flecha-boosts"
+version = "0.1.0"
+dependencies = [
+ "flecha-core",
+ "indexmap",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "url",
+]
+
+[[package]]
 name = "flecha-cef"
 version = "0.1.0"
 dependencies = [
@@ -2088,6 +2100,21 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "unicode-normalization",
+ "url",
+]
+
+[[package]]
+name = "flecha-downloads"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "flecha-core",
+ "libc",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+ "unicode-general-category",
  "unicode-normalization",
  "url",
 ]

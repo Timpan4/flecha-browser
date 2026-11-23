@@ -355,3 +355,42 @@ fn failed_import_rolls_back_both_visits_and_url_summaries() {
     assert_eq!(page.entries[0].last_visit_ms, 1);
     assert_eq!(history.import_visits(&visits[..1]).unwrap(), (1, 0));
 }
+
+#[test]
+fn clear_since_restores_surviving_visit_title_and_forgets_cleared_title() {
+    let mut history = HistoryStore::in_memory().unwrap();
+    history
+        .record_visit("https://x.example/", "old public title", 10)
+        .unwrap();
+    history
+        .record_visit("https://x.example/", "private new title", 100)
+        .unwrap();
+
+    history.clear_since(50).unwrap();
+
+    let all = history.query("", 0).unwrap();
+    assert_eq!(all.entries.len(), 1);
+    assert_eq!(all.entries[0].title, "old public title");
+    assert_eq!(all.entries[0].visit_count, 1);
+    assert_eq!(all.entries[0].last_visit_ms, 10);
+    assert!(history.query("private", 0).unwrap().entries.is_empty());
+    assert_eq!(history.query("public", 0).unwrap().entries.len(), 1);
+}
+
+#[test]
+fn record_visit_strips_credentials_from_variant_url_titles() {
+    let mut history = HistoryStore::in_memory().unwrap();
+    history
+        .record_visit(
+            "https://u:pw@example.com:443/x",
+            "https://u:pw@example.com/x",
+            1,
+        )
+        .unwrap();
+
+    let all = history.query("", 0).unwrap();
+    assert_eq!(all.entries.len(), 1);
+    assert_eq!(all.entries[0].url, "https://example.com/x");
+    assert_eq!(all.entries[0].title, "https://example.com/x");
+    assert!(history.query("pw", 0).unwrap().entries.is_empty());
+}

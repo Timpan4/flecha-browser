@@ -1,5 +1,6 @@
 //! Browsing history and local command-bar candidates.
 
+use std::borrow::Cow;
 use std::fmt;
 use std::path::Path;
 
@@ -25,7 +26,9 @@ const SCHEMA: &str = "
     CREATE TABLE visits (
         id INTEGER PRIMARY KEY,
         url_id INTEGER NOT NULL REFERENCES urls(id) ON DELETE CASCADE,
-        visited_at_ms INTEGER NOT NULL
+        visited_at_ms INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        title_folded TEXT NOT NULL
     ) STRICT;
     CREATE INDEX visits_by_url_and_time ON visits(url_id, visited_at_ms);
     CREATE INDEX visits_by_time ON visits(visited_at_ms);
@@ -138,12 +141,8 @@ impl HistoryStore {
         let tx = self
             .db
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        insert_visit(
-            &tx,
-            &clean_url,
-            clean_title(url, &clean_url, title),
-            visited_at_ms,
-        )?;
+        let cleaned_title = clean_title(url, &clean_url, title);
+        insert_visit(&tx, &clean_url, cleaned_title.as_ref(), visited_at_ms)?;
         tx.commit()?;
         Ok(true)
     }
@@ -172,12 +171,8 @@ impl HistoryStore {
             if existing.query_row(params![url.as_str(), visit.visited_at_ms], |row| row.get(0))? {
                 continue;
             }
-            insert_visit(
-                &tx,
-                &url,
-                clean_title(visit.url, &url, visit.title),
-                visit.visited_at_ms,
-            )?;
+            let cleaned_title = clean_title(visit.url, &url, visit.title);
+            insert_visit(&tx, &url, cleaned_title.as_ref(), visit.visited_at_ms)?;
             imported += 1;
         }
         drop(existing);
@@ -222,9 +217,22 @@ impl HistoryStore {
             [cutoff_ms],
         )?;
         tx.execute(
-            "UPDATE urls SET (visit_count, last_visit_ms) = (
-                SELECT COUNT(*), MAX(visited_at_ms) FROM visits WHERE url_id = urls.id
-            ) WHERE last_visit_ms >= ?1",
+            "UPDATE urls SET
+                visit_count = (SELECT COUNT(*) FROM visits WHERE url_id = urls.id),
+                last_visit_ms = (SELECT MAX(visited_at_ms) FROM visits WHERE url_id = urls.id),
+                title = (
+                    SELECT title FROM visits
+                    WHERE url_id = urls.id
+                    ORDER BY visited_at_ms DESC, id DESC
+                    LIMIT 1
+                ),
+                title_folded = (
+                    SELECT title_folded FROM visits
+                    WHERE url_id = urls.id
+                    ORDER BY visited_at_ms DESC, id DESC
+                    LIMIT 1
+                )
+             WHERE last_visit_ms >= ?1",
             [cutoff_ms],
         )?;
         tx.commit()?;
@@ -299,6 +307,7 @@ fn insert_visit(
     visited_at_ms: i64,
 ) -> rusqlite::Result<()> {
     let url = url.as_str();
+    let title_folded = title.to_lowercase();
     let id: i64 = tx.prepare_cached(
         "INSERT INTO urls (url, url_folded, title, title_folded, visit_count, last_visit_ms)
          VALUES (?1, ?2, ?3, ?4, 1, ?5)
@@ -309,11 +318,13 @@ fn insert_visit(
             last_visit_ms = MAX(last_visit_ms, excluded.last_visit_ms)
          RETURNING id",
     )?.query_row(
-        params![url, url.to_lowercase(), title, title.to_lowercase(), visited_at_ms],
+        params![url, url.to_lowercase(), title, title_folded.as_str(), visited_at_ms],
         |row| row.get(0),
     )?;
-    tx.prepare_cached("INSERT INTO visits (url_id, visited_at_ms) VALUES (?1, ?2)")?
-        .execute(params![id, visited_at_ms])?;
+    tx.prepare_cached(
+        "INSERT INTO visits (url_id, visited_at_ms, title, title_folded) VALUES (?1, ?2, ?3, ?4)",
+    )?
+    .execute(params![id, visited_at_ms, title, title_folded.as_str()])?;
     Ok(())
 }
 
@@ -340,11 +351,18 @@ fn history_url(raw: &str) -> Option<Url> {
     Some(url)
 }
 
-fn clean_title<'a>(raw_url: &str, url: &'a Url, title: &'a str) -> &'a str {
+fn clean_title<'a>(raw_url: &str, url: &'a Url, title: &'a str) -> Cow<'a, str> {
     // Importers sometimes use the original URL as the title when none was saved.
     if title == raw_url {
-        url.as_str()
-    } else {
-        title
+        return Cow::Borrowed(url.as_str());
     }
+    if let Ok(mut parsed) = Url::parse(title.trim())
+        && matches!(parsed.scheme(), "http" | "https")
+        && (parsed.password().is_some() || !parsed.username().is_empty())
+        && parsed.set_password(None).is_ok()
+        && parsed.set_username("").is_ok()
+    {
+        return Cow::Owned(parsed.into());
+    }
+    Cow::Borrowed(title)
 }
