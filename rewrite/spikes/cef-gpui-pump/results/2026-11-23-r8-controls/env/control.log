@@ -1,0 +1,4 @@
+browser 1314975, runner exit 0
+browser environ: 9 variables: DBUS_SESSION_BUS_ADDRESS DBUS_SYSTEM_BUS_ADDRESS DISPLAY HOME LANG PATH TMPDIR XDG_RUNTIME_DIR XDG_SESSION_TYPE 
+session processes below timeout 1314970: 6 read, unreadable: none
+none of SSH_AUTH_SOCK AT_SPI_BUS_ADDRESS PULSE_SERVER XAUTHORITY reached the browser or any readable session process

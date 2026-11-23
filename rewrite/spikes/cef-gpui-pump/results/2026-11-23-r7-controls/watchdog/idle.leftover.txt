@@ -1,0 +1,3 @@
+ 861303  861098 S<   perl -e $SIG{TERM} = "IGNORE"; setpgrp(0, $ARGV[0]) or die "setpgid: $!\n"; sleep 861098
+861304 861304 S perl -MPOSIX -e $SIG{TERM} = "IGNORE"; POSIX::setsid() > 0 or die "setsid: $!\n"; sleep
+sweep: killed 861304

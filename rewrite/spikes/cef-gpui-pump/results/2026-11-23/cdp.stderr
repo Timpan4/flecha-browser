@@ -1,0 +1,18 @@
+[2026-11-23T07:52:29Z ERROR gpui_linux::linux::x11::client] Found no xinput mouse pointers.
+MESA-EGL: warning: DRI3 error: Could not get DRI3 device
+MESA-EGL: warning: Ensure your X server supports DRI3 to get accelerated rendering
+[scenario] context_initialized_after_ms: 0.0038399999999999997
+[engine] created Page(0) id=1 runtime_style=Some(RuntimeStyle(CEF_RUNTIME_STYLE_ALLOY))
+[scenario] page_load_ms: 14.258842000000001
+[scenario] cdp_list_tabs: [{"tab":1,"host_url":"file:///home/timpan4/.t3/worktrees/flecha-browser/t3-3b42251b-74c4a1e059834541/rewrite/spikes/cef-gpui-pump/pages/anim.html","target_info":{"targetId":"C77D84F2EC0FA78BA051BD1F7067ABB1","type":"page","title":"anim","url":"file:///home/timpan4/.t3/worktrees/flecha-browser/t3-3b42251b-74c4a1e059834541/rewrite/spikes/cef-gpui-pump/pages/anim.html","attached":true,"canAccessOpener":false,"browserContextId":"87E23A8FB422F290399A0BA58D9AC439"},"error":null}]
+[scenario] cdp_evaluate_loop: {"calls":482760,"seconds":30.13065284,"webdriver_true_replies":0,"errors":[],"page_webdriver_samples_during_calls":903,"page_webdriver_true_total":0,"page_before":{"raf":91,"css_time":2999.406999999983,"webdriver_samples":91,"webdriver_true":0,"webdriver_now":false},"page_after":{"raf":994,"css_time":33099.00699999998,"webdriver_samples":994,"webdriver_true":0,"webdriver_now":false}}
+[scenario] cdp_screenshot: {"path":"/home/timpan4/.t3/worktrees/flecha-browser/t3-3b42251b-74c4a1e059834541/rewrite/spikes/cef-gpui-pump/results/2026-11-23/cdp.png","bytes":5430,"png_signature":true,"size":[1024,640],"took_ms":106.58182}
+[scenario] cdp_events_received: 0
+[scenario] process_tree: [{"pid":66020,"ppid":66018,"type":"browser","start_time":89585,"inner_pid":66020},{"pid":66023,"ppid":66020,"type":"zygote","start_time":89586,"inner_pid":66023},{"pid":66024,"ppid":66020,"type":"zygote","start_time":89586,"inner_pid":1},{"pid":66055,"ppid":66020,"type":"utility","start_time":89590,"inner_pid":66055},{"pid":66053,"ppid":66023,"type":"zygote-forked-unsandboxed","start_time":89590,"inner_pid":66053},{"pid":66026,"ppid":66024,"type":"zygote","start_time":89587,"inner_pid":3},{"pid":66069,"ppid":66026,"type":"zygote-forked","start_time":89591,"inner_pid":1},{"pid":66214,"ppid":66026,"type":"zygote-forked","start_time":89625,"inner_pid":1},{"pid":66215,"ppid":66026,"type":"zygote-forked","start_time":89625,"inner_pid":1}]
+[scenario] devtools_switches_in_cmdlines: []
+[scenario] listening_sockets: {"listening":[{"table":"/proc/net/unix","path":"/tmp/org.chromium.Chromium.hus5Pq/SingletonSocket","pid":66020}],"sockets_seen":63,"unreadable_fd_tables":[]}
+[scenario] cdp_pass: true
+[engine] before_close Page(0) id=1
+[scenario] browsers_closed_after_ms: 0.00026
+[scenario] scenario_seconds: 33.173682345
+[scenario] totals: {"gpui_renders":698,"gpui_animation_steps":0,"gpui_images_uploaded":994,"gpui_images_dropped":994,"on_paint_by_page":[994]}

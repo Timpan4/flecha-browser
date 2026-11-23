@@ -1,0 +1,30 @@
+[1623042:1623056:1123/102713.476582:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[1623042:1623056:1123/102713.500716:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[1623042:1623056:1123/102713.500740:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[1623042:1623056:1123/102713.500748:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[2026-11-23T09:27:13Z ERROR gpui_linux::linux::x11::client] Found no xinput mouse pointers.
+MESA-EGL: warning: DRI3 error: Could not get DRI3 device
+MESA-EGL: warning: Ensure your X server supports DRI3 to get accelerated rendering
+[1623042:1623056:1123/102713.698120:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[1623042:1623056:1123/102713.698140:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[1623042:1623042:1123/102713.698485:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.Properties.GetAll: object_path= /org/freedesktop/UPower/devices/DisplayDevice: unknown error type: 
+[scenario] browsers_closed: false
+[scenario] context_initialized_after_ms: 0.00379
+[engine] created Page(0) id=1 runtime_style=Some(RuntimeStyle(CEF_RUNTIME_STYLE_ALLOY))
+[engine] created Page(1) id=2 runtime_style=Some(RuntimeStyle(CEF_RUNTIME_STYLE_ALLOY))
+[scenario] page_load_ms: 13.527216
+[scenario] isolation_after_load: {"forbidden":["/run/user/1000","/run/dbus/system_bus_socket"],"processes":10,"open_files":[],"mapped_files":[],"unix_socket_peers":[],"sockets":67,"sockets_without_peer_info":18,"unreadable":[],"ss_error":null,"clean":true}
+[engine] created DevTools id=3 runtime_style=Some(RuntimeStyle(CEF_RUNTIME_STYLE_CHROME))
+
+(cef-gpui-pump:1623042): atspi-WARNING **: 10:27:46.875: AT-SPI: Error retrieving accessibility bus address: org.freedesktop.DBus.Error.ServiceUnknown: The name org.a11y.Bus was not provided by any .service files
+[engine] before_close DevTools id=3
+[scenario] devtools: {"second_browser":true,"runtime_style":"RuntimeStyle(CEF_RUNTIME_STYLE_CHROME)","show_devtools_call_ms":55.695675,"devtools_created_after_show_ms":55.697265,"close_devtools_after_show_ms":100.671414,"close_late_ms":0.671414,"tree_scan_before_ms":31.093362,"tree_scan_while_open_ms":31.865159999999996,"devtools_closed_after_close_ms":10.831515999999999,"health_before":[{"page":0,"on_paint_in_window":900,"on_paint_per_second":29.967703551157438,"evaluate":2,"evaluate_error":null,"evaluate_ms":8.297134},{"page":1,"on_paint_in_window":901,"on_paint_per_second":30.001000999547614,"evaluate":2,"evaluate_error":null,"evaluate_ms":0.459139}],"health_after":[{"page":0,"on_paint_in_window":901,"on_paint_per_second":30.000026258180586,"evaluate":2,"evaluate_error":null,"evaluate_ms":0.22414},{"page":1,"on_paint_in_window":901,"on_paint_per_second":30.000026258180586,"evaluate":2,"evaluate_error":null,"evaluate_ms":0.140049}],"renderers_before":[{"pid":1623093,"ppid":1623048,"type":"zygote-forked","start_time":658049,"inner_pid":1},{"pid":1623232,"ppid":1623048,"type":"zygote-forked","start_time":658069,"inner_pid":1},{"pid":1623233,"ppid":1623048,"type":"zygote-forked","start_time":658069,"inner_pid":1},{"pid":1623248,"ppid":1623048,"type":"zygote-forked","start_time":658069,"inner_pid":1}],"tree_while_open":[{"pid":1623042,"ppid":1623040,"type":"browser","start_time":658043,"inner_pid":1623042},{"pid":1623045,"ppid":1623042,"type":"zygote","start_time":658044,"inner_pid":1623045},{"pid":1623046,"ppid":1623042,"type":"zygote","start_time":658044,"inner_pid":1},{"pid":1623079,"ppid":1623042,"type":"utility","start_time":658048,"inner_pid":1623079},{"pid":1627489,"ppid":1623042,"type":"other:bwrap","start_time":661387,"inner_pid":1627489},{"pid":1623077,"ppid":1623045,"type":"zygote-forked-unsandboxed","start_time":658048,"inner_pid":1623077},{"pid":1623048,"ppid":1623046,"type":"zygote","start_time":658045,"inner_pid":3},{"pid":1627490,"ppid":1627489,"type":"other:bwrap","start_time":661387,"inner_pid":1},{"pid":1623093,"ppid":1623048,"type":"zygote-forked","start_time":658049,"inner_pid":1},{"pid":1623232,"ppid":1623048,"type":"zygote-forked","start_time":658069,"inner_pid":1},{"pid":1623233,"ppid":1623048,"type":"zygote-forked","start_time":658069,"inner_pid":1},{"pid":1623248,"ppid":1623048,"type":"zygote-forked","start_time":658069,"inner_pid":1},{"pid":1627469,"ppid":1623048,"type":"zygote-forked","start_time":661385,"inner_pid":1},{"pid":1627491,"ppid":1627490,"type":"other:glycin-svg","start_time":661387,"inner_pid":2}],"renderers_after":[{"pid":1623093,"ppid":1623048,"type":"zygote-forked","start_time":658049,"inner_pid":1},{"pid":1623232,"ppid":1623048,"type":"zygote-forked","start_time":658069,"inner_pid":1},{"pid":1623233,"ppid":1623048,"type":"zygote-forked","start_time":658069,"inner_pid":1},{"pid":1627469,"ppid":1623048,"type":"zygote-forked","start_time":661385,"inner_pid":1}],"renderers_before_now_gone":[{"pid":1623248,"ppid":1623048,"type":"zygote-forked","start_time":658069,"inner_pid":1}],"render_process_terminations":[]}
+[scenario] devtools_pass: true
+[scenario] isolation_before_shutdown: {"forbidden":["/run/user/1000","/run/dbus/system_bus_socket"],"processes":10,"open_files":[],"mapped_files":[],"unix_socket_peers":[],"sockets":82,"sockets_without_peer_info":22,"unreadable":[],"ss_error":null,"clean":true}
+[scenario] isolation_clean: true
+[engine] before_close Page(0) id=1
+[engine] before_close Page(1) id=2
+[scenario] browsers_closed_after_ms: 0.0003
+[scenario] browsers_closed: true
+[scenario] scenario_seconds: 66.423253737
+[scenario] totals: {"gpui_renders":1583,"gpui_animation_steps":0,"gpui_images_uploaded":1984,"gpui_images_dropped":1581,"gpui_frames_never_drawn":403,"on_paint_by_page":[1985,1986]}

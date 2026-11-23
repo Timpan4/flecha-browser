@@ -1,0 +1,36 @@
+{
+  "step_timeout_ms": 3000,
+  "scenario_pass": true,
+  "shutdown": {
+    "children_before_shutdown": [
+      {
+        "pid": 1274257,
+        "start_time": 449452
+      },
+      {
+        "pid": 1274258,
+        "start_time": 449452
+      }
+    ]
+  },
+  "children_after_exit": {
+    "timeout_ms": 3000.0,
+    "exited": [],
+    "clean": false,
+    "still_alive_at_timeout": [],
+    "inconclusive": [
+      {
+        "pid": 1274257,
+        "start_time": 449452,
+        "error": "Too many open files (os error 24)"
+      },
+      {
+        "pid": 1274258,
+        "start_time": 449452,
+        "error": "Too many open files (os error 24)"
+      }
+    ]
+  },
+  "shutdown_clean": false,
+  "pass": false
+}
