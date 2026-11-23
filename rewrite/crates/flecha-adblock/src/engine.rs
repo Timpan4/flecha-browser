@@ -41,22 +41,55 @@ pub struct SkippedLine {
     pub error: String,
 }
 
+/// The document that loaded a page, which party and `$domain=` options match against.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Initiator<'a> {
+    /// A tab's top-level page. The shell's rules saw no initiator for it: a first-party option
+    /// and an excluded-only `$domain=~` pass, a third-party option and a listed domain don't.
+    None,
+    /// A frame whose embedder the caller didn't supply. Only page exceptions without party or
+    /// `$domain=` options cover it, so a missing embedder never exempts more.
+    Unknown,
+    /// The embedding document's URL.
+    Url(&'a str),
+}
+
 /// The engine, and the pages the lists exempt from all blocking.
 pub struct Filters {
     engine: Engine,
     /// `@@…$document` exceptions without their `@@`, so they match as `$document` filters.
     page_exception_lines: String,
-    page_exceptions: Engine,
+    /// Every page exception, matched against a known initiator.
+    with_initiator: Engine,
+    /// The page exceptions that hold with no initiator, without their party and `$domain=`
+    /// options.
+    without_initiator: Engine,
+    /// The page exceptions that have no party or `$domain=` option.
+    whatever_initiator: Engine,
 }
 
 impl Filters {
     fn new(engine: Engine, page_exception_lines: String) -> Self {
-        let mut set = FilterSet::new(false);
-        set.add_filter_list(page_exception_lines.clone(), ParseOptions::default());
+        let mut without = String::new();
+        let mut whatever = String::new();
+        for line in page_exception_lines.lines() {
+            let condition = InitiatorCondition::of(line);
+            if condition.passes_without_initiator {
+                without.push_str(&condition.unconditional_line);
+                without.push('\n');
+            }
+            if !condition.limited {
+                whatever.push_str(line);
+                whatever.push('\n');
+            }
+        }
+        let with_initiator = side_engine(page_exception_lines.clone());
         Self {
             engine,
             page_exception_lines,
-            page_exceptions: Engine::new_with_filter_set(set),
+            with_initiator,
+            without_initiator: side_engine(without),
+            whatever_initiator: side_engine(whatever),
         }
     }
 
@@ -68,16 +101,74 @@ impl Filters {
     /// priority-3 `allowAllRequests` rules did. adblock-rust lets any exception match a document
     /// request (uBlock Origin's rule for letting a page load), so the main engine can't answer
     /// this; only filters that name `$document` count.
-    ///
-    /// `initiator_url` is the document that loaded the page: the page itself for a tab's
-    /// top-level page, and the embedding page for a frame. Party and `$domain=` options match
-    /// against it, as the shell's rules matched a frame against its initiator.
-    pub fn exempts_page(&self, page_url: &str, initiator_url: &str) -> bool {
-        Request::new(page_url, initiator_url, "document", "get").is_ok_and(|request| {
-            self.page_exceptions
-                .check_network_request(&request)
-                .should_block()
-        })
+    pub fn exempts_page(&self, page_url: &str, initiator: Initiator<'_>) -> bool {
+        let (engine, source) = match initiator {
+            Initiator::None => (&self.without_initiator, page_url),
+            Initiator::Unknown => (&self.whatever_initiator, page_url),
+            Initiator::Url(url) => (&self.with_initiator, url),
+        };
+        Request::new(page_url, source, "document", "get")
+            .is_ok_and(|request| engine.check_network_request(&request).should_block())
+    }
+}
+
+fn side_engine(lines: String) -> Engine {
+    let mut set = FilterSet::new(false);
+    set.add_filter_list(lines, ParseOptions::default());
+    Engine::new_with_filter_set(set)
+}
+
+/// How a page exception's party and `$domain=` options limit the initiators it holds for, read
+/// from its options as adblock-rust splits them: after the last `$`, on `,`. `$from=` is
+/// adblock-rust's name for `$domain=`.
+struct InitiatorCondition {
+    /// It has a party or `$domain=` option.
+    limited: bool,
+    /// It holds with no initiator, as the shell's rules held for a top-level page: no
+    /// third-party option and no listed (not excluded) domain.
+    passes_without_initiator: bool,
+    /// The line without its party and `$domain=` options.
+    unconditional_line: String,
+}
+
+impl InitiatorCondition {
+    fn of(line: &str) -> Self {
+        let Some((pattern, options)) = line.rsplit_once('$') else {
+            return Self {
+                limited: false,
+                passes_without_initiator: true,
+                unconditional_line: line.to_owned(),
+            };
+        };
+        let mut limited = false;
+        let mut passes = true;
+        let mut kept = Vec::new();
+        for option in options.split(',') {
+            let (negated, name) = option
+                .strip_prefix('~')
+                .map_or((false, option), |name| (true, name));
+            let (key, value) = name.split_once('=').unwrap_or((name, ""));
+            match key {
+                "third-party" | "3p" => {
+                    limited = true;
+                    passes &= negated;
+                }
+                "first-party" | "1p" => {
+                    limited = true;
+                    passes &= !negated;
+                }
+                "domain" | "from" => {
+                    limited = true;
+                    passes &= value.split('|').all(|domain| domain.starts_with('~'));
+                }
+                _ => kept.push(option),
+            }
+        }
+        Self {
+            limited,
+            passes_without_initiator: passes,
+            unconditional_line: format!("{pattern}${}", kept.join(",")),
+        }
     }
 }
 
@@ -336,6 +427,8 @@ mod tests {
             ("$all,document", true),
             ("$doc", true),
             ("$document,~third-party", true),
+            // adblock-rust takes the last `$` as the start of the options.
+            ("/a$b$document", true),
         ];
         for (option, expected) in options {
             let line = format!("@@||page.example^{option}");
@@ -353,5 +446,73 @@ mod tests {
             panic!();
         };
         assert!(!is_page_exception(&filter, line));
+    }
+
+    /// Which page exceptions hold for a tab's page (no initiator) and for a frame with no known
+    /// embedder, and what they become without their party and `$domain=` options.
+    #[test]
+    fn page_exception_conditions_on_the_initiator() {
+        let cases = [
+            (
+                "||a.example^$document",
+                false,
+                true,
+                "||a.example^$document",
+            ),
+            (
+                "||a.example^$document,~third-party",
+                true,
+                true,
+                "||a.example^$document",
+            ),
+            (
+                "||a.example^$document,1p",
+                true,
+                true,
+                "||a.example^$document",
+            ),
+            (
+                "||a.example^$document,third-party",
+                true,
+                false,
+                "||a.example^$document",
+            ),
+            (
+                "||a.example^$document,~first-party",
+                true,
+                false,
+                "||a.example^$document",
+            ),
+            (
+                "||a.example^$document,domain=b.example",
+                true,
+                false,
+                "||a.example^$document",
+            ),
+            (
+                "||a.example^$document,domain=~b.example",
+                true,
+                true,
+                "||a.example^$document",
+            ),
+            (
+                "||a.example^$document,domain=~b.example|c.example",
+                true,
+                false,
+                "||a.example^$document",
+            ),
+            (
+                "||a.example^$from=~b.example,document,important",
+                true,
+                true,
+                "||a.example^$document,important",
+            ),
+        ];
+        for (line, limited, passes, unconditional) in cases {
+            let condition = InitiatorCondition::of(line);
+            assert_eq!(condition.limited, limited, "{line}");
+            assert_eq!(condition.passes_without_initiator, passes, "{line}");
+            assert_eq!(condition.unconditional_line, unconditional, "{line}");
+        }
     }
 }

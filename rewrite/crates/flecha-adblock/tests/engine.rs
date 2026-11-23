@@ -14,6 +14,7 @@ fn request<'a>(url: &'a str, page: &'a str, request_type: RequestType) -> Reques
         url,
         source_url: page,
         top_level_url: page,
+        frame_parent_url: None,
         request_type,
     }
 }
@@ -144,6 +145,7 @@ fn a_document_exception_exempts_the_page_and_frames_it_covers() {
             url,
             source_url: source,
             top_level_url: top,
+            frame_parent_url: None,
             request_type,
         })
     };
@@ -233,6 +235,77 @@ fn a_document_exception_exempts_the_page_and_frames_it_covers() {
     assert!(!ad(own_site, own_site, SubFrame, blocked_frame));
 }
 
+/// Party and `$domain=` options on `$document` exceptions, as the shell's `allowAllRequests`
+/// rules applied them: a tab's page has no initiator, and a frame's initiator is its embedder.
+#[test]
+fn page_exception_options_match_a_frame_against_its_embedder() {
+    let (blocker, _cache) = loaded(true, &[]);
+    let ad = |url, source, parent, top, request_type| {
+        blocker.should_block(&Request {
+            url,
+            source_url: source,
+            top_level_url: top,
+            frame_parent_url: parent,
+            request_type,
+        })
+    };
+    use RequestType::*;
+    let tracker = "https://ads.example/a.js";
+    let news = "https://news.example/";
+    let evil = "https://evil.example/a";
+
+    // `@@||cdn.nested.example^$document,~third-party` and `||cdn.nested.example^$subdocument`.
+    let tab = "https://www.nested.example/";
+    let inner = "https://cdn.nested.example/f";
+    // Embedded by its own site: first-party, exempt with what it loads.
+    assert!(!ad(inner, tab, None, tab, SubFrame));
+    assert!(!ad(tracker, inner, Some(tab), tab, Script));
+    // Nested in a third-party frame on its own site's tab: its embedder is that frame.
+    assert!(ad(inner, evil, Some(tab), tab, SubFrame));
+    assert!(ad(tracker, inner, Some(evil), tab, Script));
+    // No embedder given: a party-limited exception doesn't cover the frame.
+    assert!(ad(tracker, inner, None, tab, Script));
+
+    // `@@||cdn.tpnest.example^$document,third-party`: exempt in a news page, not when its own
+    // site's frame embeds it there.
+    let inner = "https://cdn.tpnest.example/f";
+    assert!(!ad(tracker, inner, Some(news), news, Script));
+    assert!(ad(
+        tracker,
+        inner,
+        Some("https://www.tpnest.example/a"),
+        news,
+        Script
+    ));
+
+    // `@@||cdn.excl.example^$document,domain=~excl.example`: the same, by domain.
+    let inner = "https://cdn.excl.example/f";
+    assert!(!ad(tracker, inner, Some(news), news, Script));
+    assert!(ad(
+        tracker,
+        inner,
+        Some("https://www.excl.example/a"),
+        news,
+        Script
+    ));
+
+    // A tab's page has no initiator: a listed domain never matches it, an excluded one does.
+    let selfdom = "https://selfdom.example/";
+    assert!(ad(tracker, selfdom, None, selfdom, Script));
+    let notother = "https://notother.example/";
+    assert!(!ad(tracker, notother, None, notother, Script));
+    // `@@||topdom.example^$document,domain=frame.example`: a frame.example frame in the page is
+    // not the page's initiator.
+    let topdom = "https://topdom.example/";
+    assert!(ad(
+        tracker,
+        "https://frame.example/x",
+        Some(topdom),
+        topdom,
+        Script
+    ));
+}
+
 #[test]
 fn a_filter_anchored_to_a_host_and_port_matches_as_the_shell_did() {
     let (blocker, _cache) = loaded(true, &[]);
@@ -320,6 +393,7 @@ fn an_allowed_site_covers_its_subdomains_and_every_frame_in_its_pages() {
             url: "https://ads.example/a.js",
             source_url: "https://frames.example/embed",
             top_level_url: page,
+            frame_parent_url: None,
             request_type: RequestType::Script,
         };
         assert!(!blocker.should_block(&ad), "{page}");
@@ -334,6 +408,7 @@ fn an_allowed_site_covers_its_subdomains_and_every_frame_in_its_pages() {
         url: "https://ads.example/a.js",
         source_url: "https://news.example/embed",
         top_level_url: "https://other.example/",
+        frame_parent_url: None,
         request_type: RequestType::Script,
     };
     assert!(blocker.should_block(&framed));

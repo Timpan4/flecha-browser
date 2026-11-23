@@ -14,7 +14,7 @@ use adblock::request::Request as EngineRequest;
 
 use crate::{
     cosmetic::{CosmeticFilters, is_injectable_selector},
-    engine::Filters,
+    engine::{Filters, Initiator},
     sites::SiteAllowList,
 };
 
@@ -70,6 +70,10 @@ pub struct Request<'a> {
     /// The tab's top-level page. The per-site switch matches against it, as the Chromium shell's
     /// main-frame `allowAllRequests` rule covers every frame inside an allowed page.
     pub top_level_url: &'a str,
+    /// The document that embeds the frame at `source_url`, when that frame isn't the tab's page.
+    /// A page exception limited by a party or `$domain=` option matches a frame against its
+    /// embedder. Without it, only page exceptions without such options cover the frame.
+    pub frame_parent_url: Option<&'a str>,
     pub request_type: RequestType,
 }
 
@@ -153,15 +157,17 @@ impl AdBlocker {
             return false;
         }
         // Pages and frames the lists exempt whole, as the shell's `allowAllRequests` rules for
-        // main and sub frames did: the frame itself and everything inside it. A frame is matched
-        // with the page that embeds it as its initiator. `Request` doesn't carry a frame's
-        // parent, so a frame other than the tab's page is taken to be embedded by the tab's page.
+        // main and sub frames did: the frame itself and everything inside it. The tab's page has
+        // no initiator; a frame's initiator is the document that embeds it.
+        let source_initiator = request
+            .frame_parent_url
+            .map_or(Initiator::Unknown, Initiator::Url);
         let frame_exempt = request.request_type == RequestType::SubFrame
-            && filters.exempts_page(request.url, request.source_url);
+            && filters.exempts_page(request.url, Initiator::Url(request.source_url));
         if frame_exempt
-            || filters.exempts_page(request.top_level_url, request.top_level_url)
+            || filters.exempts_page(request.top_level_url, Initiator::None)
             || (request.source_url != request.top_level_url
-                && filters.exempts_page(request.source_url, request.top_level_url))
+                && filters.exempts_page(request.source_url, source_initiator))
         {
             return false;
         }

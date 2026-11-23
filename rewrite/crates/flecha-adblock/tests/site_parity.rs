@@ -94,6 +94,7 @@ fn page_hosts_and_decisions_match_url_hostname_and_blocks_ads_on() {
             url: "https://ads.example/a.js",
             source_url: url,
             top_level_url: url,
+            frame_parent_url: None,
             request_type: RequestType::Script,
         };
         assert_eq!(blocker.should_block(&ad), expected, "{row}");

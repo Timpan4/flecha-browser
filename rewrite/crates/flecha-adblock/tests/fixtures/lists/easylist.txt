@@ -37,3 +37,10 @@ example.com##
 @@||allbut.example^$all,~script
 ||blockedframe.example^$subdocument
 @@||blockedframe.example^$document,~third-party
+@@||cdn.nested.example^$document,~third-party
+||cdn.nested.example^$subdocument
+@@||cdn.tpnest.example^$document,third-party
+@@||cdn.excl.example^$document,domain=~excl.example
+@@||topdom.example^$document,domain=frame.example
+@@||selfdom.example^$document,domain=selfdom.example
+@@||notother.example^$document,domain=~other.example

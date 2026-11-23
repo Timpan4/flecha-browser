@@ -70,6 +70,7 @@ fn main() {
             url: "https://securepubads.g.doubleclick.net/tag/js/gpt.js",
             source_url: "https://news.example/",
             top_level_url: "https://news.example/",
+            frame_parent_url: None,
             request_type: RequestType::Script,
         };
         println!("blocks doubleclick gpt.js: {}", blocker.should_block(&ad));

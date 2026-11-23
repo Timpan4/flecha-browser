@@ -24,6 +24,7 @@ fn ad_blocked(blocker: &AdBlocker, url: &str) -> bool {
         url,
         source_url: "https://news.example/",
         top_level_url: "https://news.example/",
+        frame_parent_url: None,
         request_type: RequestType::Script,
     })
 }
@@ -86,6 +87,7 @@ fn a_cold_start_parses_and_saves_and_the_next_launch_deserializes_without_downlo
         url: "https://ads.example/a.js",
         source_url: "https://trusted.example/",
         top_level_url: "https://trusted.example/",
+        frame_parent_url: None,
         request_type: RequestType::Script,
     };
     assert!(!second.should_block(&on_trusted));
