@@ -31,6 +31,7 @@ enum Command {
     Return,
     Close,
     CloseWindow,
+    OpenWindow { url: String },
     Switch { space: SpaceId },
     NewSpace,
     Isolate,
@@ -65,6 +66,12 @@ impl Command {
             Self::Isolate => Action::Isolate,
             Self::Quit => Action::Quit,
             Self::Snapshot => return snapshot(state),
+            // The model call a page's NEW_WINDOW link makes, without a Shift-click.
+            Self::OpenWindow { url } => {
+                let window = state.model.open_window_page(crate::model::tab_id(), url)?;
+                state.save()?;
+                return Ok(json!({ "window": window }));
+            }
             Self::Capture => {
                 let handle = *state
                     .windows

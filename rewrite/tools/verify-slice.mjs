@@ -636,6 +636,27 @@ async function closeWithPopup(app) {
   assert.equal(closed.liveBrowsers, closed.browsers.length, 'a CEF browser is alive outside the engine');
   pass("the popup window's close button closed its CEF browser");
 
+  after = app.events.length;
+  const { window: extra } = await app.command('open_window', { url: base + '/split' });
+  const opened = (await app.command('snapshot')).core.windows.find(window => window.id === extra);
+  const tab = opened.spaces[opened.activeSpaceId].activeTabId;
+
+  await app.loaded(tab, '/split', after);
+  const shown = await app.command('snapshot');
+
+  engine(shown, tab, 'tab', extra);
+  assert(shown.nativeWindows.includes(extra), 'GPUI did not open the second Flecha window');
+  after = app.events.length;
+  await app.command('close_window', { window: extra });
+  await app.wait("CEF to close the closed window's tab", event => event.type === 'closed' && event.tab === tab, after);
+  const gone = await app.command('snapshot');
+
+  assert(!gone.core.windows.some(window => window.id === extra), 'the closed window is still open');
+  assert.equal(gone.core.closedWindows[0]?.id, extra, 'the closed window cannot be reopened');
+  assert(!gone.nativeWindows.includes(extra), 'GPUI kept the closed window');
+  assert.equal(gone.liveBrowsers, gone.browsers.length, 'a CEF browser is alive outside the engine');
+  pass('closing one of two Flecha windows closed its CEF browsers and kept it with the closed windows, without quitting');
+
   // A page with a beforeunload handler and a user gesture must not hold up the quit.
   const unload = await openTab(app, '/unload');
   await clickElement(app, unload, 'input', ['#147A70', '#FFCC49'], 'unload-gesture');
