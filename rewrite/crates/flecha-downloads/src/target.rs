@@ -277,10 +277,12 @@ fn char_upper_w(unit: u16) -> u16 {
     }
 }
 
-/// `HFSFastUnicodeCompare` on the decomposed form: Apple's TN1150 table drops U+200C to
-/// U+200F, U+202A to U+202E, U+206A to U+206F and U+FEFF, and lower-cases only the BMP. Its
-/// case table is approximated by Unicode's single-character lowercase, which covers its
-/// mappings, so the port may reserve more names than macOS would but never fewer.
+/// `HFSFastUnicodeCompare` on the decomposed form. Its table (`lower_case_table` in
+/// `base/files/file_path.cc`, from Apple's TN1150) drops U+200C to U+200F, U+202A to U+202E,
+/// U+206A to U+206F and U+FEFF, folds the Georgian capitals U+10A0 to U+10C5 onto U+10D0 to
+/// U+10F5, and lower-cases only the BMP. Unicode's single-character lowercase plus that
+/// Georgian rule folds every pair the table folds (checked against all 312 entries) and some
+/// it doesn't, so the port may reserve more names than macOS would but never fewer.
 fn hfs_folded(text: &str) -> impl Iterator<Item = char> + '_ {
     text.nfd()
         .filter(|c| {
@@ -292,6 +294,9 @@ fn hfs_folded(text: &str) -> impl Iterator<Item = char> + '_ {
         .map(|c| {
             if u32::from(c) > 0xFFFF {
                 return c;
+            }
+            if ('\u{10A0}'..='\u{10C5}').contains(&c) {
+                return char::from_u32(u32::from(c) + 0x30).unwrap_or(c);
             }
             let mut lower = c.to_lowercase();
             match (lower.next(), lower.next()) {

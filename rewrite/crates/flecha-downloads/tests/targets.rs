@@ -528,6 +528,12 @@ fn reservations_ignore_case_as_chromium_does_on_each_platform() {
         decided_target("https://example.com/A%CC%88rger.pdf", &list, Platform::Mac),
         saves_to("A\u{308}rger (1).pdf")
     );
+    // Apple's table folds Georgian Asomtavruli onto Mkhedruli, not onto Nuskhuri.
+    in_progress(&mut list, 3, "\u{10A0}.pdf", false);
+    assert_eq!(
+        decided_target("https://example.com/%E1%83%90.pdf", &list, Platform::Mac),
+        saves_to("\u{10D0} (1).pdf")
+    );
 }
 
 #[test]
