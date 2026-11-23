@@ -2,7 +2,7 @@
 
 macro_rules! define_js_whitespace {
     ($($low:literal..=$high:literal),+; $($single:literal),+ $(,)?) => {
-        pub(crate) fn is_js_whitespace(ch: char) -> bool {
+        pub fn is_js_whitespace(ch: char) -> bool {
             matches!(ch, $($low..=$high)|+ $(| $single)+)
         }
 
@@ -10,6 +10,9 @@ macro_rules! define_js_whitespace {
         macro_rules! js_space_chars {
             () => { concat!($($low, "-", $high,)+ $($single),+) };
         }
+
+        /// Contents of a regex character class matching ECMAScript whitespace.
+        pub const JS_SPACE_CHARS: &str = js_space_chars!();
     };
 }
 
@@ -18,7 +21,7 @@ define_js_whitespace!(
     ' ', '\u{00A0}', '\u{1680}', '\u{2028}', '\u{2029}', '\u{202F}', '\u{205F}', '\u{3000}', '\u{FEFF}',
 );
 
-pub(crate) fn trim_input(input: &str) -> &str {
+pub fn trim_input(input: &str) -> &str {
     input.trim_matches(is_js_whitespace)
 }
 

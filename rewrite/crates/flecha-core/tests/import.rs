@@ -84,6 +84,7 @@ fn import_replaces_only_a_pristine_space_and_keeps_a_before_copy() {
     assert_eq!(before.slot(), Slot::BeforeImport);
     let mut state = init.clone();
     assert!(state.open_window(other.clone(), None));
+    assert!(state.has_pristine_import_space());
     let result = state
         .import_spaces(&batch, ImportMode::Merge, &window, 0)
         .unwrap();
@@ -323,6 +324,8 @@ fn archive_import_is_ordered_deduplicated_and_bounded() {
         ..ImportBatch::default()
     };
     batch.archive.push(batch.archive[ARCHIVE_LIMIT].clone());
+    assert_eq!(state.preview_archive_drops(&batch.archive), 1);
+    assert!(state.archive().is_empty());
     let out = state
         .import_spaces(&batch, ImportMode::Merge, &window, 1)
         .unwrap();
