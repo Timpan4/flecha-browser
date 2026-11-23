@@ -195,7 +195,7 @@ Command output: [evidence/runtime-checks.txt](evidence/runtime-checks.txt).
 | /proc: renderer-type processes | seccomp mode 2, `NoNewPrivs` 1, own user, PID and network namespaces | same |
 | /proc: processes without seccomp | browser, network service (`--utility-sub-type=network.mojom.NetworkService`), zygote helpers; Chromium's normal Linux layout | same |
 | Forbidden switches in any process command line (`--remote-debugging-*`, `--enable-automation`, `--headless`, `--no-sandbox` and other sandbox-off switches, `--user-agent`, `--disable-web-security`, `--ignore-certificate-errors`, `--use-mock-keychain`, `--test-type`) | none; process scan complete, no read errors | same |
-| Profile path with `#`, `%20` and a space | the page step loaded `…/pro%23file%20%2520/flecha-selfcheck.html` | same |
+| Profile path with `#`, `%20` and a space | the page step loaded `…/pro%23file%20%2520/flecha-selfcheck.html` (the percent-encoded URL). The report shows it decoded, `…/pro#file %20/flecha-selfcheck.html`, because it contained a home path that redaction replaced | same |
 
 Switches on the browser process (from `chrome://version`, identical in both modes): `--lang=en-US --resources-dir-path=… --locales-dir-path=… --disable-signin-promo-on-avatar-pill-for-testing --disable-features=GlicActorUi,AutofillActorMode,LensOverlay,KillOnInvalidNavigationHeaders --ozone-platform=x11`. CEF adds them itself; the two `-dir-path` switches come from the app's `resources_dir_path` and `locales_dir_path` settings. None of them is visible to pages. Judging only by its name, `--disable-signin-promo-on-avatar-pill-for-testing` hides a sign-in promo on the profile avatar button; I did not check Chromium's source for what else it does.
 
