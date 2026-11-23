@@ -25,8 +25,8 @@ prepare_source() {
     return 1
   fi
   if [[ $name == zed ]]; then
-    # Prevent rustup from selecting Zed's toolchain in the staged tree.
-    rm -f -- "$tree/rust-toolchain.toml" "$tree/rust-toolchain"
+    # rustup uses the nearest toolchain file above the working directory, and Zed has nested ones.
+    find "$tree" \( -name rust-toolchain -o -name rust-toolchain.toml \) ! -type d -delete
   fi
   if [[ $tree != "$destination" ]]; then
     mv "$tree" "$destination"

@@ -74,17 +74,16 @@ jobs:
         shell: bash
         run: |
           check_zed_toolchain_absent() {
-            local file
-            for file in target/spike1-src/zed/rust-toolchain{,.toml}; do
-              if [[ -e $file || -L $file ]]; then
-                printf 'Unexpected staged Zed toolchain file: %s\n' "$file" >&2
-                return 1
-              fi
-            done
+            local found
+            found=$(find target/spike1-src/zed \( -name rust-toolchain -o -name rust-toolchain.toml \))
+            if [[ -n $found ]]; then
+              printf 'Unexpected staged Zed toolchain file:\n%s\n' "$found" >&2
+              return 1
+            fi
           }
           bash spikes/gpui-cef-compositor/prepare.sh --sources-only
           check_zed_toolchain_absent
-          touch target/spike1-src/zed/rust-toolchain{,.toml}
+          touch target/spike1-src/zed/rust-toolchain{,.toml} target/spike1-src/zed/crates/rust-toolchain.toml
           bash spikes/gpui-cef-compositor/prepare.sh --sources-only
           check_zed_toolchain_absent
           time cargo +stable metadata --locked --format-version 1 > /dev/null
