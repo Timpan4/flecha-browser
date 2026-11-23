@@ -1,0 +1,30 @@
+[389113:389127:1123/130628.818192:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[389113:389127:1123/130628.840391:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[389113:389127:1123/130628.840420:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[389113:389127:1123/130628.840432:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[2026-11-23T12:06:28Z ERROR gpui_linux::linux::x11::client] Found no xinput mouse pointers.
+MESA-EGL: warning: DRI3 error: Could not get DRI3 device
+MESA-EGL: warning: Ensure your X server supports DRI3 to get accelerated rendering
+[scenario] browsers_closed: false
+[scenario] context_initialized_after_ms: 0.00367
+[engine] created Page(0) id=1 runtime_style=Some(RuntimeStyle(CEF_RUNTIME_STYLE_ALLOY))
+[engine] created Page(1) id=2 runtime_style=Some(RuntimeStyle(CEF_RUNTIME_STYLE_ALLOY))
+[389113:389127:1123/130629.248336:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[389113:389127:1123/130629.248356:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[389113:389113:1123/130629.248983:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.Properties.GetAll: object_path= /org/freedesktop/UPower/devices/DisplayDevice: unknown error type: 
+[scenario] page_load_ms: 29.285394
+[scenario] isolation_after_load: {"forbidden":["/run/user/1000","/run/dbus/system_bus_socket","/home/timpan4"],"allowed":["/home/timpan4/.t3/worktrees/flecha-browser/t3-3b42251b-74c4a1e059834541/rewrite/target/release/cef-gpui-pump-bundle/cef_binary_158.0.3+g8c29be2+chromium-158.0.8127.18_linux64_beta_minimal","/home/timpan4/.t3/worktrees/flecha-browser/t3-3b42251b-74c4a1e059834541/rewrite/spikes/cef-gpui-pump/pages","/home/timpan4/.t3/worktrees/flecha-browser/t3-3b42251b-74c4a1e059834541/rewrite/spikes/cef-gpui-pump/results/2026-11-23-r5"],"processes":10,"open_files":[],"mapped_files":[],"unix_socket_peers":[],"sockets":69,"sockets_without_peer_info":17,"unreadable":[],"ss_error":null,"clean":true}
+[engine] created DevTools id=3 runtime_style=Some(RuntimeStyle(CEF_RUNTIME_STYLE_CHROME))
+[engine] before_close DevTools id=3
+[scenario] devtools: {"second_browser":true,"runtime_style":"RuntimeStyle(CEF_RUNTIME_STYLE_CHROME)","show_devtools_call_ms":38.414938,"devtools_created_after_show_ms":38.416828,"close_devtools_after_show_ms":38.421008,"close_late_ms":38.421008,"tree_scan_before_ms":20.674785,"tree_scan_while_open_ms":0.000059999999999999995,"devtools_closed_after_close_ms":13.223475,"health_before":[{"page":0,"on_paint_in_window":901,"on_paint_per_second":30.008922279417106,"evaluate":2,"evaluate_error":null,"evaluate_ms":0.601398},{"page":1,"on_paint_in_window":901,"on_paint_per_second":30.008922279417106,"evaluate":2,"evaluate_error":null,"evaluate_ms":0.31679}],"health_after":[{"page":0,"on_paint_in_window":901,"on_paint_per_second":30.0102557067837,"evaluate":2,"evaluate_error":null,"evaluate_ms":7.188661},{"page":1,"on_paint_in_window":901,"on_paint_per_second":30.0102557067837,"evaluate":2,"evaluate_error":null,"evaluate_ms":0.147159}],"renderers_before":[{"pid":389163,"ppid":389119,"type":"zygote-forked","start_time":870947,"inner_pid":1},{"pid":389299,"ppid":389119,"type":"zygote-forked","start_time":870983,"inner_pid":1},{"pid":389300,"ppid":389119,"type":"zygote-forked","start_time":870983,"inner_pid":1},{"pid":389315,"ppid":389119,"type":"zygote-forked","start_time":870983,"inner_pid":1}],"tree_while_open":null,"renderers_after":[{"pid":389163,"ppid":389119,"type":"zygote-forked","start_time":870947,"inner_pid":1},{"pid":389299,"ppid":389119,"type":"zygote-forked","start_time":870983,"inner_pid":1},{"pid":389300,"ppid":389119,"type":"zygote-forked","start_time":870983,"inner_pid":1},{"pid":390290,"ppid":389119,"type":"zygote-forked","start_time":874296,"inner_pid":1}],"renderers_before_now_gone":[{"pid":389315,"ppid":389119,"type":"zygote-forked","start_time":870983,"inner_pid":1}],"render_process_terminations":[]}
+[scenario] devtools_pass: true
+[scenario] pump_trace: {"seconds":66.192820869,"max_gap_between_calls_ms":67.080461,"max_gap_bound_ms":20000.0,"pump_timers_created":2629,"pump_timers_per_second":39.71729812214781,"bridge_timers_created":2,"analysis":{"requests":10984,"calls":11280,"unexplained_calls":0,"unexplained_examples":[],"gap_between_calls_ms":{"min":0.00408,"p50":0.06084,"p99":35.503136,"max":67.080461},"work_duration_ms":{"p50":0.010180000000000002,"p99":0.1021,"max":10.002745,"total":424.83313899999985,"slowest":[10.002745,10.002723,10.002673999999999,10.002502,10.002464000000002]}}}
+[scenario] pump_pass: true
+[scenario] isolation_before_shutdown: {"forbidden":["/run/user/1000","/run/dbus/system_bus_socket","/home/timpan4"],"allowed":["/home/timpan4/.t3/worktrees/flecha-browser/t3-3b42251b-74c4a1e059834541/rewrite/target/release/cef-gpui-pump-bundle/cef_binary_158.0.3+g8c29be2+chromium-158.0.8127.18_linux64_beta_minimal","/home/timpan4/.t3/worktrees/flecha-browser/t3-3b42251b-74c4a1e059834541/rewrite/spikes/cef-gpui-pump/pages","/home/timpan4/.t3/worktrees/flecha-browser/t3-3b42251b-74c4a1e059834541/rewrite/spikes/cef-gpui-pump/results/2026-11-23-r5"],"processes":10,"open_files":[],"mapped_files":[],"unix_socket_peers":[],"sockets":78,"sockets_without_peer_info":19,"unreadable":[],"ss_error":null,"clean":true}
+[scenario] isolation_clean: true
+[engine] before_close Page(0) id=1
+[engine] before_close Page(1) id=2
+[scenario] browsers_closed_after_ms: 0.00021
+[scenario] browsers_closed: true
+[scenario] scenario_seconds: 66.299040199
+[scenario] totals: {"gpui_renders":1581,"gpui_animation_steps":0,"gpui_images_uploaded":1984,"gpui_images_dropped":1580,"gpui_frames_never_drawn":404,"on_paint_by_page":[1985,1985]}

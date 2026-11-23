@@ -1,0 +1,5 @@
+shim 873230 waiting, process group 873155 (its own group would be 873230)
+runner exit 143
+shim alive after the runner: no
+processes of the run that started: none
+the runner stopped the launch before its process group existed

@@ -1,0 +1,42 @@
+bundle /home/timpan4/.t3/worktrees/flecha-browser/t3-3b42251b-74c4a1e059834541/rewrite/target/release/cef-gpui-pump-bundle/cef_binary_158.0.3+g8c29be2+chromium-158.0.8127.18_linux64_beta_minimal (CEF from /home/timpan4/.t3/worktrees/flecha-browser/t3-3b42251b-74c4a1e059834541/rewrite/target/spike1-src/cef-runtime/cef_binary_158.0.3+g8c29be2+chromium-158.0.8127.18_linux64_beta_minimal/cef_linux_x86_64)
+bus listener ok: second bus used its own socket; /tmp/cef-gpui-pump-bus-check.zHgt7N/dbus-FkH8FOwlkM unchanged and answering
+Xvfb pid 106535 on :1
+== idle
+   exit=0 scenario_pass=true isolation_clean=true shutdown_clean=true pass=true
+== animate
+   exit=0 scenario_pass=true isolation_clean=true shutdown_clean=true pass=true
+== animate-unthrottled
+   exit=0 scenario_pass=true isolation_clean=true shutdown_clean=true pass=true
+== cdp
+   exit=0 scenario_pass=true isolation_clean=true shutdown_clean=true pass=true
+== devtools-0ms-1
+   exit=0 scenario_pass=true isolation_clean=true shutdown_clean=true pass=true
+== devtools-0ms-2
+   exit=0 scenario_pass=true isolation_clean=true shutdown_clean=true pass=true
+== devtools-0ms-3
+   exit=0 scenario_pass=true isolation_clean=true shutdown_clean=true pass=true
+== devtools-0ms-4
+   exit=0 scenario_pass=true isolation_clean=true shutdown_clean=true pass=true
+== devtools-0ms-5
+   exit=0 scenario_pass=true isolation_clean=true shutdown_clean=true pass=true
+== devtools-100ms-1
+   exit=0 scenario_pass=true isolation_clean=true shutdown_clean=true pass=true
+== devtools-100ms-2
+   exit=0 scenario_pass=true isolation_clean=true shutdown_clean=true pass=true
+== devtools-100ms-3
+   exit=0 scenario_pass=true isolation_clean=true shutdown_clean=true pass=true
+== devtools-100ms-4
+   exit=0 scenario_pass=true isolation_clean=true shutdown_clean=true pass=true
+== devtools-100ms-5
+   exit=0 scenario_pass=true isolation_clean=true shutdown_clean=true pass=true
+== devtools-2000ms-1
+   exit=0 scenario_pass=true isolation_clean=true shutdown_clean=true pass=true
+== devtools-2000ms-2
+   exit=0 scenario_pass=true isolation_clean=true shutdown_clean=true pass=true
+== devtools-2000ms-3
+   exit=0 scenario_pass=true isolation_clean=true shutdown_clean=true pass=true
+== devtools-2000ms-4
+   exit=0 scenario_pass=true isolation_clean=true shutdown_clean=true pass=true
+== devtools-2000ms-5
+   exit=0 scenario_pass=true isolation_clean=true shutdown_clean=true pass=true
+all runs passed

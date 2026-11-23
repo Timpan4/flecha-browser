@@ -1,0 +1,47 @@
+diff --git a/rewrite/spikes/cef-gpui-pump/src/bridge.rs b/rewrite/spikes/cef-gpui-pump/src/bridge.rs
+index 252acd1..b8a5a5d 100644
+--- a/rewrite/spikes/cef-gpui-pump/src/bridge.rs
++++ b/rewrite/spikes/cef-gpui-pump/src/bridge.rs
+@@ -50,6 +50,7 @@ pub struct Bridge {
+     tabs: RefCell<Vec<Tab>>,
+     timeout: Duration,
+     _sweeper: Task<()>,
++    executor: BackgroundExecutor,
+ }
+ 
+ wrap_dev_tools_message_observer! {
+@@ -137,6 +138,7 @@ impl Bridge {
+         let wake: Wake = Default::default();
+         let timers: StdRc<Cell<u64>> = Default::default();
+         let executor = cx.background_executor().clone();
++        let per_call = executor.clone();
+         let sweeper = cx.spawn({
+             let (pending, wake, timers) = (pending.clone(), wake.clone(), timers.clone());
+             async move |_| sweep(pending, wake, timers, executor).await
+@@ -150,6 +152,7 @@ impl Bridge {
+             tabs: Default::default(),
+             timeout,
+             _sweeper: sweeper,
++            executor: per_call,
+         }
+     }
+ 
+@@ -212,7 +215,17 @@ impl Bridge {
+             self.pending.borrow_mut().remove(&id);
+             bail!("SendDevToolsMessage rejected {method}");
+         }
+-        match rx.await {
++        // NEGATIVE CONTROL: the old per-call GPUI timer.
++        let mut timer = futures::FutureExt::fuse(self.executor.timer(self.timeout));
++        let mut rx = futures::FutureExt::fuse(rx);
++        let outcome = futures::select_biased! {
++            outcome = rx => outcome,
++            _ = timer => {
++                self.pending.borrow_mut().remove(&id);
++                Ok(Err(Failure::Timeout))
++            }
++        };
++        match outcome {
+             Ok(Ok(result)) => Ok(result),
+             Ok(Err(Failure::Protocol(error))) => Err(anyhow!("{method} failed: {error}")),
+             Ok(Err(Failure::Timeout)) => {

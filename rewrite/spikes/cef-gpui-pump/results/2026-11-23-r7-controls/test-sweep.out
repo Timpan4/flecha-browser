@@ -1,0 +1,26 @@
+== 1. ps fails on the first pass
+   ps shim: failing call 1
+   sweep incomplete: the inventory failed
+   returned 3
+== 2. ps fails on a retry
+   sweep: environ unreadable, not checked for the marker: [1037, 1039, 4045, 4089]
+    842686  842686 S<s  sleep 600
+   sweep: environ unreadable, not checked for the marker: [1037, 1039, 4045, 4089]
+   ps shim: failing call 2
+   sweep incomplete: the inventory failed
+   returned 3 after the retry; 842686 was killed on the first pass
+== 3. the marker sweep fails
+   sweep: environ unreadable, not checked for the marker: [1037, 1039, 4045, 4089]
+   842731 842731 S sleep 600
+   sweep incomplete: the marker sweep failed
+   returned 3
+== 4. stop_run with a runtime dir and no group or launcher
+   sweep: environ unreadable, not checked for the marker: [1037, 1039, 4045, 4089]
+   842731 842731 S sleep 600
+   sweep: environ unreadable, not checked for the marker: [1037, 1039, 4045, 4089]
+   sweep: killed 842731
+   sweep: environ unreadable, not checked for the marker: [1037, 1039, 4045, 4089]
+   842731 listed and killed by the marker sweep
+all sweep cases passed
+sweep: environ unreadable, not checked for the marker: [1037, 1039, 4045, 4089]
+exit 0

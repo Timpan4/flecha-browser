@@ -1,0 +1,31 @@
+--- a/rewrite/spikes/cef-gpui-pump/src/bridge.rs
++++ b/rewrite/spikes/cef-gpui-pump/src/bridge.rs
+@@ -68,6 +68,7 @@
+     tabs: RefCell<Vec<Tab>>,
+     timeout: Duration,
+     _sweeper: Task<()>,
++    exec: gpui::BackgroundExecutor,
+ }
+ 
+ wrap_dev_tools_message_observer! {
+@@ -161,6 +162,7 @@
+             tabs: Default::default(),
+             timeout,
+             _sweeper: sweeper,
++            exec: cx.background_executor().clone(),
+         }
+     }
+ 
+@@ -224,7 +226,11 @@
+             self.pending.borrow_mut().remove(&id);
+             bail!("SendDevToolsMessage rejected {method}");
+         }
+-        match rx.await {
++        // MUTANT C: a per-call timeout through GPUI's public FutureExt::with_timeout.
++        let reply = gpui::FutureExt::with_timeout(rx, self.timeout, &self.exec)
++            .await
++            .unwrap_or(Ok(Err(Failure::Timeout)));
++        match reply {
+             Ok(Ok(result)) => Ok(result),
+             Ok(Err(Failure::Protocol(error))) => Err(anyhow!("{method} failed: {error}")),
+             Ok(Err(Failure::Timeout)) => Err(CallTimeout {

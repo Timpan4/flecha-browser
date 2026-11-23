@@ -1,0 +1,18 @@
+[2026-11-23T08:11:10Z ERROR gpui_linux::linux::x11::client] Found no xinput mouse pointers.
+MESA-EGL: warning: DRI3 error: Could not get DRI3 device
+MESA-EGL: warning: Ensure your X server supports DRI3 to get accelerated rendering
+[scenario] context_initialized_after_ms: 0.00824
+[engine] created Page(0) id=1 runtime_style=Some(RuntimeStyle(CEF_RUNTIME_STYLE_ALLOY))
+[scenario] page_load_ms: 87.740841
+[scenario] cdp_list_tabs: [{"tab":1,"host_url":"file:///home/timpan4/.t3/worktrees/flecha-browser/t3-3b42251b-74c4a1e059834541/rewrite/spikes/cef-gpui-pump/pages/anim.html","target_info":{"targetId":"479C30D81F520C2D86B48068A0F0168D","type":"page","title":"anim","url":"file:///home/timpan4/.t3/worktrees/flecha-browser/t3-3b42251b-74c4a1e059834541/rewrite/spikes/cef-gpui-pump/pages/anim.html","attached":true,"canAccessOpener":false,"browserContextId":"2890101A31BEF2ECA55DEFFC02074C76"},"error":null}]
+[scenario] cdp_evaluate_loop: {"calls":58080,"seconds":5.120108852,"webdriver_true_replies":58080,"errors":["navigator.webdriver = true","navigator.webdriver = true","navigator.webdriver = true","navigator.webdriver = true","navigator.webdriver = true","navigator.webdriver = true","navigator.webdriver = true","navigator.webdriver = true","navigator.webdriver = true","navigator.webdriver = true"],"page_webdriver_samples_during_calls":153,"page_webdriver_true_total":244,"page_before":{"raf":91,"css_time":2999.955000000086,"webdriver_samples":91,"webdriver_true":91,"webdriver_now":true},"page_after":{"raf":244,"css_time":8099.855000000087,"webdriver_samples":244,"webdriver_true":244,"webdriver_now":true}}
+[scenario] cdp_screenshot: {"path":"/home/timpan4/.t3/worktrees/flecha-browser/t3-3b42251b-74c4a1e059834541/rewrite/spikes/cef-gpui-pump/results/2026-11-23/cdp-enable-automation/cdp.png","bytes":4841,"png_signature":true,"size":[1024,640],"took_ms":94.292399}
+[scenario] cdp_events_received: 0
+[scenario] process_tree: [{"pid":161562,"ppid":161560,"type":"browser","start_time":201657,"inner_pid":161562},{"pid":161627,"ppid":161562,"type":"zygote","start_time":201693,"inner_pid":161627},{"pid":161628,"ppid":161562,"type":"zygote","start_time":201693,"inner_pid":1},{"pid":161688,"ppid":161562,"type":"utility","start_time":201708,"inner_pid":161688},{"pid":161686,"ppid":161627,"type":"zygote-forked-unsandboxed","start_time":201707,"inner_pid":161686},{"pid":161646,"ppid":161628,"type":"zygote","start_time":201700,"inner_pid":3},{"pid":161739,"ppid":161646,"type":"zygote-forked","start_time":201710,"inner_pid":1},{"pid":161898,"ppid":161646,"type":"zygote-forked","start_time":201737,"inner_pid":1},{"pid":161899,"ppid":161646,"type":"zygote-forked","start_time":201737,"inner_pid":1},{"pid":161936,"ppid":161646,"type":"zygote-forked","start_time":201746,"inner_pid":1}]
+[scenario] devtools_switches_in_cmdlines: [{"pid":161562,"type":"browser","arg":"--pump-out=/home/timpan4/.t3/worktrees/flecha-browser/t3-3b42251b-74c4a1e059834541/rewrite/spikes/cef-gpui-pump/results/2026-11-23/cdp-enable-automation/cdp.json"},{"pid":161562,"type":"browser","arg":"--enable-automation"}]
+[scenario] listening_sockets: {"listening":[{"table":"/proc/net/unix","path":"/tmp/org.chromium.Chromium.luOG6m/SingletonSocket","pid":161562}],"sockets_seen":70,"unreadable_fd_tables":[]}
+[scenario] cdp_pass: false
+[engine] before_close Page(0) id=1
+[scenario] browsers_closed_after_ms: 0.00039000000000000005
+[scenario] scenario_seconds: 8.252968203
+[scenario] totals: {"gpui_renders":172,"gpui_animation_steps":0,"gpui_images_uploaded":244,"gpui_images_dropped":244,"on_paint_by_page":[244]}

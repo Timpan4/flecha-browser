@@ -1,0 +1,11 @@
+--- a/rewrite/spikes/cef-gpui-pump/scripts/run-checks.sh
++++ b/rewrite/spikes/cef-gpui-pump/scripts/run-checks.sh
+@@ -136,7 +136,7 @@
+         --pump-url="$url" --pump-out="$out" --pump-cache-dir="$cache" \
+         --pump-warmup-ms="$WARMUP_MS" --pump-measure-ms="$MEASURE_MS" \
+         --pump-step-timeout-ms="$STEP_TIMEOUT_MS" \
+-        --pump-forbid-paths="$desktop_runtime:$system_bus_socket:$real_home" \
++        --pump-forbid-paths="$desktop_runtime:$system_bus_socket:$real_home:$home" \
+         --pump-allow-paths="$allowed" \
+         ${EXTRA_ARGS:-} "$@" >/dev/null 2>"$results/$name.stderr" || status=$?
+     # What landed in the scratch dirs would otherwise have gone to the desktop

@@ -1,0 +1,10 @@
+bundle /home/timpan4/.t3/worktrees/flecha-browser/t3-3b42251b-74c4a1e059834541/rewrite/target/release/cef-gpui-pump-bundle/cef_binary_158.0.3+g8c29be2+chromium-158.0.8127.18_linux64_beta_minimal (CEF from /home/timpan4/.t3/worktrees/flecha-browser/t3-3b42251b-74c4a1e059834541/rewrite/target/spike1-src/cef-runtime/cef_binary_158.0.3+g8c29be2+chromium-158.0.8127.18_linux64_beta_minimal/cef_linux_x86_64)
+bus listener ok: second bus used its own socket; /tmp/cef-gpui-pump-bus-check.lwDIpl/dbus-MNhAK5ZuJf unchanged and answering
+Xvfb pid 861086 on :1
+== idle (watchdog 38.000 s)
+sweep: environ unreadable, not checked for the marker: [1037, 1039, 4045, 4089]
+sweep: environ unreadable, not checked for the marker: [1037, 1039, 4045, 4089]
+sweep: environ unreadable, not checked for the marker: [1037, 1039, 4045, 4089]
+watchdog expired after 38.000 s (exit 124); killed process group 861098
+   exit=124, killed by the watchdog
+1 run(s) failed

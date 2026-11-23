@@ -1,0 +1,25 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>anim</title>
+<style>
+  body { margin: 0; background: #12202c; color: #fff; font: 32px monospace; }
+  #box { position: absolute; top: 120px; left: 0; width: 80px; height: 80px; background: #e8a33d;
+         animation: slide 2s linear infinite alternate; }
+  @keyframes slide { from { transform: translateX(0); } to { transform: translateX(900px); } }
+</style>
+<p id="counter" style="padding:24px">0</p>
+<div id="box"></div>
+<script>
+  // Page-side frame counter and a navigator.webdriver sample on every animation frame.
+  window.__raf = 0;
+  window.__wd = { samples: 0, trues: 0 };
+  const counter = document.getElementById('counter');
+  function frame() {
+    window.__raf++;
+    window.__wd.samples++;
+    if (navigator.webdriver !== false) window.__wd.trues++;
+    counter.textContent = window.__raf;
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+</script>

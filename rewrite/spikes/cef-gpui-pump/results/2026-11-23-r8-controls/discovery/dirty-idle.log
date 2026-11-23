@@ -1,0 +1,7 @@
+bundle /tmp/cef-gpui-pump-discovery.bip923/rewrite/target/release/cef-gpui-pump-bundle/cef_binary_158.0.3+g8c29be2+chromium-158.0.8127.18_linux64_beta_minimal (CEF from /tmp/cef-gpui-pump-discovery.bip923/rewrite/target/spike1-src/cef-runtime/cef_binary_158.0.3+g8c29be2+chromium-158.0.8127.18_linux64_beta_minimal/cef_linux_x86_64)
+bus listener ok: second bus used its own socket; /tmp/cef-gpui-pump-bus-check.QGt2Mj/dbus-PWcB6mtF5l unchanged and answering
+Xvfb pid 1337098 on :2
+== idle (watchdog 38.000 s)
+   exit=2 scenario_pass=false pump_pass=true isolation_clean=false shutdown_clean=false pass=false
+sweep: environ unreadable, not checked for the marker: [1037, 1039, 4045, 4089]
+1 run(s) failed
