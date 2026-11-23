@@ -48,7 +48,7 @@ Google sign-in is why Flecha left Electron. If it fails in Alloy OSR, the rewrit
 - Pin the exact CEF version string and SHA-1 in the repo, together with the cef-rs revision.
 - When a new beta appears before cef-rs publishes bindings, regenerate them with cef-rs's own update tooling on a Flecha-owned branch of cef-rs. The update lands only after the Phase 0 sign-in and compositor checks pass on the new build.
 - Do not move to a beta until CEF publishes it in the index. Never track CEF master.
-- Known gap: CEF published 158.0.3 (commit `g8c29be2`) to both channels as separate archives. cef-rs's build script picks the first index entry for the version, which is the stable archive. Until Flecha's own fetch step downloads the beta archive, checks its SHA-1 from `pins.toml` and sets `CEF_PATH`, builds use the stable archive of the same commit. Phase 1 adds that fetch step.
+- CEF published 158.0.3 (commit `g8c29be2`) to both channels as separate archives. Upstream cef-rs selects the first index entry, which is the stable archive. Spike 1's `prepare.sh` fetches the beta archive and verifies the SHA-1 in `pins.toml`. Its build and launcher require the verified archive metadata.
 
 ## Phase 0: go/no-go spikes
 
