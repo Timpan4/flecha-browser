@@ -90,6 +90,21 @@ jobs:
           cargo +stable clippy -p flecha-core --all-targets -- -D warnings
           cargo +stable test -p flecha-core --all-targets
           cargo +stable test -p flecha-core --doc
+      - name: Check the ad-block crate in isolation
+        shell: bash
+        run: |
+          adblock_rewrite="$RUNNER_TEMP/flecha-adblock-ci/rewrite"
+          mkdir -p "$adblock_rewrite/crates"
+          cp -R crates/flecha-core crates/flecha-adblock "$adblock_rewrite/crates/"
+          cp Cargo.lock "$adblock_rewrite/"
+          printf '[workspace]\nresolver = "3"\nmembers = ["crates/flecha-adblock", "crates/flecha-core"]\n' > "$adblock_rewrite/Cargo.toml"
+          cd "$adblock_rewrite"
+          # Resolving the product workspace would fetch Spike 1's Git dependencies.
+          cargo +stable metadata --format-version 1 > metadata.json
+          jq -e '[.packages[].source | select(. != null and startswith("git+"))] | length == 0' metadata.json
+          cargo +stable fmt --check -p flecha-adblock
+          cargo +stable clippy -p flecha-adblock --all-targets -- -D warnings
+          cargo +stable test -p flecha-adblock --all-targets
 
   release-scripts:
     name: Release tooling (${{ matrix.os }})

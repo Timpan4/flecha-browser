@@ -1,0 +1,27 @@
+[Adblock Plus 2.0]
+! Title: EasyList
+! A small stand-in for EasyList, for flecha-adblock's tests.
+||ads.example^
+||third.example^$third-party
+/banner/*$image
+||onlyon.example^$domain=news.example
+@@||ads.example/allowed/*
+||whole.example^$document
+/^https:\/\/regex\.example\/ad[0-9]+\.js/$script
+||frames.example^$subdocument
+##.ad-banner
+##[data-ad="1"]
+##div.sponsored > span
+##:is(.unclosed
+##.exempted-everywhere
+example.org#@#.exempted-everywhere
+site.example##.site-only
+site.example#@#.ad-banner
+@@||exempt.example^$generichide
+@@||elemhide.example^$elemhide
+||bad-option.example^$no-such-option
+example.com##
+||ok-after-bad.example^
+||stub.example^$redirect=noopjs,script
+||stub-rule.example^$redirect-rule=noopjs
+||rewritten.example^$rewrite=abp-resource:blank-js

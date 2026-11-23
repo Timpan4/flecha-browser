@@ -1,0 +1,21 @@
+[package]
+name = "flecha-adblock"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+adblock = { version = "0.13.6", default-features = false, features = ["embedded-domain-resolver", "full-regex-handling"] }
+base64 = "0.23"
+brotli-decompressor = "6"
+flate2 = "1"
+flecha-core = { path = "../flecha-core" }
+md-5 = "0.10"
+sha2 = "0.10"
+ureq = { version = "3.5.2", default-features = false, features = ["rustls"] }
+url = "2"
+
+[dev-dependencies]
+serde_json = "1"
+tempfile = "3"

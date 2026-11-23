@@ -1,0 +1,405 @@
+//! Blocking and element hiding with the fixture lists, through the API the CEF hook calls.
+
+mod common;
+
+use std::collections::HashSet;
+
+use common::{EASYLIST, EASYPRIVACY, loaded, serve, update};
+use flecha_adblock::{AdBlocker, EngineOutcome, Request, RequestType};
+
+const PAGE: &str = "https://news.example/story";
+
+fn request<'a>(url: &'a str, page: &'a str, request_type: RequestType) -> Request<'a> {
+    Request {
+        url,
+        source_url: page,
+        top_level_url: page,
+        request_type,
+    }
+}
+
+fn blocks(blocker: &AdBlocker, url: &str, page: &str, request_type: RequestType) -> bool {
+    blocker.should_block(&request(url, page, request_type))
+}
+
+#[test]
+fn network_filters_from_both_lists_block_and_exceptions_win() {
+    let (blocker, _cache) = loaded(true, &[]);
+    use RequestType::*;
+    assert!(blocks(&blocker, "https://ads.example/a.js", PAGE, Script));
+    assert!(blocks(
+        &blocker,
+        "https://sub.ads.example/a.png",
+        PAGE,
+        Image
+    ));
+    assert!(!blocks(
+        &blocker,
+        "https://ads.example/allowed/a.js",
+        PAGE,
+        Script
+    ));
+    assert!(blocks(
+        &blocker,
+        "https://metrics.example/collect",
+        PAGE,
+        XmlHttpRequest
+    ));
+    assert!(!blocks(
+        &blocker,
+        "https://metrics.example/ok.js",
+        PAGE,
+        Script
+    ));
+    assert!(blocks(
+        &blocker,
+        "https://cdn.example/pixel.gif?id=1",
+        PAGE,
+        Image
+    ));
+    assert!(!blocks(
+        &blocker,
+        "https://cdn.example/story.js",
+        PAGE,
+        Script
+    ));
+    // Options: resource type, third-party, domain=.
+    assert!(blocks(
+        &blocker,
+        "https://cdn.example/banner/x.png",
+        PAGE,
+        Image
+    ));
+    assert!(!blocks(
+        &blocker,
+        "https://cdn.example/banner/x.js",
+        PAGE,
+        Script
+    ));
+    assert!(blocks(&blocker, "https://third.example/t.js", PAGE, Script));
+    assert!(!blocks(
+        &blocker,
+        "https://third.example/t.js",
+        "https://www.third.example/",
+        Script
+    ));
+    assert!(blocks(
+        &blocker,
+        "https://onlyon.example/x.js",
+        PAGE,
+        Script
+    ));
+    assert!(!blocks(
+        &blocker,
+        "https://onlyon.example/x.js",
+        "https://other.example/",
+        Script
+    ));
+    assert!(blocks(&blocker, "https://frames.example/", PAGE, SubFrame));
+    assert!(!blocks(&blocker, "https://frames.example/", PAGE, Script));
+}
+
+#[test]
+fn regular_expression_filters_apply_unlike_the_chromium_shell() {
+    // build-adblock.mjs left regular expressions out (declarativeNetRequest caps them).
+    let (blocker, _cache) = loaded(true, &[]);
+    assert!(blocks(
+        &blocker,
+        "https://regex.example/ad42.js",
+        PAGE,
+        RequestType::Script
+    ));
+    assert!(!blocks(
+        &blocker,
+        "https://regex.example/adx.js",
+        PAGE,
+        RequestType::Script
+    ));
+}
+
+#[test]
+fn a_page_itself_is_never_blocked() {
+    let (blocker, _cache) = loaded(true, &[]);
+    for url in [
+        "https://whole.example/",
+        "https://ads.example/",
+        "https://metrics.example/",
+    ] {
+        assert!(!blocks(&blocker, url, url, RequestType::MainFrame), "{url}");
+    }
+    // `$document` doesn't reach a page's own subresources either.
+    assert!(!blocks(
+        &blocker,
+        "https://whole.example/app.js",
+        PAGE,
+        RequestType::Script
+    ));
+}
+
+#[test]
+fn nothing_is_blocked_or_hidden_before_the_first_engine() {
+    let (blocker, _) = AdBlocker::new(true, &[]);
+    assert!(!blocker.has_engine());
+    assert!(!blocks(
+        &blocker,
+        "https://ads.example/a.js",
+        PAGE,
+        RequestType::Script
+    ));
+    let filters = blocker.cosmetic_filters(PAGE);
+    assert!(filters.hide_selectors.is_empty() && filters.generic_hide);
+}
+
+#[test]
+fn the_global_switch_turns_off_blocking_and_hiding() {
+    let (blocker, _cache) = loaded(true, &[]);
+    blocker.set_enabled(false);
+    assert!(!blocks(
+        &blocker,
+        "https://ads.example/a.js",
+        PAGE,
+        RequestType::Script
+    ));
+    let filters = blocker.cosmetic_filters(PAGE);
+    assert!(filters.hide_selectors.is_empty() && filters.generic_hide);
+    let classes = ["ad-banner".to_owned()];
+    assert!(
+        blocker
+            .hidden_class_id_selectors(PAGE, &classes, &[], &HashSet::new())
+            .is_empty()
+    );
+    blocker.set_enabled(true);
+    assert!(blocks(
+        &blocker,
+        "https://ads.example/a.js",
+        PAGE,
+        RequestType::Script
+    ));
+}
+
+#[test]
+fn an_allowed_site_covers_its_subdomains_and_every_frame_in_its_pages() {
+    let (blocker, _cache) = loaded(true, &["news.example"]);
+    for page in [
+        "https://news.example/",
+        "https://www.news.example/a",
+        "http://NEWS.example:8080/",
+    ] {
+        let ad = Request {
+            url: "https://ads.example/a.js",
+            source_url: "https://frames.example/embed",
+            top_level_url: page,
+            request_type: RequestType::Script,
+        };
+        assert!(!blocker.should_block(&ad), "{page}");
+        let filters = blocker.cosmetic_filters(page);
+        assert!(
+            filters.hide_selectors.is_empty() && filters.generic_hide,
+            "{page}"
+        );
+    }
+    // A frame from an allowed site inside another page is still blocked in.
+    let framed = Request {
+        url: "https://ads.example/a.js",
+        source_url: "https://news.example/embed",
+        top_level_url: "https://other.example/",
+        request_type: RequestType::Script,
+    };
+    assert!(blocker.should_block(&framed));
+    for page in ["https://notnews.example/", "https://news.example.org/"] {
+        assert!(
+            blocks(
+                &blocker,
+                "https://ads.example/a.js",
+                page,
+                RequestType::Script
+            ),
+            "{page}"
+        );
+    }
+    assert_eq!(blocker.set_allowed_sites(&[]), 0);
+    assert!(blocks(
+        &blocker,
+        "https://ads.example/a.js",
+        PAGE,
+        RequestType::Script
+    ));
+}
+
+#[test]
+fn invalid_allowed_entries_are_dropped_one_by_one() {
+    let entries: Vec<String> = [
+        "news.example",
+        "News.example",
+        "[::1]",
+        "ſite.example",
+        "\u{212a}.example",
+        "ｓｉｔｅ.example",
+        " site.example",
+        "other.example",
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    let (blocker, dropped) = AdBlocker::new(true, &entries);
+    assert_eq!(dropped, 6);
+    let cache = tempfile::tempdir().unwrap();
+    update(&blocker, cache.path(), &serve(EASYLIST, EASYPRIVACY));
+    assert!(!blocks(
+        &blocker,
+        "https://ads.example/a.js",
+        "https://other.example/",
+        RequestType::Script
+    ));
+    assert!(!blocks(
+        &blocker,
+        "https://ads.example/a.js",
+        PAGE,
+        RequestType::Script
+    ));
+    // The URL parser folds U+017F, U+212A and fullwidth forms; the dropped entries never match.
+    assert!(blocks(
+        &blocker,
+        "https://ads.example/a.js",
+        "https://ſite.example/",
+        RequestType::Script
+    ));
+    assert!(blocks(
+        &blocker,
+        "https://ads.example/a.js",
+        "https://\u{212a}.example/",
+        RequestType::Script
+    ));
+}
+
+#[test]
+fn element_hiding_for_a_page() {
+    let (blocker, _cache) = loaded(true, &[]);
+    let filters = blocker.cosmetic_filters(PAGE);
+    assert!(!filters.generic_hide);
+    // Complex generic selectors come with the page; the unclosed one is left out.
+    assert_eq!(
+        filters.hide_selectors,
+        ["[data-ad=\"1\"]", "div.sponsored > span"]
+    );
+    assert!(
+        filters
+            .stylesheet()
+            .contains("div.sponsored > span{display:none!important}")
+    );
+    // Plain class and id selectors come from what the page reports.
+    let classes = [
+        "ad-banner".to_owned(),
+        "story".to_owned(),
+        "exempted-everywhere".to_owned(),
+    ];
+    assert_eq!(
+        blocker.hidden_class_id_selectors(PAGE, &classes, &[], &filters.exceptions),
+        [".ad-banner", ".exempted-everywhere"]
+    );
+}
+
+#[test]
+fn site_specific_hiding_and_exceptions_apply_per_site() {
+    // build-adblock.mjs skipped `site##sel` and dropped an excepted selector everywhere.
+    let (blocker, _cache) = loaded(true, &[]);
+    let site = blocker.cosmetic_filters("https://www.site.example/");
+    assert!(site.hide_selectors.contains(&".site-only".to_owned()));
+    let classes = ["ad-banner".to_owned()];
+    assert!(
+        blocker
+            .hidden_class_id_selectors("https://www.site.example/", &classes, &[], &site.exceptions)
+            .is_empty()
+    );
+    let elsewhere = blocker.cosmetic_filters(PAGE);
+    assert!(!elsewhere.hide_selectors.contains(&".site-only".to_owned()));
+    let other = blocker.cosmetic_filters("https://example.org/");
+    let classes = ["exempted-everywhere".to_owned()];
+    assert!(
+        blocker
+            .hidden_class_id_selectors("https://example.org/", &classes, &[], &other.exceptions)
+            .is_empty()
+    );
+}
+
+#[test]
+fn sites_the_lists_exempt_get_no_generic_hiding() {
+    let (blocker, _cache) = loaded(true, &[]);
+    for page in ["https://exempt.example/", "https://a.exempt.example/"] {
+        let filters = blocker.cosmetic_filters(page);
+        assert!(filters.generic_hide, "{page}");
+        assert!(
+            !filters
+                .hide_selectors
+                .contains(&"div.sponsored > span".to_owned()),
+            "{page}"
+        );
+    }
+    // adblock-rust doesn't take `$elemhide`: the line is skipped and reported (see the
+    // malformed-lines test). EasyList and EasyPrivacy had none on 2026-11-23.
+    assert!(
+        !blocker
+            .cosmetic_filters("https://elemhide.example/")
+            .generic_hide
+    );
+}
+
+#[test]
+fn malformed_lines_are_skipped_and_reported_without_failing_the_load() {
+    let (blocker, dropped) = AdBlocker::new(true, &[]);
+    assert_eq!(dropped, 0);
+    let cache = tempfile::tempdir().unwrap();
+    let report = update(&blocker, cache.path(), &serve(EASYLIST, EASYPRIVACY));
+    let EngineOutcome::Parsed { skipped_lines, .. } = &report.engine else {
+        panic!("{report:?}");
+    };
+    let reported: Vec<_> = skipped_lines
+        .iter()
+        .map(|line| (line.list.as_str(), line.text.as_str()))
+        .collect();
+    assert!(
+        reported.contains(&("easylist", "||bad-option.example^$no-such-option")),
+        "{reported:?}"
+    );
+    assert!(
+        reported.contains(&("easylist", "@@||elemhide.example^$elemhide")),
+        "{reported:?}"
+    );
+    assert!(
+        reported.contains(&("easylist", "example.com##")),
+        "{reported:?}"
+    );
+    // Redirects are left out as build-adblock.mjs did: without resources adblock-rust would
+    // cancel the request instead of serving the stub.
+    for redirect in [
+        "||stub.example^$redirect=noopjs,script",
+        "||stub-rule.example^$redirect-rule=noopjs",
+        "||rewritten.example^$rewrite=abp-resource:blank-js",
+    ] {
+        assert!(reported.contains(&("easylist", redirect)), "{reported:?}");
+        let host = redirect[2..].split('^').next().unwrap();
+        let url = format!("https://{host}/x.js");
+        assert!(!blocks(&blocker, &url, PAGE, RequestType::Script), "{url}");
+    }
+    assert_eq!(reported.len(), 6, "{reported:?}");
+    let line = skipped_lines
+        .iter()
+        .find(|line| line.text.contains("no-such-option"))
+        .unwrap();
+    assert_eq!(
+        EASYLIST.lines().nth(line.line - 1),
+        Some(line.text.as_str())
+    );
+    // The lines after them still load.
+    assert!(blocks(
+        &blocker,
+        "https://ok-after-bad.example/x.js",
+        PAGE,
+        RequestType::Script
+    ));
+    assert!(blocks(
+        &blocker,
+        "https://metrics.example/collect",
+        PAGE,
+        RequestType::Script
+    ));
+}
