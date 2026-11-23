@@ -5,6 +5,7 @@ mod linux;
 use std::{
     cell::{Cell, RefCell},
     io::{self, BufRead as _},
+    ops::Range as TextRange,
     ptr,
     rc::Rc,
     sync::{Arc, mpsc},
@@ -15,9 +16,10 @@ use base64::Engine as _;
 use cef::{rc::Rc as _, *};
 use flecha_surface::{Frame as SurfaceFrame, SurfaceTarget, surface};
 use gpui::{
-    App as GpuiApp, AppContext as _, Bounds, Context, Entity, FocusHandle, InteractiveElement as _,
-    IntoElement, MouseButton, ParentElement as _, Pixels, QuitMode, Render, Styled as _, Window,
-    WindowBounds, WindowOptions, div, point, px, rgb, size,
+    App as GpuiApp, AppContext as _, Bounds, Context, ElementInputHandler, Entity,
+    EntityInputHandler, FocusHandle, InteractiveElement as _, IntoElement, MouseButton,
+    ParentElement as _, Pixels, QuitMode, Render, Styled as _, Window, WindowBounds, WindowOptions,
+    div, point, px, rgb, size,
 };
 
 #[derive(Default)]
@@ -72,10 +74,11 @@ struct Geometry {
     width: i32,
     height: i32,
     scale: f32,
+    screen: Option<(Bounds<Pixels>, Bounds<Pixels>)>,
 }
 
 impl Geometry {
-    fn from_window(window: &Window) -> Self {
+    fn from_window(window: &Window, cx: &GpuiApp) -> Self {
         let viewport = window.viewport_size();
         let bounds = window.bounds();
         Self {
@@ -84,6 +87,9 @@ impl Geometry {
             width: (f32::from(viewport.width).round() as i32).max(1),
             height: (f32::from(viewport.height).round() as i32).max(1),
             scale: window.scale_factor(),
+            screen: window
+                .display(cx)
+                .map(|display| (display.bounds(), display.visible_bounds())),
         }
     }
 
@@ -94,6 +100,15 @@ impl Geometry {
             width: self.width,
             height: self.height,
         }
+    }
+}
+
+fn cef_rect(bounds: Bounds<Pixels>) -> Rect {
+    Rect {
+        x: f32::from(bounds.origin.x).round() as i32,
+        y: f32::from(bounds.origin.y).round() as i32,
+        width: f32::from(bounds.size.width).round() as i32,
+        height: f32::from(bounds.size.height).round() as i32,
     }
 }
 
@@ -130,6 +145,8 @@ wrap_render_handler! {
     struct OsrHandler {
         frames: Rc<RefCell<Frames>>,
         accelerated: bool,
+        active: Rc<Cell<bool>>,
+        import_target: Rc<RefCell<Option<SurfaceTarget>>>,
         view_size: Rc<Cell<Option<(i32, i32)>>>,
     }
     impl RenderHandler {
@@ -142,9 +159,10 @@ wrap_render_handler! {
         fn screen_info(&self, _browser: Option<&mut Browser>, screen: Option<&mut ScreenInfo>) -> i32 {
             let Some(screen) = screen else { return 0 };
             let state = self.frames.borrow();
+            let Some((bounds, work_area)) = state.geometry.screen else { return 0 };
             screen.device_scale_factor = state.geometry.scale;
-            screen.rect = state.geometry.view();
-            screen.available_rect = state.geometry.view();
+            screen.rect = cef_rect(bounds);
+            screen.available_rect = cef_rect(work_area);
             1
         }
 
@@ -159,6 +177,7 @@ wrap_render_handler! {
         }
 
         fn on_popup_show(&self, _browser: Option<&mut Browser>, show: i32) {
+            if !self.active.get() { return; }
             let mut state = self.frames.borrow_mut();
             state.popup_visible = show != 0;
             if !state.popup_visible {
@@ -170,6 +189,7 @@ wrap_render_handler! {
         }
 
         fn on_popup_size(&self, _browser: Option<&mut Browser>, rect: Option<&Rect>) {
+            if !self.active.get() { return; }
             let mut state = self.frames.borrow_mut();
             state.popup_bounds = rect.map(|rect| Bounds::new(
                 point(px(rect.x as f32), px(rect.y as f32)),
@@ -180,16 +200,26 @@ wrap_render_handler! {
         }
 
         fn on_paint(
-            &self, _browser: Option<&mut Browser>, kind: PaintElementType, _dirty: Option<&[Rect]>,
+            &self, _browser: Option<&mut Browser>, kind: PaintElementType, dirty: Option<&[Rect]>,
             buffer: *const u8, width: i32, height: i32,
         ) {
+            if !self.active.get() {
+                return;
+            }
             let mut state = self.frames.borrow_mut();
             if self.accelerated && kind == PaintElementType::VIEW {
                 state.import_failure.get_or_insert_with(|| anyhow::anyhow!("CEF returned a software frame in shared-texture mode"));
                 return;
             }
             // The CEF buffer is valid during this callback and copied synchronously.
-            match unsafe { SurfaceFrame::copy_bgra(buffer, width, height, &state.target) } {
+            let previous = match kind {
+                PaintElementType::VIEW => state.view.as_ref(),
+                PaintElementType::POPUP => state.popup.as_ref(),
+                _ => return,
+            };
+            match unsafe {
+                SurfaceFrame::copy_bgra(buffer, width, height, &state.target, previous, dirty.unwrap_or_default())
+            } {
                 Ok(frame) => {
                     if kind == PaintElementType::VIEW
                         && self.view_size.replace(Some((width, height))) != Some((width, height))
@@ -208,14 +238,16 @@ wrap_render_handler! {
             info: Option<&AcceleratedPaintInfo>,
         ) {
             let mut state = self.frames.borrow_mut();
-            if !self.accelerated || state.import_failure.is_some() {
+            if !self.active.get() || !self.accelerated || state.import_failure.is_some() {
                 return;
             }
             let force_error = std::mem::take(&mut state.reject_next_import);
-            let (Some(gpu), Some(info)) = (&state.target.gpu, info) else {
-                state.import_failure = Some(anyhow::anyhow!("missing CEF frame or GPUI device"));
+            let Some(info) = info else {
+                state.import_failure = Some(anyhow::anyhow!("missing CEF frame"));
                 return;
             };
+            let target = self.import_target.borrow();
+            let Some(target) = target.as_ref() else { return };
             let mut invalid;
             let info = if force_error {
                 invalid = info.clone();
@@ -226,7 +258,7 @@ wrap_render_handler! {
             };
             // Shared textures are enabled only after matching CEF's allocation node
             // to this GPUI Vulkan device. The importer waits while CEF owns the buffer.
-            match unsafe { SurfaceFrame::copy_accelerated(info, gpu) } {
+            match unsafe { SurfaceFrame::copy_accelerated(info, target) } {
                 Ok(frame) => {
                     let rect = &info.extra.visible_rect;
                     let size = (rect.width, rect.height);
@@ -247,6 +279,23 @@ wrap_life_span_handler! {
     impl LifeSpanHandler {
         fn on_before_close(&self, _browser: Option<&mut Browser>) {
             self.closed.set(true);
+            eprintln!("CEF browser closed");
+        }
+    }
+}
+
+wrap_display_handler! {
+    struct FixtureDisplay;
+    impl DisplayHandler {
+        fn on_console_message(
+            &self, _browser: Option<&mut Browser>, _level: LogSeverity, message: Option<&CefString>,
+            _source: Option<&CefString>, _line: i32,
+        ) -> i32 {
+            if message.is_some_and(|message| message.to_string() == "Flecha fixture accepted IME commit") {
+                eprintln!("Flecha fixture accepted IME commit");
+                return 1;
+            }
+            0
         }
     }
 }
@@ -256,12 +305,15 @@ wrap_client! {
     impl Client {
         fn render_handler(&self) -> Option<RenderHandler> { Some(self.render.clone()) }
         fn life_span_handler(&self) -> Option<LifeSpanHandler> { Some(self.life.clone()) }
+        fn display_handler(&self) -> Option<DisplayHandler> { Some(FixtureDisplay::new()) }
     }
 }
 
 struct Session {
     browser: Browser,
     closed: Rc<Cell<bool>>,
+    active: Rc<Cell<bool>>,
+    import_target: Rc<RefCell<Option<SurfaceTarget>>>,
     accelerated: bool,
     closing: bool,
 }
@@ -283,8 +335,18 @@ impl Session {
             ..Default::default()
         };
         let closed = Rc::new(Cell::new(false));
+        let active = Rc::new(Cell::new(true));
+        let import_target = Rc::new(RefCell::new(
+            accelerated.then(|| frames.borrow().target.clone()),
+        ));
         let mut client = OsrClient::new(
-            OsrHandler::new(frames, accelerated, Rc::new(Cell::new(None))),
+            OsrHandler::new(
+                frames,
+                accelerated,
+                active.clone(),
+                import_target.clone(),
+                Rc::new(Cell::new(None)),
+            ),
             LifeSpan::new(closed.clone()),
         );
         let browser = browser_host_create_browser_sync(
@@ -299,27 +361,35 @@ impl Session {
             None,
         )
         .context("CEF could not create the Alloy OSR browser")?;
-        let host = browser.host().context("CEF browser has no host")?;
-        ensure!(
-            host.runtime_style() == RuntimeStyle::ALLOY,
-            "CEF did not create an Alloy browser"
-        );
-        eprintln!("created Alloy OSR browser (shared textures: {accelerated})");
         Ok(Self {
             browser,
             closed,
+            active,
+            import_target,
             accelerated,
             closing: false,
         })
     }
 
     fn close(&mut self) {
-        if !self.closing {
+        self.active.set(false);
+        self.import_target.borrow_mut().take();
+        if !self.closing
+            && !self.closed.get()
+            && let Some(host) = self.browser.host()
+        {
             self.closing = true;
-            if let Some(host) = self.browser.host() {
-                host.close_browser(1);
-            }
+            host.close_browser(1);
         }
+    }
+
+    fn verify_style(&self) -> Result<()> {
+        let host = self.browser.host().context("CEF browser has no host")?;
+        ensure!(
+            host.runtime_style() == RuntimeStyle::ALLOY,
+            "CEF did not create an Alloy browser"
+        );
+        Ok(())
     }
 }
 
@@ -331,28 +401,41 @@ struct Demo {
     closing: Rc<Cell<bool>>,
     focus: FocusHandle,
     focused: Option<bool>,
+    marked: Option<TextRange<usize>>,
     retired_images: [Option<Arc<gpui::RenderImage>>; 2],
     controls: Option<mpsc::Receiver<Control>>,
     failure: Rc<RefCell<Option<anyhow::Error>>>,
 }
 
 impl Demo {
+    fn remove_window(&mut self, window: &mut Window) {
+        // The native display must still be alive when the last renderer handles drop.
+        let mut frames = self.frames.borrow_mut();
+        frames.view = None;
+        frames.popup = None;
+        frames.target = SurfaceTarget::default();
+        window.remove_window();
+    }
+
     fn host(&self) -> Option<BrowserHost> {
         let session = self.session.as_ref()?;
-        if session.closing || session.closed.get() {
+        if !session.active.get() || session.closed.get() {
             return None;
         }
         session.browser.host()
     }
 
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        if let Some(controls) = &self.controls {
-            for command in controls.try_iter() {
-                match command {
-                    Control::Resize(width, height) => window.resize(size(px(width), px(height))),
-                    Control::RejectNextImport => self.frames.borrow_mut().reject_next_import = true,
-                    Control::Close => self.closing.set(true),
-                }
+        while let Some(command) = self
+            .controls
+            .as_ref()
+            .and_then(|controls| controls.try_recv().ok())
+        {
+            match command {
+                Control::Resize(width, height) => window.resize(size(px(width), px(height))),
+                Control::RejectNextImport => self.frames.borrow_mut().reject_next_import = true,
+                Control::CommitText(text) => self.replace_text_in_range(None, &text, window, cx),
+                Control::Close => self.closing.set(true),
             }
         }
 
@@ -360,10 +443,7 @@ impl Demo {
             let mut frames = self.frames.borrow_mut();
             let current_target = SurfaceTarget::for_window(window);
             #[cfg(target_os = "linux")]
-            if self.accelerated
-                && frames.target.gpu.as_ref().map(|gpu| &gpu.device)
-                    != current_target.gpu.as_ref().map(|gpu| &gpu.device)
-            {
+            if self.accelerated && !frames.target.is_same_device(&current_target) {
                 frames.import_failure = Some(anyhow::anyhow!("the GPUI device changed"));
             }
             frames.target = current_target;
@@ -384,6 +464,7 @@ impl Demo {
             .is_some_and(|session| session.closed.get())
         {
             self.session = None;
+            self.marked = None;
             let mut frames = self.frames.borrow_mut();
             frames.popup = None;
             frames.popup_bounds = None;
@@ -395,32 +476,43 @@ impl Demo {
             if let Some(session) = &mut self.session {
                 session.close();
             } else {
-                window.remove_window();
+                self.remove_window(window);
                 return false;
             }
         } else if self.ready.get() && self.session.is_none() {
-            self.frames.borrow_mut().geometry = Geometry::from_window(window);
+            self.frames.borrow_mut().geometry = Geometry::from_window(window, cx);
             match Session::create(self.frames.clone(), self.accelerated) {
-                Ok(session) => {
+                Ok(mut session) => {
+                    if let Err(error) = session.verify_style() {
+                        *self.failure.borrow_mut() = Some(error);
+                        self.closing.set(true);
+                        session.close();
+                    } else {
+                        eprintln!(
+                            "created Alloy OSR browser (shared textures: {})",
+                            session.accelerated
+                        );
+                    }
                     self.session = Some(session);
                     self.focused = None;
                 }
                 Err(error) => {
                     *self.failure.borrow_mut() = Some(error);
-                    window.remove_window();
+                    self.remove_window(window);
                     return false;
                 }
             }
         }
 
-        let geometry = Geometry::from_window(window);
+        let geometry = Geometry::from_window(window, cx);
         let (resized, screen_changed) = {
             let mut frames = self.frames.borrow_mut();
             let resized = frames.geometry.width != geometry.width
                 || frames.geometry.height != geometry.height;
             let screen_changed = frames.geometry.scale != geometry.scale
                 || frames.geometry.x != geometry.x
-                || frames.geometry.y != geometry.y;
+                || frames.geometry.y != geometry.y
+                || frames.geometry.screen != geometry.screen;
             if resized || screen_changed {
                 eprintln!(
                     "OSR viewport: {}x{} @ {}",
@@ -459,6 +551,117 @@ impl Demo {
     }
 }
 
+fn cef_range(range: TextRange<usize>) -> Option<cef::Range> {
+    Some(cef::Range {
+        from: range.start.try_into().ok()?,
+        to: range.end.try_into().ok()?,
+    })
+}
+
+fn cef_replacement_range(range: Option<TextRange<usize>>) -> cef::Range {
+    // The C API requires a range pointer. Chromium represents an unspecified
+    // replacement with gfx::Range::InvalidRange().
+    range.and_then(cef_range).unwrap_or(cef::Range {
+        from: u32::MAX,
+        to: u32::MAX,
+    })
+}
+
+impl EntityInputHandler for Demo {
+    fn text_for_range(
+        &mut self,
+        _: TextRange<usize>,
+        _: &mut Option<TextRange<usize>>,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<String> {
+        None
+    }
+
+    fn selected_text_range(
+        &mut self,
+        _: bool,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<gpui::UTF16Selection> {
+        None
+    }
+
+    fn marked_text_range(&self, _: &mut Window, _: &mut Context<Self>) -> Option<TextRange<usize>> {
+        self.marked.clone()
+    }
+
+    fn unmark_text(&mut self, _: &mut Window, _: &mut Context<Self>) {
+        if let Some(host) = self.host() {
+            host.ime_finish_composing_text(1);
+        }
+        self.marked = None;
+    }
+
+    fn replace_text_in_range(
+        &mut self,
+        range: Option<TextRange<usize>>,
+        text: &str,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) {
+        if let Some(host) = self.host() {
+            let range = cef_replacement_range(range);
+            host.ime_commit_text(Some(&text.into()), Some(&range), 0);
+        }
+        self.marked = None;
+    }
+
+    fn replace_and_mark_text_in_range(
+        &mut self,
+        range: Option<TextRange<usize>>,
+        text: &str,
+        selection: Option<TextRange<usize>>,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) {
+        let Some(host) = self.host() else { return };
+        if text.is_empty() {
+            host.ime_cancel_composition();
+            self.marked = None;
+            return;
+        }
+        let len = text.encode_utf16().count();
+        let base = range
+            .as_ref()
+            .or(self.marked.as_ref())
+            .map_or(0, |range| range.start);
+        self.marked = base.checked_add(len).map(|end| base..end);
+        let replacement = cef_replacement_range(range);
+        let selection = cef_replacement_range(Some(selection.unwrap_or(len..len)));
+        host.ime_set_composition(
+            Some(&text.into()),
+            None,
+            Some(&replacement),
+            Some(&selection),
+        );
+    }
+
+    fn bounds_for_range(
+        &mut self,
+        _: TextRange<usize>,
+        _: Bounds<Pixels>,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<Bounds<Pixels>> {
+        None
+    }
+
+    fn character_index_for_point(
+        &mut self,
+        _: gpui::Point<Pixels>,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<usize> {
+        None
+    }
+}
+
 impl Render for Demo {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let (view, popup) = {
@@ -487,18 +690,27 @@ impl Render for Demo {
         }
         self.retired_images = next_images;
 
+        let editor = cx.entity();
+        let input_focus = self.focus.clone();
         let mut root = div()
             .size_full()
             .relative()
             .track_focus(&self.focus)
-            .on_key_down(cx.listener(|demo, event: &gpui::KeyDownEvent, _, _| {
+            .on_key_down(cx.listener(|demo, event: &gpui::KeyDownEvent, _, cx| {
                 if let Some(host) = demo.host() {
-                    input::key(&host, &event.keystroke, false, event.is_held);
+                    input::key(
+                        &host,
+                        &event.keystroke,
+                        false,
+                        event.is_held,
+                        event.prefer_character_input,
+                    );
+                    cx.stop_propagation();
                 }
             }))
             .on_key_up(cx.listener(|demo, event: &gpui::KeyUpEvent, _, _| {
                 if let Some(host) = demo.host() {
-                    input::key(&host, &event.keystroke, true, false);
+                    input::key(&host, &event.keystroke, true, false, false);
                 }
             }))
             .on_mouse_move(cx.listener(|demo, event: &gpui::MouseMoveEvent, _, _| {
@@ -517,6 +729,20 @@ impl Render for Demo {
                 }
             }))
             .child(surface(view, popup))
+            .child(
+                gpui::canvas(
+                    |_, _, _| (),
+                    move |bounds, _, window, cx| {
+                        window.handle_input(
+                            &input_focus,
+                            ElementInputHandler::new(bounds, editor),
+                            cx,
+                        );
+                    },
+                )
+                .absolute()
+                .size_full(),
+            )
             .child(
                 div()
                     .absolute()
@@ -577,6 +803,7 @@ fn pump(view: gpui::WeakEntity<Demo>, window: &Window) {
 enum Control {
     Resize(f32, f32),
     RejectNextImport,
+    CommitText(String),
     Close,
 }
 
@@ -601,6 +828,7 @@ fn controls() -> mpsc::Receiver<Control> {
                     return;
                 }
                 ["reject-next-import"] => Control::RejectNextImport,
+                ["commit-text", text] => Control::CommitText((*text).to_owned()),
                 _ => continue,
             };
             if tx.send(control).is_err() {
@@ -649,7 +877,7 @@ fn start(
     if !did_initialize {
         *failure.borrow_mut() = Some(anyhow::anyhow!("CEF initialization failed"));
     }
-    let geometry = Geometry::from_window(window);
+    let geometry = Geometry::from_window(window, cx);
     eprintln!(
         "OSR viewport: {}x{} @ {}",
         geometry.width, geometry.height, geometry.scale
@@ -681,6 +909,7 @@ fn start(
         accelerated,
         closing,
         focused: None,
+        marked: None,
         focus: cx.focus_handle(),
         retired_images: [None, None],
         controls: options.control.then(controls),
@@ -700,17 +929,16 @@ fn platform_configuration(
     #[cfg(target_os = "linux")]
     {
         let ozone = linux::ozone_platform(_window);
-        if let Some(gpu) = &_target.gpu {
-            eprintln!("GPUI renderer: {:?}", gpu.adapter.get_info());
+        if let Some(adapter) = _target.adapter() {
+            eprintln!("GPUI renderer: {:?}", adapter.get_info());
         }
         let node = if software {
             None
         } else {
             match _target
-                .gpu
-                .as_ref()
+                .adapter()
                 .context("GPUI did not provide a GPU")
-                .and_then(|gpu| linux::render_node(gpu, ozone))
+                .and_then(|adapter| linux::render_node(adapter, ozone))
             {
                 Ok(node) => {
                     eprintln!("CEF and GPUI render node: {}", node.display());
@@ -736,6 +964,11 @@ fn platform_configuration(
 }
 
 fn run() -> Result<()> {
+    #[cfg(target_os = "linux")]
+    ensure!(
+        std::env::var("FLECHA_CEF_RUNTIME_SHA1").as_deref() == Ok(sys::FLECHA_CEF_MINIMAL_SHA1),
+        "the launcher runtime stamp differs from the build; prepare and rebuild the pinned demo"
+    );
     #[cfg(target_os = "macos")]
     let _loader = {
         let exe = std::env::current_exe()?;

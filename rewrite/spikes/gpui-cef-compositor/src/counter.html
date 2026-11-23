@@ -3,20 +3,21 @@
 <title>Flecha OSR frame counter</title>
 <style>
   body { margin: 0; padding-top: 32px; background: #193f61; color: white; font: 18px system-ui; }
-  canvas { display: block; image-rendering: pixelated; }
+  canvas { display: block; margin-bottom: -8px; image-rendering: pixelated; }
   form { padding: 12px; }
   #edge { position: fixed; bottom: 0; right: 0; width: 8px; height: 8px; background: #f8bf36; }
   #typed { position: fixed; bottom: 8px; left: 8px; width: 8px; height: 8px; background: #48d159; }
+  #typed.ime { background: #986fed; }
   input:focus ~ #focus { display: block; }
   #focus { display: none; position: fixed; bottom: 8px; left: 24px; width: 8px; height: 8px; background: #53c9ff; }
 </style>
-<canvas id="telemetry" width="512" height="8" aria-hidden="true"></canvas>
+<canvas id="telemetry" width="512" height="16" aria-hidden="true"></canvas>
 <form onsubmit="return false">
   <output id="counter" aria-label="Frame counter"></output>
   <output id="geometry" aria-label="Viewport geometry"></output>
   <p>
     <label>Choose <select id="choice"><option>One</option><option>Two</option><option>Three</option></select></label>
-    <label>Type <input type="text" placeholder="Keyboard and IME" oninput="document.querySelector('#typed').hidden = this.value !== 'x'"><span id="focus"></span></label>
+    <label>Type <input type="text" placeholder="Keyboard and IME"><span id="focus"></span></label>
   </p>
   <p id="copy">Flecha clipboard probe</p>
   <label>Drop a file <input type="file"></label>
@@ -28,18 +29,25 @@
   const context = canvas.getContext('2d');
   const counter = document.querySelector('#counter');
   const geometry = document.querySelector('#geometry');
+  document.querySelector('input[type="text"]').addEventListener('input', (event) => {
+    const value = event.target.value;
+    const typed = document.querySelector('#typed');
+    typed.hidden = value !== 'x' && value !== 'xé';
+    typed.classList.toggle('ime', value === 'xé');
+    if (value === 'xé') console.info('Flecha fixture accepted IME commit');
+  });
   let frame = 0;
 
   function draw() {
     frame++;
     const width = Math.round(innerWidth * devicePixelRatio);
     const height = Math.round(innerHeight * devicePixelRatio);
-    // The left half carries the counter and the right half the pixel size.
-    const values = [frame, (width << 16) | height];
-    values.forEach((value, column) => {
+    const values = [frame, (width << 16) | height,
+      (screen.width << 16) | screen.height, (screen.availWidth << 16) | screen.availHeight];
+    values.forEach((value, index) => {
       for (let bit = 0; bit < 32; bit++) {
         context.fillStyle = (value >>> bit) & 1 ? '#fff' : '#000';
-        context.fillRect((column * 32 + bit) * 8, 0, 8, 8);
+        context.fillRect(((index % 2) * 32 + bit) * 8, Math.floor(index / 2) * 8, 8, 8);
       }
     });
     counter.value = `Frame ${frame}`;

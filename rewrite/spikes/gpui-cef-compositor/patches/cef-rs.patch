@@ -32,10 +32,10 @@ index 0ce4d72..f7e2c70 100644
          };
          super::vulkan::copy_to_owned(device, queue, source, ash::vk::QUEUE_FAMILY_EXTERNAL)
 diff --git a/cef/src/osr_texture_import/dmabuf.rs b/cef/src/osr_texture_import/dmabuf.rs
-index 768781f..c385fbd 100644
+index 768781f..5305db2 100644
 --- a/cef/src/osr_texture_import/dmabuf.rs
 +++ b/cef/src/osr_texture_import/dmabuf.rs
-@@ -180,6 +180,7 @@ impl DmaBufImporter {
+@@ -180,10 +180,21 @@ impl DmaBufImporter {
                      view_formats: &[],
                  },
                  super::vulkan::EXTERNAL_TEXTURE_STATE,
@@ -43,6 +43,21 @@ index 768781f..c385fbd 100644
              )
          };
 
+-        super::vulkan::copy_to_owned(device, queue, source, external_queue_family)
++        // Keep the imported image alive while comparing Vulkan handles.
++        let borrowed = source.clone();
++        let owned = super::vulkan::copy_to_owned(device, queue, source, external_queue_family)?;
++        let borrowed_image = unsafe { borrowed.as_hal::<api::Vulkan>() }.map(|tex| tex.raw_handle());
++        let owned_image = unsafe { owned.as_hal::<api::Vulkan>() }.map(|tex| tex.raw_handle());
++        if owned_image.is_none() || owned_image == borrowed_image {
++            return Err(TextureImportError::PlatformError {
++                message: "DMA-BUF copy returned the callback-borrowed image".into(),
++            });
++        }
++        Ok(owned)
+     }
+
+     unsafe fn create_vulkan_image_from_dmabuf(
 diff --git a/cef/src/osr_texture_import/iosurface.rs b/cef/src/osr_texture_import/iosurface.rs
 index de3d67a..5799c8c 100644
 --- a/cef/src/osr_texture_import/iosurface.rs
@@ -55,3 +70,206 @@ index de3d67a..5799c8c 100644
              )
          })
      }
+diff --git a/sys/Cargo.toml b/sys/Cargo.toml
+index 734d0c1..3889808 100644
+--- a/sys/Cargo.toml
++++ b/sys/Cargo.toml
+@@ -25,3 +25,4 @@ cc.workspace = true
+ cmake.workspace = true
+ download-cef.workspace = true
+ serde_json.workspace = true
++toml = "1"
+diff --git a/sys/build.rs b/sys/build.rs
+index c13ea75..5f1e0c8 100644
+--- a/sys/build.rs
++++ b/sys/build.rs
+@@ -1,5 +1,6 @@
+ #[cfg(not(feature = "dox"))]
+ fn main() -> anyhow::Result<()> {
++    use anyhow::{Context as _, ensure};
+     use download_cef::OsAndArch;
+     use std::{
+         env, fs,
+@@ -11,104 +12,67 @@ fn main() -> anyhow::Result<()> {
+     let target = env::var("TARGET")?;
+     let os_arch = OsAndArch::try_from(target.as_str())?;
+
+-    println!("cargo::rerun-if-env-changed=FLATPAK");
+-    println!("cargo::rerun-if-env-changed=NIX_CEF_BINARY");
+-    println!("cargo::rerun-if-env-changed=CEF_PATH");
+     let package_version = env::var("CARGO_PKG_VERSION")?;
+     let cef_version = download_cef::default_version(&package_version);
+-
+-    let check_archive = |path: &Path| -> anyhow::Result<()> {
+-        download_cef::check_archive_json(&package_version, &path.to_string_lossy())?;
+-        Ok(())
+-    };
+-
+-    let resolve_cef_dir = |location: &Path| -> anyhow::Result<PathBuf> {
+-        let cef_dir = location.join(os_arch.to_string());
+-
+-        if !fs::exists(&cef_dir)? {
+-            if env::var("NIX_CEF_BINARY").is_ok() {
+-                download_cef::install_nix_cef(&cef_version, &cef_dir, false)?;
+-            } else {
+-                use download_cef::CefIndex;
+-
+-                let download_url = download_cef::default_download_url();
+-                let index = CefIndex::download_from(&download_url)?;
+-                let platform = index.platform(&target)?;
+-                let version = platform.version(&cef_version)?;
+-
+-                let archive = version.download_archive_from(&download_url, location, false)?;
+-                let extracted_dir =
+-                    download_cef::extract_target_archive(&target, &archive, location, false)?;
+-                let extracted_dir_canonical = fs::canonicalize(&extracted_dir)?;
+-                let cef_dir_canonical = fs::canonicalize(&cef_dir)?;
+-                if extracted_dir_canonical != cef_dir_canonical {
+-                    return Err(anyhow::anyhow!(
+-                        "extracted dir {extracted_dir_canonical:?} does not match cef_dir {cef_dir_canonical:?}",
+-                    ));
+-                }
+-
+-                version.write_archive_json(extracted_dir)?;
+-            }
+-        }
+-
+-        Ok(cef_dir)
+-    };
+-
+-    let resolve_from_versioned = |configured_path: &Path| -> anyhow::Result<PathBuf> {
+-        let versioned_location = configured_path.join(&cef_version);
+-        let resolved = resolve_cef_dir(&versioned_location)?;
+-        println!(
+-            "Using versioned CEF path from environment: {}",
+-            resolved.display()
+-        );
+-        check_archive(&resolved)?;
+-        Ok(resolved)
+-    };
+-
+-    let download_to_versioned = |configured_path: &Path, reason: &str| -> anyhow::Result<PathBuf> {
+-        let versioned_location = configured_path.join(&cef_version);
+-        println!(
+-            "{reason}, downloading archive to: {}",
+-            versioned_location.display()
+-        );
+-        let resolved = resolve_cef_dir(&versioned_location)?;
+-        println!("Using downloaded CEF path: {}", resolved.display());
+-        Ok(resolved)
+-    };
+-
+     let out_dir = PathBuf::from(env::var("OUT_DIR")?);
+
+-    let cef_dir = if env::var("FLATPAK").is_ok() {
+-        let cef_path = String::from("/usr/lib");
+-        println!("Using CEF path from FLATPAK: {cef_path}");
+-        let cef_path = PathBuf::from(cef_path);
+-        check_archive(&cef_path)?;
+-        cef_path
+-    } else if let Ok(cef_path) = env::var("CEF_PATH") {
+-        let configured_path = PathBuf::from(cef_path);
+-        if fs::exists(&configured_path)? {
+-            let versioned_location = configured_path.join(&cef_version);
+-            if fs::exists(&versioned_location)? {
+-                resolve_from_versioned(&configured_path)?
+-            } else {
+-                println!(
+-                    "Using CEF path from environment: {}",
+-                    configured_path.display()
+-                );
+-                match check_archive(&configured_path) {
+-                    Ok(()) => configured_path,
+-                    Err(error) => download_to_versioned(
+-                        &configured_path,
+-                        &format!("CEF_PATH is invalid ({error})"),
+-                    )?,
+-                }
+-            }
+-        } else {
+-            download_to_versioned(&configured_path, "CEF_PATH does not exist")?
+-        }
+-    } else {
+-        resolve_cef_dir(&out_dir)?
++    // This crate is staged at rewrite/target/spike1-src/cef-rs/sys.
++    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
++    let sources = manifest
++        .ancestors()
++        .nth(2)
++        .context("missing staged source directory")?;
++    let pins_path = sources.join("../../pins.toml");
++    println!("cargo::rerun-if-changed={}", pins_path.display());
++    let pins: toml::Value = toml::from_str(&fs::read_to_string(&pins_path)?)?;
++    for (table, directory) in [("cef-rs", "cef-rs"), ("gpui", "zed")] {
++        let repo = pins[table]["git"]
++            .as_str()
++            .context("missing source repository pin")?;
++        let rev = pins[table]["rev"]
++            .as_str()
++            .context("missing source revision pin")?;
++        let stamp = sources.join(directory).join(".flecha-revision");
++        println!("cargo::rerun-if-changed={}", stamp.display());
++        ensure!(
++            fs::read_to_string(&stamp).unwrap_or_default() == format!("{repo}\n{rev}\n"),
++            "staged {directory} does not match pins.toml; run prepare.sh with a fresh cache"
++        );
++    }
++    let version = pins["cef"]["version"]
++        .as_str()
++        .context("missing CEF version pin")?;
++    let channel = pins["cef"]["channel"]
++        .as_str()
++        .context("missing CEF channel pin")?;
++    ensure!(
++        version.split('+').next() == Some(cef_version.as_str()),
++        "CEF archive and bindings pins differ"
++    );
++    let platform = match (os_arch.os, os_arch.arch) {
++        ("linux", "x86_64") => "linux64",
++        ("macos", "aarch64") => "macosarm64",
++        ("windows", "x86_64") => "windows64",
++        _ => anyhow::bail!("no Flecha CEF archive pin for {target}"),
+     };
++    let hash = pins["cef"][channel]["sha1"][platform]
++        .as_str()
++        .context("missing CEF archive SHA-1")?;
++    let cef_dir = sources
++        .join("cef-runtime")
++        .join(&cef_version)
++        .join(os_arch.to_string());
++    let archive_path = cef_dir.join("archive.json");
++    println!("cargo::rerun-if-changed={}", archive_path.display());
++    let archive: serde_json::Value = serde_json::from_str(
++        &fs::read_to_string(&archive_path).context("missing pinned CEF runtime; run prepare.sh")?,
++    )?;
++    let expected = format!("cef_binary_{version}_{platform}_{channel}_minimal.tar.bz2");
++    ensure!(
++        archive["type"] == "minimal" && archive["name"] == expected && archive["sha1"] == hash,
++        "unexpected CEF archive metadata at {}",
++        archive_path.display()
++    );
+
+     // TODO: far from ideal, but there's no other way to get the target dir, see <https://github.com/rust-lang/cargo/issues/9661>
+     let target_dir = out_dir
+@@ -126,6 +90,7 @@ fn main() -> anyhow::Result<()> {
+
+     println!("cargo::metadata=CEF_DIR={cef_dir_str}");
+     println!("cargo::rustc-link-search=native={cef_dir_str}");
++    println!("cargo::rustc-env=FLECHA_CEF_MINIMAL_SHA1={hash}");
+
+     // Compile the wrapper against an explicit API version instead of the
+     // experimental (unversioned) API that CEF selects by default, which its
+diff --git a/sys/src/lib.rs b/sys/src/lib.rs
+index 7f092d3..9a46e57 100644
+--- a/sys/src/lib.rs
++++ b/sys/src/lib.rs
+@@ -10,6 +10,9 @@
+ mod bindings;
+ pub use bindings::*;
+
++#[cfg(not(feature = "dox"))]
++pub const FLECHA_CEF_MINIMAL_SHA1: &str = env!("FLECHA_CEF_MINIMAL_SHA1");
++
+ #[cfg(target_os = "windows")]
+ impl Default for HWND {
+     fn default() -> Self {

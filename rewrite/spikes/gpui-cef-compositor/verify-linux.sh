@@ -32,10 +32,12 @@ fi
 
 out=$(mktemp -d "$rewrite/target/spike1-$backend-$scale-$mode.XXXXXX")
 printf 'Captures and logs: %s\n' "$out"
-export XDG_RUNTIME_DIR
-XDG_RUNTIME_DIR=$(mktemp -d "$XDG_RUNTIME_DIR/flecha-spike.XXXXXX")
+runtime=$(mktemp -d "${XDG_RUNTIME_DIR:?}/flecha-spike.XXXXXX")
+export XDG_RUNTIME_DIR="$runtime"
 export XDG_CONFIG_HOME="$out/config" XDG_CACHE_HOME="$out/cache"
-export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/no-session-bus"
+export DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime/bus"
+export DBUS_SYSTEM_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS"
+unset DBUS_STARTER_ADDRESS DBUS_STARTER_BUS_TYPE AT_SPI_BUS_ADDRESS GNOME_KEYRING_CONTROL
 export FLECHA_CEF_PROFILE_DIR="$out/profile"
 mkdir -p "$FLECHA_CEF_PROFILE_DIR"
 unset WAYLAND_DISPLAY WAYLAND_SOCKET DISPLAY
@@ -43,18 +45,42 @@ unset WAYLAND_DISPLAY WAYLAND_SOCKET DISPLAY
 display_pid=
 demo_pid=
 paste_pid=
+dbus_pid=
 stop() {
-  for pid in "$paste_pid" "$demo_pid" "$display_pid"; do
+  for pid in "$paste_pid" "$demo_pid" "$display_pid" "$dbus_pid"; do
     if [[ -n $pid ]]; then
       kill "$pid" 2>/dev/null || true
       wait "$pid" 2>/dev/null || true
     fi
   done
-  rmdir "$XDG_RUNTIME_DIR" 2>/dev/null || true
+  rm -rf -- "$runtime"
 }
 trap stop EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+
+dbus-daemon --config-file="$spike/dbus.conf" --address="$DBUS_SESSION_BUS_ADDRESS" \
+  --nofork --print-address >"$out/dbus.address" 2>"$out/dbus.log" &
+dbus_pid=$!
+while [[ ! -s $out/dbus.address ]]; do
+  kill -0 "$dbus_pid" || { cat "$out/dbus.log"; exit 1; }
+  sleep 0.1
+done
+if dbus-send --bus="$DBUS_SESSION_BUS_ADDRESS" --print-reply \
+    --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.StartServiceByName \
+    string:org.freedesktop.portal.Desktop uint32:0 >"$out/dbus-activation.log" 2>&1 ||
+  ! rg -q 'AccessDenied' "$out/dbus-activation.log"; then
+  cat "$out/dbus-activation.log"
+  printf 'Private D-Bus did not reject service activation\n'
+  exit 1
+fi
+
+# The first spike observed at most two readiness captures after a size change.
+capture_attempts=${FLECHA_CAPTURE_ATTEMPTS:-2}
+if [[ ! $capture_attempts =~ ^[1-9][0-9]*$ ]]; then
+  printf 'FLECHA_CAPTURE_ATTEMPTS must be a positive integer\n'
+  exit 2
+fi
 
 case "$backend" in
   wayland)
@@ -83,9 +109,26 @@ bash "$spike/run-linux.sh" "${args[@]}" <&3 >"$out/demo.log" 2>&1 &
 demo_pid=$!
 await_log() {
   while ! rg -q "$1" "$out/demo.log"; do
+    if [[ $1 == "composited dma-buf"* ]] &&
+      rg 'accelerated OSR failed|shared textures unavailable' "$out/demo.log"; then
+      return 1
+    fi
     kill -0 "$demo_pid" || { cat "$out/demo.log"; return 1; }
     sleep 0.1
   done
+}
+await_popup_pixels() {
+  local phase=$1 expected=$2 attempt dir equal
+  for ((attempt = 1; attempt <= capture_attempts; attempt++)); do
+    dir="$out/$phase-$attempt"
+    capture "$dir"
+    magick "$dir/x11.png" -crop "$popup_region" -depth 8 "rgb:$dir/region.rgb"
+    equal=changed
+    if cmp -s "$out/popup-before.rgb" "$dir/region.rgb"; then equal=baseline; fi
+    if [[ $equal == "$expected" ]]; then return 0; fi
+  done
+  printf 'Popup %s did not reach %s pixels in %s captures\n' "$phase" "$expected" "$capture_attempts"
+  return 1
 }
 capture() {
   local dir=$1
@@ -97,28 +140,35 @@ capture() {
   fi
 }
 await_pixels() {
-  local phase=$1 width=$2 height=$3 attempt=1 dir
-  while kill -0 "$demo_pid"; do
+  local phase=$1 width=$2 height=$3 attempt dir status
+  for ((attempt = 1; attempt <= capture_attempts; attempt++)); do
     dir="$out/ready-$phase-$attempt"
     capture "$dir"
     if node "$spike/verify-captures.mjs" --ready "$scale" "$width" "$height" "$dir"/*.png >"$dir/check.log" 2>&1; then
       printf '%s presented expected geometry on capture %s\n' "$phase" "$attempt"
       return
+    else
+      status=$?
+      if [[ $status != 75 ]]; then
+        cat "$dir/check.log"
+        return "$status"
+      fi
     fi
-    ((attempt += 1))
   done
+  cat "$dir/check.log"
+  printf '%s did not present the expected geometry in %s captures\n' "$phase" "$capture_attempts"
   return 1
 }
 await_color() {
-  local phase=$1 x=$2 y=$3 expected=$4 dir="$out/$1"
+  local phase=$1 x=$2 y=$3 expected=$4 dir="$out/$1" attempt
   mkdir "$dir"
-  while kill -0 "$demo_pid"; do
+  for ((attempt = 1; attempt <= capture_attempts; attempt++)); do
     magick import -window root "$dir/x11.png"
     if [[ $(magick "$dir/x11.png" -format "%[hex:p{$x,$y}]" info:) == "$expected" ]]; then
       return
     fi
   done
-  printf 'Missing %s pixel\n' "$phase" >&2
+  printf 'Missing %s pixel in %s captures\n' "$phase" "$capture_attempts"
   return 1
 }
 
@@ -140,23 +190,25 @@ if [[ -n $input ]]; then
   cc -std=c17 -Wall -Wextra -Werror "$spike/x11-input.c" -lX11 -lXtst -o "$out/x11-input"
   "$out/x11-input" click "$((left + 110))" "$((top + 103))"
   await_log 'CEF popup paint'
-  capture "$out/popup"
-  popup_region="60x65+$((left + 82))+$((top + 109))"
-  magick "$out/initial3/x11.png" -crop "$popup_region" -depth 8 "rgb:$out/popup/before.rgb"
-  magick "$out/popup/x11.png" -crop "$popup_region" -depth 8 "rgb:$out/popup/after.rgb"
-  if cmp --silent "$out/popup/before.rgb" "$out/popup/after.rgb"; then
-    printf 'CEF popup did not change the captured page pixels.\n' >&2
-    exit 1
-  fi
+  # Keep the focused select's outline out of the dismissal comparison.
+  popup_region="60x62+$((left + 82))+$((top + 118))"
+  magick "$out/initial3/x11.png" -crop "$popup_region" -depth 8 "rgb:$out/popup-before.rgb"
+  await_popup_pixels popup-open changed
   printf 'CEF popup painted over the page.\n'
   "$out/x11-input" click "$((left + 105))" "$((top + 151))"
   await_log 'CEF popup hidden'
-  capture "$out/popup-hidden"
+  await_popup_pixels popup-hidden baseline
   "$out/x11-input" click "$((left + 220))" "$((top + 103))"
   await_color focused "$((left + 28))" "$((top + 468))" 53C9FF
   "$out/x11-input" key x
   await_color typed "$((left + 12))" "$((top + 468))" 48D159
   printf 'The page input received the X11 key event.\n'
+  if [[ $input == input ]]; then
+    printf 'commit-text é\n' >&3
+    await_log 'Flecha fixture accepted IME commit'
+    await_color ime-committed "$((left + 12))" "$((top + 468))" 986FED
+    printf 'The page received a standalone Unicode text commit.\n'
+  fi
   if [[ $input == clipboard ]]; then
     "$out/x11-input" copy
     capture "$out/copied"
@@ -174,7 +226,12 @@ await_pixels resized 640 360
 capture "$out/resized1"
 capture "$out/resized2"
 capture "$out/resized3"
-node "$spike/verify-captures.mjs" "$scale" 640 360 "$out"/resized*/*.png
+resized=$(node "$spike/verify-captures.mjs" "$scale" 640 360 "$out"/resized*/*.png)
+printf '%s\n' "$resized"
+if [[ $(jq -c .screen <<< "$metrics") != "$(jq -c .screen <<< "$resized")" ]]; then
+  printf 'Page screen metrics changed during a same-output resize\n'
+  exit 1
+fi
 
 if [[ $mode == fallback ]]; then
   printf 'reject-next-import\n' >&3
@@ -190,4 +247,5 @@ fi
 printf 'close\n' >&3
 wait "$demo_pid"
 demo_pid=
+rg -q 'CEF browser closed' "$out/demo.log"
 cat "$out/demo.log"

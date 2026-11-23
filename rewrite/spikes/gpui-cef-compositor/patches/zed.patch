@@ -199,7 +199,7 @@ index 37e9a0a..31f105e 100644
              required_features |= wgpu::Features::DUAL_SOURCE_BLENDING;
          } else {
 diff --git a/crates/gpui_wgpu/src/wgpu_renderer.rs b/crates/gpui_wgpu/src/wgpu_renderer.rs
-index cd9d870..a7ae33b 100644
+index cd9d870..c23ff49 100644
 --- a/crates/gpui_wgpu/src/wgpu_renderer.rs
 +++ b/crates/gpui_wgpu/src/wgpu_renderer.rs
 @@ -95,6 +95,7 @@ impl From<Bounds<ScaledPixels>> for PodBounds {
@@ -227,10 +227,10 @@ index cd9d870..a7ae33b 100644
                      ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                      count: None,
                  },
-@@ -1070,6 +1061,21 @@ impl WgpuRenderer {
+@@ -1068,6 +1059,21 @@ impl WgpuRenderer {
+         self.core().is_some_and(|core| core.dual_source_blending)
+     }
 
-     /// Returns `None` once GPU resources have been released by `destroy` or a pending
-     /// device recovery.
 +    #[cfg(target_os = "linux")]
 +    pub fn surface_device(&self) -> Option<gpui::SurfaceDevice> {
 +        let core = self.core()?;
@@ -246,9 +246,9 @@ index cd9d870..a7ae33b 100644
 +        })
 +    }
 +
+     /// Returns `None` once GPU resources have been released by `destroy` or a pending
+     /// device recovery.
      pub fn gpu_specs(&self) -> Option<GpuSpecs> {
-         let adapter_info = &self.core()?.adapter_info;
-         Some(GpuSpecs {
 @@ -1324,6 +1330,48 @@ impl WgpuRendererCore {
          &mut self.resources
      }

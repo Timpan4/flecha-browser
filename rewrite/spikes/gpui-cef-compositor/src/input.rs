@@ -93,8 +93,13 @@ pub fn scroll(host: &BrowserHost, scroll: &ScrollEvent) {
     );
 }
 
-pub fn key(host: &BrowserHost, stroke: &Keystroke, up: bool, repeat: bool) {
+pub fn key(host: &BrowserHost, stroke: &Keystroke, up: bool, repeat: bool, prefer_text: bool) {
     let mut flags = modifiers(stroke.modifiers);
+    let altgr = prefer_text && stroke.modifiers.control && stroke.modifiers.alt;
+    if altgr {
+        flags &= !(Flags::EVENTFLAG_CONTROL_DOWN.0 | Flags::EVENTFLAG_ALT_DOWN.0);
+        flags |= Flags::EVENTFLAG_ALTGR_DOWN.0;
+    }
     if repeat {
         flags |= Flags::EVENTFLAG_IS_REPEAT.0;
     }
@@ -114,11 +119,11 @@ pub fn key(host: &BrowserHost, stroke: &Keystroke, up: bool, repeat: bool) {
             .next()
             .filter(|_| stroke.key.chars().count() == 1)
             .unwrap_or_default(),
-        is_system_key: i32::from(stroke.modifiers.alt),
+        is_system_key: i32::from(stroke.modifiers.alt && !altgr),
         ..Default::default()
     };
     host.send_key_event(Some(&key));
-    if !up && !stroke.modifiers.control && !stroke.modifiers.platform {
+    if !up && (!stroke.modifiers.control || altgr) && !stroke.modifiers.platform {
         key.type_ = KeyEventType::CHAR;
         for unit in text.encode_utf16() {
             key.character = unit;

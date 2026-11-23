@@ -1,41 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-spike=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-rewrite=$(cd "$spike/../.." && pwd)
-sources="$rewrite/target/spike1-src"
-
-pin() {
-  local table=$1 key=$2 line active=''
-  local value_pattern="^${key}[[:space:]]*=[[:space:]]*\"([^\"]*)\""
-  while IFS= read -r line; do
-    if [[ $line == \[*\] ]]; then
-      active=${line:1:-1}
-    elif [[ $active == "$table" && $line =~ $value_pattern ]]; then
-      printf '%s\n' "${BASH_REMATCH[1]}"
-      return
-    fi
-  done < "$rewrite/pins.toml"
-  printf 'Missing pin %s.%s\n' "$table" "$key" >&2
-  return 1
-}
+source "$(dirname -- "${BASH_SOURCE[0]}")/runtime-paths.sh"
 
 prepare_source() {
-  local pin_table=$1 name=$2 repo rev staging destination patch_file
+  local pin_table=$1 name=$2 repo rev destination patch_file
   repo=$(pin "$pin_table" git)
   rev=$(pin "$pin_table" rev)
   destination="$sources/$name"
   patch_file="$spike/patches/$name.patch"
   if [[ ! -d $destination ]]; then
-    staging=$(mktemp -d "$sources/$name.XXXXXX")
+    staging="$temporary/$name"
+    mkdir "$staging"
     curl -fsSL "https://codeload.github.com/${repo#https://github.com/}/tar.gz/$rev" |
       tar -xz --strip-components=1 -C "$staging"
     patch -d "$staging" -p1 --batch --forward < "$patch_file"
-    mv -T "$staging" "$destination"
-  elif patch -d "$destination" -p1 --dry-run --batch --reverse < "$patch_file" >/dev/null; then
+    printf '%s\n%s\n' "$repo" "$rev" > "$staging/.flecha-revision"
+    mv "$staging" "$destination"
+  elif cmp -s "$destination/.flecha-revision" <(printf '%s\n%s\n' "$repo" "$rev") &&
+    patch -d "$destination" -p1 --dry-run --batch --reverse < "$patch_file" >/dev/null; then
     printf '%s patches already applied\n' "$name"
   else
-    printf 'Existing %s does not match the patched source. Use a fresh target directory.\n' "$destination" >&2
+    printf 'Existing %s does not match the pinned repository, revision or patch. Use a fresh target directory.\n' "$destination" >&2
     return 1
   fi
 }
@@ -48,28 +34,46 @@ case "${1:-$(uname -s):$(uname -m)}" in
 esac
 
 mkdir -p "$sources/cef-beta"
+lock="$sources/.prepare-lock"
+if ! mkdir "$lock"; then
+  printf 'Preparation already owns %s\n' "$lock" >&2
+  exit 1
+fi
+temporary=
+cleanup() {
+  if [[ -n $temporary ]]; then rm -rf -- "$temporary"; fi
+  rmdir "$lock"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+temporary=$(mktemp -d "$sources/prepare.XXXXXX")
+
 prepare_source gpui zed
 prepare_source cef-rs cef-rs
 
-version=$(pin cef version)
-channel=$(pin cef channel)
-sha1=$(pin "cef.$channel.sha1" "$platform")
-archive_name="cef_binary_${version}_${platform}_${channel}_minimal.tar.bz2"
-archive="$sources/cef-beta/$archive_name"
-runtime_parent="$sources/cef-runtime/${version%%+*}"
-runtime="$runtime_parent/$directory"
+runtime_paths "$platform" "$directory"
+
+verify_archive() {
+  if command -v sha1sum >/dev/null; then
+    printf '%s  %s\n' "$sha1" "$1" | sha1sum --check
+  else
+    printf '%s  %s\n' "$sha1" "$1" | shasum -a 1 -c
+  fi
+}
 
 if [[ ! -f $archive ]]; then
-  download=$(mktemp "$sources/cef-beta/cef.XXXXXX")
+  download="$temporary/$archive_name"
   curl -fsSL "https://cef-builds.spotifycdn.com/${archive_name//+/%2B}" -o "$download"
-  printf '%s  %s\n' "$sha1" "$download" | sha1sum --check
-  mv -T "$download" "$archive"
+  verify_archive "$download"
+  mv "$download" "$archive"
 else
-  printf '%s  %s\n' "$sha1" "$archive" | sha1sum --check
+  verify_archive "$archive"
 fi
 
 if [[ ! -e $runtime ]]; then
-  unpack=$(mktemp -d "$sources/cef-beta/unpack.XXXXXX")
+  unpack="$temporary/unpack"
+  mkdir "$unpack"
   tar -xf "$archive" --strip-components=1 -C "$unpack"
   release="$unpack/Release"
   for item in CMakeLists.txt CREDITS.html cmake include libcef_dll; do
@@ -80,14 +84,9 @@ if [[ ! -e $runtime ]]; then
       mv -- "$item" "$release/"
     done
   fi
-  printf '{"type":"minimal","name":"%s","sha1":"%s"}\n' "$archive_name" "$sha1" > "$release/archive.json"
+  archive_metadata > "$release/archive.json"
   mkdir -p "$runtime_parent"
-  mv -T "$release" "$runtime"
+  mv "$release" "$runtime"
 fi
-if ! cmp --silent "$runtime/archive.json" <(
-  printf '{"type":"minimal","name":"%s","sha1":"%s"}\n' "$archive_name" "$sha1"
-); then
-  printf 'Unexpected archive metadata in %s\n' "$runtime" >&2
-  exit 1
-fi
+check_runtime
 printf 'Prepared %s\n' "$runtime"

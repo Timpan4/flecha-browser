@@ -1,10 +1,14 @@
+#define _POSIX_C_SOURCE 200809L
 #include <X11/Xlib.h>
 #include <X11/extensions/XTest.h>
 #include <X11/keysym.h>
 #include <limits.h>
+#include <poll.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 static int coordinate(const char *text)
 {
@@ -40,20 +44,45 @@ static int click(Display *display, int x, int y)
            XTestFakeButtonEvent(display, 1, False, CurrentTime);
 }
 
+static int64_t milliseconds(void)
+{
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
+        return -1;
+    return (int64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000;
+}
+
 static int paste(Display *display)
 {
-    Atom clipboard = XInternAtom(display, "CLIPBOARD", False);
-    if (XGetSelectionOwner(display, clipboard) == None)
+    // Match the pinned GPUI X11 clipboard's selection deadline and poll cadence.
+    int64_t start = milliseconds();
+    if (start < 0)
         return 0;
+    const int64_t deadline = start + 4000;
+    Atom clipboard = XInternAtom(display, "CLIPBOARD", False);
+    while (XGetSelectionOwner(display, clipboard) == None) {
+        int64_t now = milliseconds();
+        if (now < 0 || now >= deadline) {
+            fprintf(stderr, "No X11 CLIPBOARD owner appeared\n");
+            return 0;
+        }
+        nanosleep(&(struct timespec){.tv_nsec = 1000000}, NULL);
+    }
     Atom utf8 = XInternAtom(display, "UTF8_STRING", False);
     Atom property = XInternAtom(display, "FLECHA_SPIKE", False);
     Window requestor = XCreateSimpleWindow(display, DefaultRootWindow(display),
                                           0, 0, 1, 1, 0, 0, 0);
     XConvertSelection(display, clipboard, utf8, property, requestor, CurrentTime);
+    XFlush(display);
     XEvent event;
-    do {
-        XNextEvent(display, &event);
-    } while (event.type != SelectionNotify);
+    while (!XCheckTypedWindowEvent(display, requestor, SelectionNotify, &event)) {
+        int64_t now = milliseconds();
+        struct pollfd connection = {.fd = ConnectionNumber(display), .events = POLLIN};
+        if (now < 0 || now >= deadline || poll(&connection, 1, (int)(deadline - now)) <= 0) {
+            fprintf(stderr, "X11 CLIPBOARD owner did not send SelectionNotify\n");
+            return 0;
+        }
+    }
     if (event.xselection.property != property)
         return 0;
     Atom type;

@@ -4,13 +4,24 @@ use anyhow::{Context as _, Result, ensure};
 use cef::AcceleratedPaintInfo;
 use gpui::{Bounds, Canvas, ContentMask, Pixels, RenderImage, Styled as _, canvas};
 
+/// A frame whose texture and renderer provenance are assigned together.
+///
+/// ```compile_fail
+/// let _ = flecha_surface::Frame::Texture {
+///     view: panic!(), device: panic!(), source_uv: [0.0; 4],
+/// };
+/// ```
 #[derive(Clone)]
-pub enum Frame {
+pub struct Frame(FrameStorage);
+
+#[derive(Clone)]
+enum FrameStorage {
     #[cfg(target_os = "linux")]
     Texture {
         view: wgpu::TextureView,
         device: wgpu::Device,
         source_uv: [f32; 4],
+        software_texture: Option<wgpu::Texture>,
     },
     Image(Arc<RenderImage>),
 }
@@ -26,6 +37,8 @@ impl Frame {
         width: i32,
         height: i32,
         window: &SurfaceTarget,
+        previous: Option<&Self>,
+        dirty: &[cef::Rect],
     ) -> Result<Self> {
         let width = u32::try_from(width)?;
         let height = u32::try_from(height)?;
@@ -50,6 +63,55 @@ impl Frame {
                 height,
                 depth_or_array_layers: 1,
             };
+            if let Some(
+                prior @ Self(FrameStorage::Texture {
+                    device,
+                    software_texture: Some(texture),
+                    ..
+                }),
+            ) = previous
+                && *device == gpu.device
+                && texture.size() == size
+                && !dirty.is_empty()
+            {
+                let regions = dirty
+                    .iter()
+                    .map(|rect| {
+                        let x = u32::try_from(rect.x)?;
+                        let y = u32::try_from(rect.y)?;
+                        let w = u32::try_from(rect.width)?;
+                        let h = u32::try_from(rect.height)?;
+                        ensure!(
+                            x <= width && y <= height && w <= width - x && h <= height - y,
+                            "CEF dirty rectangle exceeds the software frame"
+                        );
+                        Ok((x, y, w, h))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                for (x, y, width, height) in regions {
+                    if width == 0 || height == 0 {
+                        continue;
+                    }
+                    gpu.queue.write_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            origin: wgpu::Origin3d { x, y, z: 0 },
+                            ..texture.as_image_copy()
+                        },
+                        data,
+                        wgpu::TexelCopyBufferLayout {
+                            offset: u64::from(y) * u64::from(stride) + u64::from(x) * 4,
+                            bytes_per_row: Some(stride),
+                            rows_per_image: None,
+                        },
+                        wgpu::Extent3d {
+                            width,
+                            height,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                }
+                return Ok(prior.clone());
+            }
             let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("CEF software frame"),
                 size,
@@ -70,20 +132,21 @@ impl Frame {
                 },
                 size,
             );
-            return Ok(Self::Texture {
+            return Ok(Self(FrameStorage::Texture {
                 view: texture.create_view(&Default::default()),
                 device: gpu.device.clone(),
                 source_uv: [0.0, 0.0, 1.0, 1.0],
-            });
+                software_texture: Some(texture),
+            }));
         }
         #[cfg(not(target_os = "linux"))]
-        let _ = window;
+        let _ = (window, previous, dirty);
 
         let image = image::RgbaImage::from_raw(width, height, data.to_vec())
             .context("invalid BGRA frame length")?;
-        Ok(Self::Image(Arc::new(RenderImage::new(
+        Ok(Self(FrameStorage::Image(Arc::new(RenderImage::new(
             smallvec::smallvec![image::Frame::new(image)],
-        ))))
+        )))))
     }
 
     #[cfg(target_os = "linux")]
@@ -94,8 +157,9 @@ impl Frame {
     /// Call inside the originating callback with the GPU used by CEF.
     pub unsafe fn copy_accelerated(
         info: &AcceleratedPaintInfo,
-        gpu: &gpui::SurfaceDevice,
+        target: &SurfaceTarget,
     ) -> Result<Self> {
+        let gpu = target.gpu.as_ref().context("missing GPUI device")?;
         let texture = unsafe { import_accelerated(info, &gpu.device, &gpu.queue) }?;
         let visible = &info.extra.visible_rect;
         let right = visible
@@ -117,7 +181,7 @@ impl Frame {
         );
         let width = texture.width() as f32;
         let height = texture.height() as f32;
-        Ok(Self::Texture {
+        Ok(Self(FrameStorage::Texture {
             view: texture.create_view(&Default::default()),
             device: gpu.device.clone(),
             source_uv: [
@@ -126,14 +190,15 @@ impl Frame {
                 right as f32 / width,
                 bottom as f32 / height,
             ],
-        })
+            software_texture: None,
+        }))
     }
 
     pub fn image(&self) -> Option<&Arc<RenderImage>> {
-        match self {
-            Self::Image(image) => Some(image),
+        match &self.0 {
+            FrameStorage::Image(image) => Some(image),
             #[cfg(target_os = "linux")]
-            Self::Texture { .. } => None,
+            FrameStorage::Texture { .. } => None,
         }
     }
 }
@@ -155,13 +220,29 @@ pub unsafe fn import_accelerated(
     Ok(unsafe { source.import_texture(device, queue) }?)
 }
 
+/// The renderer pair supplied by GPUI, or a software image target.
+///
+/// ```compile_fail
+/// let mut target = flecha_surface::SurfaceTarget::default();
+/// target.gpu = None;
+/// ```
 #[derive(Clone, Default)]
 pub struct SurfaceTarget {
     #[cfg(target_os = "linux")]
-    pub gpu: Option<gpui::SurfaceDevice>,
+    gpu: Option<gpui::SurfaceDevice>,
 }
 
 impl SurfaceTarget {
+    #[cfg(target_os = "linux")]
+    pub fn adapter(&self) -> Option<&wgpu::Adapter> {
+        self.gpu.as_ref().map(|gpu| &gpu.adapter)
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn is_same_device(&self, other: &Self) -> bool {
+        self.gpu.as_ref().map(|gpu| &gpu.device) == other.gpu.as_ref().map(|gpu| &gpu.device)
+    }
+
     pub fn for_window(window: &gpui::Window) -> Self {
         #[cfg(target_os = "linux")]
         {
@@ -198,12 +279,13 @@ pub fn surface(view: Option<Frame>, popup: Option<(Bounds<Pixels>, Frame)>) -> C
 }
 
 fn paint(frame: Frame, bounds: Bounds<Pixels>, window: &mut gpui::Window) {
-    match frame {
+    match frame.0 {
         #[cfg(target_os = "linux")]
-        Frame::Texture {
+        FrameStorage::Texture {
             view,
             device,
             source_uv,
+            ..
         } => {
             if window
                 .surface_device()
@@ -212,7 +294,7 @@ fn paint(frame: Frame, bounds: Bounds<Pixels>, window: &mut gpui::Window) {
                 window.paint_texture_surface(bounds, view, source_uv);
             }
         }
-        Frame::Image(image) => {
+        FrameStorage::Image(image) => {
             if let Err(error) =
                 window.paint_image(bounds, bounds, Default::default(), image, 0, false)
             {

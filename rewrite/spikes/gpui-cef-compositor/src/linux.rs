@@ -13,16 +13,16 @@ pub fn ozone_platform(window: &gpui::Window) -> &'static str {
 }
 
 /// Match the GPUI adapter to the node Chromium uses for GBM allocations.
-pub fn render_node(gpu: &gpui::SurfaceDevice, ozone: &str) -> Result<PathBuf> {
+pub fn render_node(adapter: &wgpu::Adapter, ozone: &str) -> Result<PathBuf> {
     ensure!(
-        gpu.device
+        adapter
             .features()
             .contains(wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF),
         "GPUI adapter does not support Vulkan dma-buf import"
     );
 
     // The guard keeps the Vulkan adapter and instance alive during this read.
-    let adapter = unsafe { gpu.adapter.as_hal::<wgpu::hal::api::Vulkan>() }
+    let adapter = unsafe { adapter.as_hal::<wgpu::hal::api::Vulkan>() }
         .context("GPUI adapter is not Vulkan")?;
     ensure!(
         adapter

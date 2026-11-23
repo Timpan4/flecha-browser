@@ -1,2 +1,0 @@
-[env]
-CEF_PATH = { value = "target/spike1-src/cef-runtime", relative = true, force = true }
