@@ -14,7 +14,7 @@
       "type": "minimal"
     },
     "compiled_cef_version": "158.0.3+g8c29be2+chromium-158.0.8127.18",
-    "loaded_libcef": "…/fresh2/rewrite/target/cef-runtime/158.0.3/cef_linux_x86_64/libcef.so",
+    "loaded_libcef": "…/fresh3/rewrite/target/cef-runtime/158.0.3/cef_linux_x86_64/libcef.so",
     "pinned_cef_version": "158.0.3+g8c29be2+chromium-158.0.8127.18",
     "pinned_channel": "beta",
     "pinned_sha1": "057a0b871bf26d26d654d999dba595b92fe0f067",
@@ -36,7 +36,7 @@
         "user": "same as browser"
       },
       "no_new_privs": "0",
-      "pid": 1260921,
+      "pid": 1361176,
       "seccomp": "0",
       "switches": [
         "--mode",
@@ -55,7 +55,7 @@
         "user": "same as browser"
       },
       "no_new_privs": "1",
-      "pid": 1260932,
+      "pid": 1361187,
       "seccomp": "0",
       "switches": [
         "--type=zygote",
@@ -64,6 +64,7 @@
         "--change-stack-guard-on-fork=<redacted>",
         "--user-data-dir=<redacted>",
         "--locales-dir-path=<redacted>",
+        "--log-severity=<redacted>",
         "--resources-dir-path=<redacted>"
       ],
       "type": "zygote"
@@ -76,7 +77,7 @@
         "user": "separate"
       },
       "no_new_privs": "1",
-      "pid": 1260933,
+      "pid": 1361188,
       "seccomp": "0",
       "switches": [
         "--type=zygote",
@@ -84,6 +85,7 @@
         "--change-stack-guard-on-fork=<redacted>",
         "--user-data-dir=<redacted>",
         "--locales-dir-path=<redacted>",
+        "--log-severity=<redacted>",
         "--resources-dir-path=<redacted>"
       ],
       "type": "zygote"
@@ -96,7 +98,7 @@
         "user": "separate"
       },
       "no_new_privs": "1",
-      "pid": 1260935,
+      "pid": 1361190,
       "seccomp": "0",
       "switches": [
         "--type=zygote",
@@ -104,6 +106,7 @@
         "--change-stack-guard-on-fork=<redacted>",
         "--user-data-dir=<redacted>",
         "--locales-dir-path=<redacted>",
+        "--log-severity=<redacted>",
         "--resources-dir-path=<redacted>"
       ],
       "type": "zygote"
@@ -116,7 +119,7 @@
         "user": "same as browser"
       },
       "no_new_privs": "1",
-      "pid": 1260963,
+      "pid": 1361218,
       "seccomp": "0",
       "switches": [
         "--type=zygote",
@@ -125,6 +128,7 @@
         "--change-stack-guard-on-fork=<redacted>",
         "--user-data-dir=<redacted>",
         "--locales-dir-path=<redacted>",
+        "--log-severity=<redacted>",
         "--resources-dir-path=<redacted>"
       ],
       "type": "zygote"
@@ -137,7 +141,7 @@
         "user": "same as browser"
       },
       "no_new_privs": "1",
-      "pid": 1260965,
+      "pid": 1361220,
       "seccomp": "0",
       "switches": [
         "--type=utility",
@@ -148,6 +152,7 @@
         "--change-stack-guard-on-fork=<redacted>",
         "--user-data-dir=<redacted>",
         "--locales-dir-path=<redacted>",
+        "--log-severity=<redacted>",
         "--resources-dir-path=<redacted>",
         "--shared-files=<redacted>",
         "--metrics-shmem-handle=<redacted>",
@@ -167,7 +172,7 @@
         "user": "separate"
       },
       "no_new_privs": "1",
-      "pid": 1260979,
+      "pid": 1361234,
       "seccomp": "2",
       "switches": [
         "--type=zygote",
@@ -175,6 +180,7 @@
         "--change-stack-guard-on-fork=<redacted>",
         "--user-data-dir=<redacted>",
         "--locales-dir-path=<redacted>",
+        "--log-severity=<redacted>",
         "--resources-dir-path=<redacted>"
       ],
       "type": "zygote"
@@ -187,7 +193,7 @@
         "user": "separate"
       },
       "no_new_privs": "1",
-      "pid": 1261042,
+      "pid": 1361294,
       "seccomp": "2",
       "switches": [
         "--type=zygote",
@@ -195,6 +201,7 @@
         "--change-stack-guard-on-fork=<redacted>",
         "--user-data-dir=<redacted>",
         "--locales-dir-path=<redacted>",
+        "--log-severity=<redacted>",
         "--resources-dir-path=<redacted>"
       ],
       "type": "zygote"
@@ -207,7 +214,7 @@
         "user": "same as browser"
       },
       "no_new_privs": "1",
-      "pid": 1261075,
+      "pid": 1361327,
       "seccomp": "0",
       "switches": [
         "--unshare-all",
@@ -243,7 +250,7 @@
         "user": "separate"
       },
       "no_new_privs": "1",
-      "pid": 1261076,
+      "pid": 1361328,
       "seccomp": "2",
       "switches": [
         "--unshare-all",
@@ -279,7 +286,7 @@
         "user": "separate"
       },
       "no_new_privs": "1",
-      "pid": 1261077,
+      "pid": 1361329,
       "seccomp": "2",
       "switches": [
         "--dbus-fd"
@@ -294,7 +301,7 @@
         "user": "separate"
       },
       "no_new_privs": "1",
-      "pid": 1261282,
+      "pid": 1361538,
       "seccomp": "2",
       "switches": [
         "--type=zygote",
@@ -302,6 +309,7 @@
         "--change-stack-guard-on-fork=<redacted>",
         "--user-data-dir=<redacted>",
         "--locales-dir-path=<redacted>",
+        "--log-severity=<redacted>",
         "--resources-dir-path=<redacted>"
       ],
       "type": "zygote"
@@ -314,7 +322,7 @@
         "user": "separate"
       },
       "no_new_privs": "1",
-      "pid": 1261308,
+      "pid": 1361564,
       "seccomp": "2",
       "switches": [
         "--type=zygote",
@@ -322,6 +330,7 @@
         "--change-stack-guard-on-fork=<redacted>",
         "--user-data-dir=<redacted>",
         "--locales-dir-path=<redacted>",
+        "--log-severity=<redacted>",
         "--resources-dir-path=<redacted>"
       ],
       "type": "zygote"
@@ -334,7 +343,7 @@
         "user": "separate"
       },
       "no_new_privs": "1",
-      "pid": 1261319,
+      "pid": 1361600,
       "seccomp": "2",
       "switches": [
         "--type=zygote",
@@ -342,6 +351,7 @@
         "--change-stack-guard-on-fork=<redacted>",
         "--user-data-dir=<redacted>",
         "--locales-dir-path=<redacted>",
+        "--log-severity=<redacted>",
         "--resources-dir-path=<redacted>"
       ],
       "type": "zygote"
@@ -354,7 +364,7 @@
         "user": "separate"
       },
       "no_new_privs": "1",
-      "pid": 1261335,
+      "pid": 1361638,
       "seccomp": "2",
       "switches": [
         "--type=zygote",
@@ -362,6 +372,7 @@
         "--change-stack-guard-on-fork=<redacted>",
         "--user-data-dir=<redacted>",
         "--locales-dir-path=<redacted>",
+        "--log-severity=<redacted>",
         "--resources-dir-path=<redacted>"
       ],
       "type": "zygote"
@@ -390,7 +401,7 @@
           "version": "158.0.8127.18"
         }
       ],
-      "href": "file://…/fresh2-out/sc-chrome/pro%23file%20%2520/flecha-selfcheck.html",
+      "href": "file://…/fresh3-out/sc-chrome/pro%23file%20%2520/flecha-selfcheck.html",
       "inner": [
         1050,
         917
@@ -430,7 +441,7 @@
     "version": {
       "href": "chrome://version/",
       "reason": "ready",
-      "text": "The Chromium Authors\nCopyright 2026 The Chromium Authors. All rights reserved.\nlicense | credits\nCEF\t158.0.3+g8c29be2+chromium-158.0.8127.18\nChromium\t158.0.8127.18 (Official Build) (x86_64) \nRevision\t6449d9f9a6a906edff724b7b220199b3fde4615c-refs/branch-heads/8127@{#845}\nOS\tLinux\nJavaScript\tV8 15.8.62.9\nUser Agent\tMozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36\nCommand Line\t<program> --lang=en-US --resources-dir-path=<redacted> --locales-dir-path=<redacted> --disable-signin-promo-on-avatar-pill-for-testing --disable-features=GlicActorUi,AutofillActorMode,LensOverlay,KillOnInvalidNavigationHeaders --ozone-platform=x11 --flag-switches-begin --flag-switches-end\nExecutable Path\t<redacted>\nModule Path\t<redacted>\nUser Data Path [*]\t<redacted>\nProfile Path [*]\t<redacted>\nVariations Source\tcommand line or about flags\nCommand-line Variations\teyJkaXNhYmxlLWZlYXR1cmVzIjoiQXV0b2ZpbGxBY3Rvck1vZGUsR2xpY0Fj...\t\nActive Variations\tf4f00e05-ca7d8d80\n9481ce98-3d47f4f4\n2a426c03-3d47f4f4\n70678518-dee66fa8\nbe338734-dee66fa8\n5f9907a9-dee66fa8\n8eeccb9a-dee66fa8\n2b465683-dee66fa8\n52fc7926-dee66fa8\nbc9b361d-dee66fa8\na41a7188-dee66fa8\nff71bfdc-dee66fa8\n251fc742-dee66fa8\n2159dd0c-dee66fa8\n4330e9a4-dee66fa8\ne7cc79d5-dee66fa8\n4b935545-bb2d3403\n9a38bae3-6046c8a7\n2d1e43a3-3d47f4f4\n386dc267-3d47f4f4\nd69d967d-4866ef6e\n3c8f75a1-21623f2a\na4406b35-1657e2d6\n408da146-1657e2d6\n\t\n\n[*] In Chromium terminology, CefSettings.root_cache_path is the \"User Data Path\" and CefSettings.cache_path is the \"Profile Path\". Chromium's process singleton lock protects against multiple app instances writing to the same \"User Data Path\" directory. Implement CefBrowserProcessHandler:: OnAlreadyRunningAppRelaunch to handle the case of app relaunch with the same directory.",
+      "text": "The Chromium Authors\nCopyright 2026 The Chromium Authors. All rights reserved.\nlicense | credits\nCEF\t158.0.3+g8c29be2+chromium-158.0.8127.18\nChromium\t158.0.8127.18 (Official Build) (x86_64) \nRevision\t6449d9f9a6a906edff724b7b220199b3fde4615c-refs/branch-heads/8127@{#845}\nOS\tLinux\nJavaScript\tV8 15.8.62.9\nUser Agent\tMozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36\nCommand Line\t<program> --lang=en-US --log-severity=<redacted> --resources-dir-path=<redacted> --locales-dir-path=<redacted> --disable-signin-promo-on-avatar-pill-for-testing --disable-features=GlicActorUi,AutofillActorMode,LensOverlay,KillOnInvalidNavigationHeaders --ozone-platform=x11 --flag-switches-begin --flag-switches-end\nExecutable Path\t<redacted>\nModule Path\t<redacted>\nUser Data Path [*]\t<redacted>\nProfile Path [*]\t<redacted>\nVariations Source\tcommand line or about flags\nCommand-line Variations\teyJkaXNhYmxlLWZlYXR1cmVzIjoiQXV0b2ZpbGxBY3Rvck1vZGUsR2xpY0Fj...\t\nActive Variations\tf4f00e05-ca7d8d80\n9481ce98-3d47f4f4\n2a426c03-3d47f4f4\n70678518-dee66fa8\nbe338734-dee66fa8\n5f9907a9-dee66fa8\n8eeccb9a-dee66fa8\n2b465683-dee66fa8\n52fc7926-dee66fa8\nbc9b361d-dee66fa8\na41a7188-dee66fa8\nff71bfdc-dee66fa8\n251fc742-dee66fa8\n2159dd0c-dee66fa8\n4330e9a4-dee66fa8\ne7cc79d5-dee66fa8\n4b935545-bb2d3403\n9a38bae3-6046c8a7\n2d1e43a3-3d47f4f4\n386dc267-3d47f4f4\nd69d967d-4866ef6e\n3c8f75a1-21623f2a\na4406b35-1657e2d6\n408da146-1657e2d6\n\t\n\n[*] In Chromium terminology, CefSettings.root_cache_path is the \"User Data Path\" and CefSettings.cache_path is the \"Profile Path\". Chromium's process singleton lock protects against multiple app instances writing to the same \"User Data Path\" directory. Implement CefBrowserProcessHandler:: OnAlreadyRunningAppRelaunch to handle the case of app relaunch with the same directory.",
       "title": "About Version"
     },
     "webstore": {

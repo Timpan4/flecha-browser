@@ -1,7 +1,9 @@
-xvfb pid 1264171 display :1
-app pid 1264173
-[load-end] http://127.0.0.1:39261
-[console] INPUT storage loads 2 (file://…/fresh2/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+xvfb pid 1365812 display :2
+app pid 1365815
+[load-end] http://127.0.0.1:33231
+[console] INPUT storage loads 2 (file://…/fresh3/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
 marker lines: 1
 PASS test 1 = 1
+marker lines in chrome_debug.log: 0
+PASS test 0 = 0
 app exit 0
