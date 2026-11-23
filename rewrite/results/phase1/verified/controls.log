@@ -1,0 +1,7 @@
+Negative control logs: /home/timpan4/.t3/worktrees/flecha-browser/t3-25e8aab9-8fed79970e8c4302/rewrite/target/phase1-controls.hDS8Mp/logs
+PASS direct-launch failed at the expected assertion
+PASS restore failed at the expected assertion
+PASS cookie failed at the expected assertion
+PASS stale failed at the expected assertion
+PASS timeout failed at the expected assertion
+error: use of a disallowed method `gpui::FutureExt::with_timeout`

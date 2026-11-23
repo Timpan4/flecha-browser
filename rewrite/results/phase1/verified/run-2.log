@@ -1,0 +1,14 @@
+Isolated run: /home/timpan4/.t3/worktrees/flecha-browser/t3-25e8aab9-8fed79970e8c4302/rewrite/target/phase1.fpNtFm
+PASS checked /proc environ for the app and its CEF descendants (10 processes, including a renderer or zygote child)
+PASS opened a durable tab, received CEF load and paint, and captured the GPUI fixture frame
+PASS an X11 click and key passed through GPUI into the CEF input field
+PASS split the selected tab, loaded the second pane, and captured both pages at once
+PASS promoted the transient Peek into Today with its browser, document and draft intact
+PASS moved the live document to Flechinha and back to the last active Flecha window
+PASS closed the returned tab, archived its URL, and received CEF closure
+PASS replaced a live browser twice before dispatch and received only the current generation
+PASS two tabs in the isolated Space shared the cookie and the ordinary Space did not receive it
+PASS restarted on the same scratch profile and restored core state and both CEF split panes
+PASS the isolated cookie persisted after restart and stayed out of the ordinary Space
+PASS CEF shut down cleanly
+Isolated process namespace exited (0)
