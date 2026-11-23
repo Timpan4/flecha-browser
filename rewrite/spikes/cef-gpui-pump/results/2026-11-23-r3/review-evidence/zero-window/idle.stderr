@@ -1,0 +1,21 @@
+[39740:39754:1123/104535.595220:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[39740:39754:1123/104535.623395:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[39740:39754:1123/104535.623469:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[39740:39754:1123/104535.623478:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[2026-11-23T09:45:35Z ERROR gpui_linux::linux::x11::client] Found no xinput mouse pointers.
+MESA-EGL: warning: DRI3 error: Could not get DRI3 device
+MESA-EGL: warning: Ensure your X server supports DRI3 to get accelerated rendering
+[39740:39754:1123/104536.031413:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[39740:39754:1123/104536.031429:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[39740:39740:1123/104536.032439:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.Properties.GetAll: object_path= /org/freedesktop/UPower/devices/DisplayDevice: unknown error type: 
+[scenario] context_initialized_after_ms: 0.00442
+[engine] created Page(0) id=1 runtime_style=Some(RuntimeStyle(CEF_RUNTIME_STYLE_ALLOY))
+[scenario] page_load_ms: 86.53709599999999
+[scenario] idle_paint_log: [{"ms_after_first_paint":0.0,"in_measured_window":false,"dirty_rects":[[0,0,1024,640]]}]
+[scenario] idle: {"seconds":0.019025677,"pump":{"requests_immediate":0,"requests_delayed":0,"calls_immediate":0,"calls_delayed":0,"calls_periodic":0,"calls_rerun":0,"calls_total":0,"recursive_calls_deferred":0},"gpui_renders":0,"gpui_renders_per_second":0.0,"gpui_animation_steps":0,"gpui_images_uploaded":0,"on_paint_by_page":[{"count":0,"per_second":0.0}],"cpu":{"wall_seconds":0.019025677,"clock_ticks_per_second":100.0,"total_cpu_ticks":2,"total_cpu_percent_of_one_core_from_ticks":105.12109503383242,"total_run_ms":14.527266,"total_cpu_percent_of_one_core":76.35610548838814,"method":"sum over the process tree of /proc/PID/task/*/schedstat run time (ns); ticks from /proc/PID/stat utime+stime","processes":[{"pid":39740,"type":"browser","cpu_ticks":2,"run_ms":14.527266,"cpu_percent_of_one_core":76.35610548838814},{"pid":39743,"type":"zygote","cpu_ticks":0,"run_ms":0.0,"cpu_percent_of_one_core":0.0},{"pid":39744,"type":"zygote","cpu_ticks":0,"run_ms":0.0,"cpu_percent_of_one_core":0.0},{"pid":39778,"type":"utility","cpu_ticks":0,"run_ms":0.0,"cpu_percent_of_one_core":0.0},{"pid":39774,"type":"zygote-forked-unsandboxed","cpu_ticks":0,"run_ms":0.0,"cpu_percent_of_one_core":0.0},{"pid":39746,"type":"zygote","cpu_ticks":0,"run_ms":0.0,"cpu_percent_of_one_core":0.0},{"pid":39824,"type":"zygote-forked","cpu_ticks":0,"run_ms":0.0,"cpu_percent_of_one_core":0.0},{"pid":39931,"type":"zygote-forked","cpu_ticks":0,"run_ms":0.0,"cpu_percent_of_one_core":0.0},{"pid":39932,"type":"zygote-forked","cpu_ticks":0,"run_ms":0.0,"cpu_percent_of_one_core":0.0},{"pid":39955,"type":"zygote-forked","cpu_ticks":0,"run_ms":0.0,"cpu_percent_of_one_core":0.0}],"exited_during_window":[]}}
+[scenario] idle_pump_trace: {"requests":0,"calls":0,"unexplained_calls":0,"unexplained_examples":[],"early_periodic_calls":0,"gap_between_calls_ms":{"min":null,"p50":null,"p99":null,"max":null},"work_duration_ms":{"p50":null,"p99":null,"max":null,"total":-0.0,"slowest":[]}}
+[scenario] idle_pass: true
+[engine] before_close Page(0) id=1
+[scenario] browsers_closed_after_ms: 0.00032
+[scenario] scenario_seconds: 1.142217218
+[scenario] totals: {"gpui_renders":3,"gpui_animation_steps":0,"gpui_images_uploaded":1,"gpui_images_dropped":1,"on_paint_by_page":[1]}

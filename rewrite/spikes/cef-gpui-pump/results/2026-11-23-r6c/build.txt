@@ -1,0 +1,12 @@
+head 70e99af4bd0939b316c5e5b1de9da31558bfaac2
+tracked changes in rewrite/:
+ M rewrite/spikes/cef-gpui-pump/results/2026-11-23-r5-controls/clippy-guard-control.out
+ M rewrite/spikes/cef-gpui-pump/results/2026-11-23-r6-controls/watchdog/build.txt
+ M rewrite/spikes/cef-gpui-pump/results/2026-11-23-r6-controls/watchdog/control.log
+ M rewrite/spikes/cef-gpui-pump/results/2026-11-23-r6-controls/watchdog/idle.leftover.txt
+ M rewrite/spikes/cef-gpui-pump/results/2026-11-23-r6-controls/watchdog/idle.scratch-dirs.txt
+ M rewrite/spikes/cef-gpui-pump/results/2026-11-23-r6-controls/watchdog/idle.stderr
+ M rewrite/spikes/cef-gpui-pump/results/2026-11-23-r6-controls/watchdog/idle.watchdog.txt
+ D rewrite/spikes/cef-gpui-pump/results/2026-11-23-r6-controls/watchdog/resist.stderr
+ M rewrite/spikes/cef-gpui-pump/results/2026-11-23-r6-controls/watchdog/run.log
+ M rewrite/spikes/cef-gpui-pump/results/2026-11-23-r6-controls/watchdog/tree-before-stop.txt

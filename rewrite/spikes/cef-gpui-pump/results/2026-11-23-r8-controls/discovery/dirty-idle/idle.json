@@ -1,0 +1,247 @@
+{
+  "gpui_inactive_frame_interval_ms": 33.333,
+  "window_scale_factor": 1.0,
+  "browsers_closed": true,
+  "context_initialized_after_ms": 0.00479,
+  "page_load_ms": 29.699401,
+  "isolation_after_load": {
+    "forbidden": [
+      "/tmp"
+    ],
+    "allowed": [
+      "/tmp/cef-gpui-pump-discovery.bip923/rewrite/target/release/cef-gpui-pump-bundle/cef_binary_158.0.3+g8c29be2+chromium-158.0.8127.18_linux64_beta_minimal",
+      "/tmp/cef-gpui-pump-discovery.bip923/rewrite/spikes/cef-gpui-pump/pages",
+      "/home/timpan4/.t3/worktrees/flecha-browser/t3-3b42251b-74c4a1e059834541/rewrite/spikes/cef-gpui-pump/results/2026-11-23-r8-controls/discovery/dirty-idle"
+    ],
+    "processes": 0,
+    "discovery_errors": [
+      "/proc/1337115/stat: Too many open files (os error 24)",
+      "root 1337115 is not in the process listing"
+    ],
+    "open_files": [],
+    "mapped_files": [],
+    "unix_socket_peers": [],
+    "sockets": 0,
+    "sockets_without_peer_info": 0,
+    "unreadable": [],
+    "ss_error": null,
+    "ss_unparsed_rows": [],
+    "clean": false
+  },
+  "idle": {
+    "seconds": 5.004342331,
+    "pump": {
+      "requests_immediate": 44,
+      "requests_delayed": 0,
+      "calls_immediate": 44,
+      "calls_delayed": 0,
+      "calls_periodic": 146,
+      "calls_rerun": 0,
+      "calls_total": 190,
+      "recursive_calls_deferred": 0
+    },
+    "gpui_renders": 1,
+    "gpui_renders_per_second": 0.1998264574758165,
+    "gpui_animation_steps": 0,
+    "gpui_images_uploaded": 1,
+    "on_paint_by_page": [
+      {
+        "count": 1,
+        "per_second": 0.1998264574758165
+      }
+    ],
+    "on_paint_frames_overwritten_before_upload": 0,
+    "on_paint_frames_overwritten_before_upload_per_second": 0.0,
+    "gpui_images_replaced_before_draw": 0,
+    "gpui_images_replaced_before_draw_per_second": 0.0,
+    "cpu": {
+      "wall_seconds": 5.004342331,
+      "clock_ticks_per_second": 100.0,
+      "total_cpu_ticks": 0,
+      "total_cpu_percent_of_one_core_from_ticks": 0.0,
+      "total_run_ms": 0.0,
+      "total_cpu_percent_of_one_core": 0.0,
+      "method": "sum over the process tree of /proc/PID/task/*/schedstat run time (ns); ticks from /proc/PID/stat utime+stime",
+      "processes": [],
+      "exited_during_window": []
+    }
+  },
+  "pump_trace": {
+    "seconds": 8.01180955,
+    "max_gap_between_calls_ms": 43.089247,
+    "max_gap_bound_ms": 5000.0,
+    "pump_timers_created": 248,
+    "pump_timers_per_second": 30.95430544776242,
+    "pump_timer_deadlines_max_unexpired_since_start": 1,
+    "bridge_timers_created": 0,
+    "scenario_timers_created": 6,
+    "scenario_timer_deadlines_max_unexpired": 5,
+    "analysis": {
+      "requests": 214,
+      "calls": 433,
+      "unexplained_calls": 0,
+      "unexplained_examples": [],
+      "gap_between_calls_ms": {
+        "min": 0.006039999999999999,
+        "p50": 33.036464,
+        "p99": 33.132723000000006,
+        "max": 43.089247
+      },
+      "work_duration_ms": {
+        "p50": 0.00729,
+        "p99": 10.002244,
+        "max": 10.004093,
+        "total": 110.079424,
+        "slowest": [
+          10.004093,
+          10.003983,
+          10.003424,
+          10.002613,
+          10.002244
+        ]
+      }
+    }
+  },
+  "pump_pass": true,
+  "idle_paint_log": [
+    {
+      "ms_after_navigation": 64.42888300000001,
+      "in_measured_window": false,
+      "paint_holding_repaint": false,
+      "dirty_rects": [
+        [
+          0,
+          0,
+          1024,
+          640
+        ]
+      ]
+    },
+    {
+      "ms_after_navigation": 4036.303249000001,
+      "in_measured_window": true,
+      "paint_holding_repaint": true,
+      "dirty_rects": [
+        [
+          0,
+          0,
+          1024,
+          640
+        ]
+      ]
+    }
+  ],
+  "idle_pump_trace": {
+    "requests": 44,
+    "calls": 190,
+    "unexplained_calls": 0,
+    "unexplained_examples": [],
+    "gap_between_calls_ms": {
+      "min": 0.019451,
+      "p50": 33.055423,
+      "p99": 33.147674,
+      "max": 43.089247
+    },
+    "work_duration_ms": {
+      "p50": 0.0073,
+      "p99": 10.002613,
+      "max": 10.004093,
+      "total": 34.10243800000001,
+      "slowest": [
+        10.004093,
+        10.003983,
+        10.002613,
+        0.712033,
+        0.463122
+      ]
+    }
+  },
+  "idle_frames": {
+    "gpui_renders_in_window": 1,
+    "on_paint_in_window": 1,
+    "paint_holding_repaints_in_window": 1,
+    "paint_holding_timeout_ms": 4000.0,
+    "strict_no_frames": false
+  },
+  "idle_pass": true,
+  "isolation_before_shutdown": {
+    "forbidden": [
+      "/tmp"
+    ],
+    "allowed": [
+      "/tmp/cef-gpui-pump-discovery.bip923/rewrite/target/release/cef-gpui-pump-bundle/cef_binary_158.0.3+g8c29be2+chromium-158.0.8127.18_linux64_beta_minimal",
+      "/tmp/cef-gpui-pump-discovery.bip923/rewrite/spikes/cef-gpui-pump/pages",
+      "/home/timpan4/.t3/worktrees/flecha-browser/t3-3b42251b-74c4a1e059834541/rewrite/spikes/cef-gpui-pump/results/2026-11-23-r8-controls/discovery/dirty-idle"
+    ],
+    "processes": 0,
+    "discovery_errors": [
+      "/proc/1337115/stat: Too many open files (os error 24)",
+      "root 1337115 is not in the process listing"
+    ],
+    "open_files": [],
+    "mapped_files": [],
+    "unix_socket_peers": [],
+    "sockets": 0,
+    "sockets_without_peer_info": 0,
+    "unreadable": [],
+    "ss_error": null,
+    "ss_unparsed_rows": [],
+    "clean": false
+  },
+  "isolation_clean": false,
+  "browsers_closed_after_ms": 0.0003,
+  "scenario_seconds": 8.075332457,
+  "totals": {
+    "gpui_renders": 4,
+    "gpui_animation_steps": 0,
+    "gpui_images_uploaded": 2,
+    "gpui_images_dropped": 2,
+    "gpui_images_replaced_before_draw": 0,
+    "on_paint_frames_overwritten_before_upload": 0,
+    "on_paint_by_page": [
+      2
+    ]
+  },
+  "step_timeout_ms": 5000.0,
+  "warmup_ms": 3000.0,
+  "measure_ms": 5000.0,
+  "sandbox": true,
+  "scenario": "Idle",
+  "gpui_ran": true,
+  "pump_totals": {
+    "requests_immediate": 234,
+    "requests_delayed": 0,
+    "calls_immediate": 225,
+    "calls_delayed": 0,
+    "calls_periodic": 228,
+    "calls_rerun": 0,
+    "calls_total": 453,
+    "recursive_calls_deferred": 0
+  },
+  "pump_requests_received_any_thread": 236,
+  "max_pump_interval_ms": 33,
+  "shutdown": {
+    "cef_shutdown_called": true,
+    "cef_shutdown_skipped_reason": null,
+    "cef_shutdown_ms": 78.039266,
+    "children_before_shutdown": [],
+    "discovery_errors": [
+      "/proc/1337115/stat: Too many open files (os error 24)",
+      "root 1337115 is not in the process listing",
+      "/proc/1337115/stat: Too many open files (os error 24)",
+      "root 1337115 is not in the process listing"
+    ],
+    "children_alive_right_after_cef_shutdown": [],
+    "descendants_right_after_cef_shutdown": []
+  },
+  "scenario_pass": false,
+  "children_after_exit": {
+    "timeout_ms": 5000.0,
+    "exited": [],
+    "clean": true,
+    "still_alive_at_timeout": [],
+    "inconclusive": []
+  },
+  "shutdown_clean": false,
+  "pass": false
+}
