@@ -129,8 +129,11 @@ impl Snapshot {
     }
 
     pub(crate) fn firefox_bookmarks(&self) -> Result<(Vec<Bookmark>, usize), ReadError> {
-        let mut statement = self.prepare("SELECT b.id, b.parent, b.type, b.title, b.guid, p.url
-            FROM moz_bookmarks b LEFT JOIN moz_places p ON p.id = b.fk ORDER BY b.parent, b.position")?;
+        let mut statement = self.prepare(
+            "SELECT b.id, b.parent, b.type, b.title, b.guid,
+                (SELECT p.url FROM moz_places p WHERE p.id = b.fk LIMIT 1)
+             FROM moz_bookmarks b ORDER BY b.parent, b.position",
+        )?;
         let mut rows = statement.query([]).map_err(database_error)?;
         let mut roots = HashMap::new();
         let mut parents: HashMap<i64, Vec<FirefoxBookmark>> = HashMap::new();
@@ -324,4 +327,55 @@ fn firefox_tree(
         }
     }
     tree.finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Bookmark, Connection, Database, Snapshot};
+    use crate::input::open_root;
+
+    #[test]
+    fn firefox_duplicate_place_ids_do_not_multiply_bookmarks() {
+        // The verifier's smallest fixture has 500 places and 500 referencing bookmarks.
+        for count in [500_i64, 1000] {
+            let profile = tempfile::tempdir().unwrap();
+            let name = "places.sqlite";
+            let mut db = Connection::open(profile.path().join(name)).unwrap();
+            db.execute_batch(
+                "CREATE TABLE moz_places (id, url);
+                 CREATE TABLE moz_bookmarks (id, parent, type, title, guid, fk, position);
+                 INSERT INTO moz_bookmarks VALUES (100, 0, 2, 'Toolbar', 'toolbar_____', NULL, 0);",
+            )
+            .unwrap();
+            let rows = db.transaction().unwrap();
+            for index in 0..count {
+                rows.execute(
+                    "INSERT INTO moz_places VALUES (1, ?1)",
+                    [format!("https://example.org/{index}")],
+                )
+                .unwrap();
+                rows.execute(
+                    "INSERT INTO moz_bookmarks VALUES (?1, 100, 1, 'Bookmark', ?2, 1, ?1)",
+                    (1000 + index, format!("bookmark-{index}")),
+                )
+                .unwrap();
+            }
+            rows.commit().unwrap();
+            drop(db);
+
+            let root = open_root(profile.path()).unwrap();
+            let snapshot = Snapshot::open(&root, name, Database::Firefox).unwrap();
+            let (nodes, malformed) = snapshot.firefox_bookmarks().unwrap();
+            let tabs: Vec<_> = nodes
+                .iter()
+                .filter_map(|node| match node {
+                    Bookmark::Tab(tab) => Some(tab),
+                    Bookmark::Folder { .. } => None,
+                })
+                .collect();
+            assert_eq!(malformed, 0);
+            assert_eq!(tabs.len(), usize::try_from(count).unwrap());
+            assert!(tabs.iter().all(|tab| tab.url == "https://example.org/0"));
+        }
+    }
 }

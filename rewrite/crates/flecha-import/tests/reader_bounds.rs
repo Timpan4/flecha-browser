@@ -143,6 +143,47 @@ fn arc_expands_shared_roots_and_descendants_once() {
 }
 
 #[test]
+fn arc_surrogate_ids_and_literal_replacement_chars_stay_distinct() {
+    let home = tempfile::tempdir().unwrap();
+    let entries = [
+        (
+            r#""\uFFFD""#,
+            r#"{"id":"�","data":{"tab":{"savedURL":"https://example.org/real","savedTitle":"\ud800"}}}"#,
+            "https://example.org/real",
+        ),
+        (
+            r#""\uD800""#,
+            r#"{"id":"\ud800","data":{"tab":{"savedURL":"https://example.org/surrogate","savedTitle":"\ud800"}}}"#,
+            "https://example.org/surrogate",
+        ),
+        (
+            r#""\u0000eda080""#,
+            r#"{"id":"\u0000eda080","data":{"tab":{"savedURL":"https://example.org/prefix","savedTitle":"\ud800"}}}"#,
+            "https://example.org/prefix",
+        ),
+    ];
+    for order in [[0, 1, 2], [1, 0, 2]] {
+        let entries = order.map(|index| entries[index]);
+        let children = entries.map(|entry| entry.0).join(",");
+        let items = entries.map(|entry| entry.1).join(",");
+        let sidebar = format!(
+            r#"{{"sidebar":{{"containers":[{{
+                "spaces":[{{"id":"space","containerIDs":["pinned","root"]}}],
+                "items":[{{"id":"root","childrenIds":[{children}]}},{items}]
+            }}]}}}}"#
+        );
+        fs::write(home.path().join("StorableSidebar.json"), sidebar).unwrap();
+        let (arc, warnings) = read_arc(home.path()).unwrap();
+        assert!(warnings.is_empty());
+        let pinned = &arc.spaces[0].pinned;
+        assert_eq!(pinned.len(), entries.len());
+        for (node, (_, _, expected)) in pinned.iter().zip(entries) {
+            assert!(matches!(node, Bookmark::Tab(tab) if tab.url == expected && tab.title == "�"));
+        }
+    }
+}
+
+#[test]
 fn firefox_expands_each_folder_id_once_per_database() {
     // The verifier also exercised 24 duplicate levels. The smaller case catches a
     // regression without running the larger, exponential input on the old reader.

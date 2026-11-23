@@ -13,7 +13,7 @@ use serde_json::Value;
 use crate::ReadError;
 
 mod json;
-pub(crate) use json::{JsonRead, json};
+pub(crate) use json::{JsonRead, arc_sidebar_json, json};
 
 // Node's fs.readFile contract for the shipping profile reader.
 pub(crate) const MAX_TEXT_BYTES: u64 = i32::MAX as u64;

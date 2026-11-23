@@ -1,4 +1,7 @@
+use std::fmt;
+
 use cap_std::fs::Dir;
+use serde::de::{Deserializer, Visitor};
 use serde_json::{Map, Value, value::RawValue};
 
 use super::{file, read_text, repair_surrogates};
@@ -35,15 +38,27 @@ impl JsonRead {
 }
 
 pub(crate) fn json(dir: &Dir, name: &str) -> Result<JsonRead, ReadError> {
-    parse(&read_text(file(dir, name)?)?)
+    parse(&read_text(file(dir, name)?)?, Strings::DisplayText)
 }
 
-fn parse(text: &str) -> Result<JsonRead, ReadError> {
+pub(crate) fn arc_sidebar_json(dir: &Dir) -> Result<JsonRead, ReadError> {
+    parse(
+        &read_text(file(dir, "StorableSidebar.json")?)?,
+        Strings::ArcSidebar,
+    )
+}
+
+enum Strings {
+    DisplayText,
+    ArcSidebar,
+}
+
+fn parse(text: &str, strings: Strings) -> Result<JsonRead, ReadError> {
     // RawValue validates the entire document with serde_json's iterative scanner.
     // The projection below decides which containers and scalar values to keep.
     let raw: &RawValue = serde_json::from_str(text).map_err(|_| ReadError::InvalidJson)?;
     let mut tokens = Tokens(raw.get());
-    let mut frames = Vec::new();
+    let mut frames: Vec<Frame> = Vec::new();
     let mut out_of_range = 0;
     let mut too_deep = 0;
     while let Some(token) = tokens.next() {
@@ -58,20 +73,32 @@ fn parse(text: &str) -> Result<JsonRead, ReadError> {
                 continue;
             }
             "[" => {
-                frames.push(Frame::Array(Vec::new()));
+                let ids = matches!(strings, Strings::ArcSidebar)
+                    && matches!(
+                        frames.last(),
+                        Some(Frame::Object(_, Some(key)))
+                            if matches!(key.as_str(), "childrenIds" | "containerIDs" | "newContainerIDs" | "topAppsContainerIDs")
+                    );
+                frames.push(Frame::Array(Vec::new(), ids));
                 continue;
             }
             "}" | "]" => match frames.pop().expect("validated closing delimiter") {
                 Frame::Object(fields, _) => Value::Object(fields),
-                Frame::Array(values) => Value::Array(values),
+                Frame::Array(values, _) => Value::Array(values),
             },
             "," | ":" => continue,
             "true" => Value::Bool(true),
             "false" => Value::Bool(false),
             "null" => Value::Null,
             text if text.starts_with('"') => {
-                let value = serde_json::from_str(&repair_surrogates(text))
-                    .map_err(|_| ReadError::InvalidJson)?;
+                let id = matches!(strings, Strings::ArcSidebar)
+                    && frames.last().is_some_and(Frame::holds_arc_id);
+                let value = if id {
+                    serde_json::Deserializer::from_str(text).deserialize_bytes(ArcId)
+                } else {
+                    serde_json::from_str(&repair_surrogates(text))
+                }
+                .map_err(|_| ReadError::InvalidJson)?;
                 Value::String(value)
             }
             number => match serde_json::from_str(number) {
@@ -93,7 +120,7 @@ fn parse(text: &str) -> Result<JsonRead, ReadError> {
                     unreachable!("validated object key");
                 }
             }
-            Some(Frame::Array(values)) => values.push(value),
+            Some(Frame::Array(values, _)) => values.push(value),
             None => {
                 return Ok(JsonRead {
                     value,
@@ -108,7 +135,46 @@ fn parse(text: &str) -> Result<JsonRead, ReadError> {
 
 enum Frame {
     Object(Map<String, Value>, Option<String>),
-    Array(Vec<Value>),
+    Array(Vec<Value>, bool),
+}
+
+impl Frame {
+    fn holds_arc_id(&self) -> bool {
+        match self {
+            Self::Object(_, Some(key)) => key == "id",
+            Self::Array(_, ids) => *ids,
+            Self::Object(_, None) => false,
+        }
+    }
+}
+
+struct ArcId;
+
+impl Visitor<'_> for ArcId {
+    type Value = String;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("an Arc identifier")
+    }
+
+    fn visit_bytes<E>(self, bytes: &[u8]) -> Result<String, E> {
+        // The byte deserializer combines valid surrogate pairs and preserves lone
+        // code units as WTF-8. Reserve a NUL prefix for opaque IDs with those bytes.
+        if let Ok(id) = std::str::from_utf8(bytes) {
+            return Ok(if id.starts_with('\0') {
+                format!("\0{id}")
+            } else {
+                id.into()
+            });
+        }
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut id = String::from('\0');
+        for &byte in bytes {
+            id.push(char::from(HEX[usize::from(byte >> 4)]));
+            id.push(char::from(HEX[usize::from(byte & 0xf)]));
+        }
+        Ok(id)
+    }
 }
 
 struct Tokens<'a>(&'a str);

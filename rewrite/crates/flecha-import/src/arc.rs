@@ -8,7 +8,9 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::bookmarks::BookmarkTree;
-use crate::input::{JsonRead, json, open_dir, open_root, text_or, truthy, web_scheme};
+use crate::input::{
+    JsonRead, arc_sidebar_json, json, open_dir, open_root, text_or, truthy, web_scheme,
+};
 use crate::plan::tabs_in;
 use crate::{Bookmark, ReadError, SavedTab};
 
@@ -50,7 +52,7 @@ pub fn read_arc(root: &Path) -> Result<(ArcImport, Vec<String>), ReadError> {
 
 pub(crate) fn read_arc_dir(root: &Dir) -> Result<(ArcImport, Vec<String>), ReadError> {
     let mut warnings = Vec::new();
-    let sidebar = json(root, "StorableSidebar.json")?.into_value("Arc’s sidebar", &mut warnings);
+    let sidebar = arc_sidebar_json(root)?.into_value("Arc’s sidebar", &mut warnings);
     let mut optional = |result: Result<JsonRead, ReadError>, label| match result {
         Ok(document) => document.into_value(label, &mut warnings),
         Err(ReadError::Missing) => Value::Null,
