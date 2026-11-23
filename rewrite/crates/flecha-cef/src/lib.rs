@@ -402,10 +402,19 @@ impl Engine {
     }
 
     /// Registers the browsers CEF started creating for pages since the last call. A
-    /// popup whose opener has gone since is closed.
+    /// popup whose opener has gone since, or that was already closed/retired, is shut
+    /// without registering so its queued events never reach the shell.
     fn adopt_popups(&mut self) {
         let pending = std::mem::take(&mut *self.popups.pending.borrow_mut());
         for Pending { child, opener } in pending {
+            if child.retired.get()
+                || child.stage.get() == Stage::Closed
+                || opener.retired.get()
+                || opener.stage.get() == Stage::Closed
+            {
+                self.shut(&child);
+                continue;
+            }
             let source = opener.key.borrow().tab.clone();
             let session = self
                 .browsers
@@ -436,6 +445,9 @@ impl Engine {
     /// The tab whose page opened this one, while that page is still open.
     pub fn opener(&self, tab: &TabId) -> Option<TabId> {
         let opener = self.browsers.get(tab)?.opener.as_ref()?.upgrade()?;
+        if opener.retired.get() || opener.stage.get() == Stage::Closed {
+            return None;
+        }
         let source = opener.key.borrow().tab.clone();
         self.browsers
             .get(&source)
@@ -625,6 +637,31 @@ mod tests {
         assert!(engine.is_drained());
 
         assert!(child.created(2), "a late popup has no tab to show it");
+        child.destroyed();
+        assert!(drain(&mut engine).is_empty());
+        assert!(engine.is_drained());
+    }
+
+    #[test]
+    fn abandoned_popup_before_first_poll_never_reaches_shell() {
+        let mut engine = Engine::new(PathBuf::new(), || TabId::new("popup"));
+        let (opener, child) = opener_with_pending_popup(&mut engine);
+        child.emit(Event::Opened(popup::Opened {
+            url: "https://example.test/popup".into(),
+            disposition: popup::Disposition::ForegroundTab,
+            size: None,
+        }));
+
+        // Opener closes before the engine's first poll adopts the popup.
+        opener.destroyed();
+
+        let events = drain(&mut engine);
+        assert_eq!(events, [Event::Created(1), Event::ClosedByPage]);
+        assert!(!engine.browsers.contains_key(&TabId::new("popup")));
+        assert_eq!(engine.opener(&TabId::new("popup")), None);
+        assert!(engine.is_drained());
+
+        assert!(child.created(2), "a late popup still closes immediately");
         child.destroyed();
         assert!(drain(&mut engine).is_empty());
         assert!(engine.is_drained());
