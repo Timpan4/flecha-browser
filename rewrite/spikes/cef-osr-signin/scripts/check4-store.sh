@@ -90,10 +90,27 @@ keyboard_install() {
     return 1
 }
 
+# 4c: never a pass here; says why.
+popup_cell() {
+    if [[ $APP_MODE == osr ]]; then
+        cell 4c 'n/a' "auto, Xvfb: Alloy OSR has no toolbar or other surface to open an extension popup"
+    else
+        cell 4c 'not automated' "the popup opens from the toolbar's extension menu, Chrome's own UI"
+    fi
+}
+
 wid=$(app_window)
+# 4b needs Dark Reader from 4a; without it the step is not tried. The control still runs 4b,
+# on purpose without Dark Reader.
+why_not=''
 if [[ $phase == install ]] && ! install; then
-    cell 4b 'not reached' "the app died in 4a, so 4b was not tried in this run (auto-checks.sh tries OSR's 4b again in content-osr)"
-    [[ $APP_MODE != osr ]] || cell 4c 'n/a' "auto, Xvfb: Alloy OSR has no toolbar or other surface to open an extension popup"
+    why_not='the app died in 4a'
+elif [[ $phase == install ]] && ((!control)) && ! extension_installed; then
+    why_not='4a installed nothing'
+fi
+if [[ -n $why_not ]]; then
+    cell 4b 'not reached' "$why_not, so 4b was not tried in this run (auto-checks.sh tries OSR's 4b again in content-osr)"
+    popup_cell
     exit 0
 fi
 
@@ -127,10 +144,4 @@ label=''
 [[ -s $shot ]] || import -window root "$shot"
 cell 4b "$result" "auto, Xvfb screenshot, ${label}example.com loaded: $loaded; window title: $(xdo getwindowname "$wid"); page background grey level $(mean_grey "$shot" "$wid") of 255 (dark below 128); probe: body $(json_field "$colours" body), html $(json_field "$colours" html)"
 
-if ((control)) || [[ $phase != install ]]; then
-    exit 0
-elif [[ $APP_MODE == osr ]]; then
-    cell 4c 'n/a' "auto, Xvfb: Alloy OSR has no toolbar or other surface to open an extension popup"
-else
-    cell 4c 'not automated' "the popup opens from the toolbar's extension menu, Chrome's own UI"
-fi
+((control)) || [[ $phase != install ]] || popup_cell
