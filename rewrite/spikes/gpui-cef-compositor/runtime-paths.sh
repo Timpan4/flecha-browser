@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 spike=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 rewrite=$(cd "$spike/../.." && pwd)
 sources="$rewrite/target/spike1-src"
@@ -23,7 +24,6 @@ runtime_paths() {
   channel=$(pin cef channel)
   sha1=$(pin "cef.$channel.sha1" "$platform")
   archive_name="cef_binary_${version}_${platform}_${channel}_minimal.tar.bz2"
-  archive="$sources/cef-beta/$archive_name"
   runtime_parent="$sources/cef-runtime/${version%%+*}"
   runtime="$runtime_parent/$2"
 }

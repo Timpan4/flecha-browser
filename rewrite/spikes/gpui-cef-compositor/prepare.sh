@@ -53,6 +53,7 @@ prepare_source gpui zed
 prepare_source cef-rs cef-rs
 
 runtime_paths "$platform" "$directory"
+archive="$sources/cef-beta/$archive_name"
 
 verify_archive() {
   if command -v sha1sum >/dev/null; then
