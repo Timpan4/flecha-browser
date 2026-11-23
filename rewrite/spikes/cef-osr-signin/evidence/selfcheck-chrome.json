@@ -14,7 +14,7 @@
       "type": "minimal"
     },
     "compiled_cef_version": "158.0.3+g8c29be2+chromium-158.0.8127.18",
-    "loaded_libcef": "…/fresh4/rewrite/target/cef-runtime/158.0.3/cef_linux_x86_64/libcef.so",
+    "loaded_libcef": "…/fresh6/rewrite/target/cef-runtime/158.0.3/cef_linux_x86_64/libcef.so",
     "pinned_cef_version": "158.0.3+g8c29be2+chromium-158.0.8127.18",
     "pinned_channel": "beta",
     "pinned_sha1": "057a0b871bf26d26d654d999dba595b92fe0f067",
@@ -38,7 +38,7 @@
         "user": "same as browser"
       },
       "no_new_privs": "0",
-      "pid": 32087,
+      "pid": 172889,
       "seccomp": "0",
       "switches": [
         "--mode",
@@ -57,7 +57,7 @@
         "user": "same as browser"
       },
       "no_new_privs": "1",
-      "pid": 32106,
+      "pid": 172901,
       "seccomp": "0",
       "switches": [
         "--type=zygote",
@@ -79,7 +79,7 @@
         "user": "separate"
       },
       "no_new_privs": "1",
-      "pid": 32107,
+      "pid": 172902,
       "seccomp": "0",
       "switches": [
         "--type=zygote",
@@ -100,7 +100,7 @@
         "user": "separate"
       },
       "no_new_privs": "1",
-      "pid": 32109,
+      "pid": 172904,
       "seccomp": "0",
       "switches": [
         "--type=zygote",
@@ -121,7 +121,7 @@
         "user": "same as browser"
       },
       "no_new_privs": "1",
-      "pid": 32135,
+      "pid": 172930,
       "seccomp": "0",
       "switches": [
         "--type=zygote",
@@ -143,7 +143,7 @@
         "user": "same as browser"
       },
       "no_new_privs": "1",
-      "pid": 32137,
+      "pid": 172932,
       "seccomp": "0",
       "switches": [
         "--type=utility",
@@ -174,7 +174,7 @@
         "user": "separate"
       },
       "no_new_privs": "1",
-      "pid": 32151,
+      "pid": 172946,
       "seccomp": "2",
       "switches": [
         "--type=zygote",
@@ -195,7 +195,7 @@
         "user": "separate"
       },
       "no_new_privs": "1",
-      "pid": 32211,
+      "pid": 173006,
       "seccomp": "2",
       "switches": [
         "--type=zygote",
@@ -216,7 +216,7 @@
         "user": "separate"
       },
       "no_new_privs": "1",
-      "pid": 32297,
+      "pid": 173097,
       "seccomp": "2",
       "switches": [
         "--type=zygote",
@@ -237,7 +237,7 @@
         "user": "separate"
       },
       "no_new_privs": "1",
-      "pid": 32305,
+      "pid": 173108,
       "seccomp": "2",
       "switches": [
         "--type=zygote",
@@ -258,7 +258,7 @@
         "user": "separate"
       },
       "no_new_privs": "1",
-      "pid": 32326,
+      "pid": 173126,
       "seccomp": "2",
       "switches": [
         "--type=zygote",
@@ -279,7 +279,7 @@
         "user": "separate"
       },
       "no_new_privs": "1",
-      "pid": 32344,
+      "pid": 173143,
       "seccomp": "2",
       "switches": [
         "--type=zygote",
@@ -316,7 +316,7 @@
           "version": "158.0.8127.18"
         }
       ],
-      "href": "file://…/fresh4-out/runs/sc-chrome/pro#file %20/flecha-selfcheck.html",
+      "href": "file://…/fresh6-out/runs/sc-chrome/pro#file %20/flecha-selfcheck.html",
       "inner": [
         1050,
         917

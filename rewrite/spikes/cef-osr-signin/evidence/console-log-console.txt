@@ -1,10 +1,16 @@
-xvfb pid 38776 display :1
-app pid 38778
-[load-end] http://127.0.0.1:38209
-[console] FLECHA_LOCAL_HOST (file://…/fresh4-out/runs/console1/iframe-host.html:3)
-[console] INPUT storage loads 2 (file://…/fresh4/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
-marker lines: 2
-PASS test 2 = 2
+xvfb pid 177015 display :1
+app pid 177017
+[load-end] http://127.0.0.1:44257
+[console] INPUT storage loads 2 (file://…/fresh6/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+marker lines, plain main: 1
+PASS test 1 = 1
+marker lines, spoof main: 1
+PASS test 1 = 1
+marker lines, plain frame: 1
+PASS test 1 = 1
+marker lines, spoof frame: 1
+PASS test 1 = 1
+PASS test 4 = 4
 marker lines in chrome_debug.log: 0
 PASS test 0 = 0
 app exit 0

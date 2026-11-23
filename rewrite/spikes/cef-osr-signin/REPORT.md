@@ -184,6 +184,10 @@ Command output: [evidence/runtime-checks.txt](evidence/runtime-checks.txt).
 | `libcef.so` copied alone into a directory, `LD_LIBRARY_PATH` pointing there | exit 1: `wrong CEF runtime: cannot read …/archive.json` |
 | Self-check, both modes | loaded `target/cef-runtime/158.0.3/cef_linux_x86_64/libcef.so`, API version 15800, commit `8c29be24…`, archive `cef_binary_158.0.3+g8c29be2+chromium-158.0.8127.18_linux64_beta_minimal.tar.bz2`, SHA-1 `057a0b87…` |
 
+### URL display probe
+
+The second verifier's probe, run with default flags against this clone's build ([log](evidence/url-probe.txt)). A local page opened 9 popups through `window.open` with test tokens in opaque and hierarchical URLs (`data:`, `data://…`, `mailto:`, userinfo, query and fragment, `javascript:`, `javascript://…`, `blob:`, `about:`). It also embedded a remote iframe that logs console lines with its source spoofed to `file://`. In OSR mode `go` then loaded 10 more URLs, including `data://…` and `data:\\…`. Every `[popup]`, `[load-end]` and `[load-error]` line printed `scheme:` or an origin, and no test token reached stderr, stdout or `chrome_debug.log` in either mode. The only token-like text is `zqxhost29.invalid`, the host of an `https` URL, which the rule keeps. In Chrome mode the probe's fixed-position clicks opened no popups, so popup coverage is OSR only; the spoofed iframe ran and relayed nothing in both modes.
+
 ### Self-check
 
 | Field | Alloy OSR | Chrome-style control |

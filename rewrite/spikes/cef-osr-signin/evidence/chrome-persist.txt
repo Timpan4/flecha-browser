@@ -1,6 +1,6 @@
-xvfb pid 38272 display :1
-app pid 38274
-[console] INPUT storage loads 2 (file://…/fresh4/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+xvfb pid 176525 display :1
+app pid 176527
+[console] INPUT storage loads 2 (file://…/fresh6/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
 PASS test 2 -ge 2
 fixture cookie hosts: 127.0.0.1
 PASS test 127.0.0.1 = 127.0.0.1

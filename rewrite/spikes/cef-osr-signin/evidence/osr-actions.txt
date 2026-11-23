@@ -1,21 +1,21 @@
-xvfb pid 37164 display :1
-app pid 37166
-[console] INPUT storage loads 1 (file://…/fresh4/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
-[popup] file://…/fresh4/rewrite/spikes/cef-osr-signin/scripts/input-test.html
-[console] INPUT child opener true (file://…/fresh4/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+xvfb pid 175538 display :1
+app pid 175540
+[console] INPUT storage loads 1 (file://…/fresh6/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[popup] file://…/fresh6/rewrite/spikes/cef-osr-signin/scripts/input-test.html
+[console] INPUT child opener true (file://…/fresh6/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
 [browser] created id=2 open=2
 [browser] closed id=2 open=1
 PASS alive
 [permission 1] file:/// requests permission types 0x8000 (cef_permission_request_types_t). Type `allow 1` or `deny 1` and press Enter.
-[console] INPUT notification granted (file://…/fresh4/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
-[console] INPUT camera error NotFoundError (file://…/fresh4/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT notification granted (file://…/fresh6/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT camera error NotFoundError (file://…/fresh6/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
 permission prompts for camera: 0
-[console] INPUT text "@åäö" (file://…/fresh4/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
-[console] INPUT keydown a KeyQ 65 ctrl true (file://…/fresh4/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
-[pdf] ok=true …/fresh4-out/runs/osr/osr-print.pdf
-PASS test -s …/fresh4-out/runs/osr/osr-print.pdf
-[load-end] http://127.0.0.1:38915
-[console] INPUT storage loads 2 (file://…/fresh4/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT text "@åäö" (file://…/fresh6/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown a KeyQ 65 ctrl true (file://…/fresh6/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[pdf] ok=true …/fresh6-out/runs/osr/osr-print.pdf
+PASS test -s …/fresh6-out/runs/osr/osr-print.pdf
+[load-end] http://127.0.0.1:41501
+[console] INPUT storage loads 2 (file://…/fresh6/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
 PASS test 0 = 0
 PASS test 0 = 0
 app exit 0

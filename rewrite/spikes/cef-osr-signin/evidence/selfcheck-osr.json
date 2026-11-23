@@ -14,7 +14,7 @@
       "type": "minimal"
     },
     "compiled_cef_version": "158.0.3+g8c29be2+chromium-158.0.8127.18",
-    "loaded_libcef": "…/fresh4/rewrite/target/cef-runtime/158.0.3/cef_linux_x86_64/libcef.so",
+    "loaded_libcef": "…/fresh6/rewrite/target/cef-runtime/158.0.3/cef_linux_x86_64/libcef.so",
     "pinned_cef_version": "158.0.3+g8c29be2+chromium-158.0.8127.18",
     "pinned_channel": "beta",
     "pinned_sha1": "057a0b871bf26d26d654d999dba595b92fe0f067",
@@ -38,7 +38,7 @@
         "user": "same as browser"
       },
       "no_new_privs": "0",
-      "pid": 31503,
+      "pid": 172630,
       "seccomp": "0",
       "switches": [
         "--mode",
@@ -57,7 +57,7 @@
         "user": "same as browser"
       },
       "no_new_privs": "1",
-      "pid": 31515,
+      "pid": 172642,
       "seccomp": "0",
       "switches": [
         "--type=zygote",
@@ -79,7 +79,7 @@
         "user": "separate"
       },
       "no_new_privs": "1",
-      "pid": 31516,
+      "pid": 172643,
       "seccomp": "0",
       "switches": [
         "--type=zygote",
@@ -100,7 +100,7 @@
         "user": "separate"
       },
       "no_new_privs": "1",
-      "pid": 31518,
+      "pid": 172645,
       "seccomp": "0",
       "switches": [
         "--type=zygote",
@@ -121,7 +121,7 @@
         "user": "same as browser"
       },
       "no_new_privs": "1",
-      "pid": 31544,
+      "pid": 172671,
       "seccomp": "0",
       "switches": [
         "--type=zygote",
@@ -143,7 +143,7 @@
         "user": "same as browser"
       },
       "no_new_privs": "1",
-      "pid": 31546,
+      "pid": 172673,
       "seccomp": "0",
       "switches": [
         "--type=utility",
@@ -174,7 +174,7 @@
         "user": "separate"
       },
       "no_new_privs": "1",
-      "pid": 31560,
+      "pid": 172687,
       "seccomp": "2",
       "switches": [
         "--type=zygote",
@@ -195,7 +195,7 @@
         "user": "separate"
       },
       "no_new_privs": "1",
-      "pid": 31684,
+      "pid": 172815,
       "seccomp": "2",
       "switches": [
         "--type=zygote",
@@ -216,7 +216,7 @@
         "user": "separate"
       },
       "no_new_privs": "1",
-      "pid": 31695,
+      "pid": 172826,
       "seccomp": "2",
       "switches": [
         "--type=zygote",
@@ -237,7 +237,7 @@
         "user": "separate"
       },
       "no_new_privs": "1",
-      "pid": 31707,
+      "pid": 172838,
       "seccomp": "2",
       "switches": [
         "--type=zygote",
@@ -258,7 +258,7 @@
         "user": "separate"
       },
       "no_new_privs": "1",
-      "pid": 31723,
+      "pid": 172854,
       "seccomp": "2",
       "switches": [
         "--type=zygote",
@@ -295,7 +295,7 @@
           "version": "158.0.8127.18"
         }
       ],
-      "href": "file://…/fresh4-out/runs/sc-osr/pro#file %20/flecha-selfcheck.html",
+      "href": "file://…/fresh6-out/runs/sc-osr/pro#file %20/flecha-selfcheck.html",
       "inner": [
         800,
         600
@@ -336,7 +336,7 @@
     "version": {
       "href": "chrome://version/",
       "reason": "ready",
-      "text": "The Chromium Authors\nCopyright 2026 The Chromium Authors. All rights reserved.\nlicense | credits\nCEF\t158.0.3+g8c29be2+chromium-158.0.8127.18\nChromium\t158.0.8127.18 (Official Build) (x86_64) \nRevision\t6449d9f9a6a906edff724b7b220199b3fde4615c-refs/branch-heads/8127@{#845}\nOS\tLinux\nJavaScript\tV8 15.8.62.9\nUser agent\tMozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36\nCommand Line\t<omitted; see processes[].switches>\nExecutable Path\t<redacted>\nModule Path\t<redacted>\nUser Data Path [*]\t<redacted>\nProfile Path [*]\t<redacted>\nVariations source\tcommand line or about flags\nCommand-line variations\teyJkaXNhYmxlLWZlYXR1cmVzIjoiQXV0b2ZpbGxBY3Rvck1vZGUsRmlyc3RS...\t\nActive variations\tf4f00e05-ca7d8d80\n9481ce98-3d47f4f4\n2a426c03-3d47f4f4\n70678518-dee66fa8\nbe338734-dee66fa8\n5f9907a9-dee66fa8\n8eeccb9a-dee66fa8\n2b465683-dee66fa8\n52fc7926-dee66fa8\nbc9b361d-dee66fa8\na41a7188-dee66fa8\nff71bfdc-dee66fa8\n251fc742-dee66fa8\n2159dd0c-dee66fa8\n4330e9a4-dee66fa8\ne7cc79d5-dee66fa8\n4b935545-bb2d3403\n9a38bae3-6046c8a7\n2d1e43a3-3d47f4f4\n386dc267-3d47f4f4\nd69d967d-4866ef6e\n3c8f75a1-21623f2a\na4406b35-1657e2d6\n408da146-1657e2d6\n\t\n\n[*] In Chromium terminology, CefSettings.root_cache_path is the \"User Data Path\" and CefSettings.cache_path is the \"Profile Path\". Chromium's process singleton lock protects against multiple app instances writing to the same \"User Data Path\" directory. Implement CefBrowserProcessHandler:: OnAlreadyRunningAppRelaunch to handle the case of app relaunch with the same directory.",
+      "text": "The Chromium Authors\nCopyright 2026 The Chromium Authors. All rights reserved.\nlicense | credits\nCEF\t158.0.3+g8c29be2+chromium-158.0.8127.18\nChromium\t158.0.8127.18 (Official Build) (x86_64) \nRevision\t6449d9f9a6a906edff724b7b220199b3fde4615c-refs/branch-heads/8127@{#845}\nOS\tLinux\nJavaScript\tV8 15.8.62.9\nUser agent\tMozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36\nCommand Line\t<omitted; see processes[].switches>\nExecutable Path\t<redacted>\nModule Path\t<redacted>\nUser Data Path [*]\t<redacted>\nProfile Path [*]\t<redacted>\nVariations source\tcommand line or about flags\nCommand-line variations\teyJkaXNhYmxlLWZlYXR1cmVzIjoiQXV0b2ZpbGxBY3Rvck1vZGUsR2xpY0Fj...\t\nActive variations\tf4f00e05-ca7d8d80\n9481ce98-3d47f4f4\n2a426c03-3d47f4f4\n70678518-dee66fa8\nbe338734-dee66fa8\n5f9907a9-dee66fa8\n8eeccb9a-dee66fa8\n2b465683-dee66fa8\n52fc7926-dee66fa8\nbc9b361d-dee66fa8\na41a7188-dee66fa8\nff71bfdc-dee66fa8\n251fc742-dee66fa8\n2159dd0c-dee66fa8\n4330e9a4-dee66fa8\ne7cc79d5-dee66fa8\n4b935545-bb2d3403\n9a38bae3-6046c8a7\n2d1e43a3-3d47f4f4\n386dc267-3d47f4f4\n\t\n\n[*] In Chromium terminology, CefSettings.root_cache_path is the \"User Data Path\" and CefSettings.cache_path is the \"Profile Path\". Chromium's process singleton lock protects against multiple app instances writing to the same \"User Data Path\" directory. Implement CefBrowserProcessHandler:: OnAlreadyRunningAppRelaunch to handle the case of app relaunch with the same directory.",
       "title": "About Version"
     },
     "webstore": {
