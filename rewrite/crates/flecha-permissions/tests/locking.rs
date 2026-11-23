@@ -57,7 +57,7 @@ fn wait_until_blocked<T>(lock: &File, worker: &JoinHandle<T>) {
 fn save_waits_for_the_lock_and_then_sees_a_newer_file() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("permissions.json");
-    let (file, _) = SnapshotFile::open(&path).unwrap();
+    let (mut file, _) = SnapshotFile::open(&path).unwrap();
     let lock = hold_lock(&path);
 
     let saving = thread::spawn(move || file.save(&Snapshot::default()));

@@ -164,7 +164,10 @@ impl Snapshot {
 /// lock file stays on disk; deleting it while a holder runs would let a second holder in.
 #[derive(Debug)]
 pub struct SnapshotFile {
+    /// Absolute, so a later change of working directory cannot redirect a save.
     path: PathBuf,
+    /// The file's bytes as this handle last read or wrote them; `None` when it was absent.
+    observed: Option<Vec<u8>>,
 }
 
 #[derive(Debug)]
@@ -181,6 +184,9 @@ pub enum SnapshotError {
     /// A newer build wrote the file. It is left in place: `open` returns no handle, and `save`
     /// refuses to replace it.
     NewerSchema(String),
+    /// Another writer changed the file since this handle last read or wrote it. `save` leaves
+    /// that version in place; reopen to load it.
+    Stale,
 }
 
 impl From<io::Error> for SnapshotError {
@@ -194,6 +200,7 @@ impl fmt::Display for SnapshotError {
         match self {
             Self::Io(error) => write!(f, "permission snapshot I/O: {error}"),
             Self::NewerSchema(found) => write!(f, "permission snapshot schema {found} is newer"),
+            Self::Stale => f.write_str("permission snapshot changed since it was read"),
         }
     }
 }
@@ -202,7 +209,7 @@ impl std::error::Error for SnapshotError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io(error) => Some(error),
-            Self::NewerSchema(_) => None,
+            Self::NewerSchema(_) | Self::Stale => None,
         }
     }
 }
@@ -211,20 +218,20 @@ impl SnapshotFile {
     /// Reads the file at `path`. A missing file loads empty. A damaged one is renamed to
     /// `<name>.damaged`, replacing an older backup, and loads empty.
     pub fn open(path: impl Into<PathBuf>) -> Result<(Self, Loaded), SnapshotError> {
-        let path = path.into();
+        let path = std::path::absolute(path.into())?;
         // Held through the read and the move aside, so a file saved meanwhile is never taken
         // for the damaged one.
         let _lock = lock(&path)?;
-        let bytes = read_if_present(&path)?;
+        let mut observed = read_if_present(&path)?;
         let mut loaded = Loaded {
             snapshot: Snapshot::default(),
             skipped_entries: 0,
             damaged_backup: None,
         };
-        if let Some(bytes) = bytes {
-            let decoded = String::from_utf8(bytes)
+        if let Some(bytes) = &observed {
+            let decoded = std::str::from_utf8(bytes)
                 .map_err(|error| DecodeError::Damaged(error.to_string()))
-                .and_then(|json| Snapshot::decode(&json));
+                .and_then(Snapshot::decode);
             match decoded {
                 Ok(decoded) => {
                     loaded.snapshot = decoded.snapshot;
@@ -237,10 +244,11 @@ impl SnapshotFile {
                     let backup = sibling(&path, "damaged")?;
                     fs::rename(&path, &backup)?;
                     loaded.damaged_backup = Some(backup);
+                    observed = None;
                 }
             }
         }
-        Ok((Self { path }, loaded))
+        Ok((Self { path, observed }, loaded))
     }
 
     pub fn path(&self) -> &Path {
@@ -250,32 +258,39 @@ impl SnapshotFile {
     /// Writes through a new file beside the snapshot and renames it into place, so a reader sees
     /// the old or the new contents, never part of either.
     ///
-    /// A newer build may have written the file since `open`, so its version is read again first
-    /// and a newer schema is refused. The check and the rename run under the snapshot's lock,
-    /// so a writer that takes the same lock cannot slip in between.
-    pub fn save(&self, snapshot: &Snapshot) -> Result<(), SnapshotError> {
+    /// The file is read again under the snapshot's lock. A newer schema is refused, and so is
+    /// any other change since this handle last read or wrote it, so a concurrent writer's
+    /// decisions (a revoked grant, say) are never overwritten. A writer that takes the same
+    /// lock cannot slip in between the check and the rename.
+    pub fn save(&mut self, snapshot: &Snapshot) -> Result<(), SnapshotError> {
         let _lock = lock(&self.path)?;
-        if let Some(bytes) = read_if_present(&self.path)?
-            && let Some(found) = std::str::from_utf8(&bytes)
-                .ok()
-                .and_then(|json| newer_schema_version(json, SCHEMA_VERSION))
+        let current = read_if_present(&self.path)?;
+        if let Some(found) = current
+            .as_deref()
+            .and_then(|bytes| std::str::from_utf8(bytes).ok())
+            .and_then(|json| newer_schema_version(json, SCHEMA_VERSION))
         {
             return Err(SnapshotError::NewerSchema(found));
         }
+        if current != self.observed {
+            return Err(SnapshotError::Stale);
+        }
+        let encoded = snapshot.encode().into_bytes();
         let name = file_name(&self.path)?;
-        let dir = match self.path.parent() {
-            Some(dir) if !dir.as_os_str().is_empty() => dir,
-            _ => Path::new("."),
-        };
+        let dir = self
+            .path
+            .parent()
+            .expect("an absolute path with a file name has a parent");
         // `tempfile` creates the file exclusively, retries on a name collision, and deletes only
         // the file it created when a later step fails.
         let mut temp = tempfile::Builder::new()
             .prefix(&format!(".{}.", name.to_string_lossy()))
             .suffix(".tmp")
             .tempfile_in(dir)?;
-        temp.write_all(snapshot.encode().as_bytes())?;
+        temp.write_all(&encoded)?;
         temp.as_file().sync_all()?;
         temp.persist(&self.path).map_err(|error| error.error)?;
+        self.observed = Some(encoded);
         sync_dir(dir)?;
         Ok(())
     }

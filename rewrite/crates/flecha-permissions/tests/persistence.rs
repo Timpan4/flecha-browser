@@ -53,7 +53,7 @@ fn sample() -> PermissionManager {
 fn snapshot_round_trips_through_the_file() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("permissions.json");
-    let (file, loaded) = SnapshotFile::open(&path).unwrap();
+    let (mut file, loaded) = SnapshotFile::open(&path).unwrap();
     assert_eq!(loaded.snapshot, Snapshot::default());
     assert!(loaded.damaged_backup.is_none());
 
@@ -168,7 +168,7 @@ fn damaged_file_moves_aside_and_loads_empty() {
         vec![0xff, 0xfe, b'{'],
     ] {
         fs::write(&path, &damaged).unwrap();
-        let (file, loaded) = SnapshotFile::open(&path).unwrap();
+        let (mut file, loaded) = SnapshotFile::open(&path).unwrap();
         assert_eq!(loaded.damaged_backup.as_deref(), Some(backup.as_path()));
         assert_eq!(loaded.snapshot, Snapshot::default());
         assert_eq!(fs::read(&backup).unwrap(), damaged);
@@ -257,7 +257,7 @@ fn a_current_version_spelled_as_a_string_still_loads() {
 fn save_refuses_a_newer_file_written_after_open() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("permissions.json");
-    let (file, _) = SnapshotFile::open(&path).unwrap();
+    let (mut file, _) = SnapshotFile::open(&path).unwrap();
     let newer = r#"{"version":2,"future_payload":1e400}"#;
     fs::write(&path, newer).unwrap();
 
@@ -288,7 +288,7 @@ fn every_isolated_space_id_round_trips() {
             )
             .unwrap();
     }
-    let (file, _) = SnapshotFile::open(&path).unwrap();
+    let (mut file, _) = SnapshotFile::open(&path).unwrap();
     file.save(&manager.snapshot()).unwrap();
 
     let (_, loaded) = SnapshotFile::open(&path).unwrap();
@@ -312,7 +312,7 @@ fn every_isolated_space_id_round_trips() {
 fn a_failed_save_removes_only_its_own_temp_file() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("permissions.json");
-    let (file, _) = SnapshotFile::open(&path).unwrap();
+    let (mut file, _) = SnapshotFile::open(&path).unwrap();
     // Files that look like temp files from another writer.
     let foreign = [
         dir.path().join(".permissions.json.abc123.tmp"),
@@ -380,4 +380,37 @@ fn encoded_keys_sort_by_their_text() {
 }
 "#
     );
+}
+
+#[test]
+fn save_refuses_to_overwrite_another_writers_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("permissions.json");
+    let (mut first, _) = SnapshotFile::open(&path).unwrap();
+    let (mut second, _) = SnapshotFile::open(&path).unwrap();
+    first.save(&sample().snapshot()).unwrap();
+    let saved = fs::read(&path).unwrap();
+
+    // The second handle never saw the first one's grants; saving would revoke them.
+    assert!(matches!(
+        second.save(&Snapshot::default()),
+        Err(SnapshotError::Stale)
+    ));
+    assert_eq!(fs::read(&path).unwrap(), saved);
+
+    // A handle keeps saving over its own writes.
+    first.save(&Snapshot::default()).unwrap();
+    first.save(&sample().snapshot()).unwrap();
+
+    // Removing the file is a change too.
+    fs::remove_file(&path).unwrap();
+    assert!(matches!(
+        first.save(&Snapshot::default()),
+        Err(SnapshotError::Stale)
+    ));
+    assert!(!path.exists());
+
+    // Reopening reads the current state and may save again.
+    let (mut reopened, _) = SnapshotFile::open(&path).unwrap();
+    reopened.save(&sample().snapshot()).unwrap();
 }
