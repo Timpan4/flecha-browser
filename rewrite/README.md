@@ -12,21 +12,36 @@ A unit adds its crate path to `members` in `Cargo.toml`.
 
 The compositor spike uses patched copies of the pinned Zed and cef-rs sources.
 From `rewrite/`, run `bash spikes/gpui-cef-compositor/prepare.sh` before resolving
-the workspace with Cargo. Preparation uses `flock` to serialize staging and
-verifies the pinned CEF beta archive. The [spike report](spikes/gpui-cef-compositor/REPORT.md)
-has the build and isolated verification commands.
+the workspace with Cargo. Stage the CEF runtime explicitly because Cargo can
+reuse build-script results without rerunning the script. Preparation uses
+`flock` to serialize staging and verifies the pinned CEF beta archive. Never run
+`cargo`, `rustc`, `rustup` or Clippy inside `rewrite/target/spike1-src/zed`.
+The [spike report](spikes/gpui-cef-compositor/REPORT.md) describes the runtime
+and the compositor checks.
 
 ## Building on the workstation
 
-The workstation runs one heavy build at a time. Every `cargo build`, `cargo test` or `cargo run` that compiles CEF or GPUI waits for a shared lock and runs in the agent build slice:
+The workstation runs one heavy build at a time. Use `~/.cargo/bin/cargo`
+because `cargo` on `PATH` can be a wrapper shim. Every `cargo build`, `cargo test`
+or `cargo run` that compiles CEF or GPUI waits for the shared lock and runs in the
+agent build slice:
 
 ```sh
 flock "$XDG_RUNTIME_DIR/flecha-rewrite-build.lock" \
-  bash ~/.claude/skills/hosts/scripts/agent-build run cargo build -j 14
+  bash ~/.claude/skills/hosts/scripts/agent-build run ~/.cargo/bin/cargo build -j 14
 ```
 
 Run it from `rewrite/`, with Cargo's target dir left at `rewrite/target`. If a build is killed for memory, check `free -g` before retrying.
 
-## Running windows
+## Isolated CEF launches
 
-Never open a test window on the owner's desktop session. Use Xvfb for X11, or a headless Wayland compositor (for example `weston --backend=headless`) with its own `WAYLAND_DISPLAY`. Stop the compositors and browsers you start by PID.
+Run every CEF launch through an isolated launcher, including tamper and negative
+tests. Use Xvfb or headless Weston, a private session D-Bus with service
+activation disabled, and scratch directories for `XDG_RUNTIME_DIR`, `HOME` and
+`TMPDIR`. Set `DBUS_SYSTEM_BUS_ADDRESS` to a nonexistent socket path. Never use
+the owner's desktop session, session bus or `/run/user/<uid>/bus`. Stop the
+compositors and browsers you start by PID.
+
+Do not run `sudo`, `pkexec`, or host system-bus or polkit probes such as
+`resolvectl statistics` or `systemctl` on system units. These can open a PIN prompt
+on the owner's desktop.
