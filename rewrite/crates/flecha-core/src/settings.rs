@@ -172,12 +172,17 @@ fn covers_site(site: &str, host: &str) -> bool {
             .is_some_and(|prefix| prefix.ends_with('.'))
 }
 
+/// Whether ads are blocked on `host`, given the sites where blocking is off. An entry covers
+/// its subdomains. Hosts compare byte for byte: `host` must already be a URL parser's
+/// lowercase ASCII hostname.
+pub fn blocks_ads_on(allowed: Option<&[String]>, host: &str) -> bool {
+    allowed.is_none_or(|allowed| !allowed.iter().any(|site| covers_site(site, host)))
+}
+
 impl Settings {
     /// The per-site rule. The global ad-block switch is stored separately.
     pub fn blocks_ads_on(&self, host: &str) -> bool {
-        self.ad_block_allowed
-            .as_ref()
-            .is_none_or(|allowed| !allowed.iter().any(|site| covers_site(site, host)))
+        blocks_ads_on(self.ad_block_allowed.as_deref(), host)
     }
 
     pub fn set_ad_blocking_on(&mut self, host: &str, block: bool) -> bool {

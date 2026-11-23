@@ -403,9 +403,19 @@ fn site_ad_block_rules_cover_subdomains_and_survive_restart() {
     assert!(state.settings.set_ad_blocking_on(subdomain, true));
     assert!(state.settings.blocks_ads_on(root));
     assert_eq!(state.settings.ad_block_allowed, Some(Vec::new()));
+    // One bad entry costs only itself (the Chromium shell dropped the whole list).
     let malformed = encode(&state).unwrap().replace(
         "\"adBlockAllowed\": []",
-        "\"adBlockAllowed\": [\"good.org\",\"[::1]\"]",
+        "\"adBlockAllowed\": [\"good.org\",\"[::1]\",7,null,\"Good.org\",\"other.net\"]",
     );
-    assert_eq!(decode(&malformed).unwrap().settings.ad_block_allowed, None);
+    let decoded = flecha_core::storage::decode_with_repairs(&malformed).unwrap();
+    assert_eq!(
+        decoded.state.settings.ad_block_allowed.as_deref().unwrap(),
+        ["good.org", "other.net"]
+    );
+    assert_eq!(decoded.repairs.skipped_ad_block_sites, 4);
+    let wrong_type = encode(&state)
+        .unwrap()
+        .replace("\"adBlockAllowed\": []", "\"adBlockAllowed\": \"good.org\"");
+    assert_eq!(decode(&wrong_type).unwrap().settings.ad_block_allowed, None);
 }

@@ -1,0 +1,10 @@
+[Adblock Plus 2.0]
+! Title: EasyPrivacy
+! A small stand-in for EasyPrivacy, for flecha-adblock's tests.
+||metrics.example^
+/pixel.gif?
+@@||metrics.example/ok.js
+||google-analytics.com^$script,third-party,xmlhttprequest
+||etwun.com:8080/counter.php?
+@@||ported.example:8443/ok^$script
+||ported.example^

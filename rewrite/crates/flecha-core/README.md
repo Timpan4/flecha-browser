@@ -40,5 +40,6 @@ GPUI owns command-bar ranking across sources, Peeks, shortcut registration, loca
 - Environment switches apply to HTTP and HTTPS pages. A blob URL stays on its original origin.
 - The command bar treats malformed explicit HTTP and HTTPS input as invalid so its path, query, and fragment stay local.
 - GitHub issue shortcuts require a complete repository segment and fall back to GitHub search for ambiguous paths.
+- A saved ad-block exception list keeps its valid hostnames and counts the dropped entries in `SnapshotRepairs::skipped_ad_block_sites`. The Chromium shell dropped the whole list for one bad entry.
 
 Regenerate the committed address parity fixture from the repository root with `bun rewrite/crates/flecha-core/scripts/generate-address-fixture.ts`. The script records Chromium's current outputs and preserves documented Rust divergences for review.
