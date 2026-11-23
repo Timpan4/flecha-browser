@@ -6,10 +6,11 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-# Pins from rewrite/pins.toml. The rev is on branch flecha/cef-158.0.3 of the Flecha fork.
-# The CEF runtime comes from prepare.sh (pinned archive and SHA-1) through CEF_PATH; build with
-# build.sh, which checks it first.
-cef = { git = "https://github.com/Timpan4/cef-rs", rev = "32d6bc558545933eb1b4620aac4bc4799299c129", default-features = false, features = ["sandbox"] }
+# The workspace's cef-rs: the pinned rev from rewrite/pins.toml, staged and patched by
+# spikes/gpui-cef-compositor/prepare.sh. One workspace can hold only one cef-dll-sys (it sets
+# `links`). Its build script links against Spike 1's staged copy of the pinned beta archive; at
+# run time run.sh loads the copy this spike's prepare.sh staged. Build with build.sh.
+cef = { workspace = true, features = ["sandbox"] }
 # winit 0.30 is the newest stable line (0.31 is in beta). softbuffer 0.4 uses the same
 # raw-window-handle 0.6.
 winit = "0.30.13"
