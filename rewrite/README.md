@@ -10,6 +10,12 @@ The plan, the decisions behind it, and what each phase must prove are in [docs/c
 
 A unit adds its crate path to `members` in `Cargo.toml`.
 
+The compositor spike uses patched copies of the pinned Zed and cef-rs sources.
+From `rewrite/`, run `bash spikes/gpui-cef-compositor/prepare.sh` before resolving
+the workspace with Cargo. Preparation uses `flock` to serialize staging and
+verifies the pinned CEF beta archive. The [spike report](spikes/gpui-cef-compositor/REPORT.md)
+has the build and isolated verification commands.
+
 ## Building on the workstation
 
 The workstation runs one heavy build at a time. Every `cargo build`, `cargo test` or `cargo run` that compiles CEF or GPUI waits for a shared lock and runs in the agent build slice:

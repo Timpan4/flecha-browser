@@ -1,9 +1,19 @@
 [workspace]
 resolver = "3"
-# Each unit adds its own crate path here.
-members = ["crates/flecha-core"]
+members = ["crates/flecha-core", "crates/flecha-surface", "spikes/gpui-cef-compositor"]
+exclude = ["target/spike1-src/zed", "target/spike1-src/cef-rs"]
 
 [workspace.package]
 edition = "2024"
 license = "MIT"
 publish = false
+
+[workspace.dependencies]
+anyhow = "1"
+cef = { path = "target/spike1-src/cef-rs/cef", default-features = false }
+gpui = { path = "target/spike1-src/zed/crates/gpui", default-features = false }
+gpui_platform = { path = "target/spike1-src/zed/crates/gpui_platform", features = ["font-kit", "x11", "wayland"] }
+wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "cddb2f5d80dc0009b2ef6767635140cacf90a007", default-features = false }
+
+[patch.crates-io]
+calloop = { git = "https://github.com/zed-industries/calloop", rev = "3759371fee14c40066d64777e2a36b6ffcc22590" }
