@@ -22,3 +22,7 @@ the current loop's request draining and yield, so it is not a7a92bd's pump.
 CEF-free `idle::` tests through the build lock, and restores the file with git.
 `idle-mutants.out` is its output on c6c2f00's `src/idle.rs` (unchanged since):
 every mutant fails at least one test, the unmutated rule passes 5 of 5.
+
+The ledger counts only timers armed through `Timers::arm`. A per-call timer
+that calls `executor.timer()` directly, as in control 1, bypasses it and fails
+`cdp_pass` only if its stall exceeds the `STEP_TIMEOUT_MS` bounds.

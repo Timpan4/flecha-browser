@@ -198,7 +198,9 @@ The Timer thread's CPU, sampled once a second as the verifier did (`threads.log`
 
 Controls are in `results/2026-11-23-r5-controls/`, each run once through the runner with its full isolation. Each applies its patch from that dir to the committed code.
 
-The bounds the parent asked for, a call over `STEP_TIMEOUT_MS` or a loop over the window plus `STEP_TIMEOUT_MS`, did not catch the controls here. The stalls on this host were shorter than the verifier's (worst calls of 11 s against 22 to 30 s) and intermittent: control 2 saturated the Timer thread and still ran on time. So `cdp_pass` also checks the cause directly: the bridge may never hold more than one outstanding timer, which is the sweeper's design. Control 3 fails on that and passes the latency bounds. Why r4's single run did not stall is not known.
+The bounds the parent asked for, a call over `STEP_TIMEOUT_MS` or a loop over the window plus `STEP_TIMEOUT_MS`, did not catch the controls here. The controls ran on the same host as the verifier, but with this round's pump (lazy timers, request draining, a yield after each call) and the old bridge timer, not a7a92bd's code. Their stalls were shorter than the verifier's (worst calls of 11 s against 22 to 30 s) and intermittent: control 2 saturated the Timer thread and still ran on time. Which difference shortened them was not isolated. So `cdp_pass` also checks the cause directly: the bridge may never hold more than one outstanding timer, which is the sweeper's design. Control 3 fails on that and passes the latency bounds. Why r4's single run did not stall is not known.
+
+The ledger sees only timers armed through `Timers::arm`. A per-call timer reinstated by calling `executor.timer()` directly, as control 1 does, bypasses it. Such a mutant fails `cdp_pass` only when its stall exceeds the `STEP_TIMEOUT_MS` bounds, and control 1's did not.
 
 ### Phase 1 risk
 
