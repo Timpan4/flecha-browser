@@ -4,7 +4,7 @@ Plan: [docs/cef-gpui-rewrite-plan.md](../../../docs/cef-gpui-rewrite-plan.md), s
 
 ## Status
 
-- Built on the pins and self-checked in both modes on Xvfb. Results are in [Automated results](#automated-results).
+- Built on the pins and self-checked in both modes on Xvfb. On Xvfb, OSR input, the `window.open` popup, a notification permission prompt, printing to PDF, the terminal commands, restart persistence, and Chrome-mode tab handling also passed. Results are in [Automated results](#automated-results).
 - The sign-in gate (checks 1 to 7) is **not run**. It needs the owner and a purpose-made Google account. The checklist is in [Manual checklist](#manual-checklist-for-the-owner).
 - Nothing in the automated results blocks the manual run. Both modes present the same identity to pages: `navigator.webdriver` false, CEF's default user agent, `Chromium` and `Not.A/Brand` brands with no `Google Chrome` brand. Both run fully sandboxed. The Web Store offers "Add to Chrome" in both modes, next to an "Install Chrome" button (see [Web Store](#web-store)).
 
@@ -48,11 +48,15 @@ Run with a new, dedicated profile directory. Never point `--profile` at a real b
 
 ```sh
 # Alloy OSR
-./target/debug/cef-osr-signin --mode osr --profile "$HOME/flecha-spike0/osr" --url https://accounts.google.com/
+env -u WAYLAND_DISPLAY ./target/debug/cef-osr-signin --mode osr \
+  --profile "$HOME/flecha-spike0/osr" --url https://accounts.google.com/
 
 # Chrome-style control
-./target/debug/cef-osr-signin --mode chrome --profile "$HOME/flecha-spike0/chrome" --url https://accounts.google.com/
+env -u WAYLAND_DISPLAY ./target/debug/cef-osr-signin --mode chrome \
+  --profile "$HOME/flecha-spike0/chrome" --url https://accounts.google.com/
 ```
+
+`env -u WAYLAND_DISPLAY` makes winit and CEF both use X11 (XWayland on a Wayland desktop). That is the only path tested: every automated run was on Xvfb. Launching with `WAYLAND_DISPLAY` set has not been run.
 
 OSR mode has no address bar. Type commands in the terminal it was started from:
 
@@ -76,7 +80,19 @@ Self-check (prints one JSON report and exits):
 
 `--self-check-timeout-secs` is required. It bounds each step; 30 is the value used for the runs below, not a product limit.
 
-To run anything on Xvfb with an isolated session (no D-Bus activation, scratch HOME, XDG and runtime dirs), use `spikes/cef-osr-signin/scripts/xvfb-isolated.sh <out-dir> <app args…>`.
+To run anything on Xvfb with an isolated session (no D-Bus activation, scratch HOME, XDG and runtime dirs), use `spikes/cef-osr-signin/scripts/xvfb-isolated.sh <out-dir> <app args…>`. The app's stdin is the FIFO `<out-dir>/stdin.fifo`, so OSR commands can be sent to it. With `ACTIONS=<script>` the harness waits for the first page load, runs the script (with `DISPLAY`, `OUT`, `APP_PID` and `CMD` set), and returns the app's exit status if the script ended the app. The action scripts in `scripts/` need:
+
+- `XDOTOOL`: path to xdotool. It is not installed on the workstation; the runs used nixpkgs' build (`nix --extra-experimental-features 'nix-command flakes' build nixpkgs#xdotool`).
+- `WAIT_SECS`: how long each step waits for its log line. The runs used 30. It bounds a test run and is not a product limit.
+- `WM` (only `persist-actions.sh`): an EWMH window manager binary. Xvfb has none, and closing a window the way a desktop does needs one. The runs used nixpkgs' openbox 3.6.1.
+
+Example, from `rewrite/`:
+
+```sh
+ACTIONS=$PWD/spikes/cef-osr-signin/scripts/osr-actions.sh WAIT_SECS=30 XDOTOOL=/nix/store/…-xdotool-…/bin/xdotool \
+  bash spikes/cef-osr-signin/scripts/xvfb-isolated.sh /tmp/spike0-osr --mode osr --profile /tmp/spike0-osr/profile \
+  --url "file://$PWD/spikes/cef-osr-signin/scripts/input-test.html"
+```
 
 ### Workarounds in this spike
 
@@ -106,7 +122,7 @@ Run on 2026-11-23 on the workstation, on Xvfb only, through `scripts/xvfb-isolat
 | /proc: processes without seccomp | browser, network service (`--utility-sub-type=network.mojom.NetworkService`), zygote helpers; Chromium's normal Linux layout | same |
 | Forbidden switches in any process command line (`--remote-debugging-*`, `--enable-automation`, `--headless`, `--no-sandbox` and other sandbox-off switches, `--user-agent`, `--disable-web-security`, `--ignore-certificate-errors`, `--use-mock-keychain`, `--test-type`) | none | none |
 
-Switches CEF itself adds to the browser process (from `chrome://version`, identical in both modes): `--lang=en-US --disable-signin-promo-on-avatar-pill-for-testing --disable-features=GlicActorUi,AutofillActorMode,LensOverlay,KillOnInvalidNavigationHeaders --ozone-platform=x11`. None of them is visible to pages. The `-for-testing` switch only hides a profile-menu promo.
+Switches CEF itself adds to the browser process (from `chrome://version`, identical in both modes): `--lang=en-US --disable-signin-promo-on-avatar-pill-for-testing --disable-features=GlicActorUi,AutofillActorMode,LensOverlay,KillOnInvalidNavigationHeaders --ozone-platform=x11`. None of them is visible to pages. Judging only by its name, `--disable-signin-promo-on-avatar-pill-for-testing` hides a sign-in promo on the profile avatar button; I did not check Chromium's source for what else it does.
 
 ### Web Store
 
@@ -138,15 +154,45 @@ Page: uBlock Origin Lite, `https://chromewebstore.google.com/detail/ublock-origi
 
 Screenshots: [OSR page](evidence/osr-page.png), [Chrome-style control](evidence/chrome-page.png).
 
+### Behaviour checks on Xvfb
+
+Each row is one scripted run through `scripts/xvfb-isolated.sh` on `scripts/input-test.html`, with `WAIT_SECS=30`. Logs: [OSR](evidence/osr-actions.txt), [Chrome](evidence/chrome-actions.txt), [OSR restart](evidence/osr-persist.txt), [Chrome restart](evidence/chrome-persist.txt).
+
+| Check | Script | Result |
+|---|---|---|
+| OSR `window.open` popup | `osr-actions.sh` | A second OSR window opened and painted ([screenshot](evidence/osr-popup.png)); the popup page saw `window.opener` non-null; `window.close()` in the popup closed only the popup (open browsers 2, then 1) and the app kept running |
+| OSR notification permission | `osr-actions.sh` | `Notification.requestPermission()` printed `[permission 1] file:/// requests permission types 0x8000`; `allow 1` on stdin resolved it as `granted` |
+| OSR camera permission | `osr-actions.sh` | `getUserMedia({video: true})` failed with `NotFoundError` and **no prompt**: Xvfb has no camera, and the request ends before any permission callback. The camera prompt path is untested (manual check 6) |
+| OSR AltGr on a Swedish layout | `osr-actions.sh` | With `setxkbmap se`, AltGr+2 then `åäö` gave the text field `@åäö` |
+| OSR `pdf <path>` | `osr-actions.sh` | `[pdf] ok=true`; the file is a 4-page Letter PDF (`pdfinfo`) |
+| OSR `go <url>` | `osr-actions.sh` | `[load-end] https://www.google.com/` |
+| OSR `quit` | `osr-actions.sh` | app exit status 0 |
+| Chrome: tab opened from Chrome's UI | `chrome-actions.sh` | Ctrl+T, then typing a URL in the omnibox: the new tab got the app's client (`[browser] created id=2 open=2`, `[load-end] https://www.google.com/`) ([screenshot](evidence/chrome-two-tabs.png)) |
+| Chrome: close the first tab | `chrome-actions.sh` | Ctrl+1, Ctrl+W: browser 1 closed, the app kept running with one tab |
+| Chrome: close the last tab | `chrome-actions.sh` | Ctrl+W: app exit status 0 |
+| Restart persistence, OSR | `osr-actions.sh` then `persist-actions.sh` | Second run on the same profile: localStorage load counter 2 (first run: 1); `Default/Cookies` has `.google.com` cookies from the first run; closing the window through the window manager exited with status 0 |
+| Restart persistence, Chrome | `chrome-actions.sh` then `persist-actions.sh` | Same as OSR: counter 2, `.google.com` cookies present, window close exited with status 0 |
+
+The first run on each profile ended with `quit` (OSR) or by closing the last tab (Chrome); the second ended with a window close. Restart persistence of a Google sign-in is still manual check 1.
+
 ### Isolation note
 
-The first OSR self-check ran under a plain `dbus-run-session`. D-Bus activation on that private bus started a keyring helper that printed `GNOME_KEYRING_CONTROL=/run/user/1000/keyring`, the owner's keyring control directory, and started portal and gvfs services. So that run touched the owner's running `gnome-keyring-daemon` once through its control socket. No secret was requested on the owner's session bus and no unlock prompt was triggered. Every later run used `scripts/session-bus.conf` (no service directories, so nothing is activated) and a scratch `XDG_RUNTIME_DIR`, and printed no keyring, portal or gvfs lines.
+The first OSR self-check ran under a plain `dbus-run-session`. D-Bus activation on that private bus started a keyring helper that printed `GNOME_KEYRING_CONTROL=/run/user/1000/keyring`, the owner's keyring control directory, and started portal and gvfs services. So that run may have reached the owner's running `gnome-keyring-daemon` through its control socket. The run's logs show no secret request and no unlock prompt, but logs alone cannot rule out that the helper talked to the daemon. Every later run used `scripts/session-bus.conf` (no service directories, so nothing is activated) and a scratch `XDG_RUNTIME_DIR`, and printed no keyring, portal or gvfs lines.
 
 ## Manual checklist for the owner
 
 Use a Google account made for this test. Enter its password and MFA code yourself. Nothing in the app logs keystrokes or form contents; the terminal shows only page `console.log` output, load events and permission requests. Do not paste account identifiers into this report.
 
-Use a fresh `--profile` per mode, for example `$HOME/flecha-spike0/osr` and `$HOME/flecha-spike0/chrome`. Run every check in both modes. Run the same checks in today's Flecha as the reference column.
+Use a fresh `--profile` per mode, for example `$HOME/flecha-spike0/osr` and `$HOME/flecha-spike0/chrome`. Start both with `env -u WAYLAND_DISPLAY` as in [Build and run](#build-and-run). Run every check in both modes. Run the same checks in today's Flecha as the reference column.
+
+The links below were checked on 2026-11-23 (HTTP 200; the herokuapp page shows the `tomsmith` / `SuperSecretPassword!` demo login). Any similar page works if one has moved.
+
+0. **Pre-flight: typing on your real display (OSR only).** Xvfb tested keys from xdotool, not your keyboard and input method.
+   1. Start OSR mode with `--url file://$PWD/spikes/cef-osr-signin/scripts/input-test.html` and a scratch `--profile`.
+   2. In the first text field type `@`, `åäö`, a few AltGr characters from your layout (for example `{[]}\` and `€`), and a capital letter with Shift.
+   3. Copy some text from another app and paste it into the field with Ctrl+V.
+   4. Pass: the terminal's `[console] INPUT text "…"` lines show exactly what you typed and pasted. If any character is wrong or missing, stop: the sign-in checks would fail for input reasons, not for Alloy reasons.
+   5. Also record, without making it a pass condition, whether Ctrl+C in the field and Ctrl+V in another app works (listed below as not implemented).
 
 1. **Gmail sign-in with MFA, then restart.**
    1. Start the mode with `--url https://accounts.google.com/`.
@@ -168,7 +214,7 @@ Use a fresh `--profile` per mode, for example `$HOME/flecha-spike0/osr` and `$HO
 6. **Camera permission through a host prompt.** Open `https://permission.site/` and click "Camera".
    - Chrome mode: Chrome's permission bubble appears. Allow it.
    - OSR mode: the terminal prints `[permission N] https://permission.site requests media access (camera; …)`. Type `allow N`.
-   - Pass: the site reports camera access granted. The machine needs a camera; with none, record "no camera".
+   - Pass: the site reports camera access granted. The machine needs a camera. Without one, OSR mode prints no prompt at all (seen on Xvfb: `NotFoundError`); record "no camera".
 7. **Print.** On any page press Ctrl+P.
    - Chrome mode: pass if the print preview opens.
    - OSR mode: record what Ctrl+P does (on Xvfb it did nothing visible). Then type `pdf` and check that `<profile>/flecha-spike-print.pdf` contains the page. The plan expects "Use `Print` or a GPUI preview over `PrintToPDF`".
@@ -177,6 +223,7 @@ Use a fresh `--profile` per mode, for example `$HOME/flecha-spike0/osr` and `$HO
 
 | # | Check | Alloy OSR | Chrome-style control | Flecha (reference) |
 |---|---|---|---|---|
+| 0 | Typing and paste on the real display | | n/a | n/a |
 | 1 | Gmail sign-in with MFA, survives restart | | | |
 | 2 | Sign out and back in | | | |
 | 3 | Third-party "Sign in with Google" | | | |
@@ -190,8 +237,11 @@ Use a fresh `--profile` per mode, for example `$HOME/flecha-spike0/osr` and `$HO
 
 ## What I could not verify
 
-- **Google sign-in, Web Store installs, password save and fill, camera, print.** All need a person, an account or hardware. None were attempted. No account was signed in to.
-- **Native Wayland.** Every run used Xvfb (X11). On the owner's Wayland session winit picks Wayland for the OSR window, and CEF picks its own Ozone platform. Neither was run there.
+- **Google sign-in, Web Store installs, password save and fill, camera, print preview.** All need a person, an account or hardware. None were attempted. No account was signed in to.
+- **The camera prompt in OSR mode.** Xvfb has no camera, so the request failed before any permission callback. The notification prompt shows the terminal prompt path works, but the media path (`OnRequestMediaAccessPermission`) never ran.
+- **Chrome-mode permission bubbles and print preview.** Not scripted; they are Chrome's own UI. Manual checks 6 and 7.
+- **Clipboard and the owner's real keyboard.** Paste was not tested. AltGr was tested only with xdotool on an Xvfb Swedish layout. Pre-flight check 0 covers both.
+- **Native Wayland.** Every run used Xvfb (X11). With `WAYLAND_DISPLAY` set on the owner's session, winit would pick Wayland for the OSR window, and CEF picks its own Ozone platform. Neither was run; the run commands unset `WAYLAND_DISPLAY`.
 - **HiDPI.** Xvfb runs at scale 1. The OSR code passes the window scale to CEF (`GetScreenInfo`) and converts mouse coordinates, but no scale other than 1 was tested.
 - **OSR features this spike does not implement:** IME composition, context menus, drag and drop, JavaScript `alert`/`confirm`/`beforeunload` dialogs, file pickers, clipboard to other apps, DevTools, an address bar. If a sign-in page depends on one of these, the failure belongs to this spike, not to Alloy. Note it.
 - **Keys with no US physical-key mapping in OSR.** Text from them is inserted correctly through `CHAR` events, but the page's `keydown` sees an empty `key` and `keyCode` 0 (seen with xdotool's remapped `ö`). A real Swedish layout maps `ö` to a physical key, so this is expected to matter only for unusual layouts.
