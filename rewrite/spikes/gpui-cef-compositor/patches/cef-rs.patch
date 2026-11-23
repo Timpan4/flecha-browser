@@ -130,7 +130,7 @@ index 734d0c1..3889808 100644
  serde_json.workspace = true
 +toml = "1"
 diff --git a/sys/build.rs b/sys/build.rs
-index c13ea75..cbe39d8 100644
+index c13ea75..4bc8eba 100644
 --- a/sys/build.rs
 +++ b/sys/build.rs
 @@ -1,5 +1,6 @@
@@ -310,6 +310,19 @@ index c13ea75..cbe39d8 100644
 
      // Compile the wrapper against an explicit API version instead of the
      // experimental (unversioned) API that CEF selects by default, which its
+@@ -164,10 +130,8 @@ fn main() -> anyhow::Result<()> {
+
+     match os_arch.os {
+         "linux" => {
+-            // On Windows and Linux the cef files usually have to be next to the main binary.
+-            // On macOS it's more complicated so we'll leave it to tools like tauri-cli for now.
+-            copy_cef_runtime_files(&cef_dir, target_dir)?;
+-
++            // Flecha's launchers point the loader at the staged runtime, so this build script
++            // copies nothing. A cached replay of it then gives the same result as a fresh run.
+             println!("cargo::rustc-link-lib=dylib=cef");
+         }
+         "windows" => {
 diff --git a/sys/src/lib.rs b/sys/src/lib.rs
 index 7f092d3..9a46e57 100644
 --- a/sys/src/lib.rs

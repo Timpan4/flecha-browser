@@ -39,6 +39,10 @@ jobs:
         run: |
           node rewrite/crates/flecha-import/scripts/generate-import-fixture.ts
           git diff --exit-code -- rewrite/crates/flecha-import/tests/fixtures/import-parity.jsonl
+      - name: Check the Boosts parity fixture
+        run: |
+          node rewrite/crates/flecha-boosts/scripts/generate-boosts-fixture.ts
+          git diff --exit-code -- rewrite/crates/flecha-boosts/tests/fixtures/boosts-parity.jsonl
       - uses: actions/setup-node@v7
         with:
           node-version: 26
@@ -126,6 +130,37 @@ jobs:
           cargo +stable fmt --check -p flecha-adblock
           cargo +stable clippy -p flecha-adblock --all-targets -- -D warnings
           cargo +stable test -p flecha-adblock --all-targets
+      - name: Check the downloads crate in isolation
+        shell: bash
+        run: |
+          downloads_rewrite="$RUNNER_TEMP/flecha-downloads-ci/rewrite"
+          mkdir -p "$downloads_rewrite/crates"
+          cp -R crates/flecha-core crates/flecha-downloads "$downloads_rewrite/crates/"
+          cp Cargo.lock "$downloads_rewrite/"
+          printf '[workspace]\nresolver = "3"\nmembers = ["crates/flecha-downloads", "crates/flecha-core"]\n' > "$downloads_rewrite/Cargo.toml"
+          cd "$downloads_rewrite"
+          # Resolving the product workspace would fetch Spike 1's Git dependencies.
+          cargo +stable metadata --format-version 1 > metadata.json
+          jq -e '[.packages[].source | select(. != null and startswith("git+"))] | length == 0' metadata.json
+          cargo +stable fmt --check -p flecha-downloads
+          cargo +stable clippy -p flecha-downloads --all-targets -- -D warnings
+          cargo +stable test -p flecha-downloads --all-targets
+      - name: Check the Boosts crate in isolation
+        shell: bash
+        run: |
+          boosts_rewrite="$RUNNER_TEMP/flecha-boosts-ci/rewrite"
+          mkdir -p "$boosts_rewrite/crates"
+          cp -R crates/flecha-core crates/flecha-boosts "$boosts_rewrite/crates/"
+          cp Cargo.lock "$boosts_rewrite/"
+          printf '[workspace]\nresolver = "3"\nmembers = ["crates/flecha-boosts", "crates/flecha-core"]\n' > "$boosts_rewrite/Cargo.toml"
+          cd "$boosts_rewrite"
+          # Resolving the product workspace would fetch Spike 1's Git dependencies.
+          cargo +stable metadata --format-version 1 > metadata.json
+          jq -e '[.packages[].source | select(. != null and startswith("git+"))] | length == 0' metadata.json
+          cargo +stable fmt --check -p flecha-boosts
+          cargo +stable clippy -p flecha-boosts --all-targets -- -D warnings
+          cargo +stable test -p flecha-boosts --all-targets
+          cargo +stable test -p flecha-boosts --doc
       - name: Check saved profile migration in isolation
         shell: bash
         run: |
