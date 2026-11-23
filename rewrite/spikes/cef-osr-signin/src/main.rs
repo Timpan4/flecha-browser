@@ -1,7 +1,8 @@
 //! Spike 0 (docs/cef-gpui-rewrite-plan.md): one binary, two modes.
 //!
 //! - `--mode osr`: Alloy-style off-screen browser, software `OnPaint` into a winit window.
-//! - `--mode chrome`: windowed Chrome-style browser in CEF Views, the control.
+//! - `--mode chrome`: the control, a Chrome-style browser in a native Chrome window with
+//!   Chrome's own tab strip and toolbar.
 //!
 //! Both run with shipping settings: sandbox on, no remote debugging, no automation switches,
 //! CEF's default user agent, and a persistent profile at `--profile`. The only settings that
