@@ -41,6 +41,30 @@ fn used_cache(report: &FetchReport) -> Vec<String> {
         .collect()
 }
 
+/// Every list's download failed for `reason`, and its cached copy was used.
+fn assert_used_cache(report: &FetchReport, reason: &str) {
+    let warnings = used_cache(report);
+    assert_eq!(warnings.len(), LISTS.len(), "{report:?}");
+    assert!(
+        warnings
+            .iter()
+            .all(|w| w.contains(reason) && w.contains("using the cached copy")),
+        "{reason}: {warnings:?}"
+    );
+}
+
+/// Every list's download failed with `reason`, with no cached copy to fall back on.
+fn assert_no_cache(report: FetchReport, reason: &str) {
+    let failures = report.lists.unwrap_err();
+    assert_eq!(failures.len(), LISTS.len(), "{reason}: {failures:?}");
+    assert!(
+        failures
+            .iter()
+            .all(|f| matches!(f, ListFailure::NoCache { download, .. } if download == reason)),
+        "{reason}: {failures:?}"
+    );
+}
+
 #[test]
 fn cosmetic_filters_keep_independent_selectors_cross_list_exceptions_and_site_exemptions() {
     let list = "/network\n##.ad\n## .ad\n##.unsupported:unknown()\n##.remove-me\nsite.example##.domain-only\n@@||site.example^$generichide";
@@ -109,6 +133,7 @@ fn failed_refresh_requires_a_cached_list_with_supported_network_rules() {
     assert!(fetch_lists(cache, false, &serve).lists.is_ok());
     let report = fetch_lists(cache, true, &offline());
     let lists = report.lists.unwrap();
+    assert_eq!(lists.len(), LISTS.len());
     assert!(
         lists
             .iter()
@@ -237,7 +262,7 @@ fn compressed(bytes: Vec<u8>, encoding: &str) -> WireResponse {
 }
 
 #[test]
-fn compressed_wire_data_is_decoded_and_a_truncated_gzip_refresh_keeps_the_verified_cache() {
+fn compressed_wire_data_is_decoded_and_a_truncated_refresh_keeps_the_verified_cache() {
     let cache = tempfile::tempdir().unwrap();
     let cache = cache.path();
     let original = |url: &str| subscription(url, "/old-rule");
@@ -256,28 +281,43 @@ fn compressed_wire_data_is_decoded_and_a_truncated_gzip_refresh_keeps_the_verifi
     });
     assert!(fetch_lists(cache, true, &download).lists.is_ok());
 
-    let truncated = FnDownload(|url: &str, _: &DownloadRequest| {
-        let mut bytes = gzip(&subscription(url, "/new-rule"));
-        bytes.pop();
-        Ok(compressed(bytes, "gzip"))
-    });
-    let report = fetch_lists(cache, true, &truncated);
-    let warnings = used_cache(&report);
-    assert_eq!(warnings.len(), LISTS.len());
-    assert!(
-        warnings
+    // A stream cut short, with a Content-Length that matches what was sent: by its last byte, and
+    // by its whole gzip (CRC-32 and size, 8 bytes) or zlib (Adler-32, 4 bytes) trailer.
+    let cuts = [
+        ("gzip", 1),
+        ("gzip", 8),
+        ("deflate", 1),
+        ("deflate", 4),
+        ("br", 1),
+    ];
+    for (encoding, cut) in cuts {
+        let compress = encoders
             .iter()
-            .all(|w| w.contains("unexpected end of file") && w.contains("using the cached copy")),
-        "{warnings:?}"
-    );
-    for list in LISTS {
-        assert_eq!(cached(cache, list.id), original(list.url));
+            .find(|(name, _)| *name == encoding)
+            .unwrap()
+            .1;
+        let truncated = FnDownload(move |url: &str, _: &DownloadRequest| {
+            let mut bytes = compress(&original(url).replace("/old-rule", "/new-rule\n/old-rule"));
+            bytes.truncate(bytes.len() - cut);
+            Ok(compressed(bytes, encoding))
+        });
+        assert_used_cache(
+            &fetch_lists(cache, true, &truncated),
+            "unexpected end of file",
+        );
+        for list in LISTS {
+            assert_eq!(
+                cached(cache, list.id),
+                original(list.url),
+                "{encoding} cut by {cut}"
+            );
+        }
+        let empty = tempfile::tempdir().unwrap();
+        assert_no_cache(
+            fetch_lists(empty.path(), false, &truncated),
+            "unexpected end of file",
+        );
     }
-    let empty = tempfile::tempdir().unwrap();
-    let failures = fetch_lists(empty.path(), false, &truncated)
-        .lists
-        .unwrap_err();
-    assert!(failures.iter().all(|f| matches!(f, ListFailure::NoCache { download, .. } if download == "unexpected end of file")));
 }
 
 #[test]
@@ -344,10 +384,10 @@ fn wire_data_exceeding_content_length_is_refused_before_reading_more() {
             body: Box::new(Oversized(false)),
         })
     });
-    let failures = fetch_lists(cache.path(), false, &download)
-        .lists
-        .unwrap_err();
-    assert!(failures.iter().all(|f| matches!(f, ListFailure::NoCache { download, .. } if download == "response exceeded Content-Length")));
+    assert_no_cache(
+        fetch_lists(cache.path(), false, &download),
+        "response exceeded Content-Length",
+    );
     for length in ["+1", "1.0", " 1", "١", "0x1"] {
         let download = FnDownload(move |url: &str, _: &DownloadRequest| {
             Ok(response_with(
@@ -355,10 +395,10 @@ fn wire_data_exceeding_content_length_is_refused_before_reading_more() {
                 &[("content-length", length)],
             ))
         });
-        let failures = fetch_lists(cache.path(), false, &download)
-            .lists
-            .unwrap_err();
-        assert!(failures.iter().all(|f| matches!(f, ListFailure::NoCache { download, .. } if download == "could not verify Content-Length")), "{length}");
+        assert_no_cache(
+            fetch_lists(cache.path(), false, &download),
+            "could not verify Content-Length",
+        );
     }
 }
 
@@ -407,11 +447,9 @@ fn redirects_stay_on_https_share_one_deadline_and_stop_after_twenty() {
             body: Box::new(io::empty()),
         })
     });
-    let failures = fetch_lists(cache.path(), true, &to_http);
-    assert!(
-        used_cache(&failures)
-            .iter()
-            .all(|w| w.contains("filter list redirect requires HTTPS"))
+    assert_used_cache(
+        &fetch_lists(cache.path(), true, &to_http),
+        "filter list redirect requires HTTPS",
     );
 
     let count = Mutex::new(0);
@@ -425,11 +463,9 @@ fn redirects_stay_on_https_share_one_deadline_and_stop_after_twenty() {
             body: Box::new(io::empty()),
         })
     });
-    let report = fetch_lists(cache.path(), true, &endless);
-    assert!(
-        used_cache(&report)
-            .iter()
-            .all(|w| w.contains("too many HTTP redirects"))
+    assert_used_cache(
+        &fetch_lists(cache.path(), true, &endless),
+        "too many HTTP redirects",
     );
     // The first request and twenty redirects.
     assert_eq!(*count.lock().unwrap(), 21);
@@ -442,8 +478,7 @@ fn redirects_stay_on_https_share_one_deadline_and_stop_after_twenty() {
             body: Box::new(io::empty()),
         })
     });
-    let report = fetch_lists(cache.path(), true, &bare);
-    assert!(used_cache(&report).iter().all(|w| w.contains("HTTP 302")));
+    assert_used_cache(&fetch_lists(cache.path(), true, &bare), "HTTP 302");
 }
 
 #[test]

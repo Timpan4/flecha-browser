@@ -38,7 +38,7 @@ fn counting(
     counts: Arc<[AtomicUsize; 2]>,
 ) -> FnDownload<impl Fn(&str, &DownloadRequest) -> io::Result<WireResponse> + Send + Sync> {
     FnDownload(move |url: &str, _: &DownloadRequest| {
-        let index = usize::from(url != LISTS[0].url);
+        let index = common::list_index(url);
         counts[index].fetch_add(1, Ordering::SeqCst);
         Ok(response(if index == 0 { EASYLIST } else { EASYPRIVACY }))
     })
@@ -241,7 +241,14 @@ fn a_damaged_or_outdated_engine_file_is_rebuilt_from_the_lists() {
     let last = flipped.len() - 1;
     flipped[last] ^= 0xff;
     let truncated = good[..good.len() / 2].to_vec();
-    for damaged in [flipped, truncated] {
+    // One ASCII byte of a page exception's host, still valid UTF-8: `trusted` to `trustee`.
+    let mut exception = good.clone();
+    let at = good
+        .windows(b"trusted.example".len())
+        .position(|window| window == b"trusted.example")
+        .unwrap();
+    exception[at + "truste".len()] = b'e';
+    for damaged in [flipped, truncated, exception] {
         fs::write(&engine_file, &damaged).unwrap();
         let (fresh, _) = AdBlocker::new(true, &[]);
         assert!(matches!(

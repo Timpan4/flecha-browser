@@ -1,10 +1,10 @@
 //! Building the adblock-rust engine from list text, and the serialized copy that lets a launch
 //! skip parsing.
 //!
-//! `engine.dat` holds a SHA-256 key over the list texts, the page exception lines, then
-//! adblock-rust's own serialization (which carries its crate version and a checksum). A key
-//! that doesn't match the cached lists, or a file adblock-rust refuses, means a rebuild from the
-//! text.
+//! `engine.dat` holds a SHA-256 key over the list texts, the page exception lines and their
+//! SHA-256, then adblock-rust's own serialization (which carries its crate version and a
+//! checksum). A key that doesn't match the cached lists, damaged page exception lines, or a file
+//! adblock-rust refuses means a rebuild from the text.
 
 use std::{fs, io, path::Path};
 
@@ -27,7 +27,7 @@ pub type EngineKey = [u8; 32];
 /// What [`build_engine`] keeps from a list, and the `engine.dat` layout. Change it whenever
 /// either changes, so an `engine.dat` built the old way is rebuilt.
 const RECIPE: &[u8] =
-    b"flecha-adblock recipe 2: parse errors and redirects left out, page exceptions kept\n";
+    b"flecha-adblock recipe 3: parse errors and redirects left out, page exceptions kept and hashed\n";
 
 const NO_REDIRECTS: &str = "redirect and rewrite filters need resources this engine doesn't load";
 
@@ -203,7 +203,14 @@ pub fn load_engine(cache: &Path, key: &EngineKey) -> Result<Filters, CachedEngin
         .ok()
         .filter(|&length| length <= rest.len())
         .ok_or_else(|| damaged("page exception length"))?;
-    let (lines, payload) = rest.split_at(length);
+    let (lines, rest) = rest.split_at(length);
+    // adblock-rust's checksum covers only its own payload.
+    let (digest, payload) = rest
+        .split_first_chunk::<32>()
+        .ok_or_else(|| damaged("page exceptions"))?;
+    if Sha256::digest(lines).as_slice() != digest {
+        return Err(damaged("page exceptions"));
+    }
     let lines = std::str::from_utf8(lines).map_err(|_| damaged("page exceptions"))?;
     let mut engine = Engine::default();
     engine
@@ -215,12 +222,15 @@ pub fn load_engine(cache: &Path, key: &EngineKey) -> Result<Filters, CachedEngin
 pub fn save_engine(cache: &Path, key: &EngineKey, filters: &Filters) -> io::Result<()> {
     let serialized = filters.engine.serialize();
     let lines = filters.page_exception_lines.as_bytes();
-    let mut bytes =
-        Vec::with_capacity(MAGIC.len() + key.len() + 8 + lines.len() + serialized.len());
+    let digest = Sha256::digest(lines);
+    let mut bytes = Vec::with_capacity(
+        MAGIC.len() + key.len() + 8 + lines.len() + digest.len() + serialized.len(),
+    );
     bytes.extend_from_slice(MAGIC);
     bytes.extend_from_slice(key);
     bytes.extend_from_slice(&(lines.len() as u64).to_le_bytes());
     bytes.extend_from_slice(lines);
+    bytes.extend_from_slice(&digest);
     bytes.extend_from_slice(&serialized);
     fs::create_dir_all(cache)?;
     write_atomically(&cache.join(ENGINE_FILE), &bytes)

@@ -16,12 +16,20 @@ pub const RETRY: Duration = Duration::from_secs(60);
 
 /// A list for `url` with the title the checks expect (build-adblock.test.mjs `subscription`).
 pub fn subscription(url: &str, rules: &str) -> String {
-    let title = if url == LISTS[0].url {
-        "EasyList"
-    } else {
-        "EasyPrivacy"
+    let title = match list_index(url) {
+        0 => "EasyList",
+        _ => "EasyPrivacy",
     };
     format!("[Adblock Plus 2.0]\n! Title: {title}\n{rules}\n")
+}
+
+/// Which of `LISTS` a URL is. Any other URL fails the test, so a request sent to the wrong
+/// place can't be answered with a valid list.
+pub fn list_index(url: &str) -> usize {
+    LISTS
+        .iter()
+        .position(|list| list.url == url)
+        .unwrap_or_else(|| panic!("no list at {url}"))
 }
 
 /// A 200 response with a matching Content-Length.
@@ -59,10 +67,9 @@ pub fn serve(
     easyprivacy: &'static str,
 ) -> FnDownload<impl Fn(&str, &DownloadRequest) -> io::Result<WireResponse> + Send + Sync> {
     FnDownload(move |url: &str, _: &DownloadRequest| {
-        Ok(response(if url == LISTS[0].url {
-            easylist
-        } else {
-            easyprivacy
+        Ok(response(match list_index(url) {
+            0 => easylist,
+            _ => easyprivacy,
         }))
     })
 }
