@@ -1,0 +1,5 @@
+xvfb pid 114980 display :2
+app pid 114982
+[console] INPUT storage loads 2 (file://.../scripts/input-test.html:25)
+cookie hosts at start: .google.com
+app exit 0

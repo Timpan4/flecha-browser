@@ -17,7 +17,7 @@ mod selfcheck;
 use cef::*;
 use cli::Mode;
 use std::{
-    ffi::{c_char, CString},
+    ffi::{CString, c_char},
     process::ExitCode,
 };
 
@@ -34,7 +34,8 @@ impl Argv {
             .iter()
             .map(|a| CString::new(a.as_str()).expect("argument without NUL"))
             .collect();
-        let mut pointers: Vec<*mut c_char> = strings.iter().map(|s| s.as_ptr() as *mut c_char).collect();
+        let mut pointers: Vec<*mut c_char> =
+            strings.iter().map(|s| s.as_ptr() as *mut c_char).collect();
         let main_args = MainArgs {
             argc: pointers.len() as i32,
             argv: pointers.as_mut_ptr(),
@@ -72,6 +73,13 @@ wrap_browser_process_handler! {
             }
         }
 
+        // Tabs and windows the user opens through Chrome's UI (new tab, a tab an extension
+        // opens) get this client. Without it they are unmanaged: no callbacks, and closing the
+        // first browser would quit while they are still open.
+        fn default_client(&self) -> Option<Client> {
+            (common::mode() == Mode::Chrome).then(chrome::ChromeClient::new)
+        }
+
         fn on_schedule_message_pump_work(&self, delay_ms: i64) {
             if common::mode() == Mode::Osr {
                 osr::schedule_pump(delay_ms);
@@ -87,7 +95,11 @@ fn main() -> ExitCode {
     // CEF relaunches this binary for its renderer, GPU, utility and zygote processes.
     if args.iter().any(|a| a.starts_with("--type=")) {
         let argv = Argv::new(&args);
-        let code = execute_process(Some(&argv.main_args), None::<&mut App>, std::ptr::null_mut());
+        let code = execute_process(
+            Some(&argv.main_args),
+            None::<&mut App>,
+            std::ptr::null_mut(),
+        );
         std::process::exit(code.max(0));
     }
 
@@ -122,7 +134,12 @@ fn main() -> ExitCode {
     let mut cef_args = vec![args[0].clone()];
     cef_args.extend(options.cef_args.iter().cloned());
     let argv = Argv::new(&cef_args);
-    if execute_process(Some(&argv.main_args), None::<&mut App>, std::ptr::null_mut()) != -1 {
+    if execute_process(
+        Some(&argv.main_args),
+        None::<&mut App>,
+        std::ptr::null_mut(),
+    ) != -1
+    {
         eprintln!("execute_process did not return -1 in the browser process");
         return ExitCode::FAILURE;
     }
@@ -142,7 +159,13 @@ fn main() -> ExitCode {
         ..Default::default()
     };
     let mut app = SpikeApp::new(start_url.clone());
-    if initialize(Some(&argv.main_args), Some(&settings), Some(&mut app), std::ptr::null_mut()) != 1 {
+    if initialize(
+        Some(&argv.main_args),
+        Some(&settings),
+        Some(&mut app),
+        std::ptr::null_mut(),
+    ) != 1
+    {
         eprintln!("cef initialize failed");
         return ExitCode::FAILURE;
     }

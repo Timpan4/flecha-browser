@@ -29,7 +29,12 @@ fn copy_cef_runtime() -> io::Result<()> {
         .ancestors()
         .find(|dir| dir.file_name().is_some_and(|name| name == "build"))
         .and_then(Path::parent)
-        .ok_or_else(|| io::Error::other(format!("OUT_DIR is not in a build dir: {}", out_dir.display())))?
+        .ok_or_else(|| {
+            io::Error::other(format!(
+                "OUT_DIR is not in a build dir: {}",
+                out_dir.display()
+            ))
+        })?
         .to_path_buf();
     link_files(&cef_dir, &profile_dir)?;
     link_files(&cef_dir.join("locales"), &profile_dir.join("locales"))

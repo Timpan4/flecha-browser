@@ -16,8 +16,9 @@ use std::{
     path::PathBuf,
     rc::Rc,
     sync::{
+        Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
-        mpsc, Mutex, OnceLock,
+        mpsc,
     },
     time::{Duration, Instant},
 };
@@ -66,7 +67,10 @@ static CONTEXT_READY: AtomicBool = AtomicBool::new(false);
 
 fn wake() {
     if let Some(proxy) = PROXY.get() {
-        let _ = proxy.lock().expect("proxy lock").send_event(UserEvent::Wake);
+        let _ = proxy
+            .lock()
+            .expect("proxy lock")
+            .send_event(UserEvent::Wake);
     }
 }
 
@@ -317,7 +321,7 @@ wrap_render_handler! {
                     (&mut v.frame, &mut v.frame_size)
                 };
                 target.clear();
-                target.extend(src.chunks_exact(4).map(|p| u32::from_le_bytes([p[0], p[1], p[2], 0])));
+                target.extend(src.as_chunks::<4>().0.iter().map(|p| u32::from_le_bytes([p[0], p[1], p[2], 0])));
                 *size = (width as u32, height as u32);
             }
             request_redraw(&self.view);
@@ -568,8 +572,12 @@ fn cursor_icon(cursor: CursorType) -> Option<CursorIcon> {
         c if c == CursorType::NOTALLOWED || c == CursorType::NODROP => CursorIcon::NotAllowed,
         c if c == CursorType::GRAB => CursorIcon::Grab,
         c if c == CursorType::GRABBING => CursorIcon::Grabbing,
-        c if c == CursorType::EASTWESTRESIZE || c == CursorType::COLUMNRESIZE => CursorIcon::EwResize,
-        c if c == CursorType::NORTHSOUTHRESIZE || c == CursorType::ROWRESIZE => CursorIcon::NsResize,
+        c if c == CursorType::EASTWESTRESIZE || c == CursorType::COLUMNRESIZE => {
+            CursorIcon::EwResize
+        }
+        c if c == CursorType::NORTHSOUTHRESIZE || c == CursorType::ROWRESIZE => {
+            CursorIcon::NsResize
+        }
         c if c == CursorType::CONTEXTMENU => CursorIcon::ContextMenu,
         c if c == CursorType::CELL => CursorIcon::Cell,
         c if c == CursorType::COPY => CursorIcon::Copy,
@@ -629,14 +637,22 @@ struct OsrApp {
 impl OsrApp {
     fn create_pending_windows(&mut self, event_loop: &ActiveEventLoop) {
         let pending: Vec<ViewRef> = VIEWS.with_borrow(|views| {
-            views.iter().filter(|v| v.borrow().window.is_none()).cloned().collect()
+            views
+                .iter()
+                .filter(|v| v.borrow().window.is_none())
+                .cloned()
+                .collect()
         });
         for view in pending {
             let (size, scale, is_main) = {
                 let v = view.borrow();
                 (v.size, v.scale, v.is_main)
             };
-            let title = if is_main { "Flecha spike: osr" } else { "Flecha spike: osr popup" };
+            let title = if is_main {
+                "Flecha spike: osr"
+            } else {
+                "Flecha spike: osr popup"
+            };
             let mut attrs = Window::default_attributes().with_title(title);
             attrs = if size.width == 0 || size.height == 0 {
                 attrs.with_inner_size(INITIAL_SIZE)
@@ -679,7 +695,9 @@ impl OsrApp {
         if self.browser_requested || !CONTEXT_READY.load(Ordering::SeqCst) {
             return;
         }
-        let Some(view) = self.main.clone() else { return };
+        let Some(view) = self.main.clone() else {
+            return;
+        };
         if view.borrow().window.is_none() {
             return;
         }
@@ -815,7 +833,11 @@ impl OsrApp {
 
         let vk = keys::windows_key_code(event.physical_key).unwrap_or(0);
         // winit reports evdev scancodes; X11 keycodes are evdev + 8.
-        let native = event.physical_key.to_scancode().map(|s| s as i32 + 8).unwrap_or(0);
+        let native = event
+            .physical_key
+            .to_scancode()
+            .map(|s| s as i32 + 8)
+            .unwrap_or(0);
         let mut flags = modifiers;
         if keys::is_keypad(event.physical_key) {
             flags |= FLAG_KEYPAD;
@@ -847,10 +869,16 @@ impl OsrApp {
         };
 
         if !pressed {
-            host.send_key_event(Some(&cef::KeyEvent { type_: KeyEventType::KEYUP, ..base }));
+            host.send_key_event(Some(&cef::KeyEvent {
+                type_: KeyEventType::KEYUP,
+                ..base
+            }));
             return;
         }
-        host.send_key_event(Some(&cef::KeyEvent { type_: KeyEventType::RAWKEYDOWN, ..base.clone() }));
+        host.send_key_event(Some(&cef::KeyEvent {
+            type_: KeyEventType::RAWKEYDOWN,
+            ..base.clone()
+        }));
         if modifiers & (FLAG_CONTROL | FLAG_ALT | FLAG_COMMAND) != 0 {
             return;
         }
@@ -887,7 +915,9 @@ impl ApplicationHandler<UserEvent> for OsrApp {
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: UserEvent) {}
 
     fn window_event(&mut self, _event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
-        let Some(view) = self.windows.get(&id).cloned() else { return };
+        let Some(view) = self.windows.get(&id).cloned() else {
+            return;
+        };
         if view.borrow().window.is_none() {
             self.windows.remove(&id);
             return;
@@ -941,7 +971,11 @@ impl ApplicationHandler<UserEvent> for OsrApp {
                 let mut v = view.borrow_mut();
                 v.modifiers = flags | (v.modifiers & FLAG_CAPS);
             }
-            WindowEvent::KeyboardInput { event, is_synthetic, .. } => {
+            WindowEvent::KeyboardInput {
+                event,
+                is_synthetic,
+                ..
+            } => {
                 if !is_synthetic {
                     Self::key(&view, &event);
                 }
@@ -961,14 +995,19 @@ impl ApplicationHandler<UserEvent> for OsrApp {
                     host.send_mouse_move_event(Some(&Self::mouse_event(&view)), 1);
                 }
             }
-            WindowEvent::MouseInput { state, button, .. } => Self::mouse_button(&view, state, button),
+            WindowEvent::MouseInput { state, button, .. } => {
+                Self::mouse_button(&view, state, button)
+            }
             WindowEvent::MouseWheel { delta, .. } => {
                 let scale = view.borrow().scale;
                 let (dx, dy) = match delta {
-                    MouseScrollDelta::LineDelta(x, y) => {
-                        (x as f64 * WHEEL_PIXELS_PER_LINE, y as f64 * WHEEL_PIXELS_PER_LINE)
+                    MouseScrollDelta::LineDelta(x, y) => (
+                        x as f64 * WHEEL_PIXELS_PER_LINE,
+                        y as f64 * WHEEL_PIXELS_PER_LINE,
+                    ),
+                    MouseScrollDelta::PixelDelta(PhysicalPosition { x, y }) => {
+                        (x / scale, y / scale)
                     }
-                    MouseScrollDelta::PixelDelta(PhysicalPosition { x, y }) => (x / scale, y / scale),
                 };
                 if let Some(host) = host_of(&view) {
                     host.send_mouse_wheel_event(

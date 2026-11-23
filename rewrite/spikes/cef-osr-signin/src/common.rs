@@ -17,16 +17,22 @@ thread_local! {
 }
 
 pub fn browser_created(browser: &Browser) {
-    BROWSERS.with_borrow_mut(|list| list.push(browser.clone()));
+    let open = BROWSERS.with_borrow_mut(|list| {
+        list.push(browser.clone());
+        list.len()
+    });
+    eprintln!("[browser] created id={} open={open}", browser.identifier());
     selfcheck::on_browser_created(browser);
 }
 
 pub fn browser_closed(browser: &Browser) {
     let id = browser.identifier();
-    let empty = BROWSERS.with_borrow_mut(|list| {
+    let open = BROWSERS.with_borrow_mut(|list| {
         list.retain(|b| b.identifier() != id);
-        list.is_empty()
+        list.len()
     });
+    eprintln!("[browser] closed id={id} open={open}");
+    let empty = open == 0;
     if empty {
         ALL_CLOSED.with_borrow_mut(|closed| *closed = true);
         if mode() == Mode::Chrome {
@@ -105,12 +111,11 @@ wrap_load_handler! {
             frame: Option<&mut Frame>,
             _http_status_code: ::std::os::raw::c_int,
         ) {
-            if let (Some(browser), Some(frame)) = (browser, frame) {
-                if frame.is_main() != 0 {
+            if let (Some(browser), Some(frame)) = (browser, frame)
+                && frame.is_main() != 0 {
                     eprintln!("[load-end] {}", userfree_to_string(&frame.url()));
                     selfcheck::on_main_frame_load_end(browser, frame);
                 }
-            }
         }
 
         fn on_load_error(

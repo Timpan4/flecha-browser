@@ -1,0 +1,9 @@
+xvfb pid 114431 display :2
+app pid 114443
+[console] INPUT storage loads 1 (file://.../scripts/input-test.html:25)
+[browser] created id=2 open=2
+[load-end] https://www.google.com/
+[browser] closed id=1 open=1
+PASS alive
+[browser] closed id=2 open=0
+app exit 0

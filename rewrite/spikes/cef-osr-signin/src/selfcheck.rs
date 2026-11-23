@@ -5,7 +5,7 @@
 
 use crate::{cli::SelfCheckOptions, common};
 use cef::*;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::{cell::RefCell, collections::HashMap, fs, path::Path};
 
 const MARKER: &str = "FLECHA_STEP ";
@@ -76,12 +76,20 @@ pub fn init(options: &SelfCheckOptions, profile: &Path) -> std::io::Result<Strin
         Step {
             name: "version",
             url: "chrome://version".into(),
-            js: script("version", TEXT_COLLECT, r"() => /\d+\.\d+\.\d+\.\d+/.test(document.body?.innerText ?? '')"),
+            js: script(
+                "version",
+                TEXT_COLLECT,
+                r"() => /\d+\.\d+\.\d+\.\d+/.test(document.body?.innerText ?? '')",
+            ),
         },
         Step {
             name: "sandbox",
             url: "chrome://sandbox".into(),
-            js: script("sandbox", TEXT_COLLECT, r"() => /adequately sandboxed/i.test(document.body?.innerText ?? '')"),
+            js: script(
+                "sandbox",
+                TEXT_COLLECT,
+                r"() => /adequately sandboxed/i.test(document.body?.innerText ?? '')",
+            ),
         },
         Step {
             name: "webstore",
@@ -144,7 +152,11 @@ pub fn on_main_frame_load_end(browser: &mut Browser, frame: &mut Frame) {
     });
     if let Some(js) = js {
         let url = common::userfree_to_string(&frame.url());
-        frame.execute_java_script(Some(&CefString::from(js.as_str())), Some(&CefString::from(url.as_str())), 0);
+        frame.execute_java_script(
+            Some(&CefString::from(js.as_str())),
+            Some(&CefString::from(url.as_str())),
+            0,
+        );
     }
 }
 
@@ -189,7 +201,8 @@ pub fn on_console_message(message: &str) -> bool {
         return true;
     }
     let (name, payload) = rest.split_once(' ').unwrap_or((rest, ""));
-    let value = serde_json::from_str(payload).unwrap_or_else(|_| Value::String(payload.to_string()));
+    let value =
+        serde_json::from_str(payload).unwrap_or_else(|_| Value::String(payload.to_string()));
     let current = RUN.with_borrow_mut(|run| {
         let run = run.as_mut()?;
         (run.steps[run.index].name == name).then(|| {
@@ -332,10 +345,10 @@ fn finish() {
     });
     let text = serde_json::to_string_pretty(&report).expect("serialize report");
     println!("{REPORT_MARKER}{text}");
-    if let Some(path) = report_path {
-        if let Err(e) = fs::write(&path, &text) {
-            eprintln!("cannot write report {}: {e}", path.display());
-        }
+    if let Some(path) = report_path
+        && let Err(e) = fs::write(&path, &text)
+    {
+        eprintln!("cannot write report {}: {e}", path.display());
     }
     common::close_all();
 }
@@ -392,10 +405,10 @@ fn inspect_processes() -> Vec<Value> {
                 continue;
             };
             // Field 4 (ppid) follows the parenthesised command name, which may contain spaces.
-            if let Some(after) = stat.rsplit_once(')').map(|(_, a)| a) {
-                if let Some(ppid) = after.split_whitespace().nth(1).and_then(|v| v.parse().ok()) {
-                    parents.insert(pid, ppid);
-                }
+            if let Some(after) = stat.rsplit_once(')').map(|(_, a)| a)
+                && let Some(ppid) = after.split_whitespace().nth(1).and_then(|v| v.parse().ok())
+            {
+                parents.insert(pid, ppid);
             }
         }
     }
@@ -409,7 +422,11 @@ fn inspect_processes() -> Vec<Value> {
         }
     };
     let own_ns = |kind: &str| fs::read_link(format!("/proc/{root}/ns/{kind}")).ok();
-    let mut pids: Vec<u32> = parents.keys().copied().filter(|&p| is_descendant(p)).collect();
+    let mut pids: Vec<u32> = parents
+        .keys()
+        .copied()
+        .filter(|&p| is_descendant(p))
+        .collect();
     pids.sort_unstable();
     pids.into_iter()
         .map(|pid| {
