@@ -2,7 +2,7 @@
 
 Date: 2026-11-23. Pins from `rewrite/pins.toml`: CEF `158.0.3+g8c29be2+chromium-158.0.8127.18`, cef-rs `32d6bc55` (Timpan4/cef-rs), Zed/GPUI `f126950f`.
 
-Current results: `results/2026-11-23-r3/`, one run of `scripts/run-checks.sh` as committed (see "How it was run"). `results/2026-11-23/` holds the first round, from before the review fixes. It is kept for history, and this report cites it only where it says so.
+Current results: `results/2026-11-23-r4/`, one run of `scripts/run-checks.sh` as committed (see "How it was run"). History, cited only where this report says so: `results/2026-11-23/` is the first round, before the review fixes. `results/2026-11-23-r3/` is the first fix round, which used a bus listener that could replace an existing socket (see "Isolation"); its `review-evidence/` holds the repro inputs and outputs.
 
 ## Verdict
 
@@ -37,10 +37,10 @@ flock "$XDG_RUNTIME_DIR/flecha-rewrite-build.lock" \
   bash ~/.claude/skills/hosts/scripts/agent-build run cargo test --release -j 14 -p cef-gpui-pump
 cd spikes/cef-gpui-pump
 WARMUP_MS=3000 MEASURE_MS=30000 STEP_TIMEOUT_MS=20000 DEVTOOLS_CLOSE_MS="0 100 2000" DEVTOOLS_TRIALS=5 \
-  scripts/run-checks.sh results/2026-11-23-r3
+  scripts/run-checks.sh results/2026-11-23-r4
 ```
 
-The runner exits 0 only if every run passes. It ran as a transient `systemd-run --user` unit and printed `all runs passed` (`results/2026-11-23-r3/run.log`). The timing values are harness parameters, not product values. `STEP_TIMEOUT_MS` bounds each wait for CEF (Xvfb start, load, a CDP reply, DevTools open and close, browser close, child exit). The runner stages a bundle in `target/release/cef-gpui-pump-bundle` (see "Cargo 1.100 and cef-rs"). Every run writes a JSON report, its stderr, and a listing of its scratch runtime dir.
+The runner exits 0 only if every run passes. It ran as a transient `systemd-run --user` unit and printed `all runs passed` (`results/2026-11-23-r4/run.log`). The timing values are harness parameters, not product values. `STEP_TIMEOUT_MS` bounds each wait for CEF (Xvfb start, load, a CDP reply, DevTools open and close, browser close, child exit). The runner stages a bundle in `target/release/cef-gpui-pump-bundle` (see "Cargo 1.100 and cef-rs"). Every run writes a JSON report, its stderr, and a listing of its scratch runtime dir.
 
 Build: release profile. GPUI picked `NVIDIA GeForce RTX 5080 (Vulkan)` on Xvfb (`RUST_LOG=gpui_wgpu=info`, first-round smoke run), so GPUI was not on a software renderer. CEF itself used software OSR (`OnPaint`, no shared textures). Chromium switches: `--ozone-platform=x11 --password-store=basic`. The sandbox was on.
 
@@ -50,7 +50,7 @@ Each app run gets:
 
 - Xvfb (`-nolisten tcp`) on a display it picks, with `WAYLAND_DISPLAY` and `WAYLAND_SOCKET` unset.
 - A fresh `mktemp -d` CEF cache and a fresh `mktemp -d` `XDG_RUNTIME_DIR` (mode 700), both deleted afterwards.
-- `dbus-run-session` with `scripts/isolated-session-bus.conf`: no service directories, so nothing is activated, and the bus listens at `$XDG_RUNTIME_DIR/bus` in the scratch dir. That config must only run with a scratch runtime dir. A test with two buses on one scratch dir showed dbus-daemon replacing an existing socket at its path and deleting it on exit, so with the desktop's runtime dir it would remove `/run/user/1000/bus`. The runner always passes a new `mktemp -d` dir.
+- `dbus-run-session` with a config written from `scripts/isolated-session-bus.conf.in`: no service directories, so nothing is activated, and `<listen>unix:dir=SCRATCH</listen>`, so dbus-daemon creates a socket with a new random name in that run's scratch dir. The first fix round listened at `$XDG_RUNTIME_DIR/bus` (`unix:runtime=yes`). A test with two buses on one scratch dir showed that listener replacing an existing socket at its path and deleting it on exit, so pointed at the desktop's runtime dir it would remove `/run/user/1000/bus`. `scripts/check-bus-listener.sh` starts a second bus on the same dir while the first runs and requires the first socket to be the same file and still answering afterwards. The runner runs it before any app run. It passes with the new listener and fails with the old one ("second bus reused …/bus", "first bus socket … is gone").
 - `DBUS_SYSTEM_BUS_ADDRESS=unix:path=/nonexistent`.
 
 The app checks this itself. After the page loads and again before shutdown, `probe::forbidden_refs` lists every file the process tree has open or memory-mapped and every Unix socket peer (from `ss -xan`), and fails the run if any lies under the caller's `XDG_RUNTIME_DIR` (`/run/user/1000`) or `/run/dbus/system_bus_socket`. In r3 all 38 samples were clean, with every fd table and map readable. The limits: it samples twice, so a connection opened and closed between samples is missed, and sandboxed renderers live in their own network namespace, so their sockets (@NO_PEER@ per sample) get no peer path from `ss`. Their open and mapped files are still scanned.
@@ -67,7 +67,7 @@ No test window opened on the desktop session, and the owner's Flecha install and
 
 ## Pump and idle
 
-Static page `pages/static.html`: text only, no animation, timers, focusable input or caret. `results/2026-11-23-r3/idle.json`, 3 s warmup after load, 30 s window:
+Static page `pages/static.html`: text only, no animation, timers, focusable input or caret. `results/2026-11-23-r4/idle.json`, 3 s warmup after load, 30 s window:
 
 | Measure | Value |
 |---|---|
@@ -91,7 +91,7 @@ The parent agent's decision for this fix round: the idle check passes with that 
 
 ### 10 ms calls: CEF's pump time slice
 
-The slowest `CefDoMessageLoopWork()` calls take 10.00 ms (@WORKMAX@ ms max in r3). That is CEF's external pump time slice. CEF 8c29be2 `libcef/browser/browser_message_loop.cc:107` creates `MessagePumpExternal(0.01f, handler)`, and its `Run()` (lines 29 to 49) keeps running work until the next task is more than `max_time_slice_` (10 ms) past the call's start. When a delayed task is due within 10 ms, the call waits for it. So one pump call can hold GPUI's main thread for up to 10 ms, which is most of a 16.7 ms frame at 60 Hz. Phase 1's frame budget has to allow for it.
+The slowest `CefDoMessageLoopWork()` calls take 10.00 ms (@WORKMAX@ ms max in r4). That is CEF's external pump time slice. CEF 8c29be2 `libcef/browser/browser_message_loop.cc:107` creates `MessagePumpExternal(0.01f, handler)`, and its `Run()` (lines 29 to 49) keeps running work until the next task is more than `max_time_slice_` (10 ms) past the call's start. When a delayed task is due within 10 ms, the call waits for it. So one pump call can hold GPUI's main thread for up to 10 ms, which is most of a 16.7 ms frame at 60 Hz. Phase 1's frame budget has to allow for it.
 
 ### Why CEF never asks for delayed work
 
@@ -109,7 +109,7 @@ The page holds 30 frames/s in every case. `include/internal/cef_types.h` gives `
 
 ## Agent access through `SendDevToolsMessage`
 
-`results/2026-11-23-r3/cdp.json`:
+`results/2026-11-23-r4/cdp.json`:
 
 - List tabs: 1 tab, `Target.getTargetInfo` returned `type: page`, title `anim`, the file URL.
 - Evaluate: `Runtime.evaluate("navigator.webdriver")` back to back. The loop itself ran @CDP_LOOP_S@ s for a 30 s window: @CDP_CALLS@ calls, every reply `false`, no errors. Per-call latency: p50 @LAT50@ ms, p99 @LAT99@ ms, max @LATMAX@ ms. The page counted `navigator.webdriver` on every animation frame: @CDP_SAMPLES@ samples during the loop, 0 not `false`, and its rAF rate over the loop was @CDP_RAF@ frames/s.
@@ -140,7 +140,7 @@ Process types come from `--type=`, but zygote-forked processes keep `--type=zygo
 
 ## Unit tests
 
-`cargo test --release -p cef-gpui-pump` runs 7 tests in `src/schedule.rs`, without CEF:
+`cargo test --release -p cef-gpui-pump` runs 9 tests without CEF: 7 in `src/schedule.rs` and 2 in `src/lib.rs`.
 
 - A request with `delay = 10 ms` schedules a `Delayed` call at 10 ms. One with 50 ms is capped by a `Periodic` call at 33 ms.
 - A new request replaces the pending one.
@@ -150,13 +150,15 @@ Process types come from `--type=`, but zygote-forked processes keep `--type=zygo
 
 Each fix was checked by breaking it on purpose. Removing the reentrancy check fails the reentrancy test. Dropping the delayed path fails 2 tests. Letting a delayed request restart the 33 ms clock, as the first round's pump did, fails the stream test.
 
+The 2 tests in `src/lib.rs` guard this report: `report_has_no_template_tokens` fails if REPORT.md still holds a fill token, either `@NAME@` or the `966NAME966` shape that a broken fill left in commit 7375b80. Run against that commit's REPORT.md, it fails and lists all of them. A guard in `run-checks.sh` would run before the report is written, and the fill is not a committed step, so the check lives in the test suite.
+
 ## Review findings
 
 From the PR #93 verifier and 15 OpenCodeReview leads. "Reproduced" means shown on the first-round code (commit d7ade4a) before the fix. "By reading" means confirmed in the code but not run. Repro inputs and outputs are in `results/2026-11-23-r3/review-evidence/`.
 
 | Finding | Reproduced? | Fix or reason |
 |---|---|---|
-| Runner had no scratch `XDG_RUNTIME_DIR`; dconf and the system bus were reached | Yes, negative control above | Scratch runtime dir, bus at `$XDG_RUNTIME_DIR/bus`, `DBUS_SYSTEM_BUS_ADDRESS` to a missing path, `isolation_clean` gates every run |
+| Runner had no scratch `XDG_RUNTIME_DIR`; dconf and the system bus were reached | Yes, negative control above | Scratch runtime dir, private bus on a random socket name in it, `DBUS_SYSTEM_BUS_ADDRESS` to a missing path, `isolation_clean` gates every run, `check-bus-listener.sh` gates the runner |
 | Idle repaint cause | Confirmed by the verifier | Documented; idle passes with the paint-holding frame explained |
 | 10 ms pump calls unexplained | Confirmed in CEF source | Documented, with the frame-budget impact |
 | `requests_delayed` always 0 | Confirmed in Chromium source | Documented; unit tests cover the path |
