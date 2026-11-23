@@ -146,6 +146,20 @@ jobs:
           cargo +stable clippy -p flecha-boosts --all-targets -- -D warnings
           cargo +stable test -p flecha-boosts --all-targets
           cargo +stable test -p flecha-boosts --doc
+      - name: Check saved profile migration in isolation
+        shell: bash
+        run: |
+          migrate_rewrite="$RUNNER_TEMP/flecha-migrate-ci/rewrite"
+          mkdir -p "$migrate_rewrite/crates"
+          cp -R crates/flecha-core crates/flecha-migrate crates/flecha-services "$migrate_rewrite/crates/"
+          cp Cargo.lock "$migrate_rewrite/"
+          printf '[workspace]\nresolver = "3"\nmembers = ["crates/flecha-core", "crates/flecha-migrate", "crates/flecha-services"]\n' > "$migrate_rewrite/Cargo.toml"
+          cd "$migrate_rewrite"
+          cargo +stable metadata --format-version 1 > metadata.json
+          jq -e '[.packages[].source | select(. != null and startswith("git+"))] | length == 0' metadata.json
+          cargo +stable fmt --check -p flecha-migrate
+          cargo +stable clippy --locked -p flecha-migrate --all-targets -- -D warnings
+          cargo +stable test --locked -p flecha-migrate
 
   rewrite-services:
     name: Flecha services (Rust)

@@ -1,0 +1,20 @@
+[package]
+name = "flecha-migrate"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+anyhow = "1"
+crc32c = "0.6"
+cruzbit-leveldb-sys = { version = "1.0.1", features = ["snappy"] }
+flecha-core = { path = "../flecha-core" }
+flecha-services = { path = "../flecha-services" }
+rustix = { version = "1", features = ["fs", "process", "system"] }
+serde_json = { version = "1", features = ["raw_value"] }
+tempfile = "3"
+
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dev-dependencies]
+rusty-leveldb = "4.0.2"
+sha2 = "0.11"
