@@ -27,7 +27,7 @@ pub type EngineKey = [u8; 32];
 /// What [`build_engine`] keeps from a list, and the `engine.dat` layout. Change it whenever
 /// either changes, so an `engine.dat` built the old way is rebuilt.
 const RECIPE: &[u8] =
-    b"flecha-adblock recipe 3: parse errors and redirects left out, page exceptions kept and hashed\n";
+    b"flecha-adblock recipe 4: parse errors and redirects left out, ||host:port as regex, typed page exceptions kept and hashed\n";
 
 const NO_REDIRECTS: &str = "redirect and rewrite filters need resources this engine doesn't load";
 
@@ -110,13 +110,66 @@ pub fn build_engine<'a>(
     (Filters::new(engine, page_exceptions), skipped)
 }
 
-/// An exception that names `$document`: it exempts whole pages. `$csp` and `$removeparam`
-/// filters also carry the document type, but only change what a page gets.
+/// An exception that names `$document` among its resource types: it exempts whole pages.
+///
+/// adblock-rust also gives the document type to an exception that names no type at all and is
+/// shaped `||host^` (uBlock Origin's implicit page exception), and to `$all`. Those set every
+/// network type as well; one that names `$document` sets only the types it lists. The shell made
+/// such exceptions allow requests to their host and nothing more, and so does the main engine.
+/// `$csp` and `$removeparam` filters also carry the document type, but only change what a page
+/// gets.
 fn is_page_exception(filter: &NetworkFilter) -> bool {
     filter.mask.contains(NetworkFilterMask::IS_EXCEPTION)
         && filter.mask.contains(NetworkFilterMask::FROM_DOCUMENT)
+        && !filter.mask.contains(NetworkFilterMask::FROM_NETWORK_TYPES)
         && !filter.is_csp()
         && !filter.is_removeparam()
+}
+
+/// adblock-rust never matches a `||host:port` filter: its hostname anchor ends at the port. Such
+/// a filter is rewritten into the regular expression its pattern means in declarativeNetRequest,
+/// which the shell matched with: any scheme, the host or a subdomain of it, then the rest of the
+/// pattern. `*` matches anything, `^` a separator or the end, and a final `|` the end. The
+/// options stay as they were. The expression holds no `$`, because adblock-rust takes the last
+/// `$` as the start of the options, and no upper-case escapes, because it lowercases the pattern.
+fn port_anchored_as_regex(line: &str) -> Option<String> {
+    let (exception, rest) = match line.strip_prefix("@@") {
+        Some(rest) => ("@@", rest),
+        None => ("", line),
+    };
+    let rest = rest.strip_prefix("||")?;
+    let (pattern, options) = rest
+        .rsplit_once('$')
+        .map_or((rest, None), |(pattern, options)| (pattern, Some(options)));
+    let host = &pattern[..pattern
+        .find(['/', '^', '*', '|', '?'])
+        .unwrap_or(pattern.len())];
+    let (_, port) = host.split_once(':')?;
+    if port.is_empty() || !port.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let (body, end) = pattern
+        .strip_suffix('|')
+        .map_or((pattern, ""), |body| (body, r"\z"));
+    let mut regex = format!("{exception}/^[a-z][a-z0-9+.-]*://(?:[^/?#]*\\.)?");
+    for c in body.chars() {
+        match c {
+            '*' => regex.push_str(".*"),
+            '^' => regex.push_str(r"(?:[^0-9a-z_.%-]|\z)"),
+            '\\' | '.' | '+' | '?' | '(' | ')' | '|' | '[' | ']' | '{' | '}' => {
+                regex.push('\\');
+                regex.push(c);
+            }
+            c => regex.push(c),
+        }
+    }
+    regex.push_str(end);
+    regex.push('/');
+    if let Some(options) = options {
+        regex.push('$');
+        regex.push_str(options);
+    }
+    Some(regex)
 }
 
 /// The list without its redirect filters. Comments, blank lines and the header neither parse
@@ -130,21 +183,23 @@ fn kept_lines(
     let normalized = text.replace("\r\n", "\n");
     let mut kept = String::with_capacity(normalized.len());
     for (index, line) in normalized.split(['\n', '\r']).enumerate() {
-        let error = match parse_filter(line, false, ParseOptions::default()) {
+        let rewritten = port_anchored_as_regex(line);
+        let filter_text = rewritten.as_deref().unwrap_or(line);
+        let error = match parse_filter(filter_text, false, ParseOptions::default()) {
             Ok(ParsedLine::Network(filter)) if filter.is_redirect() => NO_REDIRECTS.to_owned(),
             Ok(parsed) => {
                 if let ParsedLine::Network(filter) = &parsed
                     && is_page_exception(filter)
                 {
-                    page_exceptions.push_str(line.trim().trim_start_matches("@@"));
+                    page_exceptions.push_str(filter_text.trim().trim_start_matches("@@"));
                     page_exceptions.push('\n');
                 }
-                kept.push_str(line);
+                kept.push_str(filter_text);
                 kept.push('\n');
                 continue;
             }
             Err(FilterParseError::Empty | FilterParseError::Unsupported) => {
-                kept.push_str(line);
+                kept.push_str(filter_text);
                 kept.push('\n');
                 continue;
             }

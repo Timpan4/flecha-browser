@@ -179,6 +179,63 @@ fn a_document_exception_exempts_the_page_and_frames_it_covers() {
         Script,
         "https://metrics.example/collect"
     ));
+    // Exceptions shaped `||host^` that name no resource type: adblock-rust gives them the
+    // document type, but like the shell's priority-2 `allow` rules they only let requests to
+    // their host load. Neither the page nor a frame from that host is exempt.
+    for page in [
+        "https://plain.example/",
+        "https://firstparty.example/",
+        "https://important.example/",
+    ] {
+        assert!(ad(page, page, Script, "https://ads.example/a.js"), "{page}");
+        assert!(
+            ad(page, news, Script, "https://ads.example/a.js"),
+            "frame {page}"
+        );
+    }
+    // From the 2026-11-23 lists: EasyList's `@@||cloud.google.com^$~third-party` and
+    // `$generichide`, and EasyPrivacy's Google Analytics filter.
+    let cloud = "https://cloud.google.com/";
+    assert!(ad(
+        cloud,
+        cloud,
+        Script,
+        "https://www.google-analytics.com/analytics.js"
+    ));
+}
+
+#[test]
+fn a_filter_anchored_to_a_host_and_port_matches_as_the_shell_did() {
+    let (blocker, _cache) = loaded(true, &[]);
+    let script = |url| blocks(&blocker, url, PAGE, RequestType::Script);
+    // EasyPrivacy's `||etwun.com:8080/counter.php?`, from the 2026-11-23 list.
+    for url in [
+        "https://etwun.com:8080/counter.php?id=1",
+        "http://etwun.com:8080/counter.php?id=1",
+        "wss://etwun.com:8080/counter.php?",
+        "https://www.etwun.com:8080/counter.php?id=1",
+        "https://etwun.com:8080/COUNTER.php?id=1",
+    ] {
+        assert!(script(url), "{url}");
+    }
+    for url in [
+        "https://etwun.com:8081/counter.php?id=1",
+        "https://etwun.com/counter.php?id=1",
+        "https://notetwun.com:8080/counter.php?id=1",
+        "https://etwun.com:8080/counter.phpx",
+        "https://evil.example/?u=etwun.com:8080/counter.php?",
+    ] {
+        assert!(!script(url), "{url}");
+    }
+    // An exception with a port keeps its options: `$script` only.
+    assert!(script("https://ported.example:8443/other.js"));
+    assert!(!script("https://ported.example:8443/ok/a.js"));
+    assert!(blocks(
+        &blocker,
+        "https://ported.example:8443/ok/a.png",
+        PAGE,
+        RequestType::Image
+    ));
 }
 
 #[test]

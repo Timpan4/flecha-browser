@@ -27,3 +27,8 @@ example.com##
 ||stub.example^$redirect=noopjs,script
 ||stub-rule.example^$redirect-rule=noopjs
 ||rewritten.example^$rewrite=abp-resource:blank-js
+@@||plain.example^
+@@||firstparty.example^$~third-party
+@@||important.example^$important
+@@||cloud.google.com^$generichide
+@@||cloud.google.com^$~third-party
