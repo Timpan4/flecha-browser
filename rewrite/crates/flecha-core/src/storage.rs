@@ -7,11 +7,11 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, value::RawValue};
 
-use crate::state::DEFAULT_SPACE_COLOR;
+use crate::state::{DEFAULT_SPACE_COLOR, compare_recency};
 use crate::{
     ArchivePolicy, ArchivedTab, BrowserState, ClosedWindow, Device, Environment, EnvironmentTarget,
-    EpochMillis, FolderId, PinnedNode, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, Settings,
-    SidebarWidth, Space, SpaceId, Tab, TabId, Window, WindowId, WindowSpace,
+    EpochMillis, FolderId, PinnedNode, Settings, SidebarWidth, Space, SpaceId, Tab, TabId, Window,
+    WindowId, WindowSpace, is_site_host,
 };
 
 /// The first Rust snapshot format. Versions 1 and 2 refer to the Chromium shell.
@@ -21,7 +21,7 @@ pub const SCHEMA_VERSION: u64 = 3;
 pub enum DecodeError {
     Json(serde_json::Error),
     InvalidShape,
-    UnsupportedVersion(u64),
+    UnsupportedVersion(String),
     AlreadyMigrated,
 }
 
@@ -73,6 +73,7 @@ pub enum Slot {
     Current,
     LastGood,
     Damaged,
+    BeforeImport,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -85,6 +86,20 @@ pub struct BackupWrite {
 pub enum Recovery {
     LastGood,
     Fresh,
+    /// The current snapshot is damaged and the last-good copy needs a newer reader.
+    UnsupportedBackup,
+}
+
+/// Save this write before applying an import that replaces or merges the current state.
+pub fn set_aside_before_import(state: &BrowserState) -> serde_json::Result<BackupWrite> {
+    Ok(BackupWrite {
+        slot: Slot::BeforeImport,
+        value: Value::String(encode(state)?),
+    })
+}
+
+pub fn state_before_import(saved: Option<&Value>) -> Result<Option<BrowserState>, DecodeError> {
+    saved.map_or(Ok(None), readable)
 }
 
 #[derive(Debug)]
@@ -118,7 +133,7 @@ pub fn load(saved: Option<&Value>, last_good: Option<&Value>) -> Result<LoadedSt
     };
     if let Some(state) = readable(saved)? {
         let repaired = Value::String(encode(&state).map_err(DecodeError::Json)?);
-        if last_good != Some(&repaired) {
+        if last_good != Some(&repaired) && !last_good.is_some_and(needs_newer_reader) {
             loaded.last_good_after_start = Some(BackupWrite {
                 slot: Slot::LastGood,
                 value: repaired,
@@ -132,17 +147,22 @@ pub fn load(saved: Option<&Value>, last_good: Option<&Value>) -> Result<LoadedSt
         slot: Slot::Damaged,
         value: saved.clone(),
     });
-    if let Some(copy) = last_good
-        && let Some(fallback) = readable(copy)?
-    {
-        loaded.state = Some(fallback);
-        loaded.recovered = Some(Recovery::LastGood);
-        loaded.recovery_writes.push(BackupWrite {
-            slot: Slot::Current,
-            value: copy.clone(),
-        });
-    } else {
-        loaded.recovered = Some(Recovery::Fresh);
+    match last_good.map_or(Ok(None), readable) {
+        Ok(Some(fallback)) => {
+            loaded.state = Some(fallback);
+            loaded.recovered = Some(Recovery::LastGood);
+            loaded.recovery_writes.push(BackupWrite {
+                slot: Slot::Current,
+                value: last_good
+                    .expect("a fallback comes from the last-good copy")
+                    .clone(),
+            });
+        }
+        Ok(None) => loaded.recovered = Some(Recovery::Fresh),
+        Err(DecodeError::UnsupportedVersion(_)) => {
+            loaded.recovered = Some(Recovery::UnsupportedBackup)
+        }
+        Err(error) => return Err(error),
     }
     Ok(loaded)
 }
@@ -161,19 +181,7 @@ fn decode_document(json: &str, legacy_only: bool) -> Result<BrowserState, Decode
     let fields: BTreeMap<String, &RawValue> =
         serde_json::from_str(json).map_err(DecodeError::Json)?;
     if let Some(version) = fields.get("version") {
-        let version: Value = serde_json::from_str(version.get()).map_err(DecodeError::Json)?;
-        match version.as_u64().or_else(|| match version.as_f64() {
-            Some(1.0) => Some(1),
-            Some(2.0) => Some(2),
-            Some(3.0) => Some(SCHEMA_VERSION),
-            _ => None,
-        }) {
-            Some(1 | 2) => {}
-            Some(SCHEMA_VERSION) if legacy_only => return Err(DecodeError::AlreadyMigrated),
-            Some(SCHEMA_VERSION) => {}
-            Some(version) => return Err(DecodeError::UnsupportedVersion(version)),
-            None => return Err(DecodeError::InvalidShape),
-        }
+        check_version(version, legacy_only)?;
     }
     let mut raw = Map::new();
     for key in [
@@ -212,6 +220,47 @@ fn decode_document(json: &str, legacy_only: bool) -> Result<BrowserState, Decode
     repair(raw).ok_or(DecodeError::InvalidShape)
 }
 
+fn check_version(version: &RawValue, legacy_only: bool) -> Result<(), DecodeError> {
+    let raw = version.get();
+    let decoded;
+    let text = if raw.starts_with('"') {
+        decoded = serde_json::from_str::<String>(raw).map_err(DecodeError::Json)?;
+        decoded.trim()
+    } else {
+        raw
+    };
+    match text.parse::<f64>() {
+        Ok(1.0 | 2.0) => Ok(()),
+        Ok(number) if number == SCHEMA_VERSION as f64 => {
+            if legacy_only {
+                Err(DecodeError::AlreadyMigrated)
+            } else {
+                Ok(())
+            }
+        }
+        Ok(number) if number > SCHEMA_VERSION as f64 => {
+            Err(DecodeError::UnsupportedVersion(text.into()))
+        }
+        // The Chromium decoder ignored version metadata, including nonnumeric tags.
+        Err(_) => Ok(()),
+        _ => Err(DecodeError::InvalidShape),
+    }
+}
+
+fn needs_newer_reader(value: &Value) -> bool {
+    let fields: Option<BTreeMap<String, &RawValue>> = value
+        .as_str()
+        .and_then(|json| serde_json::from_str(json).ok());
+    fields
+        .and_then(|fields| fields.get("version").copied())
+        .is_some_and(|version| {
+            matches!(
+                check_version(version, false),
+                Err(DecodeError::UnsupportedVersion(_))
+            )
+        })
+}
+
 fn repair(mut raw: Map<String, Value>) -> Option<BrowserState> {
     let raw_tabs = raw.remove("tabs")?;
     let tabs: BTreeMap<_, _> = raw_tabs
@@ -220,15 +269,17 @@ fn repair(mut raw: Map<String, Value>) -> Option<BrowserState> {
         .filter_map(|(id, tab)| Some((TabId::new(id), repair_tab(tab)?)))
         .collect();
     let raw_spaces = raw.remove("spaces")?;
-    let mut seen_spaces = BTreeSet::new();
     let raw_spaces: Vec<_> = raw_spaces
         .as_array()?
         .iter()
-        .filter_map(|space| {
-            let id = SpaceId::new(space.get("id")?.as_str()?);
-            seen_spaces.insert(id.clone()).then_some((id, space))
-        })
+        .filter_map(|space| Some((space.get("id")?.as_str()?, space)))
         .collect();
+    let mut ids = RecoveredIds::new("space", raw_spaces.iter().map(|(id, _)| *id).collect());
+    let raw_spaces: Vec<_> = raw_spaces
+        .into_iter()
+        .map(|(id, space)| (SpaceId::new(ids.claim(Some(id))), space))
+        .collect();
+    let space_ids = raw_spaces.iter().map(|(id, _)| id.clone()).collect();
     let first_space = raw_spaces.first()?.0.clone();
     let mut placed = BTreeSet::new();
     let mut claim = |value: &Value| {
@@ -236,7 +287,11 @@ fn repair(mut raw: Map<String, Value>) -> Option<BrowserState> {
         (tabs.contains_key(&id) && placed.insert(id.clone())).then_some(id)
     };
     let favorites = list(raw.get("favorites")).filter_map(&mut claim).collect();
-    let mut folders = BTreeSet::new();
+    let mut folder_ids = BTreeSet::new();
+    for (_, space) in &raw_spaces {
+        collect_folder_ids(space.get("pinned"), &mut folder_ids);
+    }
+    let mut folders = RecoveredIds::new("folder", folder_ids);
     let spaces = raw_spaces
         .iter()
         .map(|(id, space)| repair_space(id, space, &mut folders, &mut claim))
@@ -267,22 +322,10 @@ fn repair(mut raw: Map<String, Value>) -> Option<BrowserState> {
         .chain(input_closed().map(|(_, win)| win))
         .filter_map(|win| win.get("id")?.as_str())
         .collect();
-    let mut assigned = BTreeSet::new();
-    let mut sequence = 0;
+    let mut window_ids = RecoveredIds::new("window", reserved);
     let mut window = |value: &Value| {
-        let genuine = value.get("id").and_then(Value::as_str).map(WindowId::new);
-        let id = genuine
-            .filter(|id| assigned.insert(id.clone()))
-            .unwrap_or_else(|| {
-                loop {
-                    sequence += 1;
-                    let id = format!("recovered-window-{sequence}");
-                    if !reserved.contains(id.as_str()) {
-                        break WindowId::new(id);
-                    }
-                }
-            });
-        repair_window(value, id, &seen_spaces, &first_space, &mut claim)
+        let id = WindowId::new(window_ids.claim(value.get("id").and_then(Value::as_str)));
+        repair_window(value, id, &space_ids, &first_space, &mut claim)
     };
     let mut windows: Vec<_> = raw_windows
         .iter()
@@ -299,7 +342,7 @@ fn repair(mut raw: Map<String, Value>) -> Option<BrowserState> {
         })
         .filter(|closed| !closed.window.spaces.is_empty())
         .collect();
-    let archive = list(raw.get("archive"))
+    let mut archive: Vec<_> = list(raw.get("archive"))
         .filter_map(|entry| {
             Some(ArchivedTab {
                 url: entry.get("url")?.as_str()?.into(),
@@ -308,6 +351,7 @@ fn repair(mut raw: Map<String, Value>) -> Option<BrowserState> {
             })
         })
         .collect();
+    archive.sort_by_key(|entry| std::cmp::Reverse(entry.closed_at));
     let sidebar_visible = raw
         .get("sidebarVisible")
         .and_then(Value::as_bool)
@@ -362,7 +406,7 @@ fn repair_tab(raw: &Value) -> Option<Tab> {
 fn repair_space(
     id: &SpaceId,
     raw: &Value,
-    folders: &mut BTreeSet<FolderId>,
+    folders: &mut RecoveredIds<'_>,
     claim: &mut impl FnMut(&Value) -> Option<TabId>,
 ) -> Space {
     Space {
@@ -378,33 +422,70 @@ fn repair_space(
 
 fn repair_pins(
     raw: Option<&Value>,
-    folders: &mut BTreeSet<FolderId>,
+    folders: &mut RecoveredIds<'_>,
     claim: &mut impl FnMut(&Value) -> Option<TabId>,
 ) -> Vec<PinnedNode> {
     list(raw)
         .filter_map(|node| match node.get("kind")?.as_str()? {
-            "tab" => Some(vec![PinnedNode::Tab {
+            "tab" => Some(PinnedNode::Tab {
                 tab_id: claim(node.get("tabId")?)?,
-            }]),
+            }),
             "folder" => {
-                let id = FolderId::new(node.get("id")?.as_str()?);
-                let first = folders.insert(id.clone());
-                let children = repair_pins(node.get("children"), folders, claim);
-                if first {
-                    Some(vec![PinnedNode::Folder {
-                        id,
-                        name: field(node, "name").unwrap_or_else(|| "Folder".into()),
-                        open: field(node, "open").unwrap_or_default(),
-                        children,
-                    }])
-                } else {
-                    Some(children)
-                }
+                let id = FolderId::new(folders.claim(Some(node.get("id")?.as_str()?)));
+                Some(PinnedNode::Folder {
+                    id,
+                    name: field(node, "name").unwrap_or_else(|| "Folder".into()),
+                    open: field(node, "open").unwrap_or_default(),
+                    children: repair_pins(node.get("children"), folders, claim),
+                })
             }
             _ => None,
         })
-        .flatten()
         .collect()
+}
+
+struct RecoveredIds<'a> {
+    kind: &'static str,
+    reserved: BTreeSet<&'a str>,
+    seen: BTreeSet<String>,
+    sequence: usize,
+}
+
+impl<'a> RecoveredIds<'a> {
+    fn new(kind: &'static str, reserved: BTreeSet<&'a str>) -> Self {
+        Self {
+            kind,
+            reserved,
+            seen: BTreeSet::new(),
+            sequence: 0,
+        }
+    }
+
+    fn claim(&mut self, id: Option<&str>) -> String {
+        if let Some(id) = id
+            && self.seen.insert(id.into())
+        {
+            return id.into();
+        }
+        loop {
+            self.sequence += 1;
+            let id = format!("recovered-{}-{}", self.kind, self.sequence);
+            if !self.reserved.contains(id.as_str()) {
+                return id;
+            }
+        }
+    }
+}
+
+fn collect_folder_ids<'a>(raw: Option<&'a Value>, ids: &mut BTreeSet<&'a str>) {
+    for node in list(raw) {
+        if node.get("kind").and_then(Value::as_str) == Some("folder")
+            && let Some(id) = node.get("id").and_then(Value::as_str)
+        {
+            ids.insert(id);
+            collect_folder_ids(node.get("children"), ids);
+        }
+    }
 }
 
 fn repair_window(
@@ -494,12 +575,7 @@ fn normalize_mobile(state: &mut BrowserState) {
                 ws.active_tab_id = ws
                     .today
                     .iter()
-                    .min_by_key(|id| {
-                        state
-                            .tabs
-                            .get(id)
-                            .map(|tab| (tab.unseen, std::cmp::Reverse(tab.last_active)))
-                    })
+                    .min_by(|left, right| compare_recency(&state.tabs, left, right))
                     .cloned();
             }
             !ws.today.is_empty()
@@ -522,10 +598,7 @@ fn repair_settings(raw: &mut Map<String, Value>) -> Settings {
 
     Settings {
         sidebar_width: take::<f64>(raw, "sidebarWidth")
-            .filter(|width| {
-                (f64::from(SIDEBAR_MIN_WIDTH)..=f64::from(SIDEBAR_MAX_WIDTH)).contains(width)
-            })
-            .and_then(SidebarWidth::clamp)
+            .and_then(SidebarWidth::from_saved)
             .unwrap_or_default(),
         theme: take(raw, "theme").unwrap_or_default(),
         search_engine: take(raw, "searchEngine").unwrap_or_default(),
@@ -547,16 +620,8 @@ fn repair_settings(raw: &mut Map<String, Value>) -> Settings {
         downloads_folder: take(raw, "downloadsFolder"),
         ask_where_to_save: take(raw, "askWhereToSave"),
         ad_block: take(raw, "adBlock"),
-        ad_block_allowed: take::<Vec<String>>(raw, "adBlockAllowed").filter(|hosts| {
-            hosts.iter().all(|host| {
-                host.split('.').all(|label| {
-                    !label.is_empty()
-                        && label
-                            .bytes()
-                            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == b'-')
-                })
-            })
-        }),
+        ad_block_allowed: take::<Vec<String>>(raw, "adBlockAllowed")
+            .filter(|hosts| hosts.iter().all(|host| is_site_host(host))),
         onboarded: take(raw, "onboarded"),
         site_permissions: take(raw, "sitePermissions"),
     }
@@ -600,7 +665,7 @@ fn millis(value: &Value) -> Option<EpochMillis> {
         .or_else(|| value.as_f64().map(|time| time as EpochMillis))
 }
 
-fn coerce_millis(value: &Value) -> Option<EpochMillis> {
+fn coerce_millis(value: &Value) -> Option<f64> {
     if let Some(text) = value.as_str() {
         let text = text.trim();
         for (prefix, radix) in [("0x", 16), ("0b", 2), ("0o", 8)] {
@@ -608,17 +673,15 @@ fn coerce_millis(value: &Value) -> Option<EpochMillis> {
                 .strip_prefix(prefix)
                 .or_else(|| text.strip_prefix(&prefix.to_ascii_uppercase()))
             {
-                return EpochMillis::from_str_radix(digits, radix).ok();
+                return u64::from_str_radix(digits, radix)
+                    .ok()
+                    .map(|time| time as f64);
             }
         }
-        return text
-            .parse::<f64>()
-            .ok()
-            .filter(|time| time.is_finite())
-            .map(|time| time as EpochMillis);
+        return text.parse::<f64>().ok().filter(|time| time.is_finite());
     }
     value
         .as_bool()
-        .map(EpochMillis::from)
-        .or_else(|| millis(value))
+        .map(|value| if value { 1.0 } else { 0.0 })
+        .or_else(|| value.as_f64())
 }

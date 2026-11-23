@@ -1,4 +1,55 @@
 use flecha_core::TabId;
+
+#[test]
+fn invalid_keys_cannot_replace_defaults() {
+    let platform = Platform::Linux;
+    let mut bindings = Keybindings::new();
+    for key in ["F99", "Ctrl+Bogus"] {
+        assert_eq!(
+            set_binding(&mut bindings, "reload", BindingEdit::Set(key), platform),
+            Err(BindingError::InvalidAccelerator)
+        );
+        bindings.insert("reload".into(), Some(key.into()));
+        assert_eq!(keys_for(&bindings, "reload", platform), Some("CmdOrCtrl+R"));
+        bindings.clear();
+    }
+}
+
+#[test]
+fn shortcut_edits_displace_shadowed_defaults_too() {
+    let platform = Platform::Linux;
+    let mut bindings = Keybindings::from([("reload".into(), Some("Ctrl+T".into()))]);
+    assert_eq!(
+        set_binding(&mut bindings, "find", BindingEdit::Set("Ctrl+T"), platform).unwrap(),
+        ["newTab", "reload"]
+    );
+    set_binding(&mut bindings, "find", BindingEdit::Unbind, platform).unwrap();
+    assert_eq!(keys_for(&bindings, "newTab", platform), None);
+}
+
+#[test]
+fn shortcut_conflicts_follow_chromium_modifier_and_key_normalization() {
+    let platform = Platform::Linux;
+    let bindings = Keybindings::from([("reload".into(), Some("control+1".into()))]);
+    assert_eq!(keys_for(&bindings, "reload", platform), None);
+    assert!(same_keys(
+        " control + Ctrl + Return ",
+        "CmdOrCtrl+Enter",
+        platform
+    ));
+    assert!(same_keys("Ctrl++", "Control+Plus", platform));
+}
+
+#[test]
+fn later_command_wins_when_saved_custom_keys_collide() {
+    let bindings = Keybindings::from([
+        ("reload".into(), Some("Ctrl+J".into())),
+        ("find".into(), Some("control+J".into())),
+    ]);
+    let platform = Platform::Linux;
+    assert_eq!(keys_for(&bindings, "reload", platform), None);
+    assert_eq!(keys_for(&bindings, "find", platform), Some("control+J"));
+}
 use flecha_core::shortcuts::{
     BindingEdit, BindingError, Keybindings, Platform, display_keys, keys_for, same_keys,
     set_binding, shortcut_map, space_shortcut_label,
@@ -248,4 +299,48 @@ fn sleep_prioritizes_visibility_media_and_debounce() {
         ),
         Discarded
     );
+}
+
+#[test]
+fn site_ad_block_rules_cover_subdomains_and_survive_restart() {
+    use flecha_core::{
+        BrowserState, SpaceId, WindowId, is_site_host,
+        storage::{decode, encode},
+    };
+    let mut state = BrowserState::new(SpaceId::new("s"), WindowId::new("w"));
+    let root = "example.org";
+    let subdomain = "www.example.org";
+    for host in [root, "xn--bcher-kva.example", "127.0.0.1", "localhost"] {
+        assert!(is_site_host(host));
+    }
+    for invalid in [
+        "",
+        "Example.org",
+        ".foo",
+        "foo..bar",
+        "foo.",
+        "[::1]",
+        "foo:8080",
+        "https://foo",
+    ] {
+        assert!(!is_site_host(invalid));
+        assert!(!state.settings.set_ad_blocking_on(invalid, false));
+    }
+    assert!(state.settings.blocks_ads_on(root));
+    assert!(state.settings.set_ad_blocking_on(root, false));
+    assert!(state.settings.set_ad_blocking_on(root, false));
+    assert!(state.settings.set_ad_blocking_on(subdomain, false));
+    assert!(!state.settings.blocks_ads_on(subdomain));
+    assert!(state.settings.blocks_ads_on("notexample.org"));
+    assert_eq!(state.settings.ad_block_allowed.as_deref().unwrap(), [root]);
+    let mut state = decode(&encode(&state).unwrap()).unwrap();
+    assert!(!state.settings.blocks_ads_on(root));
+    assert!(state.settings.set_ad_blocking_on(subdomain, true));
+    assert!(state.settings.blocks_ads_on(root));
+    assert_eq!(state.settings.ad_block_allowed, Some(Vec::new()));
+    let malformed = encode(&state).unwrap().replace(
+        "\"adBlockAllowed\": []",
+        "\"adBlockAllowed\": [\"good.org\",\"[::1]\"]",
+    );
+    assert_eq!(decode(&malformed).unwrap().settings.ad_block_allowed, None);
 }

@@ -168,10 +168,10 @@ fn suggestion_requests_keep_private_input_local() {
         ("notes 🙂127.0.0.1🙂", false),
         ("notes «127.0.0.1»", false),
         ("「example.com」", false),
-        ("notes (127.​0.0.1)", false),
-        ("example.​com", false),
-        ("127.​1", false),
-        ("example­.com", false),
+        ("notes (127.\u{200B}0.0.1)", false),
+        ("example.\u{200B}com", false),
+        ("127.\u{200B}1", false),
+        ("example\u{AD}.com", false),
         ("❤ example.com", false),
         ("🙂 example.com", false),
         ("👍🏽 example.com", false),
@@ -359,5 +359,33 @@ fn match_quality_follows_command_bar_order() {
     assert_eq!(
         match_quality("pin geo", &["Pin to Georgia"]),
         Some(MatchQuality::Word)
+    );
+}
+
+#[test]
+fn jwt_in_a_note_does_not_make_a_suggestion_request() {
+    let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"HS256"}"#);
+    let claims = URL_SAFE_NO_PAD.encode(br#"{"sub":"synthetic"}"#);
+    let token = format!("{header}.{claims}.c2lnbmF0dXJl");
+    for input in [
+        format!("inspect {token} please"),
+        format!("inspect ({token})."),
+        format!("inspect [{header}%2E{claims}%2Ec2lnbmF0dXJl] please"),
+    ] {
+        assert!(SearchEngine::Google.suggestion_url(&input).is_none());
+    }
+}
+
+#[test]
+fn github_issue_lookup_never_uses_a_prefix_of_a_repository_name() {
+    let suggestion = developer_suggestions(
+        "gh 42",
+        Some("https://github.com/team/project%2Dtools"),
+        &[],
+        0,
+    );
+    assert_eq!(
+        suggestion[0].action,
+        SuggestionAction::Open("https://github.com/search?q=42".into())
     );
 }

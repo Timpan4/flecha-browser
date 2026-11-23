@@ -12,7 +12,7 @@ pub const SIDEBAR_DEFAULT_WIDTH: u16 = 260;
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 #[serde(transparent)]
-pub struct SidebarWidth(u16);
+pub struct SidebarWidth(f64);
 
 impl SidebarWidth {
     pub fn clamp(pixels: f64) -> Option<Self> {
@@ -22,17 +22,23 @@ impl SidebarWidth {
         let rounded = pixels
             .clamp(f64::from(SIDEBAR_MIN_WIDTH), f64::from(SIDEBAR_MAX_WIDTH))
             .round();
-        Some(Self(rounded as u16))
+        Some(Self(rounded))
     }
 
-    pub fn pixels(self) -> u16 {
+    pub(crate) fn from_saved(pixels: f64) -> Option<Self> {
+        (f64::from(SIDEBAR_MIN_WIDTH)..=f64::from(SIDEBAR_MAX_WIDTH))
+            .contains(&pixels)
+            .then_some(Self(pixels))
+    }
+
+    pub fn pixels(self) -> f64 {
         self.0
     }
 }
 
 impl Default for SidebarWidth {
     fn default() -> Self {
-        Self(SIDEBAR_DEFAULT_WIDTH)
+        Self(f64::from(SIDEBAR_DEFAULT_WIDTH))
     }
 }
 
@@ -147,4 +153,44 @@ pub struct Settings {
     pub onboarded: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub site_permissions: Option<BTreeMap<String, BTreeMap<String, PermissionDecision>>>,
+}
+
+/// Hostnames accepted by Chromium's requestDomains rules.
+pub fn is_site_host(host: &str) -> bool {
+    host.split('.').all(|label| {
+        !label.is_empty()
+            && label
+                .bytes()
+                .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == b'-')
+    })
+}
+
+fn covers_site(site: &str, host: &str) -> bool {
+    host == site
+        || host
+            .strip_suffix(site)
+            .is_some_and(|prefix| prefix.ends_with('.'))
+}
+
+impl Settings {
+    /// The per-site rule. The global ad-block switch is stored separately.
+    pub fn blocks_ads_on(&self, host: &str) -> bool {
+        self.ad_block_allowed
+            .as_ref()
+            .is_none_or(|allowed| !allowed.iter().any(|site| covers_site(site, host)))
+    }
+
+    pub fn set_ad_blocking_on(&mut self, host: &str, block: bool) -> bool {
+        if !is_site_host(host) {
+            return false;
+        }
+        let append = !block && self.blocks_ads_on(host);
+        let allowed = self.ad_block_allowed.get_or_insert_with(Vec::new);
+        if block {
+            allowed.retain(|site| !covers_site(site, host));
+        } else if append {
+            allowed.push(host.into());
+        }
+        true
+    }
 }

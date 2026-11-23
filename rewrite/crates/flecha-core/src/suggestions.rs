@@ -132,7 +132,7 @@ pub fn suggestable(raw: &str) -> bool {
     if query.is_empty()
         || web_address(query).is_some()
         || rejected_address(query)
-        || jwt_parts(query).is_some()
+        || contains_jwt(query)
     {
         return false;
     }
@@ -148,6 +148,9 @@ pub fn suggestable(raw: &str) -> bool {
     let punct_end = re!(r#"[.。．｡,;:!)"'”’\]]+$"#);
     for word in normalized.split_whitespace() {
         let decoded: String = decode_component(word).chars().nfkc().collect();
+        if contains_jwt(&decoded) {
+            return false;
+        }
         for form in [word, decoded.as_str()] {
             for part in std::iter::once(form).chain(separator.split(form)) {
                 let unwrapped = punct_start.replace(part, "");
@@ -178,6 +181,11 @@ fn decode_component(word: &str) -> std::borrow::Cow<'_, str> {
     percent_decode_str(word)
         .decode_utf8()
         .unwrap_or_else(|_| word.into())
+}
+
+fn contains_jwt(text: &str) -> bool {
+    // Match inside pasted prose and punctuation, including unsigned tokens.
+    re!(r"eyJ[A-Za-z0-9_-]*={0,2}\.[A-Za-z0-9_-]+={0,2}\.[A-Za-z0-9_-]*").is_match(text)
 }
 
 fn address_part(word: &str, alone: bool) -> bool {
@@ -354,7 +362,8 @@ fn github(arg: &str, current_url: Option<&str>) -> DeveloperSuggestion {
     } else if let Some(number) = re!(r"^#?([0-9]+)$").captures(arg).and_then(|m| m.get(1))
         && let Some(repo) = current_url
             .and_then(|url| {
-                re!(r"^https://github\.com/([a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+)").captures(url)
+                re!(r"^https://github\.com/([a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+)(?:[/#?]|$)")
+                    .captures(url)
             })
             .and_then(|m| m.get(1))
     {

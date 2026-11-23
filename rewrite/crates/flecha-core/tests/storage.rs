@@ -56,7 +56,7 @@ fn migrates_a_stock_v2_profile_copy_and_round_trips_the_rewrite_snapshot() {
     assert_eq!(state.settings.search_engine, SearchEngine::Kagi);
     assert_eq!(state.settings.theme, Theme::Dark);
     assert_eq!(state.settings.archive_policy, ArchivePolicy::WEEK);
-    assert_eq!(state.settings.sidebar_width.pixels(), 312);
+    assert_eq!(state.settings.sidebar_width.pixels(), 312.0);
     assert_eq!(state.settings.keybindings["closeTab"], None);
     assert_eq!(
         state.settings.environments[0].targets[0].origin,
@@ -104,7 +104,7 @@ fn v1_and_unversioned_spaces_become_one_window_with_repaired_references() {
     assert_eq!(window.spaces[&s1].split, None);
     assert_eq!(window.spaces[&s2].active_tab_id, Some(TabId::new("t3")));
     assert_eq!(state.space(&s1).unwrap().pinned_tabs(), [&TabId::new("t1")]);
-    assert_eq!(state.tab(&TabId::new("t3")).unwrap().last_active, 42);
+    assert_eq!(state.tab(&TabId::new("t3")).unwrap().last_active, 42.0);
     assert!(state.favorites().is_empty());
     assert!(state.tab(&TabId::new("broken")).is_none());
 }
@@ -239,7 +239,12 @@ fn rejects_unstartable_shapes_and_future_schemas() {
 #[test]
 fn sidebar_width_is_clamped_on_edit_and_repaired_on_load() {
     let mut input: Value = serde_json::from_str(V2).unwrap();
-    for (requested, width) in [(90.0, 126), (1000.0, 400), (300.4, 300), (300.5, 301)] {
+    for (requested, width) in [
+        (90.0, 126.0),
+        (1000.0, 400.0),
+        (300.4, 300.0),
+        (300.5, 301.0),
+    ] {
         let mut state = decode(V2).unwrap();
         state.settings.sidebar_width = SidebarWidth::clamp(requested).unwrap();
         assert_eq!(
@@ -258,4 +263,93 @@ fn sidebar_width_is_clamped_on_edit_and_repaired_on_load() {
             SidebarWidth::default()
         );
     }
+}
+
+#[test]
+fn damaged_state_is_preserved_even_when_its_backup_needs_a_newer_reader() {
+    let damaged = json!("broken JSON");
+    let future = json!(r#"{"version":4,"spaces":[{"id":"s"}],"tabs":{}}"#);
+    let mut loaded = load(Some(&damaged), Some(&future)).unwrap();
+    assert_eq!(loaded.recovered, Some(Recovery::UnsupportedBackup));
+    assert_eq!(loaded.recovery_writes.len(), 1);
+    assert_eq!(loaded.recovery_writes[0].slot, Slot::Damaged);
+    assert_eq!(loaded.recovery_writes[0].value, damaged);
+    assert!(loaded.state.is_none());
+    assert!(loaded.started().is_none());
+    let mut loaded = load(Some(&json!(V2)), Some(&future)).unwrap();
+    assert!(loaded.state.is_some() && loaded.started().is_none());
+}
+
+#[test]
+fn decimal_and_exponent_future_versions_are_never_replaced() {
+    for version in ["4.0", "4e0", "\"4\""] {
+        let future = json!(format!(
+            r#"{{"version":{version},"spaces":[{{"id":"s"}}],"tabs":{{}}}}"#
+        ));
+        assert!(
+            matches!(
+                load(Some(&future), Some(&json!(V2))),
+                Err(DecodeError::UnsupportedVersion(_))
+            ),
+            "{version}"
+        );
+    }
+}
+
+#[test]
+fn quoted_legacy_version_loads_and_fractional_values_survive() {
+    let mut input: Value = serde_json::from_str(V2).unwrap();
+    input["version"] = json!("2");
+    assert!(migrate_legacy(&input.to_string()).is_ok());
+    input["version"] = json!(2);
+    input["sidebarWidth"] = json!(200.6);
+    input["tabs"]["review"]["lastActive"] = json!(12.7);
+    let encoded: Value =
+        serde_json::from_str(&encode(&decode(&input.to_string()).unwrap()).unwrap()).unwrap();
+    assert_eq!(encoded["sidebarWidth"], 200.6);
+    assert_eq!(encoded["tabs"]["review"]["lastActive"], 12.7);
+}
+
+#[test]
+fn duplicate_ids_keep_both_spaces_and_folders_with_their_contents() {
+    let raw = r#"{
+        "spaces": [
+            {"id":"s", "name":"First","today":["a"],"pinned":[{"kind":"folder","id":"f","name":"First folder","children":[{"kind":"tab","tabId":"t"}]}]},
+            {"id":"s", "name":"Second","today":["b"],"pinned":[{"kind":"folder","id":"f","name":"Second folder","children":[{"kind":"tab","tabId":"u"}]}]}
+        ],
+        "tabs":{"a":{"url":"a"},"b":{"url":"b"},"t":{"url":"t"},"u":{"url":"u"}}
+    }"#;
+    let state = decode(raw).unwrap();
+    assert_eq!(state.spaces().len(), 2);
+    let [first, second] = state.spaces() else {
+        panic!("expected two Spaces")
+    };
+    assert_ne!(first.id, second.id);
+    assert_eq!(second.name, "Second");
+    assert_eq!(second.pinned_tabs(), [&TabId::new("u")]);
+    let folder_ids = [first, second].map(|space| match &space.pinned[0] {
+        PinnedNode::Folder { id, .. } => id,
+        _ => panic!("expected the saved folder"),
+    });
+    assert_ne!(folder_ids[0], folder_ids[1]);
+    assert_eq!(
+        state.focused_window().spaces[&second.id].today,
+        [TabId::new("b")]
+    );
+}
+
+#[test]
+fn reopened_window_selects_a_space_that_retained_tabs() {
+    let raw = r#"{
+        "version":2, "spaces":[{"id":"s"},{"id":"other"}],
+        "tabs":{"source":{"url":"a"},"phone":{"url":"b","device":"mobile"},"kept":{"url":"c"}},
+        "windows":[{"id":"open"}],
+        "closedWindows":[{"id":"closed","closedAt":2,"activeSpaceId":"s","spaces":{
+            "s":{"today":["phone"],"split":["source","phone"],"splitMode":"responsive","activeTabId":"phone"},
+            "other":{"today":["kept"],"activeTabId":"kept"}
+        }}]
+    }"#;
+    let mut state = decode(raw).unwrap();
+    assert_eq!(state.reopen_window(), Some(WindowId::new("closed")));
+    assert_eq!(state.focused_window().visible_tabs(), [TabId::new("kept")]);
 }

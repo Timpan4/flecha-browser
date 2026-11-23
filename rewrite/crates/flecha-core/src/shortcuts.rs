@@ -1,9 +1,6 @@
 //! Platform defaults and conflict handling for Electron-style saved accelerators.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::sync::LazyLock;
-
-use regex::Regex;
+use std::collections::BTreeMap;
 
 pub type Keybindings = BTreeMap<String, Option<String>>;
 
@@ -183,34 +180,38 @@ pub fn fixed_shortcuts(platform: Platform) -> BTreeMap<String, String> {
 
 pub fn keys_for<'a>(bindings: &'a Keybindings, id: &str, platform: Platform) -> Option<&'a str> {
     let index = SHORTCUTS.iter().position(|command| command.id == id)?;
-    match bindings.get(id) {
-        Some(None) => None,
-        Some(Some(keys)) if !keys.is_empty() => {
-            if is_reserved(keys, platform)
-                || SHORTCUTS[..index]
-                    .iter()
-                    .any(|command| custom_matches(bindings, command.id, keys, platform))
-            {
-                None
-            } else {
-                Some(keys)
-            }
-        }
-        _ => {
-            let fallback = default_keys(id, platform)?;
-            (!SHORTCUTS.iter().any(|command| {
-                command.id != id && custom_matches(bindings, command.id, fallback, platform)
-            }))
-            .then_some(fallback)
-        }
+    let configured = configured_keys(bindings, id, platform)?;
+    if is_reserved(configured, platform) {
+        return None;
     }
+    let competing = |command: &Shortcut| {
+        custom_keys(bindings, command.id, platform)
+            .is_some_and(|keys| same_keys(keys, configured, platform))
+    };
+    let conflict = if custom_keys(bindings, id, platform).is_some() {
+        // The native map inserts commands in declaration order, so the later one wins.
+        SHORTCUTS[index + 1..].iter().any(competing)
+    } else {
+        SHORTCUTS
+            .iter()
+            .filter(|command| command.id != id)
+            .any(competing)
+    };
+    (!conflict).then_some(configured)
 }
 
-fn custom_matches(bindings: &Keybindings, id: &str, keys: &str, platform: Platform) -> bool {
+fn custom_keys<'a>(bindings: &'a Keybindings, id: &str, platform: Platform) -> Option<&'a str> {
     bindings
         .get(id)
         .and_then(Option::as_deref)
-        .is_some_and(|custom| !custom.is_empty() && same_keys(custom, keys, platform))
+        .filter(|keys| parse_accelerator(keys, platform).is_some())
+}
+
+fn configured_keys<'a>(bindings: &'a Keybindings, id: &str, platform: Platform) -> Option<&'a str> {
+    match bindings.get(id) {
+        Some(None) => None,
+        _ => custom_keys(bindings, id, platform).or_else(|| default_keys(id, platform)),
+    }
 }
 
 fn is_reserved(keys: &str, platform: Platform) -> bool {
@@ -250,9 +251,6 @@ pub fn set_binding(
     edit: BindingEdit<'_>,
     platform: Platform,
 ) -> Result<Vec<&'static str>, BindingError> {
-    static ACCELERATOR: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"^(?:(?:(?:Ctrl|Alt|Shift|Cmd|CmdOrCtrl)\+){1,4}[^+]+|F[0-9]{1,2})$").unwrap()
-    });
     if !SHORTCUTS.iter().any(|command| command.id == id) {
         return Err(BindingError::UnknownCommand);
     }
@@ -263,10 +261,14 @@ pub fn set_binding(
             bindings.insert(id.into(), None);
             return Ok(Vec::new());
         }
-        BindingEdit::Set(keys) if !ACCELERATOR.is_match(keys) => {
-            return Err(BindingError::InvalidAccelerator);
+        BindingEdit::Set(keys) => {
+            let accelerator =
+                parse_accelerator(keys, platform).ok_or(BindingError::InvalidAccelerator)?;
+            if accelerator.modifiers == 0 && !matches!(accelerator.key, Key::Function(_)) {
+                return Err(BindingError::InvalidAccelerator);
+            }
+            Some(keys)
         }
-        BindingEdit::Set(keys) => Some(keys),
     };
     let mut displaced = Vec::new();
     if let Some(keys) = keys {
@@ -274,9 +276,8 @@ pub fn set_binding(
             return Err(BindingError::Reserved);
         }
         for command in SHORTCUTS.iter().filter(|command| command.id != id) {
-            let occupied = keys_for(bindings, command.id, platform)
-                .is_some_and(|current| same_keys(current, keys, platform))
-                || custom_matches(bindings, command.id, keys, platform);
+            let occupied = configured_keys(bindings, command.id, platform)
+                .is_some_and(|current| same_keys(current, keys, platform));
             if occupied {
                 bindings.insert(command.id.into(), None);
                 displaced.push(command.id);
@@ -292,64 +293,121 @@ pub fn set_binding(
 }
 
 pub fn same_keys(a: &str, b: &str, platform: Platform) -> bool {
-    let normalize = |keys: &str| {
-        let mut parts: Vec<_> = parts(keys, platform).map(str::to_ascii_lowercase).collect();
-        parts.sort_unstable();
-        parts
-    };
-    normalize(a) == normalize(b)
+    parse_accelerator(a, platform).is_some_and(|a| parse_accelerator(b, platform) == Some(a))
 }
 
-fn parts(keys: &str, platform: Platform) -> impl DoubleEndedIterator<Item = &str> {
-    keys.split('+').map(move |part| match part {
-        "CmdOrCtrl" | "CommandOrControl" if platform == Platform::Mac => "Cmd",
-        "CmdOrCtrl" | "CommandOrControl" | "Control" => "Ctrl",
-        "Command" => "Cmd",
-        "Option" => "Alt",
-        _ => part,
-    })
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Key {
+    Ascii(u8),
+    Named(&'static str),
+    Function(u8),
+}
+
+const CONTROL: u8 = 1 << 0;
+const ALT: u8 = 1 << 1;
+const SHIFT: u8 = 1 << 2;
+const COMMAND: u8 = 1 << 3;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Accelerator {
+    modifiers: u8,
+    key: Key,
+}
+
+/// Matches ParseFlechaAccelerator in Chromium patch 0016.
+fn parse_accelerator(text: &str, platform: Platform) -> Option<Accelerator> {
+    let mut parts: Vec<_> = text.split('+').map(str::trim).collect();
+    let tail = parts.pop()?;
+    let tail = if tail.is_empty() && parts.last() == Some(&"") {
+        parts.pop();
+        "Plus"
+    } else {
+        tail
+    };
+    let key = key_code(tail)?;
+    let mut modifiers = 0;
+    for token in parts {
+        modifiers |= match token.to_ascii_lowercase().as_str() {
+            "cmdorctrl" | "commandorcontrol" if platform == Platform::Mac => COMMAND,
+            "cmdorctrl" | "commandorcontrol" | "ctrl" | "control" => CONTROL,
+            "alt" | "option" => ALT,
+            "shift" => SHIFT,
+            "cmd" | "command" | "super" | "meta" => COMMAND,
+            _ => return None,
+        };
+    }
+    Some(Accelerator { modifiers, key })
+}
+
+fn key_code(text: &str) -> Option<Key> {
+    if let [byte] = text.as_bytes() {
+        return (byte.is_ascii_alphanumeric() || b"[]=-,./;'`\\".contains(byte))
+            .then(|| Key::Ascii(byte.to_ascii_uppercase()));
+    }
+    // VKEY_OEM_PLUS handles both the Plus spelling and the '=' key.
+    let name = match text.to_ascii_lowercase().as_str() {
+        "plus" => return Some(Key::Ascii(b'=')),
+        "tab" => "Tab",
+        "space" => "Space",
+        "enter" | "return" => "Enter",
+        "escape" | "esc" => "Escape",
+        "backspace" => "Backspace",
+        "delete" => "Delete",
+        "up" => "Up",
+        "down" => "Down",
+        "left" => "Left",
+        "right" => "Right",
+        "home" => "Home",
+        "end" => "End",
+        "pageup" => "PageUp",
+        "pagedown" => "PageDown",
+        _ => {
+            let f: u8 = text.strip_prefix(['F', 'f'])?.parse().ok()?;
+            return (1..=24).contains(&f).then_some(Key::Function(f));
+        }
+    };
+    Some(Key::Named(name))
 }
 
 pub fn display_keys(keys: Option<&str>, platform: Platform) -> String {
-    let Some(keys) = keys.filter(|keys| !keys.is_empty()) else {
+    let Some(accelerator) = keys.and_then(|keys| parse_accelerator(keys, platform)) else {
         return String::new();
     };
-    let mut parts = parts(keys, platform);
-    let key = parts.next_back().unwrap_or_default();
-    let modifiers: BTreeSet<_> = parts.collect();
-    let ordered = ["Ctrl", "Alt", "Shift", "Cmd"];
+    let Accelerator { modifiers, key } = accelerator;
+    let mask = [CONTROL, ALT, SHIFT, COMMAND];
+    let key = match key {
+        Key::Ascii(byte) => char::from(byte).to_string(),
+        Key::Named(name) => name.into(),
+        Key::Function(n) => format!("F{n}"),
+    };
     if platform == Platform::Mac {
-        let mut label: String = ordered
+        let mut label: String = mask
             .into_iter()
             .zip(['⌃', '⌥', '⇧', '⌘'])
-            .filter_map(|(modifier, symbol)| modifiers.contains(modifier).then_some(symbol))
+            .filter_map(|(bit, symbol)| (modifiers & bit != 0).then_some(symbol))
             .collect();
-        match key {
-            "Left" => label.push('←'),
-            "Right" => label.push('→'),
-            "Up" => label.push('↑'),
-            "Down" => label.push('↓'),
-            "Return" | "Enter" => label.push('↩'),
-            "Tab" => label.push('⇥'),
-            "Space" => label.push_str("Space"),
-            "Escape" => label.push_str("Esc"),
-            "Backspace" => label.push('⌫'),
-            "Delete" => label.push('⌦'),
-            "-" => label.push('−'),
-            _ => label.push_str(&key.to_uppercase()),
-        }
+        let display = match key.as_str() {
+            "Left" => "←",
+            "Right" => "→",
+            "Up" => "↑",
+            "Down" => "↓",
+            "Enter" => "↩",
+            "Tab" => "⇥",
+            "Escape" => "Esc",
+            "Backspace" => "⌫",
+            "Delete" => "⌦",
+            "-" => "−",
+            _ => &key,
+        };
+        label.push_str(display);
         label
     } else {
-        let mut label: Vec<_> = ordered
+        let mut label: Vec<_> = mask
             .into_iter()
-            .filter(|modifier| modifiers.contains(modifier))
-            .map(|modifier| if modifier == "Cmd" { "Super" } else { modifier }.to_owned())
+            .zip(["Ctrl", "Alt", "Shift", "Super"])
+            .filter_map(|(bit, symbol)| (modifiers & bit != 0).then_some(symbol))
             .collect();
-        label.push(if key.chars().count() == 1 {
-            key.to_uppercase()
-        } else {
-            key.into()
-        });
+        label.push(&key);
         label.join("+")
     }
 }

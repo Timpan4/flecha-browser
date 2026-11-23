@@ -220,11 +220,41 @@ fn closed_window_limit_archives_displaced_today_tabs() {
             None,
             false
         ));
-        assert!(state.close_window(&window, 1));
+        assert!(state.close_window(&window, i64::try_from(n).unwrap()));
     }
     assert_eq!(state.closed_windows().len(), CLOSED_WINDOW_LIMIT);
     assert!(state.tab(&TabId::new("tab0")).is_none());
     assert_eq!(state.archive()[0].url, "https://example.org/0");
+    assert_eq!(
+        state.reopen_last(TabId::new("reopened"), 100),
+        Some(Reopened::Window(WindowId::new(format!(
+            "window{CLOSED_WINDOW_LIMIT}"
+        ))))
+    );
+}
+
+#[test]
+fn pinned_tab_and_folder_ids_do_not_collide_as_ordering_anchors() {
+    let space = SpaceId::new("s");
+    let mut state = BrowserState::new(space.clone(), WindowId::new("w"));
+    let tab = TabId::new("same");
+    let folder = FolderId::new("same");
+    let root = Placement::Pinned {
+        space: &space,
+        folder: None,
+    };
+    assert!(state.create_tab(tab.clone(), Tab::new("https://example.org", 0), root, None));
+    assert!(state.add_folder(folder.clone(), "Folder", &space, None));
+    assert!(state.move_folder(
+        &folder,
+        &space,
+        None,
+        Some(flecha_core::PinnedKey::Tab(&tab))
+    ));
+    assert!(matches!(
+        state.spaces()[0].pinned[0],
+        flecha_core::PinnedNode::Folder { .. }
+    ));
 }
 
 #[test]
@@ -277,4 +307,123 @@ fn archive_policy_expires_only_inactive_today_tabs_and_archive_is_searchable() {
         state.window(&window).unwrap().visible_tabs(),
         [selected, pane]
     );
+}
+
+#[test]
+fn responsive_split_round_trips_and_exit_removes_only_the_mirror() {
+    use flecha_core::{Device, EndedSplit, SplitMode};
+    let space = SpaceId::new("s");
+    let window = WindowId::new("w");
+    let source = TabId::new("desktop");
+    let mirror = TabId::new("phone");
+    let second_pane = TabId::new("second-pane");
+    let mut state = BrowserState::new(space.clone(), window.clone());
+    let mut tab = Tab::new("https://example.org", 0);
+    tab.title = "Project".into();
+    assert!(state.open_today(source.clone(), tab, &window, None, true));
+    assert!(!state.set_split_ratio(&window, 0.5));
+    assert_eq!(
+        state.open_responsive(&window, mirror.clone(), 1),
+        Some(mirror.clone())
+    );
+    assert_eq!(
+        state.open_responsive(&window, TabId::new("another"), 2),
+        None
+    );
+    assert_eq!(state.tab(&mirror).unwrap().title, "Project");
+    assert_eq!(state.tab(&mirror).unwrap().device, Some(Device::Mobile));
+    assert_eq!(
+        state.focused_window().spaces[&space].today,
+        [source.clone(), mirror.clone()]
+    );
+    assert_eq!(
+        state.focused_window().visible_tabs(),
+        [source.clone(), mirror.clone()]
+    );
+    assert!(state.set_split_ratio(&window, 0.1));
+    assert_eq!(state.focused_window().spaces[&space].split_ratio, Some(0.2));
+    assert!(state.set_split_ratio(&window, 0.9));
+    assert_eq!(state.focused_window().spaces[&space].split_ratio, Some(0.8));
+    assert_eq!(state.activate(&mirror, &window, None), Some(window.clone()));
+    let mut wire: serde_json::Value = serde_json::from_str(&encode(&state).unwrap()).unwrap();
+    wire["windows"][0]["spaces"]["s"]["splitRatio"] = serde_json::json!(0.1);
+    let mut state = decode(&wire.to_string()).unwrap();
+    let ws = &state.focused_window().spaces[&space];
+    assert_eq!(ws.split_ratio, Some(0.1));
+    assert_eq!(ws.split_mode, Some(SplitMode::Responsive));
+    assert_eq!(
+        state.unsplit(&window),
+        Some(EndedSplit::Responsive {
+            mirror: mirror.clone()
+        })
+    );
+    assert!(state.tab(&mirror).is_none() && state.archive().is_empty());
+    assert_eq!(
+        state.focused_window().visible_tabs(),
+        std::slice::from_ref(&source)
+    );
+    assert!(state.open_today(
+        second_pane.clone(),
+        Tab::new("https://example.org/docs", 2),
+        &window,
+        None,
+        false
+    ));
+    assert!(state.set_split(&window, [source, second_pane.clone()]));
+    assert_eq!(state.unsplit(&window), Some(EndedSplit::Standard));
+    assert!(state.tab(&second_pane).is_some());
+}
+
+#[test]
+fn today_bulk_close_respects_agent_folder_and_shared_split_rows() {
+    use flecha_core::CloseToday;
+    let space = SpaceId::new("s");
+    let window = WindowId::new("w");
+    let pin = TabId::new("pin");
+    let first = TabId::new("first");
+    let last = TabId::new("last");
+    let agent_a = TabId::new("agent-a");
+    let agent_b = TabId::new("agent-b");
+    let mut state = BrowserState::new(space.clone(), window.clone());
+    let mut previous = None;
+    for (id, agent) in [
+        (&first, false),
+        (&agent_a, true),
+        (&agent_b, true),
+        (&last, false),
+    ] {
+        let mut tab = Tab::new(format!("https://example.org/{}", id.as_str()), 0);
+        tab.agent = agent;
+        assert!(state.open_today(id.clone(), tab, &window, previous, false));
+        previous = Some(id);
+    }
+    assert!(state.in_agent_folder(&window, &agent_a));
+    assert_eq!(state.close_today_tabs(&first, CloseToday::Below, 1), [last]);
+    assert_eq!(
+        state.close_today_tabs(&agent_a, CloseToday::Others, 2),
+        [agent_b]
+    );
+    assert!(state.create_tab(
+        pin.clone(),
+        Tab::new("https://example.org/pin", 3),
+        Placement::Pinned {
+            space: &space,
+            folder: None
+        },
+        None
+    ));
+    assert!(state.set_split(&window, [pin, agent_a.clone()]));
+    assert!(state.in_agent_folder(&window, &agent_a));
+    assert_eq!(state.clear_today(&window, 4), [first]);
+    let ordinary = TabId::new("ordinary");
+    assert!(state.open_today(
+        ordinary.clone(),
+        Tab::new("https://example.org/", 5),
+        &window,
+        None,
+        false
+    ));
+    assert!(state.set_split(&window, [ordinary.clone(), agent_a.clone()]));
+    assert!(!state.in_agent_folder(&window, &agent_a));
+    assert_eq!(state.clear_today(&window, 6), [ordinary, agent_a]);
 }

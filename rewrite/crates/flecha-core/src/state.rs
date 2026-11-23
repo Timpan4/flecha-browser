@@ -38,7 +38,7 @@ pub(crate) const DEFAULT_SPACE_COLOR: &str = "#cdd9f7";
 pub struct Tab {
     pub url: String,
     pub title: String,
-    pub last_active: EpochMillis,
+    pub last_active: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub favicon: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -61,7 +61,7 @@ impl Tab {
         Self {
             title: url.clone(),
             url,
-            last_active: now,
+            last_active: now as f64,
             favicon: None,
             custom_title: None,
             muted: None,
@@ -108,12 +108,18 @@ pub enum PinnedNode {
 }
 
 impl PinnedNode {
-    fn key(&self) -> &str {
+    fn key(&self) -> PinnedKey<'_> {
         match self {
-            Self::Tab { tab_id } => tab_id.as_str(),
-            Self::Folder { id, .. } => id.as_str(),
+            Self::Tab { tab_id } => PinnedKey::Tab(tab_id),
+            Self::Folder { id, .. } => PinnedKey::Folder(id),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PinnedKey<'a> {
+    Tab(&'a TabId),
+    Folder(&'a FolderId),
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -222,6 +228,18 @@ pub enum CloseTab {
     Unloaded,
     Archived,
     Removed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CloseToday {
+    Below,
+    Others,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EndedSplit {
+    Standard,
+    Responsive { mirror: TabId },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -556,13 +574,11 @@ impl BrowserState {
                 },
             );
             if self.closed_windows.len() > CLOSED_WINDOW_LIMIT {
-                let dropped: Vec<_> = self
-                    .closed_windows
-                    .drain(CLOSED_WINDOW_LIMIT..)
-                    .flat_map(|old| old.window.spaces.into_values().flat_map(|ws| ws.today))
-                    .collect();
-                for id in dropped {
-                    self.archive_removed(&id, now);
+                let dropped: Vec<_> = self.closed_windows.drain(CLOSED_WINDOW_LIMIT..).collect();
+                for old in dropped {
+                    for id in old.window.spaces.into_values().flat_map(|ws| ws.today) {
+                        self.archive_removed(&id, old.closed_at);
+                    }
                 }
             }
         }
@@ -573,7 +589,18 @@ impl BrowserState {
         if self.closed_windows.is_empty() {
             return None;
         }
-        let closed = self.closed_windows.remove(0);
+        let mut closed = self.closed_windows.remove(0);
+        if !closed
+            .window
+            .spaces
+            .contains_key(&closed.window.active_space_id)
+            && let Some(space) = self
+                .spaces
+                .iter()
+                .find(|space| closed.window.spaces.contains_key(&space.id))
+        {
+            closed.window.active_space_id = space.id.clone();
+        }
         let id = closed.window.id.clone();
         self.windows.insert(0, closed.window);
         self.repair_visible_tabs();
@@ -629,13 +656,7 @@ impl BrowserState {
 
     pub fn by_recency<'a>(&self, ids: impl IntoIterator<Item = &'a TabId>) -> Vec<&'a TabId> {
         let mut ids: Vec<_> = ids.into_iter().collect();
-        ids.sort_by_key(|id| {
-            let tab = self.tabs.get(id);
-            (
-                tab.is_some_and(|tab| tab.unseen),
-                Reverse(tab.map_or(0, |tab| tab.last_active)),
-            )
-        });
+        ids.sort_by(|left, right| compare_recency(&self.tabs, left, right));
         ids
     }
 
@@ -739,7 +760,7 @@ impl BrowserState {
         let Some(tab) = self.tabs.get_mut(id) else {
             return false;
         };
-        tab.last_active = now;
+        tab.last_active = now as f64;
         tab.unseen = false;
         true
     }
@@ -749,7 +770,7 @@ impl BrowserState {
         id: TabId,
         mut tab: Tab,
         to: Placement<'_>,
-        before: Option<&str>,
+        before: Option<PinnedKey<'_>>,
     ) -> bool {
         if self.tabs.contains_key(&id) || !self.placement_exists(to) {
             return false;
@@ -763,8 +784,13 @@ impl BrowserState {
     }
 
     /// A stale destination leaves the tab in its original list.
-    pub fn place_tab(&mut self, id: &TabId, to: Placement<'_>, before: Option<&str>) -> bool {
-        if before == Some(id.as_str())
+    pub fn place_tab(
+        &mut self,
+        id: &TabId,
+        to: Placement<'_>,
+        before: Option<PinnedKey<'_>>,
+    ) -> bool {
+        if before == Some(PinnedKey::Tab(id))
             || self.locate(id).is_none()
             || is_mobile(&self.tabs, id)
             || !self.placement_exists(to)
@@ -872,6 +898,72 @@ impl BrowserState {
         true
     }
 
+    pub fn in_agent_folder(&self, window: &WindowId, tab: &TabId) -> bool {
+        self.window(window).is_some_and(|win| {
+            win.spaces
+                .values()
+                .any(|ws| ws.today.contains(tab) && in_agent_folder(&self.tabs, ws, tab))
+        })
+    }
+
+    /// Clear the active Space's Today list while leaving tabs in its agent folder.
+    pub fn clear_today(&mut self, window: &WindowId, now: EpochMillis) -> Vec<TabId> {
+        let Some(ws) = self
+            .windows
+            .iter_mut()
+            .find(|win| win.id == *window)
+            .and_then(|win| win.spaces.get_mut(&win.active_space_id))
+        else {
+            return Vec::new();
+        };
+        let mut removed: Vec<_> = ws
+            .today
+            .iter()
+            .filter(|id| !in_agent_folder(&self.tabs, ws, id))
+            .cloned()
+            .collect();
+        let removed_ids: BTreeSet<_> = removed.iter().collect();
+        ws.today.retain(|id| !removed_ids.contains(id));
+        for id in &removed {
+            self.archive_removed(id, now);
+        }
+        removed.extend(self.repair_selections());
+        removed
+    }
+
+    /// Close rows in the same Today list or agent folder as the given tab.
+    pub fn close_today_tabs(
+        &mut self,
+        tab: &TabId,
+        which: CloseToday,
+        now: EpochMillis,
+    ) -> Vec<TabId> {
+        let Some(Placement::Today { space, window }) = self.locate(tab) else {
+            return Vec::new();
+        };
+        let ws = &self
+            .window(window)
+            .expect("Today placement has an open window")
+            .spaces[space];
+        let agent = in_agent_folder(&self.tabs, ws, tab);
+        let siblings = ws
+            .today
+            .iter()
+            .filter(|id| in_agent_folder(&self.tabs, ws, id) == agent);
+        let closed: Vec<_> = match which {
+            CloseToday::Below => siblings
+                .skip_while(|id| *id != tab)
+                .skip(1)
+                .cloned()
+                .collect(),
+            CloseToday::Others => siblings.filter(|id| *id != tab).cloned().collect(),
+        };
+        for id in &closed {
+            self.close_tab(id, now);
+        }
+        closed
+    }
+
     pub fn archive_stale(&mut self, now: EpochMillis) -> Vec<TabId> {
         let hours = self.settings.archive_policy.hours();
         if hours == 0.0 {
@@ -894,7 +986,7 @@ impl BrowserState {
                         || self
                             .tabs
                             .get(id)
-                            .is_none_or(|tab| tab.last_active as f64 >= cutoff);
+                            .is_none_or(|tab| tab.last_active >= cutoff);
                     if !keep {
                         removed.push(id.clone());
                     }
@@ -917,22 +1009,80 @@ impl BrowserState {
         let members = self
             .tab_ids(window, &space)
             .expect("an open window has a valid active Space");
-        if tabs[0] == tabs[1] || !tabs.iter().all(|id| members.contains(&id)) {
+        if tabs[0] == tabs[1]
+            || !tabs
+                .iter()
+                .all(|id| members.contains(&id) && !is_mobile(&self.tabs, id))
+        {
             return false;
         }
         let Some(win) = self.windows.iter_mut().find(|win| win.id == *window) else {
             return false;
         };
         let ws = win.spaces.entry(space).or_default();
-        if ws.split_mode == Some(SplitMode::Responsive) {
-            return false;
-        }
+        end_split(ws, &mut self.tabs);
         ws.active_tab_id = Some(tabs[0].clone());
         ws.split = Some(tabs.clone());
         for id in &tabs {
             self.claim_visible(id, window);
         }
         true
+    }
+
+    /// Opens a phone-sized Today mirror against the window's selected desktop tab.
+    pub fn open_responsive(
+        &mut self,
+        window: &WindowId,
+        mirror: TabId,
+        now: EpochMillis,
+    ) -> Option<TabId> {
+        let win = self.window(window)?;
+        let space = win.active_space_id.clone();
+        let ws = win.spaces.get(&space)?;
+        let source = ws.active_tab_id.clone()?;
+        let tab = self.tabs.get(&source)?;
+        if ws.split_mode == Some(SplitMode::Responsive) || tab.device.is_some() {
+            return None;
+        }
+        let mut new_tab = Tab::new(tab.url.clone(), now);
+        new_tab.title.clone_from(&tab.title);
+        new_tab.device = Some(Device::Mobile);
+        if !self.open_today(mirror.clone(), new_tab, window, Some(&source), false) {
+            return None;
+        }
+        let ws = self
+            .active_window_space_mut(window)
+            .expect("open_today created the window Space");
+        ws.split = Some([source, mirror.clone()]);
+        ws.split_mode = Some(SplitMode::Responsive);
+        Some(mirror)
+    }
+
+    pub fn set_split_ratio(&mut self, window: &WindowId, ratio: f64) -> bool {
+        let Some(ws) = self
+            .active_window_space_mut(window)
+            .filter(|ws| ws.split.is_some())
+        else {
+            return false;
+        };
+        if ratio.is_nan() {
+            return false;
+        }
+        // The divider range in store.ts and the native split view.
+        ws.split_ratio = Some(ratio.clamp(0.2, 0.8));
+        true
+    }
+
+    /// Ends the split and removes its responsive mirror from Today without archiving it.
+    pub fn unsplit(&mut self, window: &WindowId) -> Option<EndedSplit> {
+        let win = self.windows.iter_mut().find(|win| win.id == *window)?;
+        let ws = win.spaces.get_mut(&win.active_space_id)?;
+        end_split(ws, &mut self.tabs)
+    }
+
+    fn active_window_space_mut(&mut self, window: &WindowId) -> Option<&mut WindowSpace> {
+        let win = self.windows.iter_mut().find(|win| win.id == *window)?;
+        win.spaces.get_mut(&win.active_space_id)
     }
 
     pub fn add_folder(
@@ -988,7 +1138,7 @@ impl BrowserState {
         id: &FolderId,
         space: &SpaceId,
         parent: Option<&FolderId>,
-        before: Option<&str>,
+        before: Option<PinnedKey<'_>>,
     ) -> bool {
         let Some(PinnedNode::Folder { children, .. }) = self
             .spaces
@@ -997,7 +1147,7 @@ impl BrowserState {
         else {
             return false;
         };
-        if before == Some(id.as_str())
+        if before == Some(PinnedKey::Folder(id))
             || parent.is_some_and(|parent| parent == id || find_folder(children, parent).is_some())
             || !self.placement_exists(Placement::Pinned {
                 space,
@@ -1068,7 +1218,7 @@ impl BrowserState {
         }
     }
 
-    fn insert(&mut self, id: &TabId, to: Placement<'_>, before: Option<&str>) {
+    fn insert(&mut self, id: &TabId, to: Placement<'_>, before: Option<PinnedKey<'_>>) {
         let list = match to {
             Placement::Favorite => &mut self.favorites,
             Placement::Pinned { space, folder } => {
@@ -1088,7 +1238,7 @@ impl BrowserState {
                 &mut win.spaces.entry(space.clone()).or_default().today
             }
         };
-        let index = insertion_index(list, |id| Some(id.as_str()) == before);
+        let index = insertion_index(list, |id| Some(PinnedKey::Tab(id)) == before);
         list.insert(index, id.clone());
     }
 
@@ -1188,8 +1338,9 @@ impl BrowserState {
         if tab.url == "about:blank" || tab.device == Some(Device::Mobile) {
             return false;
         }
+        let index = self.archive.partition_point(|entry| entry.closed_at > now);
         self.archive.insert(
-            0,
+            index,
             ArchivedTab {
                 url: tab.url,
                 title: tab.title,
@@ -1206,9 +1357,28 @@ fn insertion_index<T>(list: &[T], matches: impl FnMut(&T) -> bool) -> usize {
 }
 
 fn most_recent<'a>(tabs: &BTreeMap<TabId, Tab>, ids: &'a [TabId]) -> Option<&'a TabId> {
-    // min_by_key keeps the first equal entry, like the stable sort in store.ts.
     ids.iter()
-        .min_by_key(|id| Reverse(tabs.get(id).map_or(0, |tab| tab.last_active)))
+        .min_by(|left, right| compare_activity(tabs, left, right))
+}
+
+fn compare_activity(
+    tabs: &BTreeMap<TabId, Tab>,
+    left: &TabId,
+    right: &TabId,
+) -> std::cmp::Ordering {
+    let active_at = |id| tabs.get(id).map_or(0.0, |tab| tab.last_active);
+    active_at(right).total_cmp(&active_at(left))
+}
+
+pub(crate) fn compare_recency(
+    tabs: &BTreeMap<TabId, Tab>,
+    left: &TabId,
+    right: &TabId,
+) -> std::cmp::Ordering {
+    let unseen = |id| tabs.get(id).is_some_and(|tab| tab.unseen);
+    unseen(left)
+        .cmp(&unseen(right))
+        .then_with(|| compare_activity(tabs, left, right))
 }
 
 fn collect_pins<'a>(nodes: &'a [PinnedNode], tabs: &mut Vec<&'a TabId>) {
@@ -1323,6 +1493,32 @@ fn release_visible(ws: &mut WindowSpace, id: &TabId, tabs: &mut BTreeMap<TabId, 
 fn is_mobile(tabs: &BTreeMap<TabId, Tab>, id: &TabId) -> bool {
     tabs.get(id)
         .is_some_and(|tab| tab.device == Some(Device::Mobile))
+}
+
+fn end_split(ws: &mut WindowSpace, tabs: &mut BTreeMap<TabId, Tab>) -> Option<EndedSplit> {
+    let [source, mirror] = ws.split.take()?;
+    if ws.split_mode.take() == Some(SplitMode::Responsive)
+        && ws.today.contains(&mirror)
+        && is_mobile(tabs, &mirror)
+    {
+        ws.today.retain(|id| *id != mirror);
+        tabs.remove(&mirror);
+        if ws.active_tab_id.as_ref() == Some(&mirror) {
+            ws.active_tab_id = Some(source);
+        }
+        return Some(EndedSplit::Responsive { mirror });
+    }
+    Some(EndedSplit::Standard)
+}
+
+fn in_agent_folder(tabs: &BTreeMap<TabId, Tab>, ws: &WindowSpace, id: &TabId) -> bool {
+    tabs.get(id).is_some_and(|tab| tab.agent)
+        && !ws.split.as_ref().is_some_and(|pair| {
+            pair.contains(id)
+                && pair
+                    .iter()
+                    .all(|id| ws.today.contains(id) && tabs.contains_key(id))
+        })
 }
 
 fn truncate_utf16(text: &str, limit: usize) -> &str {
