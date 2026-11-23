@@ -4,25 +4,32 @@ set -euo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/runtime-paths.sh"
 
 prepare_source() {
-  local pin_table=$1 name=$2 repo rev destination patch_file
+  local pin_table=$1 name=$2 repo rev destination tree patch_file
   repo=$(pin "$pin_table" git)
   rev=$(pin "$pin_table" rev)
   destination="$sources/$name"
+  tree="$destination"
   patch_file="$spike/patches/$name.patch"
   if [[ ! -d $destination ]]; then
-    staging="$temporary/$name"
-    mkdir "$staging"
+    tree="$temporary/$name"
+    mkdir "$tree"
     curl -fsSL "https://codeload.github.com/${repo#https://github.com/}/tar.gz/$rev" |
-      tar -xz --strip-components=1 -C "$staging"
-    patch -d "$staging" -p1 --batch --forward < "$patch_file"
-    printf '%s\n%s\n' "$repo" "$rev" > "$staging/.flecha-revision"
-    mv "$staging" "$destination"
+      tar -xz --strip-components=1 -C "$tree"
+    patch -d "$tree" -p1 --batch --forward < "$patch_file"
+    printf '%s\n%s\n' "$repo" "$rev" > "$tree/.flecha-revision"
   elif cmp -s "$destination/.flecha-revision" <(printf '%s\n%s\n' "$repo" "$rev") &&
     patch -d "$destination" -p1 --dry-run --batch --reverse < "$patch_file" >/dev/null; then
     printf '%s patches already applied\n' "$name"
   else
     printf 'Existing %s does not match the pinned repository, revision or patch. Move aside %s and rerun prepare.sh.\n' "$destination" "$destination" >&2
     return 1
+  fi
+  if [[ $name == zed ]]; then
+    # rustup uses the nearest toolchain file above the working directory, and Zed has nested ones.
+    find "$tree" \( -name rust-toolchain -o -name rust-toolchain.toml \) ! -type d -delete
+  fi
+  if [[ $tree != "$destination" ]]; then
+    mv "$tree" "$destination"
   fi
 }
 
