@@ -93,9 +93,8 @@ pub fn scroll(host: &BrowserHost, scroll: &ScrollEvent) {
     );
 }
 
-pub fn key(host: &BrowserHost, stroke: &Keystroke, up: bool, repeat: bool, prefer_text: bool) {
+pub fn key(host: &BrowserHost, stroke: &Keystroke, up: bool, repeat: bool, altgr: bool) {
     let mut flags = modifiers(stroke.modifiers);
-    let altgr = prefer_text && stroke.modifiers.control && stroke.modifiers.alt;
     if altgr {
         flags &= !(Flags::EVENTFLAG_CONTROL_DOWN.0 | Flags::EVENTFLAG_ALT_DOWN.0);
         flags |= Flags::EVENTFLAG_ALTGR_DOWN.0;

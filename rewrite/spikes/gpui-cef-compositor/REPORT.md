@@ -78,8 +78,10 @@ cef-rs's default, which selected the promoted stable archive of the same CEF
 commit. The initial beta runs used `CEF_PATH`. The patched cef-rs build now
 resolves the staged archive from the crate path and checks it against
 `pins.toml`, including for builds started with `--manifest-path` from the
-repository root. `run-linux.sh` checks the current archive metadata and
-the demo checks its hash against the build's stamp. The launcher uses the explicit runtime
+repository root. The extracted cache uses the full archive name without
+`.tar.bz2`. Preparation and launch require matching metadata and a nonempty
+main library. The demo checks the archive hash against the build's stamp.
+The launcher uses the explicit runtime
 directory because Cargo 1.100 changes `OUT_DIR` and cef-rs copies
 `libcef.so` and resources into `target/debug/build`. The demo checks that
 libcef exposes CEF API version 15800. [CEF build
@@ -98,19 +100,23 @@ The display harness is the behavior check.
 Host was CachyOS with NVIDIA driver 620.73.04. Weston 15.0.1 used its Vulkan
 renderer on a private Wayland socket and Xvfb allocated its own X11 display.
 The Weston frames used NVIDIA modifier `0x300000000606014`.
-The follow-up runs also used a scratch XDG runtime directory and a private
-D-Bus for both session and system requests. The harness checked that D-Bus
+The harness starts with a clean environment, a scratch home and XDG runtime
+directory, and a private D-Bus for both session and system requests. It keeps
+the tool path, locale, and library and Vulkan loader paths. The harness checked that D-Bus
 rejected a portal activation request and removed its own runtime directory
-after waiting for the browser, compositor and bus PIDs.
+after waiting for the browser, compositor and bus PIDs. The launcher's socket
+checks catch setup mistakes. The harness establishes the isolation.
 
-The verifier first waits for the expected size to be visible, then takes
-three compositor captures per phase. It permits two readiness captures by
-default, the largest count observed in the initial runs. Set
-`FLECHA_CAPTURE_ATTEMPTS` if a slower host needs more. It decodes the counter and the page's
+The verifier requests a GPUI render and waits for its next-frame
+acknowledgement before each capture. The existing `FLECHA_HARNESS_TIMEOUT_MS`
+watchdog bounds retries while it waits for geometry, popup or input pixels.
+It takes three compositor captures per phase after the expected size is
+visible. It decodes the counter and the page's
 `innerWidth × devicePixelRatio` and `innerHeight × devicePixelRatio`
 from the pixels. It checks the full overlay rectangle and neighboring page
 pixels. It rejects any overlay-colored pixel elsewhere in the screenshot and
-checks that page-reported screen and work-area dimensions survive resize.
+checks screen and work-area dimensions against the logical Weston or Xvfb
+output on every capture.
 Early Xvfb captures taken during swapchain resize could be blank
 before the new image presented. The stabilized samples cover the new geometry.
 These samples do not establish that every intervening frame was visible.
@@ -202,3 +208,51 @@ and `node tools/checks/lint.mjs` after `npm ci` passed. The repo linter
 reported 0 findings above baseline and 0 stale allowances.
 `cargo test --locked --manifest-path rewrite/Cargo.toml -j 14 -p flecha-surface --doc`
 passed both compile-fail checks.
+
+## Final review fixes
+
+| Finding | Change and verification |
+| --- | --- |
+| Invalid dirty rectangle can leave stale software pixels | If any rectangle is invalid, upload the complete callback buffer to the existing matching texture. The mixed valid and invalid rectangle unit test failed when the mutant uploaded only valid rectangles. |
+| A channel or revision change could reuse the wrong extraction | Prepare, launch, and the patched cef-rs build resolve the cache by full archive name. Changing the channel and revision in a disposable pins file produced distinct paths. Preparing the real beta archive and building from it passed. |
+| An incomplete extraction passed metadata validation | Prepare and launch both report the missing library and name the exact directory to move aside. Both rejected an extraction with matching metadata and no `libcef.so`. Removing the payload check let preparation accept that fixture and launch proceed to the socket sanity check. |
+| AltGr release could become Ctrl+Alt | Retain the key-down classification through repeat and key-up. Clear it on focus or session loss. Xvfb exercised basic key delivery. A native AltGr layout still needs verification. |
+| A missing CEF host could stall shutdown | A session requires a host before it can enter the pump. Forcing host lookup to return `None` under Xvfb exited 1 with `CEF created an OSR browser without a host` before the watchdog. |
+| IME could report an invented UTF-16 offset | Use a known replacement or marked start. If CEF chooses the insertion point and the start is unknown, return no marked range. Xvfb exercised the standalone commit. Native preedit remains open. |
+| The overlay probe could sample telemetry | Derive 633 px from the 512 px telemetry row, 96 px overlay, 24 px inset and 1 px border sample. The 632 px argument probe failed at the geometry guard. Reinstating the 512 px guard made the same test reach pixel sampling. |
+| Popup and input probes could run ahead of presentation | Request a new GPUI frame before every capture and retry pixel mismatches under the existing harness watchdog. Xvfb showed the select popup and its dismissal, the native key, and the Unicode commit. |
+| Constant screen telemetry could still be wrong | Check screen and work-area dimensions against each backend's configured logical output. Multiplying the Xvfb 2× screen dimensions by scale made the first readiness image fail with `unexpected logical display size`. |
+| Launcher socket guard could be mistaken for isolation | Documented the guard as a path sanity check. The harness starts the private display and bus, verifies activation is disabled and cleans up its processes and runtime directory. |
+| Unstamped source diagnostic obscured the recovery path | An unstamped Zed fixture failed with the exact staged directory to move aside. |
+| Killed preparation could leave an orphaned directory lock | Preparation holds a kernel `flock` on a persistent lock file. A second lock attempt failed while the fixture owner held it and succeeded after that PID was killed. |
+| The copy completion and early release mutants could pass | In debug builds, attach completion markers to the actual wgpu copy and release command buffers. Pinned wgpu dispatches these markers in submission order after GPU completion. Weston exited 1 with the missing completion diagnostic when the wait was skipped and exited 1 with the ordering diagnostic when the submission placed release before copy. |
+| The compile-fail test referred to a removed variant | Attempt to destructure the real tuple struct. Making its field public caused the doctest to fail because the destructuring compiled. |
+| Caller sockets leaked into the demo | Start the harness from an explicit environment allowlist. The display, session bus and scratch paths are created inside that environment. |
+
+The GPU probe checks completion and command-buffer submission order. Driver
+enforcement of Vulkan external ownership remains unverified.
+
+All four isolated display runs passed after restoring the original code.
+Each run rejected D-Bus service activation and removed its own scratch runtime.
+Initial and resized captures contained advancing counters and the expected
+overlay. Both Weston scales and Xvfb 2× reported a 1280 × 800 logical output
+and work area. Xvfb 1× reported 2560 × 1600 for both.
+
+From `rewrite/`, run the locked workspace build and the four display commands
+in [Build and reproduce](#build-and-reproduce). The final round also ran:
+
+```sh
+flock "$XDG_RUNTIME_DIR/flecha-rewrite-build.lock" \
+  bash ~/.claude/skills/hosts/scripts/agent-build run cargo clippy --locked -j 14 --workspace --all-targets -- -D warnings
+flock "$XDG_RUNTIME_DIR/flecha-rewrite-build.lock" \
+  bash ~/.claude/skills/hosts/scripts/agent-build run cargo test --locked -j 14 -p flecha-surface
+```
+
+From the repository root:
+
+```sh
+cargo fmt --manifest-path rewrite/Cargo.toml --check
+nix --extra-experimental-features 'nix-command flakes' run nixpkgs#shellcheck -- -x -S warning $(git ls-files 'rewrite/*.sh')
+npm ci
+node tools/checks/lint.mjs
+```

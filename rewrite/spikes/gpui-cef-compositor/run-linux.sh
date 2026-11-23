@@ -4,6 +4,8 @@ set -euo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/runtime-paths.sh"
 runtime_paths linux64 cef_linux_x86_64
 check_runtime
+# The harness creates the display, runtime directory and non-activating bus.
+# These path checks catch a misconfigured invocation.
 if [[ ${DBUS_SESSION_BUS_ADDRESS:-} != "unix:path=${XDG_RUNTIME_DIR:-}/bus" ||
   ${DBUS_SYSTEM_BUS_ADDRESS:-} != "$DBUS_SESSION_BUS_ADDRESS" ||
   ! -S ${XDG_RUNTIME_DIR:-}/bus ]]; then

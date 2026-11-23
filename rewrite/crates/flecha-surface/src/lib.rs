@@ -7,9 +7,9 @@ use gpui::{Bounds, Canvas, ContentMask, Pixels, RenderImage, Styled as _, canvas
 /// A frame whose texture and renderer provenance are assigned together.
 ///
 /// ```compile_fail
-/// let _ = flecha_surface::Frame::Texture {
-///     view: panic!(), device: panic!(), source_uv: [0.0; 4],
-/// };
+/// fn inspect(frame: flecha_surface::Frame) {
+///     let flecha_surface::Frame(..) = frame;
+/// }
 /// ```
 #[derive(Clone)]
 pub struct Frame(FrameStorage);
@@ -24,6 +24,47 @@ enum FrameStorage {
         software_texture: Option<wgpu::Texture>,
     },
     Image(Arc<RenderImage>),
+}
+
+#[cfg(target_os = "linux")]
+fn upload_regions(dirty: &[cef::Rect], width: u32, height: u32) -> Vec<(u32, u32, u32, u32)> {
+    let regions = dirty
+        .iter()
+        .map(|rect| {
+            let x = u32::try_from(rect.x).ok()?;
+            let y = u32::try_from(rect.y).ok()?;
+            let w = u32::try_from(rect.width).ok()?;
+            let h = u32::try_from(rect.height).ok()?;
+            (x <= width && y <= height && w <= width - x && h <= height - y).then_some((x, y, w, h))
+        })
+        .collect::<Option<Vec<_>>>();
+    regions
+        .filter(|regions| regions.iter().any(|&(_, _, w, h)| w != 0 && h != 0))
+        .unwrap_or_else(|| vec![(0, 0, width, height)])
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::upload_regions;
+
+    #[test]
+    fn invalid_dirty_rect_uploads_the_entire_available_frame() {
+        let valid = cef::Rect {
+            x: 1,
+            y: 2,
+            width: 3,
+            height: 4,
+        };
+        let invalid = cef::Rect {
+            x: 9,
+            ..valid.clone()
+        };
+        assert_eq!(
+            upload_regions(std::slice::from_ref(&valid), 10, 10),
+            [(1, 2, 3, 4)]
+        );
+        assert_eq!(upload_regions(&[valid, invalid], 10, 10), [(0, 0, 10, 10)]);
+    }
 }
 
 impl Frame {
@@ -72,23 +113,8 @@ impl Frame {
             ) = previous
                 && *device == gpu.device
                 && texture.size() == size
-                && !dirty.is_empty()
             {
-                let regions = dirty
-                    .iter()
-                    .map(|rect| {
-                        let x = u32::try_from(rect.x)?;
-                        let y = u32::try_from(rect.y)?;
-                        let w = u32::try_from(rect.width)?;
-                        let h = u32::try_from(rect.height)?;
-                        ensure!(
-                            x <= width && y <= height && w <= width - x && h <= height - y,
-                            "CEF dirty rectangle exceeds the software frame"
-                        );
-                        Ok((x, y, w, h))
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                for (x, y, width, height) in regions {
+                for (x, y, width, height) in upload_regions(dirty, width, height) {
                     if width == 0 || height == 0 {
                         continue;
                     }

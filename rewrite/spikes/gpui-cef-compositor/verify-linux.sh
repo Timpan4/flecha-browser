@@ -26,21 +26,23 @@ if [[ -n $input && ( ( $input != input && $input != clipboard ) || $backend != x
 fi
 if [[ ! -v FLECHA_SPIKE_WATCHDOG ]]; then
   # Match the native Chromium harness's configurable watchdog.
+  environment=(PATH="$PATH" XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:?}" LANG="${LANG:-C}")
+  for key in LC_ALL LD_LIBRARY_PATH XDG_DATA_DIRS VK_DRIVER_FILES VK_ICD_FILENAMES; do
+    if [[ -v $key ]]; then environment+=("$key=${!key}"); fi
+  done
   exec timeout --foreground "${FLECHA_HARNESS_TIMEOUT_MS:-600000}e-3s" \
-    env FLECHA_SPIKE_WATCHDOG=1 bash "$0" "$@"
+    env -i "${environment[@]}" FLECHA_SPIKE_WATCHDOG=1 bash "$0" "$@"
 fi
 
 out=$(mktemp -d "$rewrite/target/spike1-$backend-$scale-$mode.XXXXXX")
 printf 'Captures and logs: %s\n' "$out"
 runtime=$(mktemp -d "${XDG_RUNTIME_DIR:?}/flecha-spike.XXXXXX")
 export XDG_RUNTIME_DIR="$runtime"
-export XDG_CONFIG_HOME="$out/config" XDG_CACHE_HOME="$out/cache"
+export HOME="$out/home" XDG_CONFIG_HOME="$out/config" XDG_CACHE_HOME="$out/cache"
 export DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime/bus"
 export DBUS_SYSTEM_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS"
-unset DBUS_STARTER_ADDRESS DBUS_STARTER_BUS_TYPE AT_SPI_BUS_ADDRESS GNOME_KEYRING_CONTROL
 export FLECHA_CEF_PROFILE_DIR="$out/profile"
-mkdir -p "$FLECHA_CEF_PROFILE_DIR"
-unset WAYLAND_DISPLAY WAYLAND_SOCKET DISPLAY
+mkdir -p "$HOME" "$FLECHA_CEF_PROFILE_DIR"
 
 display_pid=
 demo_pid=
@@ -75,23 +77,19 @@ if dbus-send --bus="$DBUS_SESSION_BUS_ADDRESS" --print-reply \
   exit 1
 fi
 
-# The first spike observed at most two readiness captures after a size change.
-capture_attempts=${FLECHA_CAPTURE_ATTEMPTS:-2}
-if [[ ! $capture_attempts =~ ^[1-9][0-9]*$ ]]; then
-  printf 'FLECHA_CAPTURE_ATTEMPTS must be a positive integer\n'
-  exit 2
-fi
-
 case "$backend" in
   wayland)
+    screen_width=1280 screen_height=800
     export WAYLAND_DISPLAY=spike1
     weston --backend=headless --renderer=vulkan --no-config --debug --fake-seat --scale="$scale" \
-      --width=1280 --height=800 --socket="$WAYLAND_DISPLAY" --log="$out/display.log" &
+      --width="$screen_width" --height="$screen_height" --socket="$WAYLAND_DISPLAY" --log="$out/display.log" &
     display_pid=$!
     while [[ ! -S $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY ]]; do kill -0 "$display_pid"; sleep 0.1; done
     ;;
   x11)
-    Xvfb -displayfd 3 -screen 0 "2560x1600x24" -dpi "$((96 * scale))" -nolisten tcp \
+    output_width=2560 output_height=1600
+    screen_width=$((output_width / scale)) screen_height=$((output_height / scale))
+    Xvfb -displayfd 3 -screen 0 "${output_width}x${output_height}x24" -dpi "$((96 * scale))" -nolisten tcp \
       3>"$out/display" >"$out/display.log" 2>&1 &
     display_pid=$!
     while [[ ! -s $out/display ]]; do kill -0 "$display_pid"; sleep 0.1; done
@@ -107,6 +105,7 @@ mkfifo "$out/control"
 exec 3<>"$out/control"
 bash "$spike/run-linux.sh" "${args[@]}" <&3 >"$out/demo.log" 2>&1 &
 demo_pid=$!
+capture_id=0
 await_log() {
   while ! rg -q "$1" "$out/demo.log"; do
     if [[ $1 == "composited dma-buf"* ]] &&
@@ -118,58 +117,60 @@ await_log() {
   done
 }
 await_popup_pixels() {
-  local phase=$1 expected=$2 attempt dir equal
-  for ((attempt = 1; attempt <= capture_attempts; attempt++)); do
-    dir="$out/$phase-$attempt"
+  local phase=$1 expected=$2 dir="$out/$1" equal
+  while true; do
     capture "$dir"
     magick "$dir/x11.png" -crop "$popup_region" -depth 8 "rgb:$dir/region.rgb"
     equal=changed
     if cmp -s "$out/popup-before.rgb" "$dir/region.rgb"; then equal=baseline; fi
     if [[ $equal == "$expected" ]]; then return 0; fi
+    printf 'Waiting for %s to show %s pixels after GPUI frame %s\n' "$phase" "$expected" "$capture_id"
   done
-  printf 'Popup %s did not reach %s pixels in %s captures\n' "$phase" "$expected" "$capture_attempts"
-  return 1
 }
 capture() {
   local dir=$1
-  mkdir "$dir"
+  capture_id=$((capture_id + 1))
+  printf 'capture-ready %s\n' "$capture_id" >&3
+  await_log "^GPUI capture ready: $capture_id\$"
+  mkdir -p "$dir"
   if [[ $backend == wayland ]]; then
-    (cd "$dir" && weston-screenshooter)
+    (cd "$dir" && weston-screenshooter && mv -- wayland-screenshot-*.png frame.png)
   else
     magick import -window root "$dir/x11.png"
   fi
 }
+check_captures() {
+  local width=$1 height=$2
+  shift 2
+  node "$spike/verify-captures.mjs" "$scale" "$width" "$height" "$screen_width" "$screen_height" "$@"
+}
 await_pixels() {
-  local phase=$1 width=$2 height=$3 attempt dir status
-  for ((attempt = 1; attempt <= capture_attempts; attempt++)); do
-    dir="$out/ready-$phase-$attempt"
+  local phase=$1 width=$2 height=$3 dir="$out/ready-$1" status
+  # The harness watchdog bounds retries after a newly drawn GPUI frame.
+  while true; do
     capture "$dir"
-    if node "$spike/verify-captures.mjs" --ready "$scale" "$width" "$height" "$dir"/*.png >"$dir/check.log" 2>&1; then
-      printf '%s presented expected geometry on capture %s\n' "$phase" "$attempt"
+    if node "$spike/verify-captures.mjs" --ready "$scale" "$width" "$height" \
+      "$screen_width" "$screen_height" "$dir"/*.png >"$dir/check.log" 2>&1; then
+      printf '%s presented expected geometry after GPUI frame %s\n' "$phase" "$capture_id"
       return
     else
       status=$?
+      cat "$dir/check.log"
       if [[ $status != 75 ]]; then
-        cat "$dir/check.log"
         return "$status"
       fi
     fi
   done
-  cat "$dir/check.log"
-  printf '%s did not present the expected geometry in %s captures\n' "$phase" "$capture_attempts"
-  return 1
 }
 await_color() {
-  local phase=$1 x=$2 y=$3 expected=$4 dir="$out/$1" attempt
-  mkdir "$dir"
-  for ((attempt = 1; attempt <= capture_attempts; attempt++)); do
-    magick import -window root "$dir/x11.png"
+  local phase=$1 x=$2 y=$3 expected=$4 dir="$out/$1"
+  while true; do
+    capture "$dir"
     if [[ $(magick "$dir/x11.png" -format "%[hex:p{$x,$y}]" info:) == "$expected" ]]; then
       return
     fi
+    printf 'Waiting for %s pixel after GPUI frame %s\n' "$phase" "$capture_id"
   done
-  printf 'Missing %s pixel in %s captures\n' "$phase" "$capture_attempts"
-  return 1
 }
 
 if [[ $backend == wayland && $mode != software ]]; then
@@ -182,7 +183,7 @@ await_pixels initial 800 480
 capture "$out/initial1"
 capture "$out/initial2"
 capture "$out/initial3"
-metrics=$(node "$spike/verify-captures.mjs" "$scale" 800 480 "$out"/initial*/*.png)
+metrics=$(check_captures 800 480 "$out"/initial*/*.png)
 printf '%s\n' "$metrics"
 
 if [[ -n $input ]]; then
@@ -226,12 +227,7 @@ await_pixels resized 640 360
 capture "$out/resized1"
 capture "$out/resized2"
 capture "$out/resized3"
-resized=$(node "$spike/verify-captures.mjs" "$scale" 640 360 "$out"/resized*/*.png)
-printf '%s\n' "$resized"
-if [[ $(jq -c .screen <<< "$metrics") != "$(jq -c .screen <<< "$resized")" ]]; then
-  printf 'Page screen metrics changed during a same-output resize\n'
-  exit 1
-fi
+check_captures 640 360 "$out"/resized*/*.png
 
 if [[ $mode == fallback ]]; then
   printf 'reject-next-import\n' >&3
@@ -241,7 +237,7 @@ if [[ $mode == fallback ]]; then
   capture "$out/fallback1"
   capture "$out/fallback2"
   capture "$out/fallback3"
-  node "$spike/verify-captures.mjs" "$scale" 640 360 "$out"/fallback*/*.png
+  check_captures 640 360 "$out"/fallback*/*.png
 fi
 
 printf 'close\n' >&3

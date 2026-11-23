@@ -24,7 +24,7 @@ runtime_paths() {
   channel=$(pin cef channel)
   sha1=$(pin "cef.$channel.sha1" "$platform")
   archive_name="cef_binary_${version}_${platform}_${channel}_minimal.tar.bz2"
-  runtime_parent="$sources/cef-runtime/${version%%+*}"
+  runtime_parent="$sources/cef-runtime/${archive_name%.tar.bz2}"
   runtime="$runtime_parent/$2"
 }
 
@@ -33,8 +33,18 @@ archive_metadata() {
 }
 
 check_runtime() {
+  local library
+  case "$platform" in
+    linux64) library=libcef.so ;;
+    windows64) library=libcef.dll ;;
+    macosarm64) library='Chromium Embedded Framework.framework/Chromium Embedded Framework' ;;
+  esac
   if ! cmp -s "$runtime/archive.json" <(archive_metadata); then
-    printf 'Missing or unexpected CEF archive metadata in %s. Run prepare.sh for the pinned runtime.\n' "$runtime" >&2
+    printf 'Missing or unexpected CEF archive metadata in %s. Move aside that directory if it exists, then run prepare.sh.\n' "$runtime" >&2
+    return 1
+  fi
+  if [[ ! -f $runtime/$library || ! -s $runtime/$library ]]; then
+    printf 'Missing or empty CEF library %s. Move aside %s and run prepare.sh.\n' "$runtime/$library" "$runtime" >&2
     return 1
   fi
 }

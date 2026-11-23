@@ -4,6 +4,7 @@ mod linux;
 
 use std::{
     cell::{Cell, RefCell},
+    collections::HashMap,
     io::{self, BufRead as _},
     ops::Range as TextRange,
     ptr,
@@ -310,7 +311,7 @@ wrap_client! {
 }
 
 struct Session {
-    browser: Browser,
+    host: BrowserHost,
     closed: Rc<Cell<bool>>,
     active: Rc<Cell<bool>>,
     import_target: Rc<RefCell<Option<SurfaceTarget>>>,
@@ -319,7 +320,11 @@ struct Session {
 }
 
 impl Session {
-    fn create(frames: Rc<RefCell<Frames>>, accelerated: bool) -> Result<Self> {
+    fn create(
+        frames: Rc<RefCell<Frames>>,
+        accelerated: bool,
+        shutdown_on_exit: &Cell<bool>,
+    ) -> Result<Self> {
         let url = CefString::from(
             format!(
                 "data:text/html;base64,{}",
@@ -361,8 +366,13 @@ impl Session {
             None,
         )
         .context("CEF could not create the Alloy OSR browser")?;
+        let Some(host) = browser.host() else {
+            // CEF shutdown requires every browser to have closed.
+            shutdown_on_exit.set(false);
+            bail!("CEF created an OSR browser without a host");
+        };
         Ok(Self {
-            browser,
+            host,
             closed,
             active,
             import_target,
@@ -374,19 +384,15 @@ impl Session {
     fn close(&mut self) {
         self.active.set(false);
         self.import_target.borrow_mut().take();
-        if !self.closing
-            && !self.closed.get()
-            && let Some(host) = self.browser.host()
-        {
+        if !self.closing && !self.closed.get() {
             self.closing = true;
-            host.close_browser(1);
+            self.host.close_browser(1);
         }
     }
 
     fn verify_style(&self) -> Result<()> {
-        let host = self.browser.host().context("CEF browser has no host")?;
         ensure!(
-            host.runtime_style() == RuntimeStyle::ALLOY,
+            self.host.runtime_style() == RuntimeStyle::ALLOY,
             "CEF did not create an Alloy browser"
         );
         Ok(())
@@ -401,10 +407,13 @@ struct Demo {
     closing: Rc<Cell<bool>>,
     focus: FocusHandle,
     focused: Option<bool>,
+    key_altgr: HashMap<String, bool>,
     marked: Option<TextRange<usize>>,
     retired_images: [Option<Arc<gpui::RenderImage>>; 2],
     controls: Option<mpsc::Receiver<Control>>,
+    capture_requests: Vec<u64>,
     failure: Rc<RefCell<Option<anyhow::Error>>>,
+    shutdown_on_exit: Rc<Cell<bool>>,
 }
 
 impl Demo {
@@ -422,7 +431,7 @@ impl Demo {
         if !session.active.get() || session.closed.get() {
             return None;
         }
-        session.browser.host()
+        Some(session.host.clone())
     }
 
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
@@ -435,6 +444,10 @@ impl Demo {
                 Control::Resize(width, height) => window.resize(size(px(width), px(height))),
                 Control::RejectNextImport => self.frames.borrow_mut().reject_next_import = true,
                 Control::CommitText(text) => self.replace_text_in_range(None, &text, window, cx),
+                Control::CaptureReady(id) => {
+                    self.capture_requests.push(id);
+                    cx.notify();
+                }
                 Control::Close => self.closing.set(true),
             }
         }
@@ -465,6 +478,7 @@ impl Demo {
         {
             self.session = None;
             self.marked = None;
+            self.key_altgr.clear();
             let mut frames = self.frames.borrow_mut();
             frames.popup = None;
             frames.popup_bounds = None;
@@ -481,7 +495,11 @@ impl Demo {
             }
         } else if self.ready.get() && self.session.is_none() {
             self.frames.borrow_mut().geometry = Geometry::from_window(window, cx);
-            match Session::create(self.frames.clone(), self.accelerated) {
+            match Session::create(
+                self.frames.clone(),
+                self.accelerated,
+                &self.shutdown_on_exit,
+            ) {
                 Ok(mut session) => {
                     if let Err(error) = session.verify_style() {
                         *self.failure.borrow_mut() = Some(error);
@@ -532,6 +550,9 @@ impl Demo {
             let focused = window.is_window_active();
             if self.focused != Some(focused) {
                 self.focused = Some(focused);
+                if !focused {
+                    self.key_altgr.clear();
+                }
                 host.set_focus(i32::from(focused));
             }
             if self
@@ -627,12 +648,12 @@ impl EntityInputHandler for Demo {
             return;
         }
         let len = text.encode_utf16().count();
-        let base = range
+        let replacement = cef_replacement_range(range.clone());
+        self.marked = range
             .as_ref()
+            .filter(|_| replacement.from != u32::MAX)
             .or(self.marked.as_ref())
-            .map_or(0, |range| range.start);
-        self.marked = base.checked_add(len).map(|end| base..end);
-        let replacement = cef_replacement_range(range);
+            .and_then(|range| range.start.checked_add(len).map(|end| range.start..end));
         let selection = cef_replacement_range(Some(selection.unwrap_or(len..len)));
         host.ime_set_composition(
             Some(&text.into()),
@@ -664,6 +685,14 @@ impl EntityInputHandler for Demo {
 
 impl Render for Demo {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if !self.capture_requests.is_empty() {
+            let requests = std::mem::take(&mut self.capture_requests);
+            window.on_next_frame(move |_, _| {
+                for id in requests {
+                    eprintln!("GPUI capture ready: {id}");
+                }
+            });
+        }
         let (view, popup) = {
             let mut frames = self.frames.borrow_mut();
             if let Some((mode, width, height)) = frames.view_change.take() {
@@ -698,19 +727,19 @@ impl Render for Demo {
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|demo, event: &gpui::KeyDownEvent, _, cx| {
                 if let Some(host) = demo.host() {
-                    input::key(
-                        &host,
-                        &event.keystroke,
-                        false,
-                        event.is_held,
-                        event.prefer_character_input,
-                    );
+                    let stroke = &event.keystroke;
+                    let altgr = event.prefer_character_input
+                        && stroke.modifiers.control
+                        && stroke.modifiers.alt;
+                    let altgr = *demo.key_altgr.entry(stroke.key.clone()).or_insert(altgr);
+                    input::key(&host, stroke, false, event.is_held, altgr);
                     cx.stop_propagation();
                 }
             }))
             .on_key_up(cx.listener(|demo, event: &gpui::KeyUpEvent, _, _| {
                 if let Some(host) = demo.host() {
-                    input::key(&host, &event.keystroke, true, false, false);
+                    let altgr = demo.key_altgr.remove(&event.keystroke.key).unwrap_or(false);
+                    input::key(&host, &event.keystroke, true, false, altgr);
                 }
             }))
             .on_mouse_move(cx.listener(|demo, event: &gpui::MouseMoveEvent, _, _| {
@@ -804,6 +833,7 @@ enum Control {
     Resize(f32, f32),
     RejectNextImport,
     CommitText(String),
+    CaptureReady(u64),
     Close,
 }
 
@@ -829,6 +859,10 @@ fn controls() -> mpsc::Receiver<Control> {
                 }
                 ["reject-next-import"] => Control::RejectNextImport,
                 ["commit-text", text] => Control::CommitText((*text).to_owned()),
+                ["capture-ready", id] => {
+                    let Ok(id) = id.parse() else { continue };
+                    Control::CaptureReady(id)
+                }
                 _ => continue,
             };
             if tx.send(control).is_err() {
@@ -845,7 +879,7 @@ fn start(
     cx: &mut GpuiApp,
     options: Options,
     failure: Rc<RefCell<Option<anyhow::Error>>>,
-    initialized: Rc<Cell<bool>>,
+    shutdown_on_exit: Rc<Cell<bool>>,
 ) -> Entity<Demo> {
     let target = SurfaceTarget::for_window(window);
     let (ozone, render_node) = platform_configuration(window, &target, options.software);
@@ -873,7 +907,7 @@ fn start(
         Some(&mut app),
         ptr::null_mut(),
     ) == 1;
-    initialized.set(did_initialize);
+    shutdown_on_exit.set(did_initialize);
     if !did_initialize {
         *failure.borrow_mut() = Some(anyhow::anyhow!("CEF initialization failed"));
     }
@@ -909,11 +943,14 @@ fn start(
         accelerated,
         closing,
         focused: None,
+        key_altgr: HashMap::new(),
         marked: None,
         focus: cx.focus_handle(),
         retired_images: [None, None],
         controls: options.control.then(controls),
+        capture_requests: Vec::new(),
         failure,
+        shutdown_on_exit,
     });
     let focus = demo.read(cx).focus.clone();
     focus.focus(window, cx);
@@ -1005,9 +1042,9 @@ fn run() -> Result<()> {
     }
 
     let failure = Rc::new(RefCell::new(None));
-    let initialized = Rc::new(Cell::new(false));
+    let shutdown_on_exit = Rc::new(Cell::new(false));
     let shared_failure = failure.clone();
-    let shared_initialized = initialized.clone();
+    let shared_shutdown = shutdown_on_exit.clone();
     gpui_platform::application()
         .with_quit_mode(QuitMode::LastWindowClosed)
         .run(move |cx| {
@@ -1022,13 +1059,13 @@ fn run() -> Result<()> {
             };
             let start_failure = shared_failure.clone();
             if let Err(error) = cx.open_window(options_window, move |window, cx| {
-                start(window, cx, options, start_failure, shared_initialized)
+                start(window, cx, options, start_failure, shared_shutdown)
             }) {
                 *shared_failure.borrow_mut() = Some(error);
                 cx.quit();
             }
         });
-    if initialized.get() {
+    if shutdown_on_exit.get() {
         shutdown();
     }
     failure.take().map_or(Ok(()), Err)

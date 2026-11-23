@@ -21,7 +21,7 @@ prepare_source() {
     patch -d "$destination" -p1 --dry-run --batch --reverse < "$patch_file" >/dev/null; then
     printf '%s patches already applied\n' "$name"
   else
-    printf 'Existing %s does not match the pinned repository, revision or patch. Use a fresh target directory.\n' "$destination" >&2
+    printf 'Existing %s does not match the pinned repository, revision or patch. Move aside %s and rerun prepare.sh.\n' "$destination" "$destination" >&2
     return 1
   fi
 }
@@ -34,15 +34,15 @@ case "${1:-$(uname -s):$(uname -m)}" in
 esac
 
 mkdir -p "$sources/cef-beta"
-lock="$sources/.prepare-lock"
-if ! mkdir "$lock"; then
-  printf 'Preparation already owns %s\n' "$lock" >&2
+if ! command -v flock >/dev/null; then
+  printf 'prepare.sh requires flock to serialize staging.\n' >&2
   exit 1
 fi
+exec 9>"$sources/.prepare.lock"
+flock 9
 temporary=
 cleanup() {
   if [[ -n $temporary ]]; then rm -rf -- "$temporary"; fi
-  rmdir "$lock"
 }
 trap cleanup EXIT
 trap 'exit 130' INT

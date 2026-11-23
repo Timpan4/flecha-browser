@@ -12,9 +12,9 @@ A unit adds its crate path to `members` in `Cargo.toml`.
 
 The compositor spike uses patched copies of the pinned Zed and cef-rs sources.
 From `rewrite/`, run `bash spikes/gpui-cef-compositor/prepare.sh` before resolving
-the workspace with Cargo. The script also verifies and stages the pinned CEF
-beta archive. See the [spike report](spikes/gpui-cef-compositor/REPORT.md) for
-the build and isolated verification commands.
+the workspace with Cargo. Preparation uses `flock` to serialize staging and
+verifies the pinned CEF beta archive. The [spike report](spikes/gpui-cef-compositor/REPORT.md)
+has the build and isolated verification commands.
 
 ## Building on the workstation
 

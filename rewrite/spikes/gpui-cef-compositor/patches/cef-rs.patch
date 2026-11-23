@@ -70,6 +70,56 @@ index de3d67a..5799c8c 100644
              )
          })
      }
+diff --git a/cef/src/osr_texture_import/vulkan.rs b/cef/src/osr_texture_import/vulkan.rs
+index 56c0680..7f6b683 100644
+--- a/cef/src/osr_texture_import/vulkan.rs
++++ b/cef/src/osr_texture_import/vulkan.rs
+@@ -76,8 +76,44 @@ pub fn copy_to_owned(
+         external_queue_family,
+         false,
+     )?;
+-    let submission = queue.submit([acquire, copy.finish(), release]);
++    let copy = copy.finish();
++    #[cfg(debug_assertions)]
++    enum Stage {
++        Copy,
++        Release,
++    }
++    #[cfg(debug_assertions)]
++    let completed = {
++        let (finished, completed) = std::sync::mpsc::channel();
++        let copied = finished.clone();
++        // Pinned wgpu registers command-buffer callbacks in submission order
++        // and dispatches them after the native submission completes.
++        copy.on_submitted_work_done(move || {
++            let _ = copied.send(Stage::Copy);
++        });
++        release.on_submitted_work_done(move || {
++            let _ = finished.send(Stage::Release);
++        });
++        completed
++    };
++    let submission = queue.submit([acquire, copy, release]);
+     texture::wait_for_copy(device, submission)?;
++    #[cfg(debug_assertions)]
++    match (completed.try_recv(), completed.try_recv()) {
++        (Ok(Stage::Copy), Ok(Stage::Release)) => {}
++        (Ok(Stage::Release), Ok(Stage::Copy)) => {
++            return Err(TextureImportError::PlatformError {
++                message: "Vulkan ownership release was submitted before the CEF frame copy"
++                    .to_string(),
++            });
++        }
++        _ => {
++            return Err(TextureImportError::PlatformError {
++                message: "Vulkan frame copy did not complete before returning the CEF buffer"
++                    .to_string(),
++            });
++        }
++    }
+     Ok(destination)
+ }
+
 diff --git a/sys/Cargo.toml b/sys/Cargo.toml
 index 734d0c1..3889808 100644
 --- a/sys/Cargo.toml
@@ -80,7 +130,7 @@ index 734d0c1..3889808 100644
  serde_json.workspace = true
 +toml = "1"
 diff --git a/sys/build.rs b/sys/build.rs
-index c13ea75..5f1e0c8 100644
+index c13ea75..cbe39d8 100644
 --- a/sys/build.rs
 +++ b/sys/build.rs
 @@ -1,5 +1,6 @@
@@ -90,7 +140,7 @@ index c13ea75..5f1e0c8 100644
      use download_cef::OsAndArch;
      use std::{
          env, fs,
-@@ -11,104 +12,67 @@ fn main() -> anyhow::Result<()> {
+@@ -11,104 +12,68 @@ fn main() -> anyhow::Result<()> {
      let target = env::var("TARGET")?;
      let os_arch = OsAndArch::try_from(target.as_str())?;
 
@@ -233,16 +283,17 @@ index c13ea75..5f1e0c8 100644
 +    let hash = pins["cef"][channel]["sha1"][platform]
 +        .as_str()
 +        .context("missing CEF archive SHA-1")?;
++    let archive_stem = format!("cef_binary_{version}_{platform}_{channel}_minimal");
 +    let cef_dir = sources
 +        .join("cef-runtime")
-+        .join(&cef_version)
++        .join(&archive_stem)
 +        .join(os_arch.to_string());
 +    let archive_path = cef_dir.join("archive.json");
 +    println!("cargo::rerun-if-changed={}", archive_path.display());
 +    let archive: serde_json::Value = serde_json::from_str(
 +        &fs::read_to_string(&archive_path).context("missing pinned CEF runtime; run prepare.sh")?,
 +    )?;
-+    let expected = format!("cef_binary_{version}_{platform}_{channel}_minimal.tar.bz2");
++    let expected = format!("{archive_stem}.tar.bz2");
 +    ensure!(
 +        archive["type"] == "minimal" && archive["name"] == expected && archive["sha1"] == hash,
 +        "unexpected CEF archive metadata at {}",
@@ -251,7 +302,7 @@ index c13ea75..5f1e0c8 100644
 
      // TODO: far from ideal, but there's no other way to get the target dir, see <https://github.com/rust-lang/cargo/issues/9661>
      let target_dir = out_dir
-@@ -126,6 +90,7 @@ fn main() -> anyhow::Result<()> {
+@@ -126,6 +91,7 @@ fn main() -> anyhow::Result<()> {
 
      println!("cargo::metadata=CEF_DIR={cef_dir_str}");
      println!("cargo::rustc-link-search=native={cef_dir_str}");

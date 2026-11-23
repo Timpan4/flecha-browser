@@ -4,17 +4,23 @@ import { execFileSync } from "node:child_process";
 const marker = 0xf8bf36;
 const overlay = 0xf53ab5;
 const page = 0x193f61;
+const telemetry = { bits: 32, cell: 8, top: 32 };
+const overlayRect = { width: 96, height: 40, top: 28, right: 24 };
+const telemetryWordWidth = telemetry.bits * telemetry.cell;
+const minWidth = 2 * telemetryWordWidth + overlayRect.width + overlayRect.right + 1;
 const args = process.argv.slice(2);
 const ready = args[0] === "--ready";
 
 if (ready) args.shift();
 
-const [scaleArg, logicalWidthArg, logicalHeightArg, ...files] = args;
-const [scale, logicalWidth, logicalHeight] = [scaleArg, logicalWidthArg, logicalHeightArg].map(Number);
+const [scaleArg, logicalWidthArg, logicalHeightArg, screenWidthArg, screenHeightArg, ...files] = args;
+const dimensions = [scaleArg, logicalWidthArg, logicalHeightArg, screenWidthArg, screenHeightArg].map(Number);
+const [scale, logicalWidth, logicalHeight, screenWidth, screenHeight] = dimensions;
 
-assert([scale, logicalWidth, logicalHeight].every((value) => Number.isSafeInteger(value) && value > 0));
+assert(dimensions.every((value) => Number.isSafeInteger(value) && value > 0));
 
-assert(logicalWidth >= 512 && logicalHeight > 28 + 40, "viewport cannot contain the fixture probes");
+assert(logicalWidth >= minWidth && logicalHeight > overlayRect.top + overlayRect.height,
+  `viewport cannot contain the fixture probes (minimum width: ${minWidth})`);
 
 assert(ready ? files.length === 1 : files.length >= 2, "unexpected capture count");
 
@@ -64,8 +70,12 @@ function capture(file) {
   function readValue(start, row) {
     let result = 0;
 
-    for (let bit = 0; bit < 32; bit++) {
-      const cell = pixel(left + (start + bit * 8 + 4) * scale, top + (36 + 8 * row) * scale);
+    const center = telemetry.cell / 2;
+
+    for (let bit = 0; bit < telemetry.bits; bit++) {
+      const cell = pixel(left + (start + bit * telemetry.cell + center) * scale,
+        top + (telemetry.top + center + telemetry.cell * row) * scale);
+
       presented(cell === 0 || cell === 0xffffff, `${file}: invalid telemetry cell ${bit}: ${cell.toString(16)}`);
 
       if (cell !== 0) result += 2 ** bit;
@@ -75,19 +85,25 @@ function capture(file) {
   }
 
   const frame = readValue(0, 0);
-  const dimensions = readValue(256, 0);
+  const dimensions = readValue(telemetryWordWidth, 0);
   presented(frame > 0, `${file}: the page has not drawn a counter`);
   presented(
     (dimensions >>> 16) === viewportWidth && (dimensions & 0xffff) === viewportHeight,
     `${file}: page reports a different size than ${viewportWidth}×${viewportHeight}`,
   );
-  const screen = [readValue(0, 1), readValue(256, 1)];
-  assert(screen.every((value) => (value >>> 16) > 0 && (value & 0xffff) > 0), `${file}: missing display bounds`);
 
-  const overlayLeft = left + (logicalWidth - 24 - 96) * scale;
-  const overlayTop = top + 28 * scale;
-  const overlayRight = overlayLeft + 96 * scale;
-  const overlayBottom = overlayTop + 40 * scale;
+  const screen = [readValue(0, 1), readValue(telemetryWordWidth, 1)]
+    .map((value) => [value >>> 16, value & 0xffff]);
+
+  const expectedScreen = [screenWidth, screenHeight];
+
+  assert.deepEqual(screen[0], expectedScreen, `${file}: unexpected logical display size`);
+  assert.deepEqual(screen[1], expectedScreen, `${file}: unexpected logical work-area size`);
+
+  const overlayLeft = left + (logicalWidth - overlayRect.right - overlayRect.width) * scale;
+  const overlayTop = top + overlayRect.top * scale;
+  const overlayRight = overlayLeft + overlayRect.width * scale;
+  const overlayBottom = overlayTop + overlayRect.height * scale;
 
   for (let y = overlayTop - 1; y <= overlayBottom; y++) {
     for (let x = overlayLeft - 1; x <= overlayRight; x++) {
@@ -116,7 +132,6 @@ try {
 if (results) {
   for (let i = 1; i < results.length; i++) {
     assert(results[i].frame >= results[i - 1].frame, "captured counter moved backwards");
-    assert.deepEqual(results[i].screen, results[0].screen, "screen metrics changed between captures");
   }
 
   if (!ready) assert(results.at(-1).frame > results[0].frame, "captured counter did not advance");
