@@ -6,6 +6,8 @@
 
 `storage::encode` writes schema version 3. It stores pinned trees as ordered records with depths so deep folders can save and restore without deeply nested JSON. The reader also accepts nested pin records. `storage::migrate_legacy` reads the saved JSON value from a copy or export of a Chromium profile. It accepts versions 1 and 2 and unversioned snapshots. Version 1 moves each Space's Today tabs into a single window. Version 2 carries over each window's own Today tabs, shared pins and Favorites, and recently closed windows.
 
+Once a build ships, changing the snapshot format requires a schema version bump.
+
 `storage::load` returns repaired state plus the writes needed to keep damaged and last-good copies. Apply recovery writes in order and call `LoadedState::started` after startup succeeds. A newer current schema blocks recovery. A newer last-good copy stays available to a newer reader, and a damaged current value is still set aside. Repairs assign distinct IDs to duplicate Spaces and folders while retaining their contents. Version 2 window memberships keyed by a duplicate Space ID stay with the first Space. The application owns the storage path, atomic writes, and error reporting.
 
 `import_spaces` merges or appends parsed Spaces, folders, favorites, splits, and archive entries in one transaction. It preserves folder depth. Source readers can flatten their own input before calling it.
@@ -15,6 +17,8 @@ For whole-state file imports, call `storage::set_aside_before_import` and persis
 ## Engine and UI
 
 CEF owns browser handles, cookie stores, page-state restoration, media state, and applying sleep decisions. Migration retains navigation URLs and titles. Chromium's opaque `pageState` and the old agent bridge token are dropped because the new engine and services own those formats and credentials.
+
+State operations that return `TabChange` report their result and the durable tab IDs removed, including mirrors removed as a side effect. Closing a window reports its removed mirrors and tabs evicted from closed-window history. Its retained Today tabs stay available to reopen.
 
 GPUI owns command-bar ranking across sources, Peeks, shortcut registration, local date labels, and general layout undo. Browser discovery, file parsing, and visit-history import use services and engine APIs. Import previews, stale-preview checks, and result text depend on the source and UI flow. Suggestion scheduling, cancellation, character-set decoding, and cookie policy belong to the HTTP client. The core tracks responsive mirrors as Today tabs. The engine creates and operates the mirrored browser and follows the source's navigation.
 

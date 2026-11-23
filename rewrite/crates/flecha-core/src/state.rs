@@ -229,6 +229,23 @@ pub enum CloseTab {
     Removed,
 }
 
+/// The operation's usual result and every durable tab ID it removed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[must_use = "the caller must release any removed tabs"]
+pub struct TabChange<T> {
+    pub result: T,
+    pub removed: Vec<TabId>,
+}
+
+impl<T> TabChange<T> {
+    fn unchanged(result: T) -> Self {
+        Self {
+            result,
+            removed: Vec::new(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CloseToday {
     Below,
@@ -470,8 +487,8 @@ impl BrowserState {
         for id in &removed {
             self.archive_removed(id, now);
         }
-        self.repair_selections();
-        self.repair_visible_tabs();
+        removed.extend(self.repair_selections());
+        removed.extend(self.repair_visible_tabs());
         removed
     }
 
@@ -504,18 +521,19 @@ impl BrowserState {
         true
     }
 
-    pub fn switch_space(&mut self, window: &WindowId, space: &SpaceId) -> bool {
+    pub fn switch_space(&mut self, window: &WindowId, space: &SpaceId) -> TabChange<bool> {
         if self.space(space).is_none() {
-            return false;
+            return TabChange::unchanged(false);
         }
         let Some(win) = self.windows.iter_mut().find(|win| win.id == *window) else {
-            return false;
+            return TabChange::unchanged(false);
         };
         win.active_space_id = space.clone();
+        let mut change = TabChange::unchanged(true);
         for tab in win.visible_tabs().to_vec() {
-            self.claim_visible(&tab, window);
+            self.claim_visible(&tab, window, &mut change.removed);
         }
-        true
+        change
     }
 
     pub fn set_sidebar_visible(&mut self, window: &WindowId, visible: bool) -> bool {
@@ -533,13 +551,15 @@ impl BrowserState {
             .unwrap_or(self.sidebar_visible)
     }
 
-    pub fn close_window(&mut self, id: &WindowId, now: EpochMillis) -> bool {
+    /// Closing keeps Today tabs for reopening. Mirrors and tabs from evicted windows are removed.
+    pub fn close_window(&mut self, id: &WindowId, now: EpochMillis) -> TabChange<bool> {
         if self.windows.len() == 1 {
-            return false;
+            return TabChange::unchanged(false);
         }
         let Some(index) = self.windows.iter().position(|window| window.id == *id) else {
-            return false;
+            return TabChange::unchanged(false);
         };
+        let mut change = TabChange::unchanged(true);
         let mut window = self.windows.remove(index);
         window.spaces.retain(|_, ws| {
             if let Some([desktop, phone]) = ws.split.take()
@@ -549,6 +569,7 @@ impl BrowserState {
             {
                 ws.today.retain(|id| *id != phone);
                 self.tabs.remove(&phone);
+                change.removed.push(phone.clone());
                 if ws.active_tab_id.as_ref() == Some(&phone) {
                     ws.active_tab_id = Some(desktop);
                 }
@@ -579,17 +600,24 @@ impl BrowserState {
                         if let Some(entry) = self.take_archive_entry(&id, old.closed_at) {
                             self.archive.insert(0, entry);
                         }
+                        change.removed.push(id);
                     }
                 }
                 self.archive.truncate(ARCHIVE_LIMIT);
             }
         }
-        true
+        change
     }
 
-    pub fn reopen_window(&mut self) -> Option<WindowId> {
-        let (index, _) = self.newest_closed_window()?;
-        Some(self.reopen_window_at(index))
+    pub fn reopen_window(&mut self) -> TabChange<Option<WindowId>> {
+        let Some((index, _)) = self.newest_closed_window() else {
+            return TabChange::unchanged(None);
+        };
+        let (window, removed) = self.reopen_window_at(index);
+        TabChange {
+            result: Some(window),
+            removed,
+        }
     }
 
     fn newest_closed_window(&self) -> Option<(usize, &ClosedWindow)> {
@@ -599,7 +627,7 @@ impl BrowserState {
             .min_by_key(|(_, window)| Reverse(window.closed_at))
     }
 
-    fn reopen_window_at(&mut self, index: usize) -> WindowId {
+    fn reopen_window_at(&mut self, index: usize) -> (WindowId, Vec<TabId>) {
         let mut closed = self.closed_windows.remove(index);
         if !closed
             .window
@@ -614,12 +642,15 @@ impl BrowserState {
         }
         let id = closed.window.id.clone();
         self.windows.insert(0, closed.window);
-        self.repair_visible_tabs();
-        id
+        (id, self.repair_visible_tabs())
     }
 
     /// Reopen by close time. Archive entries reopen as new Today tabs.
-    pub fn reopen_last(&mut self, new_tab_id: TabId, now: EpochMillis) -> Option<Reopened> {
+    pub fn reopen_last(
+        &mut self,
+        new_tab_id: TabId,
+        now: EpochMillis,
+    ) -> TabChange<Option<Reopened>> {
         let newest_tab = self
             .archive
             .iter()
@@ -628,17 +659,23 @@ impl BrowserState {
         if let Some((index, closed)) = self.newest_closed_window()
             && newest_tab.is_none_or(|(_, entry)| closed.closed_at > entry.closed_at)
         {
-            return Some(Reopened::Window(self.reopen_window_at(index)));
+            let (window, removed) = self.reopen_window_at(index);
+            return TabChange {
+                result: Some(Reopened::Window(window)),
+                removed,
+            };
         }
-        let (index, entry) = newest_tab?;
+        let Some((index, entry)) = newest_tab else {
+            return TabChange::unchanged(None);
+        };
         let mut tab = Tab::new(entry.url.clone(), now);
         tab.title.clone_from(&entry.title);
         let window = self.focused_window().id.clone();
         if !self.open_today(new_tab_id.clone(), tab, &window, None, true) {
-            return None;
+            return TabChange::unchanged(None);
         }
         self.archive.remove(index);
-        Some(Reopened::Tab(new_tab_id))
+        TabChange::unchanged(Some(Reopened::Tab(new_tab_id)))
     }
 
     pub fn tab_ids(&self, window: &WindowId, space: &SpaceId) -> Option<Vec<&TabId>> {
@@ -747,26 +784,37 @@ impl BrowserState {
         tab: &TabId,
         requested: &WindowId,
         used_at: Option<EpochMillis>,
-    ) -> Option<WindowId> {
-        let (window, space) = match self.locate(tab)? {
+    ) -> TabChange<Option<WindowId>> {
+        let Some(location) = self.locate(tab) else {
+            return TabChange::unchanged(None);
+        };
+        let (window, space) = match location {
             Placement::Today { window, space } => (window.clone(), space.clone()),
             Placement::Pinned { space, .. } => (requested.clone(), space.clone()),
-            Placement::Favorite => (
-                requested.clone(),
-                self.window(requested)?.active_space_id.clone(),
-            ),
+            Placement::Favorite => {
+                let Some(window) = self.window(requested) else {
+                    return TabChange::unchanged(None);
+                };
+                (requested.clone(), window.active_space_id.clone())
+            }
         };
-        let win = self.windows.iter_mut().find(|win| win.id == window)?;
+        let Some(win) = self.windows.iter_mut().find(|win| win.id == window) else {
+            return TabChange::unchanged(None);
+        };
         win.active_space_id = space.clone();
         let ws = win.spaces.entry(space).or_default();
         ws.active_tab_id = Some(tab.clone());
+        let mut removed = Vec::new();
         for id in win.visible_tabs().to_vec() {
-            self.claim_visible(&id, &window);
+            self.claim_visible(&id, &window, &mut removed);
         }
         if let Some(now) = used_at {
             self.touch(tab, now);
         }
-        Some(window)
+        TabChange {
+            result: Some(window),
+            removed,
+        }
     }
 
     pub fn touch(&mut self, id: &TabId, now: EpochMillis) -> bool {
@@ -802,13 +850,13 @@ impl BrowserState {
         id: &TabId,
         to: Placement<'_>,
         before: Option<PinnedKey<'_>>,
-    ) -> bool {
+    ) -> TabChange<bool> {
         if before == Some(PinnedKey::Tab(id))
             || self.locate(id).is_none()
             || is_mobile(&self.tabs, id)
             || !self.placement_exists(to)
         {
-            return false;
+            return TabChange::unchanged(false);
         }
         self.detach(id);
         self.insert(id, to, before);
@@ -820,13 +868,18 @@ impl BrowserState {
                 tab.home_url = Some(tab.url.clone());
             }
         }
-        self.repair_selections();
-        self.repair_visible_tabs();
-        true
+        let mut removed = self.repair_selections();
+        removed.extend(self.repair_visible_tabs());
+        TabChange {
+            result: true,
+            removed,
+        }
     }
 
-    pub fn close_tab(&mut self, id: &TabId, now: EpochMillis) -> CloseTab {
-        self.close_tab_recording(id, now, |_| {})
+    pub fn close_tab(&mut self, id: &TabId, now: EpochMillis) -> TabChange<CloseTab> {
+        let mut removed = Vec::new();
+        let result = self.close_tab_recording(id, now, |id| removed.push(id));
+        TabChange { result, removed }
     }
 
     fn close_tab_recording(
@@ -914,14 +967,18 @@ impl BrowserState {
         CloseTab::Unloaded
     }
 
-    pub fn delete_tab(&mut self, id: &TabId, now: EpochMillis) -> bool {
+    pub fn delete_tab(&mut self, id: &TabId, now: EpochMillis) -> TabChange<bool> {
         if self.locate(id).is_none() {
-            return false;
+            return TabChange::unchanged(false);
         }
         self.detach(id);
         self.archive_removed(id, now);
-        self.repair_selections();
-        true
+        let mut removed = vec![id.clone()];
+        removed.extend(self.repair_selections());
+        TabChange {
+            result: true,
+            removed,
+        }
     }
 
     pub fn in_agent_folder(&self, window: &WindowId, tab: &TabId) -> bool {
@@ -1035,9 +1092,9 @@ impl BrowserState {
         removed
     }
 
-    pub fn set_split(&mut self, window: &WindowId, tabs: [TabId; 2]) -> bool {
+    pub fn set_split(&mut self, window: &WindowId, tabs: [TabId; 2]) -> TabChange<bool> {
         let Some(win) = self.window(window) else {
-            return false;
+            return TabChange::unchanged(false);
         };
         let space = win.active_space_id.clone();
         let members = self
@@ -1048,19 +1105,22 @@ impl BrowserState {
                 .iter()
                 .all(|id| members.contains(&id) && !is_mobile(&self.tabs, id))
         {
-            return false;
+            return TabChange::unchanged(false);
         }
         let Some(win) = self.windows.iter_mut().find(|win| win.id == *window) else {
-            return false;
+            return TabChange::unchanged(false);
         };
         let ws = win.spaces.entry(space).or_default();
-        end_split(ws, &mut self.tabs);
+        let mut change = TabChange::unchanged(true);
+        if let Some(EndedSplit::Responsive { mirror }) = end_split(ws, &mut self.tabs) {
+            change.removed.push(mirror);
+        }
         ws.active_tab_id = Some(tabs[0].clone());
         ws.split = Some(tabs.clone());
         for id in &tabs {
-            self.claim_visible(id, window);
+            self.claim_visible(id, window, &mut change.removed);
         }
-        true
+        change
     }
 
     /// Opens a phone-sized Today mirror against the window's selected desktop tab.
@@ -1173,13 +1233,13 @@ impl BrowserState {
         space: &SpaceId,
         parent: Option<&FolderId>,
         before: Option<PinnedKey<'_>>,
-    ) -> bool {
+    ) -> TabChange<bool> {
         let Some(PinnedNode::Folder { children, .. }) = self
             .spaces
             .iter()
             .find_map(|space| find_folder(&space.pinned, id))
         else {
-            return false;
+            return TabChange::unchanged(false);
         };
         if before == Some(PinnedKey::Folder(id))
             || parent.is_some_and(|parent| parent == id || find_folder(children, parent).is_some())
@@ -1188,41 +1248,50 @@ impl BrowserState {
                 folder: parent,
             })
         {
-            return false;
+            return TabChange::unchanged(false);
         }
         let Some(folder) = self
             .spaces
             .iter_mut()
             .find_map(|space| take_folder(&mut space.pinned, id, false))
         else {
-            return false;
+            return TabChange::unchanged(false);
         };
         let list = self
             .pinned_list_mut(space, parent)
             .expect("destination survives moving a different folder");
         let index = insertion_index(list, |node| Some(node.key()) == before);
         list.insert(index, folder);
-        self.repair_selections();
-        true
+        TabChange {
+            result: true,
+            removed: self.repair_selections(),
+        }
     }
 
-    pub fn delete_folder(&mut self, id: &FolderId, keep_children: bool, now: EpochMillis) -> bool {
+    pub fn delete_folder(
+        &mut self,
+        id: &FolderId,
+        keep_children: bool,
+        now: EpochMillis,
+    ) -> TabChange<bool> {
         let Some(folder) = self
             .spaces
             .iter_mut()
             .find_map(|space| take_folder(&mut space.pinned, id, keep_children))
         else {
-            return false;
+            return TabChange::unchanged(false);
         };
+        let mut change = TabChange::unchanged(true);
         if let PinnedNode::Folder { children, .. } = &folder {
             let mut ids = Vec::new();
             collect_pins(children, &mut ids);
             for id in ids {
                 self.archive_removed(id, now);
+                change.removed.push(id.clone());
             }
-            self.repair_selections();
+            change.removed.extend(self.repair_selections());
         }
-        true
+        change
     }
 
     fn pinned_list_mut(
@@ -1290,20 +1359,22 @@ impl BrowserState {
         }
     }
 
-    fn claim_visible(&mut self, id: &TabId, owner: &WindowId) {
+    fn claim_visible(&mut self, id: &TabId, owner: &WindowId, removed: &mut Vec<TabId>) {
         for win in self.windows.iter_mut().filter(|win| win.id != *owner) {
             for ws in win.spaces.values_mut() {
-                if ws.active_tab_id.as_ref() == Some(id)
-                    || ws.split.as_ref().is_some_and(|split| split.contains(id))
+                if (ws.active_tab_id.as_ref() == Some(id)
+                    || ws.split.as_ref().is_some_and(|split| split.contains(id)))
+                    && let Some(mirror) = release_visible(ws, id, &mut self.tabs)
                 {
-                    release_visible(ws, id, &mut self.tabs);
+                    removed.push(mirror);
                 }
             }
         }
     }
 
-    pub(crate) fn repair_visible_tabs(&mut self) {
+    pub(crate) fn repair_visible_tabs(&mut self) -> Vec<TabId> {
         let mut visible = BTreeSet::new();
+        let mut removed = Vec::new();
         for win in &mut self.windows {
             for id in win.visible_tabs().to_vec() {
                 if !visible.contains(&id) {
@@ -1313,10 +1384,11 @@ impl BrowserState {
                     .spaces
                     .get_mut(&win.active_space_id)
                     .expect("visible tabs have a Space");
-                release_visible(ws, &id, &mut self.tabs);
+                removed.extend(release_visible(ws, &id, &mut self.tabs));
             }
             visible.extend(win.visible_tabs().iter().cloned());
         }
+        removed
     }
 
     pub(crate) fn repair_selections(&mut self) -> Vec<TabId> {
@@ -1594,7 +1666,12 @@ fn take_folder(
     None
 }
 
-fn release_visible(ws: &mut WindowSpace, id: &TabId, tabs: &mut BTreeMap<TabId, Tab>) {
+fn release_visible(
+    ws: &mut WindowSpace,
+    id: &TabId,
+    tabs: &mut BTreeMap<TabId, Tab>,
+) -> Option<TabId> {
+    let mut removed = None;
     if let Some(pair) = &ws.split
         && let Some(other) = pair.iter().find(|tab| *tab != id)
         && pair.contains(id)
@@ -1605,6 +1682,7 @@ fn release_visible(ws: &mut WindowSpace, id: &TabId, tabs: &mut BTreeMap<TabId, 
         {
             ws.today.retain(|tab| tab != other);
             tabs.remove(other);
+            removed = Some(other.clone());
             ws.active_tab_id = most_recent(tabs, &ws.today).cloned();
         } else if ws.active_tab_id.as_ref() == Some(id) {
             ws.active_tab_id = ws
@@ -1618,6 +1696,7 @@ fn release_visible(ws: &mut WindowSpace, id: &TabId, tabs: &mut BTreeMap<TabId, 
     } else if ws.active_tab_id.as_ref() == Some(id) {
         ws.active_tab_id = most_recent(tabs, &ws.today).cloned();
     }
+    removed
 }
 
 fn is_mobile(tabs: &BTreeMap<TabId, Tab>, id: &TabId) -> bool {

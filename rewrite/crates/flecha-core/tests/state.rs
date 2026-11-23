@@ -54,16 +54,22 @@ fn today_belongs_to_one_window_and_shared_tabs_have_one_visible_owner() {
         [&favorite, &pin, &today]
     );
     assert_eq!(
-        state.activate(&today, &first, Some(2)),
+        state.activate(&today, &first, Some(2)).result,
         Some(second.clone())
     );
-    assert_eq!(state.activate(&pin, &first, Some(3)), Some(first.clone()));
+    assert_eq!(
+        state.activate(&pin, &first, Some(3)).result,
+        Some(first.clone())
+    );
     assert_eq!(state.window(&first).unwrap().active_space_id, work);
     assert_eq!(
         state.window(&second).unwrap().visible_tabs(),
         std::slice::from_ref(&today)
     );
-    assert_eq!(state.activate(&pin, &second, Some(4)), Some(second.clone()));
+    assert_eq!(
+        state.activate(&pin, &second, Some(4)).result,
+        Some(second.clone())
+    );
     assert!(!state.window(&first).unwrap().visible_tabs().contains(&pin));
     assert_eq!(
         state.window(&second).unwrap().visible_tabs(),
@@ -75,14 +81,18 @@ fn today_belongs_to_one_window_and_shared_tabs_have_one_visible_owner() {
     );
     assert!(state.space(&work).unwrap().isolated);
     let missing_folder = FolderId::new("missing");
-    assert!(!state.place_tab(
-        &today,
-        Placement::Pinned {
-            space: &work,
-            folder: Some(&missing_folder)
-        },
-        None
-    ));
+    assert!(
+        !state
+            .place_tab(
+                &today,
+                Placement::Pinned {
+                    space: &work,
+                    folder: Some(&missing_folder)
+                },
+                None
+            )
+            .result
+    );
     assert_eq!(
         state.locate(&today),
         Some(Placement::Today {
@@ -90,10 +100,14 @@ fn today_belongs_to_one_window_and_shared_tabs_have_one_visible_owner() {
             window: &second
         })
     );
-    assert!(!state.move_folder(&folder, &work, Some(&folder), None));
-    assert!(state.move_folder(&folder, &home, None, None));
+    assert!(
+        !state
+            .move_folder(&folder, &work, Some(&folder), None)
+            .result
+    );
+    assert!(state.move_folder(&folder, &home, None, None).result);
     assert_eq!(state.space(&home).unwrap().pinned_tabs(), [&pin]);
-    assert!(state.delete_folder(&folder, true, 5));
+    assert!(state.delete_folder(&folder, true, 5).result);
     assert_eq!(state.space(&home).unwrap().pinned_tabs(), [&pin]);
     assert!(state.set_sidebar_visible(&second, false));
     assert!(state.set_sidebar_visible(&first, true));
@@ -124,7 +138,7 @@ fn recency_skips_unseen_tabs_until_control_tab_commits() {
     }
     assert_eq!(state.recent_tabs(&window).unwrap(), [&oldest, &background]);
     assert_eq!(
-        state.activate(&background, &window, None),
+        state.activate(&background, &window, None).result,
         Some(window.clone())
     );
     let mut state = decode(&encode(&state).unwrap()).unwrap();
@@ -149,7 +163,7 @@ fn undo_reopens_whichever_closed_most_recently() {
     let tab = TabId::new("tab");
     let favorite = TabId::new("favorite");
     let mut state = BrowserState::new(space.clone(), first.clone());
-    assert!(!state.close_window(&first, 0));
+    assert!(!state.close_window(&first, 0).result);
     assert!(state.open_window(second.clone(), None));
     assert!(state.open_today(
         today.clone(),
@@ -172,22 +186,22 @@ fn undo_reopens_whichever_closed_most_recently() {
         None
     ));
     state.tab_mut(&favorite).unwrap().url = "https://example.org/somewhere".into();
-    assert_eq!(state.close_tab(&favorite, 4), CloseTab::Unloaded);
+    assert_eq!(state.close_tab(&favorite, 4).result, CloseTab::Unloaded);
     assert_eq!(
         state.tab(&favorite).unwrap().url,
         "https://example.org/home"
     );
     assert_eq!(
-        state.activate(&favorite, &second, Some(5)),
+        state.activate(&favorite, &second, Some(5)).result,
         Some(second.clone())
     );
-    assert!(state.close_window(&second, 6));
+    assert!(state.close_window(&second, 6).result);
     assert!(!state.open_tabs().contains_key(&today));
-    assert_eq!(state.close_tab(&tab, 7), CloseTab::Archived);
+    assert_eq!(state.close_tab(&tab, 7).result, CloseTab::Archived);
     let mut state = decode(&encode(&state).unwrap()).unwrap();
     let reopen = TabId::new("reopened");
     assert_eq!(
-        state.reopen_last(reopen.clone(), 8),
+        state.reopen_last(reopen.clone(), 8).result,
         Some(Reopened::Tab(reopen.clone()))
     );
     assert_eq!(
@@ -195,7 +209,7 @@ fn undo_reopens_whichever_closed_most_recently() {
         "https://example.org/closed"
     );
     assert_eq!(
-        state.reopen_last(TabId::new("unused"), 9),
+        state.reopen_last(TabId::new("unused"), 9).result,
         Some(Reopened::Window(second.clone()))
     );
     assert_eq!(state.focused_window().id, second);
@@ -220,13 +234,19 @@ fn closed_window_limit_archives_displaced_today_tabs() {
             None,
             false
         ));
-        assert!(state.close_window(&window, i64::try_from(n).unwrap()));
+        let closed = state.close_window(&window, i64::try_from(n).unwrap());
+        assert!(closed.result);
+        if n == CLOSED_WINDOW_LIMIT {
+            assert_eq!(closed.removed, [TabId::new("tab0")]);
+        } else {
+            assert!(closed.removed.is_empty());
+        }
     }
     assert_eq!(state.closed_windows().len(), CLOSED_WINDOW_LIMIT);
     assert!(state.tab(&TabId::new("tab0")).is_none());
     assert_eq!(state.archive()[0].url, "https://example.org/0");
     assert_eq!(
-        state.reopen_last(TabId::new("reopened"), 100),
+        state.reopen_last(TabId::new("reopened"), 100).result,
         Some(Reopened::Window(WindowId::new(format!(
             "window{CLOSED_WINDOW_LIMIT}"
         ))))
@@ -248,7 +268,7 @@ fn evicted_window_tabs_take_the_front_even_when_the_archive_is_full() {
             None,
             true
         ));
-        assert_eq!(state.close_tab(&tab, time), CloseTab::Archived);
+        assert_eq!(state.close_tab(&tab, time).result, CloseTab::Archived);
     }
     let first_closed = i64::try_from(ARCHIVE_LIMIT).unwrap();
     for n in 0..=CLOSED_WINDOW_LIMIT {
@@ -261,7 +281,11 @@ fn evicted_window_tabs_take_the_front_even_when_the_archive_is_full() {
             None,
             true
         ));
-        assert!(state.close_window(&window, first_closed + i64::try_from(n).unwrap()));
+        assert!(
+            state
+                .close_window(&window, first_closed + i64::try_from(n).unwrap())
+                .result
+        );
     }
     assert_eq!(state.archive().len(), ARCHIVE_LIMIT);
     assert_eq!(state.archive()[0].url, "https://example.org/x0");
@@ -276,7 +300,9 @@ fn evicted_window_tabs_take_the_front_even_when_the_archive_is_full() {
     );
     let mut state = decode(&encode(&state).unwrap()).unwrap();
     assert_eq!(
-        state.reopen_last(TabId::new("reopened"), first_closed),
+        state
+            .reopen_last(TabId::new("reopened"), first_closed)
+            .result,
         Some(Reopened::Window(WindowId::new(format!(
             "window{CLOSED_WINDOW_LIMIT}"
         ))))
@@ -298,7 +324,11 @@ fn reopen_orders_evicted_windows_and_tabs_by_close_time_even_after_restart() {
             None,
             true
         ));
-        assert!(state.close_window(&window, i64::try_from(n + 1).unwrap()));
+        assert!(
+            state
+                .close_window(&window, i64::try_from(n + 1).unwrap())
+                .result
+        );
     }
     let a = TabId::new("a");
     assert!(state.open_today(
@@ -308,7 +338,7 @@ fn reopen_orders_evicted_windows_and_tabs_by_close_time_even_after_restart() {
         None,
         true
     ));
-    assert_eq!(state.close_tab(&a, 100), CloseTab::Archived);
+    assert_eq!(state.close_tab(&a, 100).result, CloseTab::Archived);
     let last = WindowId::new("last");
     assert!(state.open_window(last.clone(), None));
     assert!(state.open_today(
@@ -318,7 +348,7 @@ fn reopen_orders_evicted_windows_and_tabs_by_close_time_even_after_restart() {
         None,
         true
     ));
-    assert!(state.close_window(&last, 200));
+    assert!(state.close_window(&last, 200).result);
     assert_eq!(
         state
             .archive()
@@ -332,16 +362,16 @@ fn reopen_orders_evicted_windows_and_tabs_by_close_time_even_after_restart() {
     for mut state in [state, decode(&saved).unwrap()] {
         let reopened = TabId::new("reopened");
         assert_eq!(
-            state.reopen_last(reopened.clone(), 201),
+            state.reopen_last(reopened.clone(), 201).result,
             Some(Reopened::Window(last.clone()))
         );
         assert_eq!(
-            state.reopen_last(reopened.clone(), 202),
+            state.reopen_last(reopened.clone(), 202).result,
             Some(Reopened::Tab(reopened.clone()))
         );
         assert_eq!(state.tab(&reopened).unwrap().url, "https://example.org/a");
         assert_eq!(
-            state.reopen_last(TabId::new("unused"), 203),
+            state.reopen_last(TabId::new("unused"), 203).result,
             Some(Reopened::Window(WindowId::new(format!(
                 "window{}",
                 CLOSED_WINDOW_LIMIT - 1
@@ -365,12 +395,12 @@ fn reopen_uses_close_time_for_windows_behind_the_front() {
             None,
             true
         ));
-        assert!(state.close_window(window, time));
+        assert!(state.close_window(window, time).result);
     }
     assert_eq!(state.closed_windows()[0].window.id, earlier);
     let mut state = decode(&encode(&state).unwrap()).unwrap();
     assert_eq!(
-        state.reopen_last(TabId::new("unused"), 9_100),
+        state.reopen_last(TabId::new("unused"), 9_100).result,
         Some(Reopened::Window(later))
     );
 }
@@ -387,12 +417,16 @@ fn pinned_tab_and_folder_ids_do_not_collide_as_ordering_anchors() {
     };
     assert!(state.create_tab(tab.clone(), Tab::new("https://example.org", 0), root, None));
     assert!(state.add_folder(folder.clone(), "Folder", &space, None));
-    assert!(state.move_folder(
-        &folder,
-        &space,
-        None,
-        Some(flecha_core::PinnedKey::Tab(&tab))
-    ));
+    assert!(
+        state
+            .move_folder(
+                &folder,
+                &space,
+                None,
+                Some(flecha_core::PinnedKey::Tab(&tab))
+            )
+            .result
+    );
     assert!(matches!(
         state.spaces()[0].pinned[0],
         flecha_core::PinnedNode::Folder { .. }
@@ -436,7 +470,11 @@ fn archive_policy_expires_only_inactive_today_tabs_and_archive_is_searchable() {
             false
         ));
     }
-    assert!(state.set_split(&window, [selected.clone(), pane.clone()]));
+    assert!(
+        state
+            .set_split(&window, [selected.clone(), pane.clone()])
+            .result
+    );
     let cutoff = 12 * 60 * 60 * 1000 + 1;
     state.settings.archive_policy = ArchivePolicy::NEVER;
     assert!(state.archive_stale(cutoff).is_empty());
@@ -486,7 +524,10 @@ fn responsive_split_round_trips_and_exit_removes_only_the_mirror() {
     assert_eq!(state.focused_window().spaces[&space].split_ratio, Some(0.2));
     assert!(state.set_split_ratio(&window, 0.9));
     assert_eq!(state.focused_window().spaces[&space].split_ratio, Some(0.8));
-    assert_eq!(state.activate(&mirror, &window, None), Some(window.clone()));
+    assert_eq!(
+        state.activate(&mirror, &window, None).result,
+        Some(window.clone())
+    );
     let mut wire: serde_json::Value = serde_json::from_str(&encode(&state).unwrap()).unwrap();
     wire["windows"][0]["spaces"]["s"]["splitRatio"] = serde_json::json!(0.1);
     let mut state = decode(&wire.to_string()).unwrap();
@@ -511,7 +552,11 @@ fn responsive_split_round_trips_and_exit_removes_only_the_mirror() {
         None,
         false
     ));
-    assert!(state.set_split(&window, [source, second_pane.clone()]));
+    assert!(
+        state
+            .set_split(&window, [source, second_pane.clone()])
+            .result
+    );
     assert_eq!(state.unsplit(&window), Some(EndedSplit::Standard));
     assert!(state.tab(&second_pane).is_some());
 }
@@ -554,7 +599,7 @@ fn today_bulk_close_respects_agent_folder_and_shared_split_rows() {
         },
         None
     ));
-    assert!(state.set_split(&window, [pin, agent_a.clone()]));
+    assert!(state.set_split(&window, [pin, agent_a.clone()]).result);
     assert!(state.in_agent_folder(&window, &agent_a));
     assert_eq!(state.clear_today(&window, 4), [first]);
     let ordinary = TabId::new("ordinary");
@@ -565,7 +610,11 @@ fn today_bulk_close_respects_agent_folder_and_shared_split_rows() {
         None,
         false
     ));
-    assert!(state.set_split(&window, [ordinary.clone(), agent_a.clone()]));
+    assert!(
+        state
+            .set_split(&window, [ordinary.clone(), agent_a.clone()])
+            .result
+    );
     assert!(!state.in_agent_folder(&window, &agent_a));
     assert_eq!(state.clear_today(&window, 6), [ordinary, agent_a]);
 }
@@ -583,13 +632,13 @@ fn archive_display_order_survives_clock_rollback_while_undo_uses_close_time() {
     ] {
         state.open_today(id.clone(), Tab::new(url, 0), &window, None, true);
     }
-    state.close_tab(&first, 10_000);
-    state.close_tab(&last, 9_000);
+    assert_eq!(state.close_tab(&first, 10_000).result, CloseTab::Archived);
+    assert_eq!(state.close_tab(&last, 9_000).result, CloseTab::Archived);
     let saved = encode(&state).unwrap();
     for mut version in [state, decode(&saved).unwrap()] {
         assert_eq!(version.archive()[0].url, "https://example.org/b");
         assert_eq!(
-            version.reopen_last(reopened.clone(), 9_100),
+            version.reopen_last(reopened.clone(), 9_100).result,
             Some(Reopened::Tab(reopened.clone()))
         );
         assert_eq!(version.tab(&reopened).unwrap().url, "https://example.org/a");
@@ -621,7 +670,10 @@ fn closing_other_today_tabs_keeps_the_selected_responsive_pair() {
     state.open_responsive(&window, mirror.clone(), 1).unwrap();
     for kept in [&desktop, &mirror] {
         let mut state = state.clone();
-        assert_eq!(state.activate(kept, &window, None), Some(window.clone()));
+        assert_eq!(
+            state.activate(kept, &window, None).result,
+            Some(window.clone())
+        );
         assert_eq!(
             state
                 .close_today_tabs(kept, flecha_core::CloseToday::Others, 2)
@@ -684,14 +736,18 @@ fn close_operations_report_every_removed_today_tab_for_each_pair_position() {
     };
     let moved = |before: Option<&TabId>| {
         let mut state = baseline.clone();
-        assert!(state.place_tab(
-            &desktop,
-            Placement::Today {
-                space: &space,
-                window: &window
-            },
-            before.map(PinnedKey::Tab)
-        ));
+        assert!(
+            state
+                .place_tab(
+                    &desktop,
+                    Placement::Today {
+                        space: &space,
+                        window: &window
+                    },
+                    before.map(PinnedKey::Tab)
+                )
+                .result
+        );
         state
     };
     let mut example = moved(Some(&last));
@@ -713,7 +769,7 @@ fn close_operations_report_every_removed_today_tab_for_each_pair_position() {
         for selected in [&desktop, &mirror, &anchor, &last] {
             for which in [CloseToday::Below, CloseToday::Others] {
                 let mut state = moved(position);
-                assert!(state.activate(selected, &window, None).is_some());
+                assert!(state.activate(selected, &window, None).result.is_some());
                 let before = all_tabs(&state);
                 let reported = state.close_today_tabs(selected, which, 2);
                 check(&state, before, reported);
@@ -731,6 +787,158 @@ fn close_operations_report_every_removed_today_tab_for_each_pair_position() {
 }
 
 #[test]
+fn single_closes_and_deletions_report_durable_ids_removed_from_state() {
+    use std::collections::BTreeSet;
+
+    let space = SpaceId::new("s");
+    let other = SpaceId::new("other");
+    let main = WindowId::new("main");
+    let window = WindowId::new("w");
+    let desktop = TabId::new("d");
+    let mirror = TabId::new("m");
+    let keep = TabId::new("keep");
+    let folder = FolderId::new("f");
+    let known = [&desktop, &mirror, &keep];
+    let present = |state: &BrowserState| {
+        known
+            .into_iter()
+            .filter(|id| state.tab(id).is_some())
+            .cloned()
+            .collect::<BTreeSet<_>>()
+    };
+    let check = |label: &str, before: &BrowserState, after: &BrowserState, removed: Vec<TabId>| {
+        let actual: BTreeSet<_> = present(before)
+            .difference(&present(after))
+            .cloned()
+            .collect();
+        assert_eq!(
+            removed.len(),
+            actual.len(),
+            "{label}: reported {removed:?}, removed {actual:?}"
+        );
+        assert_eq!(
+            removed.into_iter().collect::<BTreeSet<_>>(),
+            actual,
+            "{label}"
+        );
+    };
+
+    for pinned in [false, true] {
+        let mut original = BrowserState::new(space.clone(), main.clone());
+        assert!(original.add_space(other.clone()));
+        assert!(original.open_window(window.clone(), Some(&space)));
+        assert!(original.open_today(
+            keep.clone(),
+            Tab::new("https://example.org/keep", 0),
+            &window,
+            None,
+            false
+        ));
+        let tab = Tab::new("https://example.org/source", 0);
+        if pinned {
+            assert!(original.add_folder(folder.clone(), "Folder", &space, None));
+            assert!(original.create_tab(
+                desktop.clone(),
+                tab,
+                Placement::Pinned {
+                    space: &space,
+                    folder: Some(&folder)
+                },
+                None
+            ));
+            assert_eq!(
+                original.activate(&desktop, &window, Some(1)).result,
+                Some(window.clone())
+            );
+        } else {
+            assert!(original.open_today(desktop.clone(), tab, &window, None, true));
+        }
+        assert_eq!(
+            original.open_responsive(&window, mirror.clone(), 2),
+            Some(mirror.clone())
+        );
+
+        let mut state = original.clone();
+        let result = state.close_tab(&desktop, 3);
+        assert_eq!(
+            result.result,
+            if pinned {
+                CloseTab::Unloaded
+            } else {
+                CloseTab::Archived
+            }
+        );
+        check("close tab", &original, &state, result.removed);
+
+        let mut state = original.clone();
+        let result = state.close_window(&window, 3);
+        assert!(result.result);
+        assert!(state.tab(&keep).is_some() && state.tab(&desktop).is_some());
+        check("close window", &original, &state, result.removed);
+
+        let mut state = original.clone();
+        let result = state.delete_tab(&desktop, 3);
+        assert!(result.result);
+        check("delete tab", &original, &state, result.removed);
+
+        let mut state = original.clone();
+        let result = state.set_split(&window, [desktop.clone(), keep.clone()]);
+        assert!(result.result);
+        check(
+            "replace responsive split",
+            &original,
+            &state,
+            result.removed,
+        );
+
+        if pinned {
+            for keep_children in [false, true] {
+                let mut state = original.clone();
+                let result = state.delete_folder(&folder, keep_children, 3);
+                assert!(result.result);
+                check("delete folder", &original, &state, result.removed);
+            }
+            let mut state = original.clone();
+            let result = state.activate(&desktop, &main, Some(3));
+            assert_eq!(result.result, Some(main.clone()));
+            check(
+                "take a shared responsive source",
+                &original,
+                &state,
+                result.removed,
+            );
+
+            let mut state = original.clone();
+            let result = state.move_folder(&folder, &other, None, None);
+            assert!(result.result);
+            check(
+                "move folder to another Space",
+                &original,
+                &state,
+                result.removed,
+            );
+
+            let mut state = original.clone();
+            let result = state.place_tab(
+                &desktop,
+                Placement::Pinned {
+                    space: &other,
+                    folder: None,
+                },
+                None,
+            );
+            assert!(result.result);
+            check(
+                "move tab to another Space",
+                &original,
+                &state,
+                result.removed,
+            );
+        }
+    }
+}
+
+#[test]
 fn moving_a_tab_before_the_folder_with_the_same_id_uses_the_folder_anchor() {
     use flecha_core::{PinnedKey, PinnedNode};
     let space = SpaceId::new("s");
@@ -744,7 +952,11 @@ fn moving_a_tab_before_the_folder_with_the_same_id_uses_the_folder_anchor() {
     };
     assert!(state.add_folder(folder.clone(), "Folder", &space, None));
     assert!(state.create_tab(tab.clone(), Tab::new("https://example.org", 0), root, None));
-    assert!(state.place_tab(&tab, root, Some(PinnedKey::Folder(&folder))));
+    assert!(
+        state
+            .place_tab(&tab, root, Some(PinnedKey::Folder(&folder)))
+            .result
+    );
     assert!(state.create_tab(
         next.clone(),
         Tab::new("https://example.org/next", 1),
@@ -787,9 +999,17 @@ fn set_split_rejects_a_phone_mirror_and_replaces_responsive_with_regular() {
         Some(mirror.clone())
     );
     let prior = state.clone();
-    assert!(!state.set_split(&window, [desktop.clone(), mirror.clone()]));
+    assert!(
+        !state
+            .set_split(&window, [desktop.clone(), mirror.clone()])
+            .result
+    );
     assert_eq!(state, prior);
-    assert!(state.set_split(&window, [regular.clone(), desktop.clone()]));
+    assert!(
+        state
+            .set_split(&window, [regular.clone(), desktop.clone()])
+            .result
+    );
     let ws = &state.focused_window().spaces[&space];
     assert_eq!(ws.split_mode, None);
     assert!(!ws.today.contains(&mirror));

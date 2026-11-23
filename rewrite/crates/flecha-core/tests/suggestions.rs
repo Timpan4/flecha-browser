@@ -510,3 +510,12 @@ fn jwt_privacy_scans_normalized_and_repeatedly_percent_decoded_dots() {
         );
     }
 }
+
+#[test]
+fn jwt_privacy_decodes_percent_escaped_fullwidth_percent_as_an_escape() {
+    let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"HS256"}"#);
+    let payload = URL_SAFE_NO_PAD.encode(br#"{"sub":"fixture"}"#);
+    let token = format!("{header}%EF%BC%852E{payload}%EF%BC%852Esignature");
+    assert!(!suggestable(&token));
+    assert!(!suggestable(&format!("note {token}")));
+}

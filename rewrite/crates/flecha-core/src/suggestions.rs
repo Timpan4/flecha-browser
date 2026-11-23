@@ -5,9 +5,7 @@ use std::collections::BTreeSet;
 
 use base64::{Engine as _, engine::general_purpose};
 use chrono::{DateTime, SecondsFormat};
-use percent_encoding::{
-    AsciiSet, NON_ALPHANUMERIC, percent_decode, percent_decode_str, utf8_percent_encode,
-};
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use serde_json::{Value, json};
 use unicode_normalization::UnicodeNormalization;
 use url::{Host, Url};
@@ -176,23 +174,84 @@ fn alternate_spelling_contains_jwt(raw: &str, normalized: &str) -> bool {
     if dotted != raw && contains_jwt(&dotted) {
         return true;
     }
-    let mut encoded = Cow::Borrowed(dotted.as_bytes());
-    while encoded.contains(&b'%') {
-        let decoded: Vec<_> = percent_decode(&encoded).collect();
-        if decoded.len() == encoded.len() {
-            break;
+    dotted.contains('%')
+        && contains_jwt(&String::from_utf8_lossy(&fold_jwt_escapes(&dotted, |_| {})))
+}
+
+/// After a push, only the suffix can have become a new escape or a complete UTF-8 scalar.
+/// Escapes consume three bytes and emit one. Compatibility folding emits only ASCII, so
+/// each decoded Unicode scalar is folded at most once.
+fn fold_jwt_escapes(text: &str, mut inspect_tail: impl FnMut(usize)) -> Vec<u8> {
+    let mut output = Vec::with_capacity(text.len());
+    let mut pending = Vec::new();
+    for byte in text.bytes() {
+        pending.push(byte);
+        while let Some(byte) = pending.pop() {
+            output.push(byte);
+            loop {
+                inspect_tail(1);
+                if let Some(decoded) = percent_suffix(&output) {
+                    output.truncate(output.len() - 3);
+                    output.push(decoded);
+                } else {
+                    if let Some((start, ascii)) = compatibility_suffix(&output) {
+                        output.truncate(start);
+                        pending.extend(ascii.bytes().rev());
+                    }
+                    break;
+                }
+            }
         }
-        // Work with bytes between passes. A successful escape always shrinks the input.
-        let clean: String = String::from_utf8_lossy(&decoded)
-            .nfkc()
-            .map(|ch| if ch == '。' { '.' } else { ch })
-            .collect();
-        if contains_jwt(&clean) {
-            return true;
-        }
-        encoded = Cow::Owned(decoded);
     }
-    false
+    output
+}
+
+fn percent_suffix(bytes: &[u8]) -> Option<u8> {
+    let [.., b'%', high, low] = bytes else {
+        return None;
+    };
+    let high = char::from(*high).to_digit(16)? as u8;
+    let low = char::from(*low).to_digit(16)? as u8;
+    Some((high << 4) | low)
+}
+
+fn compatibility_suffix(bytes: &[u8]) -> Option<(usize, String)> {
+    if bytes.last()?.is_ascii() {
+        return None;
+    }
+    for width in 2..=char::MAX.len_utf8() {
+        let start = bytes.len().checked_sub(width)?;
+        let Ok(suffix) = std::str::from_utf8(&bytes[start..]) else {
+            continue;
+        };
+        let ch = suffix.chars().next()?;
+        if ch.len_utf8() != width {
+            continue;
+        }
+        let folded: String = std::iter::once(ch).nfkc().collect();
+        return if folded == "。" {
+            Some((start, ".".into()))
+        } else {
+            folded.is_ascii().then_some((start, folded))
+        };
+    }
+    None
+}
+
+#[cfg(test)]
+mod jwt_escape_tests {
+    use super::fold_jwt_escapes;
+
+    #[test]
+    fn repeated_percent_escapes_only_inspect_the_input_and_reductions() {
+        for depth in [2, 16_000, 200_000] {
+            let input = format!("%{}2E", "25".repeat(depth));
+            let mut inspections = 0;
+            let decoded = fold_jwt_escapes(&input, |count| inspections += count);
+            assert_eq!(decoded, b".");
+            assert_eq!(inspections, input.len() + depth + 1);
+        }
+    }
 }
 
 fn decode_component(word: &str) -> std::borrow::Cow<'_, str> {

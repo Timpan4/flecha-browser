@@ -350,7 +350,7 @@ fn reopened_window_selects_a_space_that_retained_tabs() {
         }}]
     }"#;
     let mut state = decode(raw).unwrap();
-    assert_eq!(state.reopen_window(), Some(WindowId::new("closed")));
+    assert_eq!(state.reopen_window().result, Some(WindowId::new("closed")));
     assert_eq!(state.focused_window().visible_tabs(), [TabId::new("kept")]);
 }
 

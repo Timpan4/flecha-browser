@@ -96,7 +96,7 @@ fn import_replaces_only_a_pristine_space_and_keeps_a_before_copy() {
                     None,
                     false,
                 );
-                state.close_window(&other, 1);
+                assert!(state.close_window(&other, 1).result);
             }
             "renamed" => {
                 state.update_space(&home, Some("Home"), None, None, None);
@@ -249,7 +249,10 @@ fn merge_splits_use_existing_tabs_unless_another_window_has_claimed_them() {
         ..ImportBatch::default()
     };
     let mut occupied = base.clone();
-    occupied.activate(&pin, &other, Some(1));
+    assert_eq!(
+        occupied.activate(&pin, &other, Some(1)).result,
+        Some(other.clone())
+    );
     let out = occupied
         .import_spaces(&batch, ImportMode::Merge, &window, 2)
         .unwrap();
@@ -377,8 +380,12 @@ fn deep_imports_keep_their_folders_across_merge_and_restore() {
         nodes = children;
     }
     assert_eq!(nodes.len(), 2);
-    assert!(state.delete_folder(&FolderId::new("folder-0"), true, 2));
-    assert!(state.delete_tab(&new_leaf.id, 3));
+    assert!(
+        state
+            .delete_folder(&FolderId::new("folder-0"), true, 2)
+            .result
+    );
+    assert!(state.delete_tab(&new_leaf.id, 3).result);
     assert_eq!(state.space(&space).unwrap().pinned_tabs(), [&leaf.id]);
 }
 
@@ -401,7 +408,7 @@ fn empty_recovered_windows_leave_no_stale_space_after_import() {
         .import_spaces(&batch, ImportMode::Append, &WindowId::new("open"), 2)
         .unwrap();
     assert!(state.space(&SpaceId::new("personal")).is_none());
-    assert!(state.reopen_window().is_none());
+    assert!(state.reopen_window().result.is_none());
 }
 
 #[test]
@@ -461,7 +468,10 @@ fn imported_split_prefers_new_unseen_tabs_over_an_existing_favorite() {
     let url = "https://example.org/shared";
     let mut state = BrowserState::new(SpaceId::new("home"), window.clone());
     state.create_tab(used.clone(), Tab::new(url, 0), Placement::Favorite, None);
-    state.activate(&used, &window, Some(1));
+    assert_eq!(
+        state.activate(&used, &window, Some(1)).result,
+        Some(window.clone())
+    );
     let left = incoming_tab("left", url);
     let right = incoming_tab("right", "https://example.org/right");
     let fav = incoming_tab("favorite", "https://example.org/favorite");

@@ -52,6 +52,31 @@ jobs:
         if: github.event_name == 'pull_request'
         run: git diff --check HEAD^1 HEAD -- . ':!*.patch'
 
+  rewrite-core:
+    name: Flecha core (Rust)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rewrite
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install the stable Rust toolchain
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - name: Check the core crate in isolation
+        shell: bash
+        run: |
+          core_rewrite="$RUNNER_TEMP/flecha-core-ci/rewrite"
+          mkdir -p "$core_rewrite"
+          cp -R crates/flecha-core/. "$core_rewrite/"
+          cp Cargo.lock "$core_rewrite/"
+          cd "$core_rewrite"
+          # Resolving the product workspace would fetch Spike 1's Git dependencies.
+          cargo +stable metadata --format-version 1 > metadata.json
+          jq -e '[.packages[].source | select(. != null and startswith("git+"))] | length == 0' metadata.json
+          cargo +stable fmt --check
+          cargo +stable clippy -p flecha-core --all-targets -- -D warnings
+          cargo +stable test -p flecha-core --all-targets
+
   release-scripts:
     name: Release tooling (${{ matrix.os }})
     strategy:
@@ -119,11 +144,11 @@ jobs:
   ci-passed:
     name: CI passed
     if: always()
-    needs: [shell-and-host, release-scripts, scripts]
+    needs: [shell-and-host, rewrite-core, release-scripts, scripts]
     runs-on: ubuntu-latest
     steps:
       - name: Require every check to pass
         if: always()
         env:
-          ALL_PASSED: ${{ needs.shell-and-host.result == 'success' && needs.release-scripts.result == 'success' && needs.scripts.result == 'success' }}
+          ALL_PASSED: ${{ needs.shell-and-host.result == 'success' && needs.rewrite-core.result == 'success' && needs.release-scripts.result == 'success' && needs.scripts.result == 'success' }}
         run: test "$ALL_PASSED" = true
