@@ -13,12 +13,15 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, AppContext as _, ClickEvent, ClipboardItem, Context, Div, Entity, FocusHandle,
     InteractiveElement as _, IntoElement, KeyDownEvent, KeyUpEvent, MouseButton, MouseDownEvent,
-    MouseExitEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _, Render, RenderImage,
+    MouseExitEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Render, RenderImage,
     ScrollEvent, StatefulInteractiveElement as _, Styled as _, Subscription, Window, canvas,
     deferred, div, px, relative, rgb,
 };
 
 use crate::{Action, Shared, dispatch, now};
+
+/// A popup's read-only address bar, as tall as the Peek toolbar.
+pub(crate) const POPUP_BAR_HEIGHT: Pixels = px(40.);
 
 #[derive(Clone, Copy)]
 enum Command {
@@ -37,6 +40,7 @@ pub(crate) struct Shell {
     input: String,
     command: Command,
     images: BTreeMap<TabId, Vec<Arc<RenderImage>>>,
+    title: String,
     _activation: Subscription,
 }
 
@@ -62,6 +66,7 @@ impl Shell {
                 input: String::new(),
                 command: Command::Open,
                 images: BTreeMap::new(),
+                title: String::new(),
                 _activation: activation,
             }
         })
@@ -153,7 +158,10 @@ impl Shell {
                 "o" if self.state.borrow().model.peeks.contains_key(&self.id) => {
                     dispatch(&self.state, &self.id, Action::Promote, cx);
                 }
-                "l" | "t" => self.choose(Command::Open, window, cx),
+                // Only a Flecha window has a command bar.
+                "l" | "t" if self.state.borrow().model.core.window(&self.id).is_some() => {
+                    self.choose(Command::Open, window, cx);
+                }
                 "q" => dispatch(&self.state, &self.id, Action::Quit, cx),
                 "v" if self.focus.is_focused(window) => {
                     if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
@@ -240,7 +248,7 @@ impl Shell {
                 && state.engine.key(&old.tab).as_ref() == Some(&old)
                 && matches!(
                     state.engine.owner(&old.tab),
-                    Some(Owner::Tab(id) | Owner::Peek(id) | Owner::Flechinha(id)) if id == &self.id
+                    Some(Owner::Tab(id) | Owner::Peek(id) | Owner::Flechinha(id) | Owner::Popup(id)) if id == &self.id
                 )
             {
                 state.engine.focused(&old.tab, false);
@@ -384,6 +392,14 @@ impl Shell {
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let _ = self.sync_page_focus(window, cx);
+        let popup_title = (self.state.borrow().model.popups.get(&self.id))
+            .map(|popup| popup.page.tab.title.clone());
+        if let Some(title) = popup_title
+            && title != self.title
+        {
+            window.set_window_title(&title);
+            self.title = title;
+        }
         let mut main = div()
             .relative()
             .size_full()
@@ -399,7 +415,25 @@ impl Render for Shell {
             }));
         let mut images = BTreeMap::new();
         let state = self.state.borrow();
-        if let Some(page) = state.model.flechinhas.get(&self.id) {
+        if let Some(popup) = state.model.popups.get(&self.id) {
+            main = main
+                .child(
+                    div()
+                        .h(POPUP_BAR_HEIGHT)
+                        .flex_shrink_0()
+                        .px_2()
+                        .flex()
+                        .items_center()
+                        .min_w_0()
+                        .child(div().truncate().child(popup.page.tab.url.clone())),
+                )
+                .child(div().flex_1().min_h_0().child(self.pane(
+                    Owner::Popup(self.id.clone()),
+                    popup.page.id.clone(),
+                    &mut images,
+                    cx,
+                )));
+        } else if let Some(page) = state.model.flechinhas.get(&self.id) {
             main = main
                 .child(
                     div()

@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
 
-import { blankRestartColor, fixture } from './fixture.mjs';
+import { blankRestartColor, fixture, openerColors } from './fixture.mjs';
 import { checkProcessEnvironment } from './verify-process-env.mjs';
 
 const out = join(process.env.HOME, '..');
@@ -16,7 +16,7 @@ const mode = process.argv[2] ?? 'slice';
 const shippingTrace = readFileSync(new URL('./slice-ts-replay.jsonl', import.meta.url), 'utf8')
   .trim().split('\n').map(line => JSON.parse(line));
 
-assert(['slice', 'open', 'focus', 'break-restore'].includes(mode), 'unknown slice check');
+assert(['slice', 'open', 'focus', 'popups', 'break-restore'].includes(mode), 'unknown slice check');
 
 const site = await fixture();
 const { base } = site;
@@ -63,8 +63,14 @@ function browser(name) {
 
   async function command(op, detail = {}) {
     const request = ++seq;
+    const sent = events.length;
     child.stdin.write(JSON.stringify({ seq: request, op, ...detail }) + '\n');
-    const reply = await wait(`reply to ${op}`, event => event.type === 'reply' && event.seq === request);
+    // Commands run one at a time, so a rejection after this write is this request's.
+
+    const reply = await wait(`reply to ${op}`, event =>
+      (event.type === 'reply' && event.seq === request) || event.type === 'invalid_request', sent);
+
+    assert.notEqual(reply.type, 'invalid_request', `Flecha does not understand the ${op} request`);
     assert.equal(reply.error, undefined, reply.error);
 
     return reply.result;
@@ -72,6 +78,10 @@ function browser(name) {
 
   return {
     events, command, wait, pid: child.pid,
+    async exited() {
+      child.stdin.end();
+      assert.deepEqual(await closed, [0, null]);
+    },
     loaded: (tab, path, since = 0) => wait(
       `HTTP load of ${path}`,
       event => event.type === 'loaded' && event.tab === tab && event.url === base + path,
@@ -82,9 +92,9 @@ function browser(name) {
       child.stdin.end();
       assert.deepEqual(await closed, [0, null]);
     },
-    async present() {
+    async present(window) {
       const after = events.length;
-      await command('capture');
+      await command('capture', window ? { window } : {});
       await wait('GPUI presented the fixture frame', event => event.type === 'presented', after);
     },
     release() {
@@ -326,11 +336,11 @@ async function keyDelivery(app, tabs, key, step, expected) {
     assert.equal(await ready, 'ready');
   }
 
-  waitingFor = `X11 key after sidebar ${step}`;
+  waitingFor = `X11 key after ${step}`;
   execFileSync(x11Driver, ['key', key]);
   const actual = await received;
 
-  assert.equal(actual, expected, `sidebar ${step} sent ${key} to pane ${actual}, expected ${expected}`);
+  assert.equal(actual, expected, `${step} sent ${key} to pane ${actual}, expected ${expected}`);
 
   for (const [name, tab] of Object.entries(tabs)) {
     const report = site.probe(`${step}-${name}-report`);
@@ -342,7 +352,7 @@ async function keyDelivery(app, tabs, key, step, expected) {
     assert.deepEqual(JSON.parse(await report), name === expected ? [key] : [], `keys received by pane ${name}`);
   }
 
-  pass(`sidebar ${step} sent ${key} only to pane ${expected}`);
+  pass(`${step} sent ${key} only to pane ${expected}`);
 }
 
 async function waitForSelection(app, tab, description) {
@@ -371,11 +381,11 @@ async function sidebarFocus(app, left) {
   const split = await waitForSelection(app, right, 'sidebar Split selected pane B');
 
   assert.deepEqual(active(split).split, [left, right]);
-  await keyDelivery(app, { A: left, B: right }, 'y', 'split', 'B');
+  await keyDelivery(app, { A: left, B: right }, 'y', 'sidebar split', 'B');
 
   execFileSync(x11Driver, ['click', 95, 227]);
   await waitForSelection(app, left, 'sidebar selected pane A');
-  await keyDelivery(app, { A: left, B: right }, 'z', 'select', 'A');
+  await keyDelivery(app, { A: left, B: right }, 'z', 'sidebar select', 'A');
 }
 
 async function cookie(app, expected, op = 'open') {
@@ -439,6 +449,266 @@ async function isolateWithTransients(app, space) {
   return after;
 }
 
+// Clicks the element's centre with X11, which gives the page a user gesture.
+async function clickElement(app, tab, selector, colors, label, window) {
+  await app.present(window);
+  await capture(label, colors);
+
+  const marker = execFileSync('magick', [
+    join(out, `${label}.png`), '-transparent', colors[1], '-alpha', 'extract', '-negate',
+    '-trim', '-format', '%X %Y', 'info:',
+  ], { encoding: 'utf8' }).trim().split(' ').map(Number);
+
+  assert(marker.length === 2 && marker.every(Number.isFinite), `no marker for ${label}`);
+  const offset = site.probe(`${label}-offset`);
+  await app.command('script', {
+    tab,
+    source: `{
+      const marker = document.querySelector('#marker').getBoundingClientRect();
+      const target = document.querySelector('${selector}').getBoundingClientRect();
+      fetch('/probe/${label}-offset?value=' + JSON.stringify([
+        target.x + target.width / 2 - marker.x, target.y + target.height / 2 - marker.y,
+      ]));
+    }`,
+  });
+  waitingFor = `geometry of ${selector}`;
+  const [x, y] = JSON.parse(await offset);
+  execFileSync(x11Driver, ['click', Math.round(marker[0] + x), Math.round(marker[1] + y)]);
+}
+
+async function openTab(app, path) {
+  const after = app.events.length;
+  const tab = active(await app.command('open', { url: base + path })).activeTabId;
+  await app.loaded(tab, path.split('?')[0], after);
+
+  return tab;
+}
+
+// The checks for browsers pages open. Each reports its own failure, so a run
+// against an older build shows every check it fails.
+async function popupChecks(app) {
+  const failed = [];
+
+  const check = async (name, run) => {
+    try {
+      await run();
+    } catch (error) {
+      failed.push(name);
+      console.error(`FAIL ${name} while waiting for ${waitingFor}`, error);
+    }
+  };
+
+  await check('target=_blank', () => blankLink(app));
+  await check('scripted popup', async () => scriptedPopup(app, await openTab(app, '/opener'), 'isolated'));
+  await check('Flechinha links and popups', () => flechinhaLinks(app));
+  await check('popup without a gesture', () => blockedPopups(app));
+  await check('close with a popup open', () => closeWithPopup(app));
+  assert.deepEqual(failed, [], 'popup checks failed');
+}
+
+async function blankLink(app) {
+  const space = win(await app.command('new_space')).activeSpaceId;
+  await app.command('isolate');
+  const written = await openTab(app, '/cookie/set');
+  const opener = await openTab(app, '/opener');
+  const filler = await openTab(app, '/open');
+  await app.command('select', { tab: opener });
+  const requested = site.requests.length;
+  const after = app.events.length;
+
+  await clickElement(app, opener, '#blank', openerColors, 'blank-link');
+
+  const { tab } = await app.wait('the target=_blank page load', event =>
+    event.type === 'loaded' && event.url === base + '/cookie/check' && event.tab !== opener, after);
+
+  const { title } = await app.wait('the new tab cookie result', event =>
+    event.type === 'title' && event.tab === tab && ['Cookie present', 'Cookie absent', 'Shared cookie'].includes(event.title), after);
+
+  const state = await app.command('snapshot');
+
+  assert.equal(win(state).activeSpaceId, space, 'the link tab opened outside its Space');
+  assert.deepEqual(active(state).today, [filler, opener, tab, written], 'the link tab is not right after its opener, as in the TS shell');
+  assert.equal(active(state).activeTabId, tab, 'the link tab is not in the foreground');
+  engine(state, tab, 'tab', state.window);
+  assert.equal(title, 'Cookie present', 'the link tab used the wrong cookie jar');
+  const request = site.requests.slice(requested).find(entry => entry.path === '/cookie/check');
+  assert.equal(request?.referer, base + '/opener', 'the link tab lost the referrer Chromium sends');
+  assert(app.events.slice(after).some(event =>
+    event.type === 'opened' && event.tab === tab && event.disposition === 'foreground_tab'), 'CEF did not create the link tab');
+  pass('a target=_blank click opened a foreground tab after its opener, in its Space and cookie jar, with its referrer');
+}
+
+// `flechinha` is the window of a Flechinha opener, which the sidebar can't select.
+async function openPopup(app, opener, label, flechinha) {
+  if (!flechinha) await app.command('select', { tab: opener });
+
+  const after = app.events.length;
+  const message = site.probe('popup-message');
+  const hasOpener = site.probe('popup-opener');
+
+  await clickElement(app, opener, '#scripted', openerColors, label, flechinha);
+
+  const returned = await app.wait('window.open to return', event =>
+    event.type === 'title' && event.tab === opener && event.title.startsWith('after-popup:'), after);
+
+  assert(returned.title.endsWith(':true'), 'window.open returned null: the scripted popup was blocked');
+  const opened = app.events.slice(after).find(event => event.type === 'opened' && event.disposition === 'popup');
+
+  assert(opened, 'the popup has no CEF browser of its own');
+  assert.deepEqual(opened.size, [480, 360], 'the popup lost its requested size');
+  await app.loaded(opened.tab, '/popup', after);
+  assert.equal(await hasOpener, 'true', 'the popup lost window.opener');
+  assert.equal(await message, 'hello-from-popup', 'the opener did not receive the popup message');
+  const state = await app.command('snapshot');
+  const popup = state.popups.find(entry => entry.tab === opened.tab);
+
+  assert.deepEqual(popup, { window: popup?.window, tab: opened.tab, opener: flechinha ?? state.window });
+  assert(state.nativeWindows.includes(popup.window), 'GPUI did not open the popup window');
+  engine(state, popup.tab, 'popup', popup.window);
+  assert.equal(state.liveBrowsers, state.browsers.length, 'a CEF browser is alive outside the engine');
+  await app.wait('the shell to bring the popup forward', event =>
+    event.type === 'activated' && event.window === popup.window, after);
+
+  return { ...popup, after, main: state.window };
+}
+
+async function scriptedPopup(app, opener, cookie) {
+  const requested = site.requests.length;
+  const popup = await openPopup(app, opener, 'scripted-popup');
+  const request = site.requests.slice(requested).find(entry => entry.path === '/popup');
+
+  assert.equal(request.cookie, cookie, 'the popup used the wrong cookie jar');
+  assert.equal(request.referer, base + '/opener', 'the popup lost its referrer');
+  const size = site.probe('popup-size');
+  await app.command('script', { tab: popup.tab, source: "fetch('/probe/popup-size?value=' + innerWidth + 'x' + innerHeight)" });
+  assert.equal(await size, '480x360', 'the popup page is not the size it asked for');
+  pass('a scripted popup opened in its own window with window.opener, postMessage, its size and its opener cookie jar');
+
+  await app.wait('the popup title', event =>
+    event.type === 'title' && event.tab === popup.tab && event.title === 'Flecha fixture /popup', popup.after);
+  await app.present(popup.window);
+  execFileSync(x11Driver, ['focus', 'Flecha fixture /popup']);
+  await keyDelivery(app, { O: opener, P: popup.tab }, 'k', 'popup', 'P');
+  // A popup has no command bar for Ctrl+L to focus.
+  execFileSync(x11Driver, ['chord', 'Control_L', 'l']);
+  await keyDelivery(app, { O: opener, P: popup.tab }, 'm', 'popup after Ctrl+L', 'P');
+
+  const closing = app.events.length;
+  await app.command('script', { tab: popup.tab, source: 'window.close()' });
+  await app.wait('the popup to close itself', event => event.type === 'closed_by_page' && event.tab === popup.tab, closing);
+  const closed = await app.command('snapshot');
+
+  assert.deepEqual(closed.popups, [], 'the shell kept the closed popup');
+  assert(!closed.nativeWindows.includes(popup.window), 'GPUI kept the closed popup window');
+  assert(!closed.browsers.some(browser => browser.tab === popup.tab), 'the engine kept the closed popup browser');
+  assert.equal(closed.liveBrowsers, closed.browsers.length, 'a CEF browser is alive outside the engine');
+  await app.wait('focus to return to the opener window', event =>
+    event.type === 'activated' && event.window === popup.main, closing);
+  execFileSync(x11Driver, ['focus', 'Flecha']);
+  await keyDelivery(app, { O: opener }, 'j', 'popup closed', 'O');
+  pass('the popup closed itself, and focus and keys returned to its opener');
+}
+
+async function flechinhaLinks(app) {
+  // The main window shows this page once the opener leaves, not another opener.
+  await openTab(app, '/open');
+  await openTab(app, '/opener');
+  const [{ window: mini, tab: page }] = (await app.command('detach')).flechinhas;
+  const after = app.events.length;
+
+  await clickElement(app, page, '#blank', openerColors, 'flechinha-blank', mini);
+
+  const { tab } = await app.wait("a Flechinha link's tab load", event =>
+    event.type === 'loaded' && event.url === base + '/cookie/check' && event.tab !== page, after);
+
+  const state = await app.command('snapshot');
+
+  engine(state, tab, 'tab', state.window);
+  assert.equal(active(state).today[0], tab, "the Flechinha link tab is not first in the main window's Today");
+  assert.equal(active(state).activeTabId, tab, 'the Flechinha link tab is not in the foreground');
+  pass('a target=_blank link in a Flechinha opened a foreground tab in the main window, as patch 0023 does');
+
+  const popup = await openPopup(app, page, 'flechinha-popup', mini);
+  const closing = app.events.length;
+
+  await app.command('script', { tab: popup.tab, source: 'window.close()' });
+  await app.wait('the Flechinha popup to close itself', event =>
+    event.type === 'closed_by_page' && event.tab === popup.tab, closing);
+  await app.wait('focus to return to the Flechinha', event => event.type === 'activated' && event.window === mini, closing);
+  await app.command('close_window', { window: mini });
+  pass('a scripted popup from a Flechinha opened with its opener, closed itself and returned focus to the Flechinha');
+}
+
+async function blockedPopups(app) {
+  const requested = site.requests.length;
+  const after = app.events.length;
+  const tab = active(await app.command('open', { url: base + '/opener?auto=1' })).activeTabId;
+
+  const { title } = await app.wait('window.open without a gesture', event =>
+    event.type === 'title' && event.tab === tab && event.title.startsWith('after-blocked:'), after);
+
+  assert.equal(title, 'after-blocked:true:true', 'a popup without a user gesture opened');
+  assert.deepEqual(app.events.slice(after).filter(event => event.type === 'opened'), [], 'CEF created a browser without a gesture');
+  assert.deepEqual(site.requests.slice(requested).filter(entry => entry.path.startsWith('/blocked-')), [],
+    'a blocked popup reached the network');
+  const state = await app.command('snapshot');
+
+  assert.deepEqual(state.popups, []);
+  assert.equal(state.liveBrowsers, state.browsers.length, 'a CEF browser is alive outside the engine');
+  pass('window.open without a user gesture was blocked for a popup and a tab, as in the TS shell');
+}
+
+async function closeWithPopup(app) {
+  const opener = await openTab(app, '/opener');
+  const first = await openPopup(app, opener, 'close-button-popup');
+  let after = app.events.length;
+
+  await app.command('close_window', { window: first.window });
+  await app.wait('CEF to close the popup', event => event.type === 'closed' && event.tab === first.tab, after);
+  const closed = await app.command('snapshot');
+
+  assert.deepEqual(closed.popups, []);
+  assert(!closed.nativeWindows.includes(first.window), 'GPUI kept the closed popup window');
+  assert.equal(closed.liveBrowsers, closed.browsers.length, 'a CEF browser is alive outside the engine');
+  pass("the popup window's close button closed its CEF browser");
+
+  after = app.events.length;
+  const { window: extra } = await app.command('open_window', { url: base + '/split' });
+  const opened = (await app.command('snapshot')).core.windows.find(window => window.id === extra);
+  const tab = opened.spaces[opened.activeSpaceId].activeTabId;
+
+  await app.loaded(tab, '/split', after);
+  const shown = await app.command('snapshot');
+
+  engine(shown, tab, 'tab', extra);
+  assert(shown.nativeWindows.includes(extra), 'GPUI did not open the second Flecha window');
+  after = app.events.length;
+  await app.command('close_window', { window: extra });
+  await app.wait("CEF to close the closed window's tab", event => event.type === 'closed' && event.tab === tab, after);
+  const gone = await app.command('snapshot');
+
+  assert(!gone.core.windows.some(window => window.id === extra), 'the closed window is still open');
+  assert.equal(gone.core.closedWindows[0]?.id, extra, 'the closed window cannot be reopened');
+  assert(!gone.nativeWindows.includes(extra), 'GPUI kept the closed window');
+  assert.equal(gone.liveBrowsers, gone.browsers.length, 'a CEF browser is alive outside the engine');
+  pass('closing one of two Flecha windows closed its CEF browsers and kept it with the closed windows, without quitting');
+
+  // A page with a beforeunload handler and a user gesture must not hold up the quit.
+  const unload = await openTab(app, '/unload');
+  await clickElement(app, unload, 'input', ['#147A70', '#FFCC49'], 'unload-gesture');
+  const second = await openPopup(app, opener, 'quit-popup');
+  const open = await app.command('snapshot');
+
+  assert(open.browsers.some(browser => browser.tab === unload) && open.browsers.some(browser => browser.tab === second.tab));
+  after = app.events.length;
+  await app.command('close_window', { window: second.main });
+  const drained = await app.wait('every CEF browser to close', event => event.type === 'drained', after);
+
+  assert.equal(drained.live, 0, 'CEF browsers outlived the quit');
+  await app.exited();
+  pass(`closing the last Flecha window with a popup and a beforeunload page open closed all ${open.liveBrowsers} CEF browsers and quit`);
+}
+
 const apps = [];
 
 function launch(name) {
@@ -467,7 +737,10 @@ try {
 
   if (mode === 'focus') {
     await sidebarFocus(app, left);
+    await scriptedPopup(app, await openTab(app, '/opener'), undefined);
     await app.quit();
+  } else if (mode === 'popups') {
+    await popupChecks(app);
   } else if (mode !== 'open') {
     const publicUrl = base.replace('127.0.0.1', 'localtest.me') + '/open';
     const attempted = await app.command('peek', { url: publicUrl });
@@ -609,6 +882,10 @@ try {
     await cookie(restarted, 'Shared cookie');
     pass('the isolated cookie persisted after restart and stayed out of the ordinary Space');
     await restarted.quit();
+
+    const popups = launch('popups');
+    await popups.wait('CEF context ready for popups', event => event.type === 'ready');
+    await popupChecks(popups);
   } else {
     await app.quit();
   }

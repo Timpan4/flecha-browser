@@ -3,8 +3,30 @@ import { once } from 'node:events';
 
 export const blankRestartColor = '#E64DA3';
 
+// Popup fixture colours, unique on screen so a capture can find each page's marker.
+export const openerColors = ['#2B2D6E', '#F2E94E'];
+export const popupColors = ['#5A1F1F', '#9AF2C4'];
+
+// The opener page's controls. Each sets a fresh title once window.open returns, so the
+// title change reaches the shell after any popup event the call queued.
+const openerScript = `
+  let opened = 0;
+  document.querySelector('#scripted').addEventListener('click', () => {
+    const popup = window.open('/popup', 'flecha-popup', 'popup,width=480,height=360');
+    document.title = 'after-popup:' + (++opened) + ':' + (popup !== null);
+  });
+  addEventListener('message', event => fetch('/probe/popup-message?value=' + encodeURIComponent(event.data)));
+  if (new URLSearchParams(location.search).has('auto')) {
+    addEventListener('load', () => {
+      const popup = window.open('/blocked-popup', 'flecha-blocked', 'popup,width=480,height=360');
+      const tab = window.open('/blocked-tab');
+      document.title = 'after-blocked:' + (popup === null) + ':' + (tab === null);
+    });
+  }`;
+
 export async function fixture() {
   const pending = new Map();
+  const requests = [];
 
   const server = createServer((request, response) => {
   const path = new URL(request.url, 'http://localhost').pathname;
@@ -27,6 +49,8 @@ export async function fixture() {
 
   const cookie = /(?:^|; )flecha_phase1=(isolated|shared)(?:;|$)/.exec(request.headers.cookie ?? '')?.[1];
 
+  requests.push({ path, search: new URL(request.url, 'http://localhost').search, referer: request.headers.referer, cookie });
+
   const write = { '/cookie/set': 'isolated', '/cookie/set-shared': 'shared' }[path];
 
   if (write) {
@@ -39,7 +63,29 @@ export async function fixture() {
   const [background, marker] = {
     '/split': ['#703496', '#f386b9'],
     '/peek': ['#235089', '#83ddff'],
+    '/opener': openerColors,
+    '/popup': popupColors,
   }[path] ?? ['#147a70', '#ffcc49'];
+
+  // Asks before leaving. Chromium shows the prompt only after a user gesture.
+  const beforeUnload = `
+    addEventListener('beforeunload', event => {
+      event.preventDefault();
+      event.returnValue = '';
+    });`;
+
+  const extra = {
+    '/opener': `
+      <a id="blank" href="/cookie/check" target="_blank">Open in a new tab</a>
+      <button id="scripted">Open a popup</button>
+      <script>${openerScript}</script>`,
+    '/popup': `
+      <script>
+        fetch('/probe/popup-opener?value=' + (window.opener !== null));
+        window.opener?.postMessage('hello-from-popup', '*');${beforeUnload}
+      </script>`,
+    '/unload': `<script>${beforeUnload}</script>`,
+  }[path] ?? '';
 
   response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
   response.end(`<!doctype html>
@@ -48,12 +94,13 @@ export async function fixture() {
       html { background: ${background}; color: white; font: 24px system-ui; }
       body { margin: 32px; }
       #marker { width: 116px; height: 56px; background: ${marker}; }
+      #blank, #scripted { display: block; width: 320px; height: 64px; margin: 8px 0; font: inherit; }
     </style>
     <div id="marker"></div>
     <h1>${name}</h1>
     <input aria-label="Draft">
     <a href="/peek" target="_blank">Open another page</a>
-    <script>window.documentToken = crypto.randomUUID();</script>`);
+    <script>window.documentToken = crypto.randomUUID();</script>${extra}`);
   });
 
   server.listen(0, '127.0.0.1');
@@ -63,5 +110,6 @@ export async function fixture() {
     server,
     base: `http://127.0.0.1:${server.address().port}`,
     probe: name => new Promise(resolve => pending.set(name, resolve)),
+    requests,
   };
 }
