@@ -99,6 +99,7 @@ pub fn init(
                 "sandbox",
                 &nonce,
                 TEXT_COLLECT,
+                // Either verdict line counts as loaded; `verdict` reads which one it is.
                 r"() => /adequately sandboxed/i.test(document.body?.innerText ?? '')",
             ),
         },
@@ -501,9 +502,15 @@ fn verdict(
     scan_errors: &[String],
 ) -> Vec<String> {
     let mut failures = Vec::new();
-    // The sandbox step reports "ready" only once chrome://sandbox says "adequately sandboxed".
-    if results.get("sandbox").and_then(|s| s.get("reason")) != Some(&json!("ready")) {
-        failures.push("chrome://sandbox did not report an adequate sandbox".to_string());
+    // chrome://sandbox ends with "You are adequately sandboxed." or "You are NOT adequately
+    // sandboxed."; the step is ready once either is shown, so the verdict reads which one.
+    let sandbox_text = results
+        .get("sandbox")
+        .and_then(|s| s.get("text"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if !sandbox_text.contains("You are adequately sandboxed") {
+        failures.push("chrome://sandbox did not say \"You are adequately sandboxed\"".to_string());
     }
     if !forbidden.is_empty() {
         failures.push(format!(
@@ -900,13 +907,13 @@ mod tests {
     #[test]
     fn verdict_fails_on_sandbox_switches_webdriver_and_scan_gaps() {
         let good: Map<String, Value> = serde_json::from_value(json!({
-            "sandbox": { "reason": "ready" },
+            "sandbox": { "reason": "ready", "text": "Sandbox Status\nYou are adequately sandboxed." },
             "page": { "webdriver": false },
         }))
         .unwrap();
         assert!(verdict(&good, &[], &[]).is_empty());
         let bad: Map<String, Value> = serde_json::from_value(json!({
-            "sandbox": { "reason": "timeout" },
+            "sandbox": { "reason": "ready", "text": "You are NOT adequately sandboxed." },
             "page": { "webdriver": true },
         }))
         .unwrap();
