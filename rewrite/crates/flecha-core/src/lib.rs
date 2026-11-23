@@ -2,7 +2,7 @@
 
 pub mod import;
 #[macro_use]
-mod input_text;
+pub mod input_text;
 mod settings;
 pub mod shortcuts;
 pub mod sleep;

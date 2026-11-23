@@ -35,6 +35,10 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check:source
+      - name: Check the browser import parity fixture
+        run: |
+          node rewrite/crates/flecha-import/scripts/generate-import-fixture.ts
+          git diff --exit-code -- rewrite/crates/flecha-import/tests/fixtures/import-parity.jsonl
       - uses: actions/setup-node@v7
         with:
           node-version: 26
@@ -75,6 +79,11 @@ jobs:
         run: |
           bash spikes/gpui-cef-compositor/prepare.sh --sources-only
           time cargo +stable metadata --locked --format-version 1 > /dev/null
+      - name: Check the Rust browser importers
+        run: |
+          cargo +stable fmt -p flecha-import --check
+          cargo +stable clippy --locked -p flecha-import --all-targets -- -D warnings
+          cargo +stable test --locked -p flecha-import
       - name: Check the core crate in isolation
         shell: bash
         run: |

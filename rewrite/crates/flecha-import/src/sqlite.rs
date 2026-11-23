@@ -1,0 +1,323 @@
+use std::collections::{HashMap, HashSet};
+use std::fs::File;
+use std::io::{self, Read};
+use std::path::Path;
+
+use cap_std::fs::Dir;
+use flecha_core::input_text::trim_input;
+use rusqlite::config::DbConfig;
+use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+use rusqlite::types::ValueRef;
+use rusqlite::{Connection, OpenFlags, PrepFlags, Row, Statement};
+use tempfile::TempDir;
+
+use crate::bookmarks::BookmarkTree;
+use crate::input::{file, io_error};
+use crate::{Bookmark, HistoryVisit, ReadError, SavedTab};
+
+// Per profile, from the shipping browserImport.ts.
+const HISTORY_ROWS: i64 = 5000;
+
+#[derive(Clone, Copy)]
+pub(crate) enum Database {
+    Chromium,
+    Firefox,
+    Safari,
+}
+
+pub(crate) struct Snapshot {
+    connection: Connection,
+    _directory: TempDir,
+    pub(crate) wal_warning: Option<ReadError>,
+}
+
+impl Snapshot {
+    pub(crate) fn open(root: &Dir, name: &str, kind: Database) -> Result<Self, ReadError> {
+        let mut temp = tempfile::Builder::new();
+        temp.prefix("flecha-import-");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            temp.permissions(std::fs::Permissions::from_mode(0o700));
+        }
+        let directory = temp.tempdir().map_err(io_error)?;
+        let main = directory.path().join("snapshot.sqlite");
+        copy(root, name, &main)?;
+        let wal = directory.path().join("snapshot.sqlite-wal");
+        let wal_warning = match copy(root, &format!("{name}-wal"), &wal) {
+            Ok(()) | Err(ReadError::Missing) => None,
+            Err(error) => {
+                // A partial WAL copy is unusable. Discard only the file we created.
+                match std::fs::remove_file(&wal) {
+                    Ok(()) => {}
+                    Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                    Err(err) => return Err(io_error(err)),
+                }
+                Some(error)
+            }
+        };
+        let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+        let mut connection = Connection::open_with_flags(&main, flags).map_err(database_error)?;
+        connection
+            .set_db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA, false)
+            .map_err(database_error)?;
+        connection
+            .authorizer(Some(move |ctx: AuthContext<'_>| authorize(kind, ctx)))
+            .map_err(database_error)?;
+        Ok(Self {
+            connection,
+            _directory: directory,
+            wal_warning,
+        })
+    }
+
+    fn prepare(&self, sql: &str) -> Result<Statement<'_>, ReadError> {
+        self.connection
+            .prepare_with_flags(sql, PrepFlags::SQLITE_PREPARE_NO_VTAB)
+            .map_err(database_error)
+    }
+
+    pub(crate) fn history(&self, kind: Database) -> Result<(Vec<HistoryVisit>, usize), ReadError> {
+        let sql = match kind {
+            Database::Chromium => "SELECT url, title, visit_count, last_visit_time / 1000 - 11644473600000
+                FROM urls WHERE hidden = 0 AND last_visit_time > 0 ORDER BY last_visit_time DESC LIMIT ?1",
+            Database::Firefox => "SELECT url, title, visit_count, last_visit_date / 1000
+                FROM moz_places WHERE hidden = 0 AND visit_count > 0 AND last_visit_date IS NOT NULL
+                ORDER BY last_visit_date DESC LIMIT ?1",
+            Database::Safari => "SELECT i.url, v.title, i.visit_count,
+                CAST((MAX(v.visit_time) + 978307200) * 1000 AS INTEGER) AS last_visit
+                FROM history_items i JOIN history_visits v ON v.history_item = i.id
+                GROUP BY i.id ORDER BY last_visit DESC LIMIT ?1",
+        };
+        let mut statement = self.prepare(sql)?;
+        let mut rows = statement.query([HISTORY_ROWS]).map_err(database_error)?;
+        let mut history = Vec::new();
+        let mut malformed = 0;
+        while let Some(row) = rows.next().map_err(database_error)? {
+            let Some(url) = row
+                .get_ref(0)
+                .ok()
+                .and_then(text)
+                .filter(|url| !url.is_empty())
+            else {
+                malformed += 1;
+                continue;
+            };
+            let Some(last_visit) = row.get_ref(3).ok().and_then(number) else {
+                malformed += 1;
+                continue;
+            };
+            let visits = row
+                .get_ref(2)
+                .ok()
+                .and_then(number)
+                .filter(|value| *value != 0.0)
+                .unwrap_or(1.0);
+            let title = row
+                .get_ref(1)
+                .ok()
+                .and_then(title)
+                .unwrap_or_else(|| url.clone());
+            history.push(HistoryVisit {
+                url,
+                title,
+                visits,
+                last_visit,
+            });
+        }
+        Ok((history, malformed))
+    }
+
+    pub(crate) fn firefox_bookmarks(&self) -> Result<(Vec<Bookmark>, usize), ReadError> {
+        let mut statement = self.prepare("SELECT b.id, b.parent, b.type, b.title, b.guid, p.url
+            FROM moz_bookmarks b LEFT JOIN moz_places p ON p.id = b.fk ORDER BY b.parent, b.position")?;
+        let mut rows = statement.query([]).map_err(database_error)?;
+        let mut roots = HashMap::new();
+        let mut parents: HashMap<i64, Vec<FirefoxBookmark>> = HashMap::new();
+        let mut malformed = 0;
+        while let Some(row) = rows.next().map_err(database_error)? {
+            match firefox_record(row) {
+                Ok((parent, guid, item)) => {
+                    roots.entry(guid).or_insert(item.id);
+                    parents.entry(parent).or_default().push(item);
+                }
+                Err(_) => malformed += 1,
+            }
+        }
+        let mut output = Vec::new();
+        for (guid, name) in [
+            ("toolbar_____", None),
+            ("menu________", Some("Bookmarks Menu")),
+            ("unfiled_____", Some("Other Bookmarks")),
+            ("mobile______", Some("Mobile Bookmarks")),
+        ] {
+            let bookmarks = roots
+                .get(guid)
+                .map_or_else(Vec::new, |id| firefox_tree(*id, &parents, &mut malformed));
+            if let Some(name) = name {
+                output.push(Bookmark::Folder {
+                    name: name.into(),
+                    children: bookmarks,
+                });
+            } else {
+                output.extend(bookmarks);
+            }
+        }
+        Ok((output, malformed))
+    }
+}
+
+fn copy(root: &Dir, name: &str, destination: &Path) -> Result<(), ReadError> {
+    let source = file(root, name)?;
+    // Copy through the validated handle, and stop at the size observed when it opened.
+    let len = source.metadata().map_err(io_error)?.len();
+    let mut destination = File::create_new(destination).map_err(io_error)?;
+    io::copy(&mut source.take(len), &mut destination).map_err(io_error)?;
+    Ok(())
+}
+
+fn authorize(kind: Database, ctx: AuthContext<'_>) -> Authorization {
+    if ctx.accessor.is_some() {
+        return Authorization::Deny;
+    }
+    let allowed = match ctx.action {
+        AuthAction::Select => true,
+        AuthAction::Function { function_name } => {
+            matches!(kind, Database::Safari) && function_name == "max"
+        }
+        AuthAction::Read {
+            table_name,
+            column_name,
+        } if ctx.database_name == Some("main") => match (kind, table_name) {
+            (Database::Chromium, "urls") => matches!(
+                column_name,
+                "url" | "title" | "visit_count" | "last_visit_time" | "hidden"
+            ),
+            (Database::Firefox, "moz_places") => matches!(
+                column_name,
+                "id" | "url" | "title" | "visit_count" | "last_visit_date" | "hidden"
+            ),
+            (Database::Firefox, "moz_bookmarks") => matches!(
+                column_name,
+                "id" | "parent" | "type" | "title" | "guid" | "fk" | "position"
+            ),
+            (Database::Safari, "history_items") => {
+                matches!(column_name, "id" | "url" | "visit_count")
+            }
+            (Database::Safari, "history_visits") => {
+                matches!(column_name, "title" | "visit_time" | "history_item")
+            }
+            _ => false,
+        },
+        _ => false,
+    };
+    if allowed {
+        Authorization::Allow
+    } else {
+        Authorization::Deny
+    }
+}
+
+fn database_error(_: rusqlite::Error) -> ReadError {
+    ReadError::InvalidDatabase
+}
+
+fn text(value: ValueRef<'_>) -> Option<String> {
+    match value {
+        ValueRef::Text(bytes) => Some(String::from_utf8_lossy(bytes).into_owned()),
+        _ => None,
+    }
+}
+
+fn title(value: ValueRef<'_>) -> Option<String> {
+    match value {
+        ValueRef::Integer(value) if value != 0 => Some(value.to_string()),
+        ValueRef::Real(value) if value != 0.0 && value.is_finite() => Some(value.to_string()),
+        _ => text(value).filter(|value| !value.is_empty()),
+    }
+}
+
+fn number(value: ValueRef<'_>) -> Option<f64> {
+    let number = match value {
+        ValueRef::Integer(number) => number as f64,
+        ValueRef::Real(number) => number,
+        ValueRef::Text(bytes) => {
+            let text = trim_input(std::str::from_utf8(bytes).ok()?);
+            if text.is_empty() {
+                0.0
+            } else {
+                text.parse().ok()?
+            }
+        }
+        ValueRef::Null => 0.0,
+        ValueRef::Blob(_) => return None,
+    };
+    number.is_finite().then_some(number)
+}
+
+struct FirefoxBookmark {
+    id: i64,
+    kind: i64,
+    title: Option<String>,
+    url: Option<String>,
+}
+
+fn firefox_record(row: &Row<'_>) -> rusqlite::Result<(i64, String, FirefoxBookmark)> {
+    Ok((
+        row.get(1)?,
+        row.get(4)?,
+        FirefoxBookmark {
+            id: row.get(0)?,
+            kind: row.get(2)?,
+            title: title(row.get_ref(3)?),
+            url: text(row.get_ref(5)?),
+        },
+    ))
+}
+
+fn firefox_tree(
+    id: i64,
+    parents: &HashMap<i64, Vec<FirefoxBookmark>>,
+    malformed: &mut usize,
+) -> Vec<Bookmark> {
+    let children = |id| parents.get(&id).map_or(&[][..], Vec::as_slice).iter();
+    let mut seen = HashSet::from([id]);
+    let mut stack = vec![(children(id), None)];
+    let mut tree = BookmarkTree::default();
+    while let Some((rows, _)) = stack.last_mut() {
+        match rows.next() {
+            Some(row) if row.kind == 1 => {
+                if let Some(url) = row.url.as_ref().filter(|url| !url.is_empty()) {
+                    let title = row.title.as_ref().unwrap_or(url);
+                    tree.push(Bookmark::Tab(SavedTab {
+                        url: url.clone(),
+                        title: title.clone(),
+                    }));
+                } else {
+                    *malformed += 1;
+                }
+            }
+            Some(row) if row.kind == 2 => {
+                if seen.insert(row.id) {
+                    tree.open(
+                        row.title
+                            .clone()
+                            .unwrap_or_else(|| "Untitled folder".into()),
+                    );
+                    stack.push((children(row.id), Some(row.id)));
+                } else {
+                    *malformed += 1;
+                }
+            }
+            Some(_) => {}
+            None => {
+                let (_, folder) = stack.pop().expect("an active Firefox bookmark list");
+                if let Some(id) = folder {
+                    seen.remove(&id);
+                    tree.close(true);
+                }
+            }
+        }
+    }
+    tree.finish()
+}
