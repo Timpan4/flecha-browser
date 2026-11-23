@@ -184,6 +184,34 @@ fn arc_surrogate_ids_and_literal_replacement_chars_stay_distinct() {
 }
 
 #[test]
+fn firefox_reports_duplicate_place_ids_and_keeps_the_lowest_rowid() {
+    let home = tempfile::tempdir().unwrap();
+    let profile = home.path().join(".mozilla/firefox/example.default");
+    fs::create_dir_all(&profile).unwrap();
+    let db = Connection::open(profile.join("places.sqlite")).unwrap();
+    db.execute_batch(
+        "CREATE TABLE moz_places (id, url, title, visit_count, last_visit_date, hidden);
+         CREATE TABLE moz_bookmarks (id, parent, type, title, guid, fk, position);
+         INSERT INTO moz_places (rowid, id, url) VALUES
+             (30, 1, 'https://example.org/last'), (10, 1, 'https://example.org/first'),
+             (20, 1, 'https://example.org/middle'), (1, 2, 'https://example.org/unreferenced');
+         INSERT INTO moz_bookmarks VALUES (100, 0, 2, 'Toolbar', 'toolbar_____', NULL, 0),
+             (101, 100, 1, 'Bookmark', 'bookmark', 1, 0);",
+    )
+    .unwrap();
+    drop(db);
+
+    let config = BrowserLocations::new(Platform::Linux, home.path());
+    let plan = read_browser(Browser::Firefox, &config);
+    assert_eq!(plan.warnings, ["Skipped 2 duplicate Firefox place rows."]);
+    assert_eq!(plan.bookmark_count, 1);
+    assert!(matches!(
+        plan.bookmarks.as_deref(),
+        Some([Bookmark::Tab(tab)]) if tab.url == "https://example.org/first"
+    ));
+}
+
+#[test]
 fn firefox_expands_each_folder_id_once_per_database() {
     // The verifier also exercised 24 duplicate levels. The smaller case catches a
     // regression without running the larger, exponential input on the old reader.

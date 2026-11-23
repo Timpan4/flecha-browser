@@ -1,3 +1,4 @@
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{self, Read};
@@ -29,6 +30,12 @@ pub(crate) struct Snapshot {
     connection: Connection,
     _directory: TempDir,
     pub(crate) wal_warning: Option<ReadError>,
+}
+
+pub(crate) struct FirefoxBookmarks {
+    pub(crate) nodes: Vec<Bookmark>,
+    pub(crate) malformed: usize,
+    pub(crate) duplicate_places: usize,
 }
 
 impl Snapshot {
@@ -128,10 +135,27 @@ impl Snapshot {
         Ok((history, malformed))
     }
 
-    pub(crate) fn firefox_bookmarks(&self) -> Result<(Vec<Bookmark>, usize), ReadError> {
+    pub(crate) fn firefox_bookmarks(&self) -> Result<FirefoxBookmarks, ReadError> {
+        let mut places = HashMap::new();
+        let mut duplicate_places = 0;
+        {
+            // Resolve each place once, including in databases with no index on the ID.
+            let mut statement = self.prepare("SELECT id, url FROM moz_places ORDER BY rowid")?;
+            let mut rows = statement.query([]).map_err(database_error)?;
+            while let Some(row) = rows.next().map_err(database_error)? {
+                let Ok(id) = row.get::<_, i64>(0) else {
+                    continue;
+                };
+                match places.entry(id) {
+                    Entry::Vacant(entry) => {
+                        entry.insert(row.get_ref(1).ok().and_then(text));
+                    }
+                    Entry::Occupied(_) => duplicate_places += 1,
+                }
+            }
+        }
         let mut statement = self.prepare(
-            "SELECT b.id, b.parent, b.type, b.title, b.guid,
-                (SELECT p.url FROM moz_places p WHERE p.id = b.fk LIMIT 1)
+            "SELECT b.id, b.parent, b.type, b.title, b.guid, b.fk
              FROM moz_bookmarks b ORDER BY b.parent, b.position",
         )?;
         let mut rows = statement.query([]).map_err(database_error)?;
@@ -139,7 +163,7 @@ impl Snapshot {
         let mut parents: HashMap<i64, Vec<FirefoxBookmark>> = HashMap::new();
         let mut malformed = 0;
         while let Some(row) = rows.next().map_err(database_error)? {
-            match firefox_record(row) {
+            match firefox_record(row, &places) {
                 Ok((parent, guid, item)) => {
                     roots.entry(guid).or_insert(item.id);
                     parents.entry(parent).or_default().push(item);
@@ -167,7 +191,11 @@ impl Snapshot {
                 output.extend(bookmarks);
             }
         }
-        Ok((output, malformed))
+        Ok(FirefoxBookmarks {
+            nodes: output,
+            malformed,
+            duplicate_places,
+        })
     }
 }
 
@@ -199,7 +227,7 @@ fn authorize(kind: Database, ctx: AuthContext<'_>) -> Authorization {
             ),
             (Database::Firefox, "moz_places") => matches!(
                 column_name,
-                "id" | "url" | "title" | "visit_count" | "last_visit_date" | "hidden"
+                "id" | "url" | "title" | "visit_count" | "last_visit_date" | "hidden" | "ROWID"
             ),
             (Database::Firefox, "moz_bookmarks") => matches!(
                 column_name,
@@ -266,7 +294,10 @@ struct FirefoxBookmark {
     url: Option<String>,
 }
 
-fn firefox_record(row: &Row<'_>) -> rusqlite::Result<(i64, String, FirefoxBookmark)> {
+fn firefox_record(
+    row: &Row<'_>,
+    places: &HashMap<i64, Option<String>>,
+) -> rusqlite::Result<(i64, String, FirefoxBookmark)> {
     Ok((
         row.get(1)?,
         row.get(4)?,
@@ -274,7 +305,11 @@ fn firefox_record(row: &Row<'_>) -> rusqlite::Result<(i64, String, FirefoxBookma
             id: row.get(0)?,
             kind: row.get(2)?,
             title: title(row.get_ref(3)?),
-            url: text(row.get_ref(5)?),
+            url: row
+                .get::<_, i64>(5)
+                .ok()
+                .and_then(|id| places.get(&id))
+                .and_then(Clone::clone),
         },
     ))
 }
@@ -331,12 +366,17 @@ fn firefox_tree(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
     use super::{Bookmark, Connection, Database, Snapshot};
     use crate::input::open_root;
 
     #[test]
-    fn firefox_duplicate_place_ids_do_not_multiply_bookmarks() {
-        // The verifier's smallest fixture has 500 places and 500 referencing bookmarks.
+    fn firefox_late_place_lookups_scale_with_rows() {
+        let mut instructions = Vec::new();
         for count in [500_i64, 1000] {
             let profile = tempfile::tempdir().unwrap();
             let name = "places.sqlite";
@@ -350,7 +390,7 @@ mod tests {
             let rows = db.transaction().unwrap();
             for index in 0..count {
                 rows.execute(
-                    "INSERT INTO moz_places VALUES (1, ?1)",
+                    "INSERT INTO moz_places VALUES (2, ?1)",
                     [format!("https://example.org/{index}")],
                 )
                 .unwrap();
@@ -360,22 +400,49 @@ mod tests {
                 )
                 .unwrap();
             }
+            rows.execute(
+                "INSERT INTO moz_places (rowid, id, url) VALUES
+                    (?2, 1, 'https://example.org/duplicate'), (?1, 1, 'https://example.org/target')",
+                (count + 1, count + 2),
+            ).unwrap();
             rows.commit().unwrap();
             drop(db);
 
             let root = open_root(profile.path()).unwrap();
-            let snapshot = Snapshot::open(&root, name, Database::Firefox).unwrap();
-            let (nodes, malformed) = snapshot.firefox_bookmarks().unwrap();
-            let tabs: Vec<_> = nodes
+            let mut snapshot = Snapshot::open(&root, name, Database::Firefox).unwrap();
+            let steps = Arc::new(AtomicUsize::new(0));
+            let counter = Arc::clone(&steps);
+            snapshot
+                .connection
+                .progress_handler(
+                    1,
+                    Some(move || {
+                        counter.fetch_add(1, Ordering::Relaxed);
+                        false
+                    }),
+                )
+                .unwrap();
+
+            let bookmarks = snapshot.firefox_bookmarks().unwrap();
+            instructions.push(steps.load(Ordering::Relaxed));
+            let tabs: Vec<_> = bookmarks
+                .nodes
                 .iter()
                 .filter_map(|node| match node {
                     Bookmark::Tab(tab) => Some(tab),
                     Bookmark::Folder { .. } => None,
                 })
                 .collect();
-            assert_eq!(malformed, 0);
+            assert_eq!(bookmarks.malformed, 0);
+            assert_eq!(bookmarks.duplicate_places, usize::try_from(count).unwrap());
             assert_eq!(tabs.len(), usize::try_from(count).unwrap());
-            assert!(tabs.iter().all(|tab| tab.url == "https://example.org/0"));
+            assert!(
+                tabs.iter()
+                    .all(|tab| tab.url == "https://example.org/target")
+            );
         }
+        // Doubling both tables can at most double the per-row instructions of the two scans.
+        assert!(instructions[0] > 0);
+        assert!(instructions[1] <= 2 * instructions[0], "{instructions:?}");
     }
 }

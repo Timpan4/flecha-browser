@@ -498,6 +498,7 @@ pub fn read_browser(browser: Browser, config: &BrowserLocations) -> ImportPlan {
     let mut tidy = Tidy::default();
     let mut malformed_bookmarks = 0;
     let mut malformed_history = 0;
+    let mut duplicate_firefox_places = 0;
     let kind = browser.database();
     for profile in profiles {
         let snapshot = profile
@@ -517,7 +518,10 @@ pub fn read_browser(browser: Browser, config: &BrowserLocations) -> ImportPlan {
         if !profile.bookmarks.is_empty() && browser != Browser::Arc {
             let (nodes, skipped) = match browser {
                 Browser::Firefox => match &snapshot {
-                    Some(Ok(copy)) => copy.firefox_bookmarks(),
+                    Some(Ok(copy)) => copy.firefox_bookmarks().map(|bookmarks| {
+                        duplicate_firefox_places += bookmarks.duplicate_places;
+                        (bookmarks.nodes, bookmarks.malformed)
+                    }),
                     Some(Err(error)) => Err(*error),
                     None => Err(ReadError::Missing),
                 }
@@ -574,6 +578,16 @@ pub fn read_browser(browser: Browser, config: &BrowserLocations) -> ImportPlan {
     if malformed_bookmarks > 0 {
         plan.warnings.push(format!(
             "Skipped {malformed_bookmarks} malformed bookmark records."
+        ));
+    }
+    if duplicate_firefox_places > 0 {
+        let noun = if duplicate_firefox_places == 1 {
+            "row"
+        } else {
+            "rows"
+        };
+        plan.warnings.push(format!(
+            "Skipped {duplicate_firefox_places} duplicate Firefox place {noun}."
         ));
     }
     if malformed_history > 0 {
