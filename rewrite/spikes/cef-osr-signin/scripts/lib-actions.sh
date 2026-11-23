@@ -1,7 +1,8 @@
+# shellcheck shell=bash
 # Helpers for ACTIONS scripts run by xvfb-isolated.sh (sourced, not executed).
 # WAIT_SECS is required: how long wait_for waits for a log line before failing. It bounds a
 # test run on Xvfb and is not a product limit.
-x=${XDOTOOL:-xdotool}
+xdo() { "${XDOTOOL:-xdotool}" "$@"; }
 : "${WAIT_SECS:?set WAIT_SECS, the per-step wait in seconds}"
 log=$OUT/stderr.log
 

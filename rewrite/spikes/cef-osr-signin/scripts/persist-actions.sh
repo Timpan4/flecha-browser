@@ -9,7 +9,7 @@ set -euo pipefail
 . "$(dirname "$0")/lib-actions.sh"
 : "${PROFILE:?set PROFILE to the --profile path}" "${WM:?set WM to a window manager binary}"
 
-wid=$("$x" search --sync --onlyvisible --name '^Flecha spike')
+wid=$(xdo search --sync --onlyvisible --name '^Flecha spike')
 wait_for '^\[console\] INPUT storage loads'
 echo "cookie hosts at start: $(sqlite3 "file:$PROFILE/Default/Cookies?mode=ro&immutable=1" \
     'select group_concat(host_key) from (select distinct host_key from cookies)')"
@@ -24,5 +24,5 @@ until xprop -root _NET_SUPPORTING_WM_CHECK 2>/dev/null | grep -c 'window id' >/d
     ((SECONDS < deadline)) || { echo "FAIL window manager did not start" >&2; exit 1; }
     sleep 0.2
 done
-"$x" windowquit "$wid"
+xdo windowquit "$wid"
 wait_exit
