@@ -4,8 +4,9 @@
 # run, and a system bus address that points nowhere. Each app run checks that
 # its process tree holds nothing under the desktop session's runtime dir, the
 # system bus socket or the caller's home outside the bundle, pages and results
-# (`isolation_clean` in the report). Stops what it starts by PID, or by the
-# process group ID of a run's session: it kills that group when the run
+# (`isolation_clean` in the report). Stops what it starts by PID, by the
+# process group ID of a run's session, and through pidfds for processes
+# marked with the run's XDG_RUNTIME_DIR (scripts/sweep.sh): when the run
 # outlives its watchdog (see `watchdog_ms`), when anything of the session
 # outlives it, and when the runner itself exits mid-run.
 # Exits nonzero if any run fails.
@@ -162,6 +163,8 @@ system_bus_socket=/run/dbus/system_bus_socket
 real_home=${HOME:?}
 allowed="$bundle:$pages:$results"
 
+# shellcheck source=sweep.sh
+source "$here/scripts/sweep.sh"
 xvfb_pid=
 active_group=
 active_runtime=
@@ -169,18 +172,13 @@ scratch=()
 # An EXIT trap's last status becomes the script's, so this keeps the status it
 # was called with.
 cleanup() {
-    local status=$? d job
+    local status=$? d
     # A session's launcher is timeout, which calls setpgid(0, 0) before it
-    # forks anything (coreutils src/timeout.c). Killing it by PID first stops a
-    # launch whose group does not exist yet; the sweep then covers the group it
-    # may already have made. `jobs -p` lists it even before run_one records it.
-    for job in $(jobs -p); do
-        [[ $job != "$xvfb_pid" ]] || continue
-        kill -KILL "$job" 2>/dev/null || true
-        wait "$job" 2>/dev/null || true
-        end_group "$job" "$active_runtime" >/dev/null || true
-    done
-    if [[ -n $active_group ]]; then end_group "$active_group" "$active_runtime" >/dev/null || true; fi
+    # forks anything (coreutils src/timeout.c). stop_run kills it by PID first,
+    # which stops a launch whose group does not exist yet, then sweeps the
+    # group and the run's marker. `jobs -p` lists the launcher even before
+    # run_one records it.
+    stop_run "$bin" "$xvfb_pid" "$active_group" "$active_runtime" >/dev/null
     if [[ -n $xvfb_pid ]] && kill -0 "$xvfb_pid" 2>/dev/null; then
         kill "$xvfb_pid"
         wait "$xvfb_pid" 2>/dev/null || true
@@ -209,46 +207,6 @@ exec {dfd}>&-
 display=:$display_number
 echo "Xvfb pid $xvfb_pid on $display"
 
-
-# The live processes of one run, one `ps` line each: the members of process
-# group $1, and every process whose environment holds the run's own
-# XDG_RUNTIME_DIR=$2, which a process keeps when it leaves the group or is
-# reparented. Zombies are already dead and left out.
-run_processes() { # group runtime
-    local p marked=
-    if [[ -n $2 ]]; then
-        for p in /proc/[0-9]*; do
-            [[ -O $p ]] || continue
-            tr '\0' '\n' 2>/dev/null <"$p/environ" | grep -Fxc "XDG_RUNTIME_DIR=$2" >/dev/null &&
-                marked+=" ${p#/proc/}"
-        done
-    fi
-    ps -eo pid=,pgid=,stat=,args= | awk -v g="$1" -v marked="$marked" '
-        BEGIN { n = split(marked, m, " "); for (i = 1; i <= n; i++) mine[m[i]] = 1 }
-        ($2 == g || $1 in mine) && $3 !~ /^Z/'
-}
-# Kills what is left of a run: process group $1 by its group ID and every
-# process marked with its runtime dir $2 by PID. Waits until none is left,
-# for at most STEP_TIMEOUT_MS. Prints what it found. Returns 0 if nothing was
-# left, 1 if something was and it is gone, 2 if any survived.
-now_ms() { local t=${EPOCHREALTIME//[!0-9]/}; echo $((10#$t / 1000)); }
-end_group() { # group runtime
-    local group=$1 left pid deadline
-    left=$(run_processes "$group" "${2:-}")
-    [[ -n $left ]] || return 0
-    printf '%s\n' "$left"
-    deadline=$(( $(now_ms) + STEP_TIMEOUT_MS ))
-    while :; do
-        kill -KILL -- "-$group" 2>/dev/null || true
-        while read -r pid _; do kill -KILL "$pid" 2>/dev/null || true; done <<<"$left"
-        left=$(run_processes "$group" "${2:-}")
-        [[ -n $left ]] || return 1
-        (( $(now_ms) < deadline )) || break
-        sleep 0.1
-    done
-    printf '%s\n' "$left" | sed 's/^/still alive: /'
-    return 2
-}
 
 failures=0
 run_one() {
@@ -279,7 +237,8 @@ run_one() {
     # (results/2026-11-23-r6-controls/watchdog/tree-before-stop.txt). On expiry
     # it signals the group, then sends SIGKILL after one more STEP_TIMEOUT_MS
     # if dbus-run-session is still running. It waits only for dbus-run-session,
-    # so end_group below removes whatever else is left. XDG base dirs and cache
+    # so end_group (scripts/sweep.sh) removes whatever else is left, and fails
+    # the run if its inventory fails. XDG base dirs and cache
     # overrides would point back into the real home.
     timeout --kill-after="$(ms_to_s "$STEP_TIMEOUT_MS")" "$(ms_to_s "$watchdog")" \
     env -u WAYLAND_DISPLAY -u WAYLAND_SOCKET -u DBUS_SESSION_BUS_ADDRESS \
@@ -302,7 +261,7 @@ run_one() {
     local expired='' left=0
     if (( status == 124 || status == 137 )); then
         expired=yes
-        end_group "$session" "$runtime" >"$results/$name.leftover.txt" || left=$?
+        end_group "$bin" "$session" "$runtime" >"$results/$name.leftover.txt" || left=$?
         echo "watchdog expired after $(ms_to_s "$watchdog") s (exit $status); killed process group $session" | tee "$results/$name.watchdog.txt"
     fi
     # What landed in the scratch dirs would otherwise have gone to the desktop
@@ -324,13 +283,16 @@ run_one() {
     # After the leak check, so a child slow to exit is reported as a leak
     # rather than killed first: nothing of the session may outlive it.
     if [[ -z $expired ]]; then
-        end_group "$session" "$runtime" >"$results/$name.leftover.txt" || left=$?
-        if (( left )); then
+        end_group "$bin" "$session" "$runtime" >"$results/$name.leftover.txt" || left=$?
+        if (( left == 1 || left == 2 )); then
             verdict=fail
             echo "   session processes outlived the session; killed process group $session (see $name.leftover.txt)"
         fi
     fi
-    (( left != 2 )) || { verdict=fail; echo "   process group $session survived SIGKILL (see $name.leftover.txt)"; }
+    case $left in
+        2) verdict=fail; echo "   process group $session survived SIGKILL (see $name.leftover.txt)" ;;
+        3) verdict=fail; echo "   the sweep of process group $session and its marked processes was incomplete (see $name.leftover.txt)" ;;
+    esac
     active_group='' active_runtime=''
     [[ -s $results/$name.leftover.txt ]] || rm -f -- "$results/$name.leftover.txt"
     rm -rf -- "$base"

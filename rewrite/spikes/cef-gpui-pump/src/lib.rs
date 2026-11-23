@@ -4,6 +4,8 @@
 pub mod idle;
 pub mod procfs;
 pub mod schedule;
+#[cfg(target_os = "linux")]
+pub mod sweep;
 
 /// Whether `path` is `dir` or lies below it, by whole path components.
 pub fn path_under(path: &str, dir: &str) -> bool {

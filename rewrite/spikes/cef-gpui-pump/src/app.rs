@@ -26,6 +26,14 @@ pub fn main() -> ExitCode {
             }
         };
     }
+    // The runner's sweep of a run's marked processes. No CEF.
+    for (flag, kill) in [("--pump-sweep=", false), ("--pump-sweep-kill=", true)] {
+        if let Some(runtime) =
+            std::env::args().find_map(|a| a.strip_prefix(flag).map(str::to_string))
+        {
+            return sweep_main(&runtime, kill);
+        }
+    }
     env_logger::init();
     let _ = cef::api_hash(cef::sys::CEF_API_VERSION_LAST, 0);
     let args = cef::args::Args::new();
@@ -180,6 +188,56 @@ fn browser_main(args: cef::args::Args, mut app: cef::App) -> Result<bool> {
 }
 
 /// Adds the after-exit leak check to a scenario report and sets `pass`.
+/// Lists (`kill` false) or kills (`kill` true) this user's processes marked
+/// with `XDG_RUNTIME_DIR=runtime`; see `cef_gpui_pump::sweep`. Prints one
+/// `pid pgid state args` line per marked process, or one `sweep:` line per
+/// kill outcome. Exits 0 only if the scan, and each kill, completed; the runner
+/// counts any other exit as an incomplete sweep.
+fn sweep_main(runtime: &str, kill: bool) -> ExitCode {
+    use cef_gpui_pump::sweep::{self, Outcome};
+    if !runtime.starts_with('/') {
+        eprintln!("error: the sweep needs an absolute XDG_RUNTIME_DIR, got {runtime:?}");
+        return ExitCode::from(2);
+    }
+    let marker = format!("XDG_RUNTIME_DIR={runtime}");
+    let found = match sweep::scan(&marker) {
+        Ok(found) => found,
+        Err(err) => {
+            eprintln!("error: process scan failed: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if !found.unreadable.is_empty() {
+        eprintln!(
+            "sweep: environ unreadable, not checked for the marker: {:?}",
+            found.unreadable
+        );
+    }
+    if !kill {
+        for m in &found.marked {
+            println!("{} {} {} {}", m.pid, m.pgid, m.state, m.args);
+        }
+        return ExitCode::SUCCESS;
+    }
+    let mut complete = true;
+    for (pid, outcome) in sweep::kill(&found.marked, &marker) {
+        match outcome {
+            Outcome::Killed => println!("sweep: killed {pid}"),
+            Outcome::GoneBeforeOpen => println!("sweep: {pid} gone before pidfd_open"),
+            Outcome::Skipped(why) => println!("sweep: skipped {pid}: {why:?}"),
+            Outcome::Failed(err) => {
+                complete = false;
+                println!("sweep: {pid} not signaled: {err}");
+            }
+        }
+    }
+    if complete {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
 fn wait_gone(path: &str) -> Result<bool> {
     let text = std::fs::read_to_string(path).with_context(|| format!("read {path}"))?;
     let mut report: serde_json::Map<String, Value> = serde_json::from_str(&text)?;
