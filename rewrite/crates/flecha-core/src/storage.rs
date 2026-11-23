@@ -8,6 +8,8 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, value::RawValue};
 
+mod snapshot;
+
 use crate::shortcuts::repair_saved_bindings;
 use crate::state::{DEFAULT_SPACE_COLOR, PinnedTree, compare_recency};
 use crate::{
@@ -239,14 +241,10 @@ fn readable(value: &Value) -> Result<Option<BrowserState>, DecodeError> {
 }
 
 fn decode_document(json: &str, legacy_only: bool) -> Result<BrowserState, DecodeError> {
-    // RawValue scans nested values without constructing a recursive tree. Apply the
-    // default recursion limit when materializing each recognized field below.
-    let fields: BTreeMap<String, &RawValue> =
-        serde_json::from_str(json).map_err(DecodeError::Json)?;
+    let fields: RawRecord<'_> = serde_json::from_str(json).map_err(DecodeError::Json)?;
     if let Some(version) = fields.get("version") {
         check_version(version, legacy_only)?;
     }
-    let mut raw = Map::new();
     let tabs = fields.get("tabs").ok_or(DecodeError::InvalidShape)?;
     let tabs: BTreeMap<String, &RawValue> =
         serde_json::from_str(tabs.get()).map_err(|_| DecodeError::InvalidShape)?;
@@ -254,39 +252,7 @@ fn decode_document(json: &str, legacy_only: bool) -> Result<BrowserState, Decode
         .into_iter()
         .filter_map(|(id, tab)| Some((TabId::new(id), repair_tab(tab)?)))
         .collect();
-    for key in [
-        "spaces",
-        "activeSpaceId",
-        "windows",
-        "closedWindows",
-        "favorites",
-        "archive",
-        "sidebarVisible",
-        "sidebarWidth",
-        "theme",
-        "searchEngine",
-        "archiveAfterHours",
-        "keybindings",
-        "environments",
-        "window",
-        "peekPinnedLinks",
-        "openLinksInFlechinha",
-        "sidebarInPageFullscreen",
-        "downloadsFolder",
-        "askWhereToSave",
-        "adBlock",
-        "adBlockAllowed",
-        "onboarded",
-        "sitePermissions",
-    ] {
-        if let Some(value) = fields.get(key) {
-            raw.insert(
-                key.into(),
-                serde_json::from_str(value.get()).map_err(DecodeError::Json)?,
-            );
-        }
-    }
-    repair(raw, tabs).ok_or(DecodeError::InvalidShape)
+    repair(snapshot::project(&fields)?, tabs).ok_or(DecodeError::InvalidShape)
 }
 
 fn check_version(version: &RawValue, legacy_only: bool) -> Result<(), DecodeError> {

@@ -43,7 +43,9 @@ fn referenced(state: &BrowserState) -> BTreeSet<TabId> {
 
 #[test]
 fn random_transitions_preserve_tab_and_selection_invariants() {
-    for seed in 1..=128u64 {
+    let (mut close_below, mut close_others) = (0, 0);
+    // Include the verifier's late cross-window claim at seed 359, step 219.
+    for seed in 1..=400u64 {
         let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
         let mut state = BrowserState::new(SpaceId::new("s0"), WindowId::new("w0"));
         let mut next_tab = 0;
@@ -51,7 +53,7 @@ fn random_transitions_preserve_tab_and_selection_invariants() {
         let mut next_window = 1;
         let mut next_folder = 0;
         let mut now: EpochMillis = 1_000_000;
-        for step in 0..120 {
+        for step in 0..240 {
             now += 1 + rng.below(4 * 3_600_000) as i64;
             let tabs: Vec<TabId> = state.tabs.keys().cloned().collect();
             let mut any_tabs = tabs.clone();
@@ -203,6 +205,12 @@ fn random_transitions_preserve_tab_and_selection_invariants() {
                     } else {
                         "close_others"
                     };
+                    if matches!(state.locate(&t), Some(Placement::Today { .. })) {
+                        match which {
+                            CloseToday::Below => close_below += 1,
+                            CloseToday::Others => close_others += 1,
+                        }
+                    }
                     anchor_check = Some(t.clone());
                     reported = Some(state.close_today_tabs(&t, which, now));
                 }
@@ -321,7 +329,9 @@ fn random_transitions_preserve_tab_and_selection_invariants() {
             for win in &state.windows {
                 assert!(state.space(&win.active_space_id).is_some(), "{context}");
                 for (space, ws) in &win.spaces {
-                    let members = state.tab_ids(&win.id, space).unwrap();
+                    let members = state.tab_ids(&win.id, space).unwrap_or_else(|| {
+                        panic!("missing window {:?} or Space {space:?}: {context}", win.id)
+                    });
                     for id in ws.active_tab_id.iter().chain(ws.split.iter().flatten()) {
                         assert!(
                             members.contains(&id),
@@ -367,4 +377,8 @@ fn random_transitions_preserve_tab_and_selection_invariants() {
             }
         }
     }
+    assert!(
+        close_below > 0 && close_others > 0,
+        "fuzzer must exercise both bulk close modes on Today tabs"
+    );
 }

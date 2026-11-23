@@ -10,7 +10,7 @@ Once a build ships, changing the snapshot format requires a schema version bump.
 
 `storage::load` returns a startup handle. `LoadedState::ready` exposes repaired state and the current-slot writer when there are no pending writes. `LoadedState::apply_recovery` saves the damaged copy before restoring the current slot, stops on failure, and returns the ready state on success. Call `ReadyState::started` after startup succeeds. A newer current schema blocks recovery. A newer last-good copy stays available to a newer reader, and a damaged current value is still set aside. Repairs assign distinct IDs to duplicate Spaces and folders while retaining their contents. Version 2 window memberships keyed by a duplicate Space ID stay with the first Space. The application owns the storage path, atomic writes, and error reporting.
 
-The reader validates the JSON syntax and skips unknown tab and navigation fields without materializing their nested values.
+The reader validates JSON syntax and skips unknown fields throughout the snapshot without materializing their nested values. Legacy pinned folder children are part of the schema, so serde_json's normal nesting limit still applies to those trees. An overdeep legacy tree triggers recovery that preserves the original snapshot. Version 3 writes flat pin records.
 
 `import_spaces` merges or appends parsed Spaces, folders, favorites, splits, and archive entries in one transaction. It preserves folder depth. Source readers can flatten their own input before calling it. Like the Arc reader, it accepts HTTP and HTTPS URLs, and reports rejected tab and archive entries.
 
@@ -30,9 +30,10 @@ GPUI owns command-bar ranking across sources, Peeks, shortcut registration, loca
 - When two saved keys resolve to one accelerator, Chromium's registration order picks the winner. The core displays no shortcut for the earlier binding when it loses.
 - Exit Split selects the desktop source if its phone mirror was selected. This follows the responsive toggle and keeps the source visible after removing the mirror.
 - Close Other Tabs and Close Tabs Below keep both responsive panes when invoked on either one, so closing the source cannot remove the anchor as a side effect.
+- If another window claims the selected shared tab, the old window can select a local Today tab so it keeps a page visible.
 - Auto-archive protects both panes of a selected split even in a background Space. Tabs with missing or invalid activity timestamps are ineligible for wall-clock expiry. Active-use sleep thresholds also require a known usage timestamp.
 - The archive keeps the shell's front insertion and cap. At capacity, older tabs evicted from closed-window history can displace newer archive entries. Undo compares the original close times of all retained entries and windows. The Chromium shell compares the heads of those lists. Reopening a window whose active Space lost its Today tabs opens the first Space that retained tabs.
-- Suggestion requests keep JWTs local even when pasted directly beside other text or with spaced or repeatedly encoded delimiters. The local decoder accepts either standard Base64 or Base64URL for each segment, and accepts any JSON object header.
+- Suggestion requests keep JWTs local even when pasted directly beside other text or with spaced, repeatedly encoded, or default-ignorable characters around or inside them. The local decoder accepts either standard Base64 or Base64URL for each segment, and accepts any JSON object header.
 - Environment switches apply to HTTP and HTTPS pages. A blob URL stays on its original origin.
 - The command bar treats malformed explicit HTTP and HTTPS input as invalid so its path, query, and fragment stay local.
 - GitHub issue shortcuts require a complete repository segment and fall back to GitHub search for ambiguous paths.

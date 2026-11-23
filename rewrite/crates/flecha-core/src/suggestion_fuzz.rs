@@ -2,6 +2,18 @@ use super::*;
 
 const HEADER: &str = "eyJhbGciOiJIUzI1NiJ9"; // {"alg":"HS256"}
 const PAYLOAD: &str = "eyJzdWIiOiJmaXh0dXJlIn0"; // {"sub":"fixture"}
+const IGNORABLES: &[char] = &[
+    '\u{200b}',
+    '\u{2060}',
+    '\u{ad}',
+    '\u{180e}',
+    '\u{200c}',
+    '\u{200d}',
+    '\u{feff}',
+    '\u{34f}',
+    '\u{3164}',
+    '\u{e0100}',
+];
 
 struct Rng(u64);
 impl Rng {
@@ -24,7 +36,11 @@ fn fixed_point_bytes(text: &str) -> Vec<u8> {
         let decoded: Vec<u8> = percent_encoding::percent_decode(&current).collect();
         let mut folded = Vec::new();
         for chunk in decoded.utf8_chunks() {
-            let valid: String = chunk.valid().nfkc().collect::<String>().replace('。', ".");
+            let valid: String = re!(r"\p{Default_Ignorable_Code_Point}")
+                .replace_all(chunk.valid(), "")
+                .nfkc()
+                .collect::<String>()
+                .replace('。', ".");
             folded.extend_from_slice(valid.as_bytes());
             folded.extend_from_slice(chunk.invalid());
         }
@@ -33,6 +49,22 @@ fn fixed_point_bytes(text: &str) -> Vec<u8> {
         }
         current = folded;
     }
+}
+
+fn add_ignorables(text: &str, rng: &mut Rng) -> String {
+    let mut next = || IGNORABLES[rng.below(IGNORABLES.len() as u64) as usize];
+    let mut out = String::from(next());
+    for (index, ch) in text.chars().enumerate() {
+        if ch == '.' || (index + 1) % 20 == 0 {
+            // The verifier's soft-wrap reproducer interrupted the JWT every 20 characters.
+            out.push(next());
+        }
+        out.push(ch);
+        if ch == '.' {
+            out.push(next());
+        }
+    }
+    out
 }
 
 fn fixed_point(text: &str) -> String {
@@ -82,7 +114,11 @@ fn layered_delimiters_never_reach_suggestions() {
         let depth = 1 + seed % 5;
         for dot in [".", " . ", "\t.\u{2003}"] {
             let token = format!("{HEADER}{dot}{PAYLOAD}{dot}c2ln");
-            let mut text = token.clone();
+            let mut text = if seed % 2 == 0 {
+                add_ignorables(&token, &mut rng)
+            } else {
+                token.clone()
+            };
             for _ in 0..depth {
                 text = layer(&text, &mut rng);
             }
@@ -103,4 +139,28 @@ fn layered_delimiters_never_reach_suggestions() {
             }
         }
     }
+}
+
+#[test]
+fn raw_ignorables_do_not_hide_a_jwt_in_prose() {
+    for &ch in IGNORABLES {
+        let jwt = format!("{ch}{HEADER}{ch}.{ch}{PAYLOAD}{ch}.{ch}c2ln");
+        assert!(
+            SearchEngine::Google
+                .suggestion_url(&format!("note {jwt} please"))
+                .is_none(),
+            "U+{:04X}",
+            u32::from(ch)
+        );
+    }
+}
+
+#[test]
+fn encoded_ignorable_inside_an_escape_does_not_hide_a_jwt() {
+    let jwt = format!("{HEADER}%2%E2%80%8BE{PAYLOAD}%2%EF%BB%BFEc2ln");
+    assert!(
+        SearchEngine::Google
+            .suggestion_url(&format!("note {jwt} please"))
+            .is_none()
+    );
 }

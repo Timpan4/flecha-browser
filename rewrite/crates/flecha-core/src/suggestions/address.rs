@@ -1,6 +1,6 @@
 use url::{Host, Url};
 
-use super::{decode_component, encode_component};
+use super::{decode_component, encode_component, trim_input};
 use crate::SearchEngine;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -11,7 +11,7 @@ pub enum InputResolution {
 }
 
 pub fn resolve_input(raw: &str, engine: SearchEngine) -> InputResolution {
-    let input = raw.trim();
+    let input = trim_input(raw);
     if let Some(address) = web_address(input) {
         return InputResolution::Navigate(address);
     }
@@ -31,7 +31,7 @@ pub fn pinnable_address(raw: &str) -> Option<String> {
 }
 
 fn has_credentials(input: &str) -> bool {
-    let input = input.trim();
+    let input = trim_input(input);
     let Some((userinfo, destination)) = input.split_once('@') else {
         return false;
     };
@@ -43,7 +43,7 @@ fn has_credentials(input: &str) -> bool {
         Some((name, password)) if !name.contains(['/', '?', '#']) => {
             has_tail
                 || !password.starts_with(char::is_whitespace)
-                || password.trim().contains(char::is_whitespace)
+                || trim_input(password).contains(char::is_whitespace)
         }
         None => {
             !userinfo.contains(['/', '?', '#'])
@@ -56,8 +56,7 @@ fn has_credentials(input: &str) -> bool {
 pub fn rejected_address(raw: &str) -> bool {
     // Explicit HTTP(S) input that fails address parsing must stay local.
     if has_credentials(raw)
-        || raw
-            .trim()
+        || trim_input(raw)
             .split_once(':')
             .is_some_and(|(scheme, _)| is_http_scheme(&scheme.replace(['\t', '\r', '\n'], "")))
     {
@@ -69,7 +68,7 @@ pub fn rejected_address(raw: &str) -> bool {
     let decoded = decode_component(typed);
     let authority =
         re!(r"(?i)[。．｡]|%2e|%e3%80%82|%ef%bc%8e|%ef%bd%a1").replace_all(&decoded, ".");
-    let authority = authority.trim();
+    let authority = trim_input(&authority);
     if has_credentials(&format!("{authority}{tail}"))
         || re!(r"^\[[^\s\[\]]*:[^\s\[\]]*(?:\]|$)").is_match(authority)
         || (re!(r"(?i)^[0-9a-f:.]+(?:%[a-z0-9_.-]+)?$").is_match(authority)
@@ -80,7 +79,7 @@ pub fn rejected_address(raw: &str) -> bool {
     let (host, port) = authority
         .split_once(':')
         .map_or((authority, None), |(host, port)| {
-            (host.trim(), Some(port.trim()))
+            (trim_input(host), Some(trim_input(port)))
         });
     let address_tail = re!(r"^[/\\?#]\S").is_match(tail) || tail.contains('=');
     let numeric_port = port.is_some_and(|port| {
@@ -107,7 +106,7 @@ fn is_http_scheme(scheme: &str) -> bool {
 }
 
 pub(super) fn address(raw: &str, allow_bare_host: bool) -> Option<String> {
-    let input = raw.trim();
+    let input = trim_input(raw);
     if re!(r"(?i)^(about|data):").is_match(input) {
         return Some(escape_controls(input));
     }

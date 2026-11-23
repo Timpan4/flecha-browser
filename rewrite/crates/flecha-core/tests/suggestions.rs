@@ -17,6 +17,7 @@ fn explicit_http_addresses_without_hosts_stay_local() {
         "https://\t/path?token=x",
         "https://\n\r/path#private",
         "https://\t\r\n?token=x",
+        "ht\ttps:///p?token=x",
     ];
     assert_eq!(
         inputs.map(|input| resolve_input(input, engine)),
@@ -25,6 +26,40 @@ fn explicit_http_addresses_without_hosts_stay_local() {
     for input in inputs {
         assert!(engine.suggestion_url(input).is_none());
     }
+}
+
+#[test]
+fn command_input_trims_ecmascript_whitespace_and_line_terminators() {
+    let engine = SearchEngine::Google;
+    let url = "https://host.example/p?token=x";
+    let whitespace = [
+        '\t', '\n', '\u{b}', '\u{c}', '\r', ' ', '\u{a0}', '\u{1680}', '\u{2000}', '\u{2001}',
+        '\u{2002}', '\u{2003}', '\u{2004}', '\u{2005}', '\u{2006}', '\u{2007}', '\u{2008}',
+        '\u{2009}', '\u{200a}', '\u{2028}', '\u{2029}', '\u{202f}', '\u{205f}', '\u{3000}',
+        '\u{feff}',
+    ];
+    for ch in whitespace {
+        let wrapped = format!("{ch}{url}{ch}");
+        assert_eq!(
+            resolve_input(&wrapped, engine),
+            InputResolution::Navigate(url.into()),
+            "U+{:04X}",
+            u32::from(ch)
+        );
+        assert!(engine.suggestion_url(&wrapped).is_none());
+        assert_eq!(
+            resolve_input(&format!("{ch}https:///p?token=x"), engine),
+            InputResolution::Invalid,
+            "U+{:04X}",
+            u32::from(ch),
+        );
+    }
+    // NEL is Unicode White_Space but isn't trimmed by ECMAScript.
+    let with_nel = "\u{85}weather tomorrow\u{85}";
+    assert_eq!(
+        resolve_input(with_nel, engine),
+        InputResolution::Search(engine.search_url(with_nel))
+    );
 }
 
 #[test]

@@ -89,6 +89,7 @@ jobs:
           cargo +stable fmt --check
           cargo +stable clippy -p flecha-core --all-targets -- -D warnings
           cargo +stable test -p flecha-core --all-targets
+          cargo +stable test -p flecha-core --doc
 
   release-scripts:
     name: Release tooling (${{ matrix.os }})

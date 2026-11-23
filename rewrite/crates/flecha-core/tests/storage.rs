@@ -327,6 +327,73 @@ fn unknown_deep_tab_fields_do_not_trigger_recovery() {
 }
 
 #[test]
+fn deep_unknown_snapshot_values_do_not_discard_other_state() {
+    let base = json!({
+        "version": 3,
+        "tabs": {
+            "today": {"url": "https://example.org/today"},
+            "recent": {"url": "https://example.org/recent"},
+            "pin": {"url": "https://example.org/pin"},
+        },
+        "spaces": [
+            {"id": "s", "pinned": [{"id": "f", "kind": "folder", "children": [{"kind": "tab", "tabId": "pin"}]}]},
+            {"id": "other", "pinnedFlat": [{"id": "flat", "kind": "folder", "depth": 0}]},
+        ],
+        "windows": [{"id": "w", "activeSpaceId": "s", "spaces": {"s": {"today": ["today"], "activeTabId": "today"}}}],
+        "closedWindows": [{"id": "closed", "activeSpaceId": "s", "closedAt": 9, "spaces": {"s": {"today": ["recent"]}}}],
+        "archive": [{"url": "https://example.org/archived", "title": "Archived", "closedAt": 10}],
+        "window": {"x": 1, "y": 2, "width": 3, "height": 4},
+        "environments": [{"id": "dev", "name": "Dev", "targets": [{"label": "Local", "origin": "http://localhost"}]}],
+        "sitePermissions": {"example.org": {"camera": "block"}},
+        "keybindings": {"newTab": "Ctrl+T"},
+        "sidebarWidth": 200,
+    });
+    let deep = format!("{}null{}", "[".repeat(20_000), "]".repeat(20_000));
+    for (parent, field) in [
+        ("", "extra"),
+        ("/spaces/0", "extra"),
+        ("/spaces/0/pinned/0", "extra"),
+        ("/spaces/0/pinned/0/children/0", "children"),
+        ("/spaces/1/pinnedFlat/0", "extra"),
+        ("/windows/0", "extra"),
+        ("/windows/0/spaces/s", "extra"),
+        ("/closedWindows/0", "extra"),
+        ("/closedWindows/0/spaces/s", "extra"),
+        ("/archive/0", "extra"),
+        ("/window", "extra"),
+        ("/environments/0", "extra"),
+        ("/environments/0/targets/0", "extra"),
+        ("/sitePermissions", "extra"),
+        ("/sitePermissions/example.org", "extra"),
+        ("/keybindings", "extra"),
+    ] {
+        let mut sample = base.clone();
+        let record = sample.pointer_mut(parent).unwrap().as_object_mut().unwrap();
+        record.insert(field.into(), json!("deep_fixture"));
+        let saved = json!(sample.to_string().replace("\"deep_fixture\"", &deep));
+        // For typed dictionaries, an invalid entry drops the setting as a whole.
+        if parent.starts_with("/sitePermissions") {
+            sample["sitePermissions"] = Value::Null;
+        } else if parent == "/keybindings" {
+            sample["keybindings"]["extra"] = json!([]);
+        } else {
+            sample = base.clone();
+        }
+        let expected = decode(&sample.to_string()).unwrap();
+        let mut loaded = load(Some(&saved), None).unwrap();
+        let ready = loaded
+            .ready()
+            .unwrap_or_else(|| panic!("deep value in {parent:?} triggered recovery"));
+        assert_eq!(
+            ready.state.as_ref(),
+            Some(&expected),
+            "deep value in {parent:?}"
+        );
+        assert_eq!(ready.recovered, None);
+    }
+}
+
+#[test]
 fn saved_history_requires_objects_and_uses_the_last_duplicate_fields() {
     let history = |input: &str| {
         let saved = format!(

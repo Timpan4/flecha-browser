@@ -26,6 +26,17 @@ pub use address::{
     InputResolution, pinnable_address, rejected_address, resolve_input, web_address,
 };
 
+// ECMAScript TrimString uses the union of WhiteSpace and LineTerminator.
+fn trim_input(input: &str) -> &str {
+    input.trim_matches(|ch: char| {
+        matches!(
+            ch,
+            '\u{0009}'..='\u{000D}' | ' ' | '\u{00A0}' | '\u{1680}' | '\u{2000}'..='\u{200A}'
+                | '\u{2028}' | '\u{2029}' | '\u{202F}' | '\u{205F}' | '\u{3000}' | '\u{FEFF}'
+        )
+    })
+}
+
 /// Chromium's default minimum interval between suggestion requests.
 pub const SUGGEST_INTERVAL_MS: EpochMillis = 100;
 /// Chromium's desktop popup holds eight rows, one for the typed search.
@@ -71,7 +82,7 @@ impl SearchEngine {
     }
 
     pub fn suggestion_url(self, input: &str) -> Option<String> {
-        let query = input.trim();
+        let query = trim_input(input);
         if !suggestable(query) {
             return None;
         }
@@ -122,7 +133,7 @@ pub fn parse_suggestions(body: &str, query: &str) -> Vec<String> {
             ) {
                 return None;
             }
-            let text = entry.as_str()?.trim();
+            let text = trim_input(entry.as_str()?);
             (!text.is_empty() && seen.insert(text.to_lowercase())).then(|| text.to_owned())
         })
         .take(MAX_SUGGESTIONS)
@@ -131,16 +142,12 @@ pub fn parse_suggestions(body: &str, query: &str) -> Vec<String> {
 
 /// Keep addresses, credentials, and private paths out of search suggestion requests.
 pub fn suggestable(raw: &str) -> bool {
-    let query = raw.trim();
-    if query.is_empty()
-        || web_address(query).is_some()
-        || rejected_address(query)
-        || contains_jwt(query)
-    {
+    let query = trim_input(raw);
+    if query.is_empty() || web_address(query).is_some() || rejected_address(query) {
         return false;
     }
     let normalized: String = query.nfkc().collect();
-    if alternate_spelling_contains_jwt(query, &normalized) {
+    if private_jwt(query, &normalized) {
         return false;
     }
     let separator = re!(r"[^\p{L}\p{N}\p{M}\p{Default_Ignorable_Code_Point}\x21-\x7e。．｡]+");
@@ -167,13 +174,26 @@ pub fn suggestable(raw: &str) -> bool {
     true
 }
 
-fn alternate_spelling_contains_jwt(raw: &str, normalized: &str) -> bool {
+fn default_ignorables() -> &'static regex::Regex {
+    re!(r"\p{Default_Ignorable_Code_Point}")
+}
+
+fn private_jwt(raw: &str, normalized: &str) -> bool {
+    let stripped = default_ignorables().replace_all(raw, "");
+    if contains_jwt(&stripped) {
+        return true;
+    }
+    let normalized = match &stripped {
+        Cow::Borrowed(_) => Cow::Borrowed(normalized),
+        Cow::Owned(_) => Cow::Owned(stripped.nfkc().collect::<String>()),
+    };
+    let normalized = default_ignorables().replace_all(&normalized, "");
     let dotted = if normalized.contains('。') {
         Cow::Owned(normalized.replace('。', "."))
     } else {
-        Cow::Borrowed(normalized)
+        normalized
     };
-    if dotted != raw && contains_jwt(&dotted) {
+    if dotted != stripped && contains_jwt(&dotted) {
         return true;
     }
     dotted.contains('%')
@@ -230,6 +250,9 @@ fn compatibility_suffix(bytes: &[u8]) -> Option<(usize, String)> {
         if ch.len_utf8() != width {
             continue;
         }
+        if default_ignorables().is_match(suffix) {
+            return Some((start, String::new()));
+        }
         let folded: String = std::iter::once(ch).nfkc().collect();
         return if folded == "。" {
             Some((start, ".".into()))
@@ -279,8 +302,9 @@ fn contains_jwt(text: &str) -> bool {
     // Check every dot-separated triple and every possible start of its header,
     // including tokens pasted immediately after letters, punctuation, or URL text.
     let candidates = re!(r"[A-Za-z0-9_+/=-]+(?:\s*\.\s*[A-Za-z0-9_+/=-]*){2,}");
+    let delimiter = re!(r"\s*\.\s*");
     for candidate in candidates.find_iter(text) {
-        let mut parts = candidate.as_str().split('.').map(str::trim);
+        let mut parts = delimiter.split(candidate.as_str());
         let (Some(mut header), Some(mut payload)) = (parts.next(), parts.next()) else {
             continue;
         };
@@ -421,7 +445,7 @@ pub fn developer_suggestions(
     environments: &[Environment],
     now: EpochMillis,
 ) -> Vec<DeveloperSuggestion> {
-    let query = query.trim();
+    let query = trim_input(query);
     if re!(r"(?i-u)^env\b").is_match(query) {
         let Some(env) = current_url.and_then(|url| describe_environment(url, environments)) else {
             return Vec::new();
@@ -539,7 +563,7 @@ fn jwt_parts(text: &str) -> Option<(&str, &str)> {
 mod fuzz;
 
 fn decode_jwt_json(part: &str) -> Option<Value> {
-    let part = part.trim_matches([' ', '\t', '\r', '\n', '\x0c']);
+    let part = trim_input(part);
     serde_json::from_slice(&decode_base64(part)?).ok()
 }
 
@@ -805,7 +829,7 @@ pub enum MatchQuality {
 }
 
 pub fn match_quality(query: &str, texts: &[&str]) -> Option<MatchQuality> {
-    let query = query.trim().to_lowercase();
+    let query = trim_input(query).to_lowercase();
     if query.is_empty() {
         return None;
     }
