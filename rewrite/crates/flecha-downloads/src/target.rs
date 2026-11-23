@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::NaiveDateTime;
 use flecha_core::Settings;
+use unicode_normalization::UnicodeNormalization;
 
 use crate::Platform;
 use crate::filename::{FileName, split_extension};
@@ -21,7 +22,7 @@ pub const MAX_UNIQUE_FILES: u32 = 100;
 /// `filename_generation::kTruncatedNameLengthLowerbound`.
 const TRUNCATED_NAME_LOWER_BOUND: usize = 5;
 /// `kIntermediateNameSuffixLength`: room for `.crdownload`.
-const INTERMEDIATE_SUFFIX: &str = ".crdownload";
+pub(crate) const INTERMEDIATE_SUFFIX: &str = ".crdownload";
 /// `kZoneIdentifierLength` on Windows.
 const ZONE_IDENTIFIER: &str = ":Zone.Identifier";
 
@@ -237,4 +238,65 @@ pub fn name_max(folder: &Path) -> Option<usize> {
     // SAFETY: `path` is a NUL-terminated string that outlives the call.
     let max = unsafe { libc::pathconf(path.as_ptr(), libc::_PC_NAME_MAX) };
     usize::try_from(max).ok().filter(|max| *max > 0)
+}
+
+/// `FilePath::CompareEqualIgnoreCase` on `platform`, which the reservation tracker uses for
+/// every reserved path (`download_path_reservation_tracker.cc`, `IsPathReservedInternal`).
+pub(crate) fn same_path_ignoring_case(a: &Path, b: &Path, platform: Platform) -> bool {
+    if a == b {
+        return true;
+    }
+    if platform == Platform::Linux {
+        // The POSIX version is `strncasecmp`, which folds ASCII letters only.
+        return a
+            .as_os_str()
+            .as_encoded_bytes()
+            .eq_ignore_ascii_case(b.as_os_str().as_encoded_bytes());
+    }
+    let (Some(a), Some(b)) = (a.to_str(), b.to_str()) else {
+        return false;
+    };
+    match platform {
+        Platform::Windows => a
+            .encode_utf16()
+            .map(char_upper_w)
+            .eq(b.encode_utf16().map(char_upper_w)),
+        Platform::Linux | Platform::Mac => hfs_folded(a).eq(hfs_folded(b)),
+    }
+}
+
+/// `CharUpperW` on one UTF-16 unit: its single-character uppercase, if it has one.
+fn char_upper_w(unit: u16) -> u16 {
+    let Some(c) = char::from_u32(u32::from(unit)) else {
+        return unit;
+    };
+    let mut upper = c.to_uppercase();
+    match (upper.next(), upper.next()) {
+        (Some(upper), None) => u16::try_from(u32::from(upper)).unwrap_or(unit),
+        _ => unit,
+    }
+}
+
+/// `HFSFastUnicodeCompare` on the decomposed form: Apple's TN1150 table drops U+200C to
+/// U+200F, U+202A to U+202E, U+206A to U+206F and U+FEFF, and lower-cases only the BMP. Its
+/// case table is approximated by Unicode's single-character lowercase, which covers its
+/// mappings, so the port may reserve more names than macOS would but never fewer.
+fn hfs_folded(text: &str) -> impl Iterator<Item = char> + '_ {
+    text.nfd()
+        .filter(|c| {
+            !matches!(
+                c,
+                '\u{200C}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{206A}'..='\u{206F}' | '\u{FEFF}'
+            )
+        })
+        .map(|c| {
+            if u32::from(c) > 0xFFFF {
+                return c;
+            }
+            let mut lower = c.to_lowercase();
+            match (lower.next(), lower.next()) {
+                (Some(lower), None) => lower,
+                _ => c,
+            }
+        })
 }

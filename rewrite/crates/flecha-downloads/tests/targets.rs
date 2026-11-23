@@ -7,10 +7,12 @@ use std::path::{Path, PathBuf};
 use chrono::{NaiveDate, NaiveDateTime};
 use flecha_core::Settings;
 use flecha_downloads::{
-    AskReason, DownloadList, DownloadSettings, FolderError, MAX_UNIQUE_FILES, NameSources,
-    NewDownload, Platform, Snapshot, SnapshotState, TargetDecision, TargetRequest, decide_target,
-    generate_file_name, set_downloads_folder,
+    AskReason, DangerSignals, DownloadList, DownloadRequest, DownloadSettings, FolderError,
+    InsecureSignals, MAX_UNIQUE_FILES, NameSources, NewDownload, Platform, Snapshot, SnapshotState,
+    TargetDecision, TargetRequest, Trigger, decide, decide_target, generate_file_name,
+    set_downloads_folder,
 };
+use url::Url;
 
 /// ext4's documented file name limit, 255 bytes (kernel.org ext4 "Overview": "Max filename
 /// length 255 bytes"). Real callers read it with `name_max`.
@@ -258,7 +260,7 @@ fn downloads_in_progress_reserve_their_paths() {
     })
     .unwrap();
     assert_eq!(
-        saved(target(Case::default(), |p| list.reserves(p))),
+        saved(target(Case::default(), |p| list.reserves(p, Platform::Linux))),
         Path::new("/home/me/Downloads/report (1).pdf")
     );
     // Chromium revokes the reservation once the download stops being in progress.
@@ -272,7 +274,10 @@ fn downloads_in_progress_reserve_their_paths() {
         },
     )
     .unwrap();
-    assert_eq!(saved(target(Case::default(), |p| list.reserves(p))), first);
+    assert_eq!(
+        saved(target(Case::default(), |p| list.reserves(p, Platform::Linux))),
+        first
+    );
 }
 
 #[test]
@@ -432,5 +437,120 @@ fn the_file_system_limit_reads_from_pathconf() {
     assert_eq!(
         flecha_downloads::name_max(Path::new("/no/such/folder/at/all")),
         None
+    );
+}
+
+/// Where `decide` would save a link to `url` while `list` holds its downloads.
+fn decided_target(url: &str, list: &DownloadList, platform: Platform) -> TargetDecision {
+    let download_url = Url::parse(url).unwrap();
+    decide(
+        DownloadRequest {
+            names: NameSources {
+                url,
+                content_disposition: None,
+                suggested_name: None,
+            },
+            settings: &settings(false),
+            save_as: false,
+            max_name_length: Some(EXT4_NAME_MAX),
+            started: started(),
+            danger: DangerSignals {
+                has_user_gesture: true,
+                from_address_bar: false,
+                visited_referrer_before: false,
+            },
+            insecure: InsecureSignals {
+                download_url: &download_url,
+                redirects: &[],
+                initiator: None,
+                trigger: Trigger::Navigation {
+                    reload: false,
+                    typed: false,
+                    from_address_bar: false,
+                    forward_back: false,
+                    auto_toplevel: false,
+                    auto_bookmark: false,
+                    from_api: false,
+                },
+                https_first_mode: false,
+            },
+            platform,
+        },
+        list,
+        |_: &Path| false,
+    )
+    .target
+}
+
+fn in_progress(list: &mut DownloadList, cef_id: u32, name: &str, prompted: bool) {
+    list.begin(NewDownload {
+        cef_id,
+        url: format!("https://example.com/{cef_id}"),
+        target: Path::new(FOLDER).join(name),
+        started_at: 1,
+        warning: None,
+        prompted,
+    })
+    .unwrap();
+}
+
+fn saves_to(name: &str) -> TargetDecision {
+    TargetDecision::Save(Path::new(FOLDER).join(name))
+}
+
+#[test]
+fn reservations_ignore_case_as_chromium_does_on_each_platform() {
+    let mut list = DownloadList::new();
+    in_progress(&mut list, 1, "Report.pdf", false);
+    in_progress(&mut list, 2, "\u{c4}rger.pdf", false);
+    for platform in [Platform::Linux, Platform::Mac, Platform::Windows] {
+        assert_eq!(
+            decided_target("https://example.com/report.pdf", &list, platform),
+            saves_to("report (1).pdf"),
+            "{platform:?}"
+        );
+    }
+    // macOS and Windows fold non-ASCII letters too; Linux's `strncasecmp` folds ASCII only.
+    let lower_umlaut = "https://example.com/%C3%A4rger.pdf";
+    for platform in [Platform::Mac, Platform::Windows] {
+        assert_eq!(
+            decided_target(lower_umlaut, &list, platform),
+            saves_to("\u{e4}rger (1).pdf"),
+            "{platform:?}"
+        );
+    }
+    assert_eq!(
+        decided_target(lower_umlaut, &list, Platform::Linux),
+        saves_to("\u{e4}rger.pdf")
+    );
+    // macOS compares the decomposed form: a decomposed "A" plus diaeresis is the same name.
+    assert_eq!(
+        decided_target("https://example.com/A%CC%88rger.pdf", &list, Platform::Mac),
+        saves_to("A\u{308}rger (1).pdf")
+    );
+}
+
+#[test]
+fn a_path_picked_in_the_save_dialog_is_reserved_once_reported() {
+    let mut list = DownloadList::new();
+    in_progress(&mut list, 4, "a.pdf", true);
+    list.update(
+        4,
+        Snapshot {
+            state: SnapshotState::InProgress,
+            received: 1,
+            total: 9,
+            full_path: &Path::new(FOLDER).join("x.pdf.crdownload"),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        decided_target("https://example.com/x.pdf", &list, Platform::Linux),
+        saves_to("x (1).pdf")
+    );
+    // The suggestion it replaced is free again.
+    assert_eq!(
+        decided_target("https://example.com/a.pdf", &list, Platform::Linux),
+        saves_to("a.pdf")
     );
 }

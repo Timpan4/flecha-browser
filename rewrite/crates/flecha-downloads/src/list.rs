@@ -15,8 +15,10 @@ use flecha_core::EpochMillis;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+use crate::Platform;
 use crate::danger::Warning;
 use crate::filename::DEFAULT_NAME;
+use crate::target::{INTERMEDIATE_SUFFIX, same_path_ignoring_case};
 
 pub type DownloadId = u64;
 
@@ -396,11 +398,12 @@ impl DownloadList {
     }
 
     /// Whether a download in progress holds `path` (the reservation map in
-    /// `download_path_reservation_tracker.cc`, kept only while `IN_PROGRESS`).
-    pub fn reserves(&self, path: &Path) -> bool {
-        self.entries
-            .iter()
-            .any(|entry| entry.in_progress() && entry.path == path)
+    /// `download_path_reservation_tracker.cc`, kept only while `IN_PROGRESS`), ignoring case as
+    /// Chromium does on `platform`.
+    pub fn reserves(&self, path: &Path, platform: Platform) -> bool {
+        self.entries.iter().any(|entry| {
+            entry.in_progress() && same_path_ignoring_case(&entry.path, path, platform)
+        })
     }
 
     pub fn id_for_cef(&self, cef_id: u32) -> Option<DownloadId> {
@@ -491,6 +494,10 @@ impl DownloadList {
             {
                 self.last_prompt_folder = Some(folder.to_path_buf());
                 entry.prompted = false;
+                // The person's choice replaces the suggestion, as the reservation tracker
+                // follows the item's new target (`DownloadItemObserver::OnDownloadUpdated` →
+                // `UpdateReservation`).
+                entry.path = chosen_target(reported);
             }
             // Until completion the full path may be an intermediate file such as
             // `.crdownload` (`DownloadItem::GetFullPath`), so the decided target keeps the
@@ -499,8 +506,10 @@ impl DownloadList {
                 entry.path = reported.to_path_buf();
             }
         }
-        if !entry.in_progress() {
-            // Patch 0058 reports a warning only while the download is in progress.
+        // Chromium keeps an item's danger and insecure status across pauses and interruptions
+        // and won't complete it until it is validated (`IsDownloadReadyForCompletion`), so only
+        // Keep, Discard or a cancel ends the hold.
+        if to == State::Cancelled {
             entry.warning = None;
         }
         Ok(())
@@ -546,10 +555,9 @@ impl DownloadList {
     }
 
     /// The CEF id to resume a paused or resumable interrupted download (`resumeDownload`).
+    /// A held download is kept or discarded first.
     pub fn resume(&self, id: DownloadId) -> Result<u32, ListError> {
-        self.live_command(id, |entry| {
-            entry.state == State::Paused || self.can_resume(entry)
-        })
+        self.live_command(id, |entry| self.can_resume(entry))
     }
 
     /// The URL to download again (`retryDownload`, offered for interrupted rows).
@@ -622,14 +630,20 @@ impl DownloadList {
             state,
             started_at: entry.started_at,
             warning: entry.warning.filter(|_| entry.in_progress()),
-            can_resume: entry.state == State::Paused || self.can_resume(entry),
+            can_resume: self.can_resume(entry),
             paused: entry.state == State::Paused,
         }
     }
 
-    /// Resumable: interrupted for a reason that allows it, over HTTP(S) (`GetDownloadResumeMode`
-    /// supports nothing else), and still known to CEF this session.
+    /// Resumable: not held, and either paused or interrupted for a reason that allows it over
+    /// HTTP(S) (`GetDownloadResumeMode` supports nothing else) while CEF still knows it.
     fn can_resume(&self, entry: &Download) -> bool {
+        if entry.warning.is_some() {
+            return false;
+        }
+        if entry.state == State::Paused {
+            return true;
+        }
         entry.state == State::Interrupted
             && entry
                 .interrupt_reason
@@ -661,6 +675,16 @@ impl DownloadList {
         self.live.retain(|_, ours| *ours != id);
         Some(self.entries.remove(index))
     }
+}
+
+/// The target a reported path stands for: the intermediate file without its `.crdownload`
+/// suffix (`kCrdownloadSuffix`), or the path itself.
+fn chosen_target(reported: &Path) -> PathBuf {
+    reported
+        .to_str()
+        .and_then(|text| text.strip_suffix(INTERMEDIATE_SUFFIX))
+        .filter(|stem| !stem.is_empty() && !stem.ends_with(['/', '\\']))
+        .map_or_else(|| reported.to_path_buf(), PathBuf::from)
 }
 
 /// `toInfo`'s name: the file's base name, else the URL path's last segment, else `download`.

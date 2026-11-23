@@ -4,8 +4,8 @@
 use std::path::{Path, PathBuf};
 
 use flecha_downloads::{
-    DownloadId, DownloadList, InterruptReason, ListError, NewDownload, RowState, Snapshot,
-    SnapshotState, State, Warning,
+    DownloadId, DownloadList, InterruptReason, ListError, NewDownload, Platform, RowState,
+    Snapshot, SnapshotState, State, Warning,
 };
 
 const URL: &str = "https://example.com/files/a.bin";
@@ -390,8 +390,8 @@ fn the_intermediate_file_never_replaces_the_target_before_completion() {
         assert_eq!(list.get(id).unwrap().path(), target);
         assert_eq!(list.row(list.get(id).unwrap()).filename, "7.bin");
     }
-    assert!(list.reserves(target));
-    assert!(!list.reserves(Path::new("/dl/7.bin.crdownload")));
+    assert!(list.reserves(target, Platform::Linux));
+    assert!(!list.reserves(Path::new("/dl/7.bin.crdownload"), Platform::Linux));
     list.update(
         7,
         Snapshot {
@@ -402,7 +402,7 @@ fn the_intermediate_file_never_replaces_the_target_before_completion() {
         },
     )
     .unwrap();
-    assert!(!list.reserves(target));
+    assert!(!list.reserves(target, Platform::Linux));
 }
 
 #[test]
@@ -505,4 +505,44 @@ fn without_a_path_the_row_is_named_from_the_url() {
         "download"
     );
     assert_eq!(row_for_path("", "not a url").filename, "download");
+}
+
+#[test]
+fn a_held_download_stays_held_through_pauses_and_interruptions() {
+    let mut list = DownloadList::new();
+    let id = begin(&mut list, 9, 1_000, Some(Warning::Dangerous));
+    report(&mut list, 9, interrupted(InterruptReason::NetworkFailed)).unwrap();
+    assert!(!list.row(list.get(id).unwrap()).can_resume);
+    assert!(list.resume(id).is_err());
+    // Chromium may resume it on its own; the warning comes back with it.
+    report(&mut list, 9, SnapshotState::InProgress).unwrap();
+    assert_eq!(
+        list.row(list.get(id).unwrap()).warning,
+        Some(Warning::Dangerous)
+    );
+    assert_eq!(
+        report(&mut list, 9, SnapshotState::Complete),
+        Err(ListError::CompletedWhileHeld(id))
+    );
+
+    let paused = begin(&mut list, 10, 2_000, Some(Warning::Insecure));
+    report(&mut list, 10, SnapshotState::Paused).unwrap();
+    let row = list.row(list.get(paused).unwrap());
+    assert_eq!(
+        (row.paused, row.can_resume, row.warning),
+        (true, false, Some(Warning::Insecure))
+    );
+    assert!(list.resume(paused).is_err());
+    assert_eq!(
+        report(&mut list, 10, SnapshotState::Complete),
+        Err(ListError::CompletedWhileHeld(paused))
+    );
+
+    // Keep ends the hold, and only then can it resume and finish.
+    assert_eq!(list.keep(paused), Ok(Some(10)));
+    assert!(list.row(list.get(paused).unwrap()).can_resume);
+    assert_eq!(list.resume(paused), Ok(10));
+    report(&mut list, 10, SnapshotState::Complete).unwrap();
+    assert_eq!(list.keep(id), Ok(Some(9)));
+    report(&mut list, 9, SnapshotState::Complete).unwrap();
 }

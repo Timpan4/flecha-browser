@@ -202,7 +202,7 @@ fn a_newer_schema_is_never_overwritten() {
     let newer = Value::String(json!({"version": SCHEMA_VERSION + 1, "anything": true}).to_string());
     assert!(matches!(
         persist::load(Some(&newer), None),
-        Err(DecodeError::UnsupportedVersion(v)) if v == SCHEMA_VERSION + 1
+        Err(DecodeError::UnsupportedVersion(v)) if v == (SCHEMA_VERSION + 1).to_string()
     ));
     // A damaged current list with a newer backup starts empty but keeps the backup.
     let mut loaded = persist::load(Some(&Value::String("x".into())), Some(&newer)).unwrap();
@@ -215,4 +215,50 @@ fn a_newer_schema_is_never_overwritten() {
     // A good current list doesn't replace a newer backup.
     let mut loaded = persist::load(Some(&stored(&stopped_list())), Some(&newer)).unwrap();
     assert_eq!(loaded.ready().unwrap().started(), None);
+}
+
+#[test]
+fn every_spelling_of_a_newer_schema_is_refused_like_core() {
+    let newer = SCHEMA_VERSION + 1;
+    for spelling in [
+        format!("{newer}"),
+        format!("\"{newer}\""),
+        format!("\" {newer} \""),
+        format!("{newer}.0"),
+        format!("{newer}e0"),
+        format!("0.{newer}e1"),
+    ] {
+        let saved = format!(r#"{{"version": {spelling}, "nextId": 0, "downloads": []}}"#);
+        // flecha_core::storage refuses the same spelling for its own schema.
+        let core_newer = flecha_core::storage::SCHEMA_VERSION + 1;
+        let core_saved = format!(
+            r#"{{"version": {}}}"#,
+            spelling.replace(&newer.to_string(), &core_newer.to_string())
+        );
+        assert!(
+            matches!(
+                flecha_core::storage::load(Some(&Value::String(core_saved)), None),
+                Err(flecha_core::storage::DecodeError::UnsupportedVersion(_))
+            ),
+            "core accepts {spelling}"
+        );
+        let saved = Value::String(saved);
+        assert!(
+            matches!(
+                persist::load(Some(&saved), None),
+                Err(DecodeError::UnsupportedVersion(_))
+            ),
+            "current slot {spelling} was not refused"
+        );
+        // A newer backup behind a damaged current list is kept, not overwritten.
+        let mut loaded = persist::load(Some(&Value::String("x".into())), Some(&saved)).unwrap();
+        let writes = recover(&mut loaded);
+        assert_eq!(writes.len(), 1, "{spelling}");
+        assert_eq!(writes[0].slot(), Slot::Damaged);
+        assert_eq!(
+            loaded.ready().unwrap().recovered,
+            Some(Recovery::UnsupportedBackup),
+            "{spelling}"
+        );
+    }
 }

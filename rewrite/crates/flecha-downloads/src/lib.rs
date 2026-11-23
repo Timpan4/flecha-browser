@@ -111,7 +111,7 @@ pub fn decide(
             started: request.started,
             platform: request.platform,
         },
-        |path| exists(path) || list.reserves(path),
+        |path| exists(path) || list.reserves(path, request.platform),
     );
     let target_name = target
         .path()

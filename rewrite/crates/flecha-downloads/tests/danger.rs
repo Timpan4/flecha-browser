@@ -356,3 +356,42 @@ fn decide_holds_insecure_before_dangerous_and_trusts_a_chosen_path() {
     let (verdict, _) = decided("https://example.com/report.pdf", page, false, NO_SIGNALS);
     assert_eq!(verdict, Verdict::Proceed);
 }
+
+#[test]
+fn an_initiator_is_judged_by_its_origin() {
+    use InsecureVerdict::*;
+    // Chromium holds the initiator as a `url::Origin`; `blob:` and `filesystem:` pages take
+    // the origin inside them, so these are all mixed content from https://site.example.
+    let photo = "http://cdn.example/photo.jpg";
+    for page in [
+        "https://site.example/",
+        "blob:https://site.example/5e0d1a2b-0000-4000-8000-000000000000",
+        "filesystem:https://site.example/temporary/page.html",
+    ] {
+        assert_eq!(
+            verdict("photo.jpg", &[photo], Some(page), LINK),
+            SilentBlock,
+            "{page}"
+        );
+    }
+    // An http page behind a blob URL still can't vouch for a secure file.
+    assert_eq!(
+        verdict(
+            "a.bin",
+            &["https://cdn.example/a.bin"],
+            Some("blob:http://site.example/5e0d1a2b-0000-4000-8000-000000000000"),
+            LINK
+        ),
+        Hold
+    );
+    // An opaque origin is neither.
+    assert_eq!(
+        verdict(
+            "a.bin",
+            &["https://cdn.example/a.bin"],
+            Some("data:text/html,x"),
+            LINK
+        ),
+        Safe
+    );
+}

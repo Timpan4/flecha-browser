@@ -42,7 +42,8 @@ pub const SCHEMA_VERSION: u64 = 1;
 pub enum DecodeError {
     Json(serde_json::Error),
     InvalidShape,
-    UnsupportedVersion(u64),
+    /// The saved list names a newer schema, spelled as it was saved.
+    UnsupportedVersion(String),
 }
 
 impl fmt::Display for DecodeError {
@@ -117,13 +118,11 @@ pub fn encode(list: &DownloadList) -> serde_json::Result<String> {
 }
 
 pub fn decode(json: &str) -> Result<DownloadList, DecodeError> {
-    let value: Value = serde_json::from_str(json).map_err(DecodeError::Json)?;
-    if let Some(version) = value.get("version").and_then(Value::as_u64)
-        && version > SCHEMA_VERSION
-    {
+    // Core's check, so every spelling core refuses as newer is refused here too.
+    if let Some(version) = flecha_core::storage::newer_schema_version(json, SCHEMA_VERSION) {
         return Err(DecodeError::UnsupportedVersion(version));
     }
-    let snapshot: Snapshot = serde_json::from_value(value).map_err(DecodeError::Json)?;
+    let snapshot: Snapshot = serde_json::from_str(json).map_err(DecodeError::Json)?;
     let mut ids = HashSet::new();
     if !snapshot
         .downloads

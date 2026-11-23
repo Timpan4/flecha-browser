@@ -145,9 +145,11 @@ pub fn insecure_verdict(target_name: &str, signals: InsecureSignals<'_>) -> Inse
         } => reload || from_api,
         Trigger::ContextMenu | Trigger::WebContentsApi => false,
     };
-    let initiator_insecure = signals.initiator.is_some_and(|initiator| {
-        !is_opaque(initiator) && !is_url_potentially_trustworthy(initiator)
-    });
+    // Chromium holds the initiator as a `url::Origin` and reads it through `GetURL()`.
+    let initiator = signals.initiator.and_then(origin_url);
+    let initiator_insecure = initiator
+        .as_ref()
+        .is_some_and(|origin| !is_url_potentially_trustworthy(origin));
     let is_insecure = !exempt_from_insecure
         && (initiator_insecure || !delivered_securely)
         && !is_localhost(download_url);
@@ -177,9 +179,9 @@ pub fn insecure_verdict(target_name: &str, signals: InsecureSignals<'_>) -> Inse
         Trigger::ContextMenu | Trigger::WebContentsApi => false,
     };
     let is_mixed_content = !exempt_from_mixed
-        && signals
-            .initiator
-            .is_some_and(|initiator| matches!(initiator.scheme(), "https" | "wss"))
+        && initiator
+            .as_ref()
+            .is_some_and(|origin| matches!(origin.scheme(), "https" | "wss"))
         && !delivered_securely;
 
     if !is_mixed_content {
@@ -226,8 +228,23 @@ pub fn is_url_potentially_trustworthy(url: &Url) -> bool {
     }
 }
 
-fn is_opaque(url: &Url) -> bool {
-    !url.origin().is_tuple() && url.scheme() != "file"
+/// `url::Origin::Create(url).GetURL()`: the URL of `url`'s origin, `None` when the origin is
+/// opaque. `blob:` and `filesystem:` URLs take the origin of the URL inside them.
+fn origin_url(url: &Url) -> Option<Url> {
+    let inner;
+    let url = if matches!(url.scheme(), "blob" | "filesystem") {
+        inner = Url::parse(url.path()).ok()?;
+        &inner
+    } else {
+        url
+    };
+    match url.scheme() {
+        "file" => Url::parse("file:///").ok(),
+        "http" | "https" | "ws" | "wss" | "ftp" => {
+            Url::parse(&url.origin().ascii_serialization()).ok()
+        }
+        _ => None,
+    }
 }
 
 /// `net::IsLocalhost`: a loopback IP literal, `localhost`, or a `.localhost` name.
