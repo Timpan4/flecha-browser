@@ -1,17 +1,19 @@
 [workspace]
 resolver = "3"
-# Each unit adds its own crate path here.
-members = ["spikes/cef-gpui-pump"]
+members = ["crates/flecha-surface", "spikes/cef-gpui-pump", "spikes/gpui-cef-compositor"]
+exclude = ["target/spike1-src/zed", "target/spike1-src/cef-rs"]
 
 [workspace.package]
 edition = "2024"
 license = "MIT"
 publish = false
 
-# Zed's own [patch.crates-io] does not apply to git dependents. These are the
-# entries from Zed's Cargo.toml (rev in pins.toml) for crates GPUI pulls in.
+[workspace.dependencies]
+anyhow = "1"
+cef = { path = "target/spike1-src/cef-rs/cef", default-features = false }
+gpui = { path = "target/spike1-src/zed/crates/gpui", default-features = false }
+gpui_platform = { path = "target/spike1-src/zed/crates/gpui_platform", features = ["font-kit", "x11", "wayland"] }
+wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "cddb2f5d80dc0009b2ef6767635140cacf90a007", default-features = false }
+
 [patch.crates-io]
-async-task = { git = "https://github.com/smol-rs/async-task", rev = "41fd3359c75e221bd8b187a8ee361aa309c1714c" }
-async-process = { git = "https://github.com/zed-industries/async-process.git", rev = "0b6d6713570af61806e1e5cb40e0f757cb93fd9d" }
 calloop = { git = "https://github.com/zed-industries/calloop", rev = "3759371fee14c40066d64777e2a36b6ffcc22590" }
-khronos-egl = { git = "https://github.com/zed-industries/khronos-egl", rev = "42214b36347b108fd9630ca6254b96dde59e04fe" }

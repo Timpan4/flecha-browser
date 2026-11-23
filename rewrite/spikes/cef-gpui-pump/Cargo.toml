@@ -5,16 +5,17 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
-# Pins: rewrite/pins.toml.
+# cef, gpui and gpui_platform come from the workspace: the cef-rs and Zed
+# sources that spikes/gpui-cef-compositor/prepare.sh stages at the pins.toml
+# revs. cef-dll-sys declares `links = "cef_dll_wrapper"`, so the workspace can
+# hold only one cef-rs source. The workspace cef has no `accelerated_osr`: this
+# spike uploads software OnPaint frames.
 [dependencies]
-# No `accelerated_osr`: this spike uploads software OnPaint frames, so cef-rs's
-# registry wgpu 30 stays out of the graph next to Zed's git wgpu.
-cef = { git = "https://github.com/Timpan4/cef-rs", rev = "32d6bc558545933eb1b4620aac4bc4799299c129", default-features = false }
-gpui = { git = "https://github.com/zed-industries/zed", rev = "f126950f9d3b62666f97437ae5d4ccac2272c4db" }
-# Zed's workspace turns off gpui_linux's default backends, so name them here.
-gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "f126950f9d3b62666f97437ae5d4ccac2272c4db", features = ["x11", "wayland"] }
+cef.workspace = true
+gpui.workspace = true
+gpui_platform.workspace = true
 
-anyhow = "1"
+anyhow.workspace = true
 base64 = "0.22"
 env_logger = "0.11"
 futures = "0.3"
