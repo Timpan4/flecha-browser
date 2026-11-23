@@ -124,8 +124,8 @@ results=$(cd "$results" && pwd)
 
 # The workspace cef-rs builds against the beta runtime that
 # spikes/gpui-cef-compositor/prepare.sh stages and checks against pins.toml.
-# Cargo 1.100's build-dir layout keeps cef-rs's runtime copy out of the binary's
-# dir (tauri-apps/cef-rs#522), so stage the binary next to that runtime.
+# The patched cef-rs build script does not copy that runtime on Linux, so stage
+# the binary in a bundle next to a copy of it.
 # shellcheck source=../../gpui-cef-compositor/runtime-paths.sh
 source "$here/../gpui-cef-compositor/runtime-paths.sh"
 runtime_paths linux64 cef_linux_x86_64
