@@ -32,24 +32,30 @@ pages=$here/pages
 mkdir -p "$results"
 results=$(cd "$results" && pwd)
 
-# Cargo 1.100's default build-dir layout makes cef-dll-sys copy CEF's runtime
-# files to target/release/build instead of next to the binary (tauri-apps/cef-rs#522).
-# Stage the binary with the CEF distribution that cef-dll-sys built against.
-want_version=$(awk -F'"' '/^version = / { print $2; exit }' "$here/../../pins.toml")
-cef_dir=
-for d in "$profile_dir"/build/cef-dll-sys/*/out/cef_linux_x86_64; do
-    if [[ -f $d/archive.json ]] && jq -e --arg v "$want_version" '.name | contains($v)' "$d/archive.json" >/dev/null; then
-        cef_dir=$d
-    fi
-done
-[[ -n $cef_dir ]] || { echo "no cef-dll-sys output for CEF $want_version; build first" >&2; exit 1; }
-bundle=$profile_dir/cef-gpui-pump-bundle
+# The workspace cef-rs builds against the beta runtime that
+# spikes/gpui-cef-compositor/prepare.sh stages and checks against pins.toml.
+# Cargo 1.100's build-dir layout keeps cef-rs's runtime copy out of the binary's
+# dir (tauri-apps/cef-rs#522), so stage the binary next to that runtime.
+# shellcheck source=../../gpui-cef-compositor/runtime-paths.sh
+source "$here/../gpui-cef-compositor/runtime-paths.sh"
+runtime_paths linux64 cef_linux_x86_64
+check_runtime
+cef_dir=$runtime
+# One bundle per archive, so files from another CEF build never mix in.
+bundle=$profile_dir/cef-gpui-pump-bundle/${archive_name%.tar.bz2}
 mkdir -p "$bundle/locales"
-find "$cef_dir" -maxdepth 1 -type f -exec cp --reflink=auto -u -t "$bundle" {} +
-cp --reflink=auto -u -t "$bundle/locales" "$cef_dir"/locales/*
+find "$cef_dir" -maxdepth 1 -type f -exec cp --reflink=auto -f -t "$bundle" {} +
+cp --reflink=auto -f -t "$bundle/locales" "$cef_dir"/locales/*
 cp --reflink=auto -f "$profile_dir/cef-gpui-pump" "$bundle/"
 bin=$bundle/cef-gpui-pump
 echo "bundle $bundle (CEF from $cef_dir)"
+# What this run tested: the commit, any tracked edits on top of it, and the CEF archive.
+{
+    echo "head $(git -C "$here" rev-parse HEAD)"
+    echo "tracked changes in rewrite/:"
+    git -C "$here/../.." status --porcelain --untracked-files=no -- .
+} >"$results/build.txt"
+cp -f "$cef_dir/archive.json" "$results/cef-archive.json"
 
 # The private bus must never take over an existing socket path.
 "$here/scripts/check-bus-listener.sh"
