@@ -22,7 +22,9 @@ macro_rules! re {
 
 mod address;
 
-pub use address::{pinnable_address, rejected_address, resolve_input, web_address};
+pub use address::{
+    InputResolution, pinnable_address, rejected_address, resolve_input, web_address,
+};
 
 /// Chromium's default minimum interval between suggestion requests.
 pub const SUGGEST_INTERVAL_MS: EpochMillis = 100;

@@ -80,8 +80,18 @@ pub enum Slot {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct BackupWrite {
-    pub slot: Slot,
-    pub value: Value,
+    slot: Slot,
+    value: Value,
+}
+
+impl BackupWrite {
+    pub fn slot(&self) -> Slot {
+        self.slot
+    }
+
+    pub fn value(&self) -> &Value {
+        &self.value
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -104,22 +114,44 @@ pub fn state_before_import(saved: Option<&Value>) -> Result<Option<BrowserState>
     saved.map_or(Ok(None), readable)
 }
 
+/// Startup state whose current-slot writer is gated on recovery.
+///
+/// ```compile_fail
+/// # use flecha_core::storage::load;
+/// # use flecha_core::{BrowserState, SpaceId, WindowId};
+/// let loaded = load(None, None).unwrap();
+/// let state = BrowserState::new(SpaceId::new("s"), WindowId::new("w"));
+/// loaded.save_current(&state).unwrap();
+/// ```
 #[derive(Debug)]
 pub struct LoadedState {
-    pub state: Option<BrowserState>,
-    pub recovered: Option<Recovery>,
+    ready: ReadyState,
     damaged_copy: Option<BackupWrite>,
     recovered_current: Option<BackupWrite>,
+}
+
+#[derive(Debug)]
+pub struct ReadyState {
+    pub state: Option<BrowserState>,
+    pub recovered: Option<Recovery>,
     last_good_after_start: Option<BackupWrite>,
 }
 
 impl LoadedState {
+    /// Obtain the current-slot writer only after any recovery writes have succeeded.
+    pub fn ready(&mut self) -> Option<&mut ReadyState> {
+        if self.damaged_copy.is_some() || self.recovered_current.is_some() {
+            return None;
+        }
+        Some(&mut self.ready)
+    }
+
     /// Persist recovery writes. Return success from the writer only after the value is saved.
     /// On failure, another call resumes at the failed write.
     pub fn apply_recovery<E>(
         &mut self,
         mut write: impl FnMut(&BackupWrite) -> Result<(), E>,
-    ) -> Result<(), E> {
+    ) -> Result<&mut ReadyState, E> {
         if let Some(damaged) = &self.damaged_copy {
             write(damaged)?;
             self.damaged_copy = None;
@@ -128,7 +160,16 @@ impl LoadedState {
             write(current)?;
             self.recovered_current = None;
         }
-        Ok(())
+        Ok(&mut self.ready)
+    }
+}
+
+impl ReadyState {
+    pub fn save_current(&self, state: &BrowserState) -> serde_json::Result<BackupWrite> {
+        Ok(BackupWrite {
+            slot: Slot::Current,
+            value: Value::String(encode(state)?),
+        })
     }
 
     /// Promote the repaired startup snapshot only after the application starts successfully.
@@ -142,11 +183,13 @@ impl LoadedState {
 /// A newer schema is surfaced as an error so an older binary cannot overwrite it.
 pub fn load(saved: Option<&Value>, last_good: Option<&Value>) -> Result<LoadedState, DecodeError> {
     let mut loaded = LoadedState {
-        state: None,
-        recovered: None,
+        ready: ReadyState {
+            state: None,
+            recovered: None,
+            last_good_after_start: None,
+        },
         damaged_copy: None,
         recovered_current: None,
-        last_good_after_start: None,
     };
     let Some(saved) = saved else {
         return Ok(loaded);
@@ -154,12 +197,12 @@ pub fn load(saved: Option<&Value>, last_good: Option<&Value>) -> Result<LoadedSt
     if let Some(state) = readable(saved)? {
         let repaired = Value::String(encode(&state).map_err(DecodeError::Json)?);
         if last_good != Some(&repaired) && !last_good.is_some_and(needs_newer_reader) {
-            loaded.last_good_after_start = Some(BackupWrite {
+            loaded.ready.last_good_after_start = Some(BackupWrite {
                 slot: Slot::LastGood,
                 value: repaired,
             });
         }
-        loaded.state = Some(state);
+        loaded.ready.state = Some(state);
         return Ok(loaded);
     }
 
@@ -169,8 +212,8 @@ pub fn load(saved: Option<&Value>, last_good: Option<&Value>) -> Result<LoadedSt
     });
     match last_good.map_or(Ok(None), readable) {
         Ok(Some(fallback)) => {
-            loaded.state = Some(fallback);
-            loaded.recovered = Some(Recovery::LastGood);
+            loaded.ready.state = Some(fallback);
+            loaded.ready.recovered = Some(Recovery::LastGood);
             loaded.recovered_current = Some(BackupWrite {
                 slot: Slot::Current,
                 value: last_good
@@ -178,9 +221,9 @@ pub fn load(saved: Option<&Value>, last_good: Option<&Value>) -> Result<LoadedSt
                     .clone(),
             });
         }
-        Ok(None) => loaded.recovered = Some(Recovery::Fresh),
+        Ok(None) => loaded.ready.recovered = Some(Recovery::Fresh),
         Err(DecodeError::UnsupportedVersion(_)) => {
-            loaded.recovered = Some(Recovery::UnsupportedBackup)
+            loaded.ready.recovered = Some(Recovery::UnsupportedBackup)
         }
         Err(error) => return Err(error),
     }
@@ -441,25 +484,30 @@ fn repair(mut raw: Map<String, Value>, tabs: BTreeMap<TabId, Tab>) -> Option<Bro
     Some(state)
 }
 
+type RawRecord<'a> = BTreeMap<String, &'a RawValue>;
+
+fn raw_field<T: DeserializeOwned>(raw: &RawRecord<'_>, key: &str) -> Option<T> {
+    serde_json::from_str(raw.get(key)?.get()).ok()
+}
+
 fn repair_tab(raw: &RawValue) -> Option<Tab> {
-    fn read<T: DeserializeOwned>(raw: &BTreeMap<String, &RawValue>, key: &str) -> Option<T> {
-        serde_json::from_str(raw.get(key)?.get()).ok()
-    }
     // Read only whitelisted fields. RawValue skips unknown nested data without
     // building a recursive tree or hitting the Value deserializer's depth limit.
-    let raw: BTreeMap<String, &RawValue> = serde_json::from_str(raw.get()).ok()?;
-    let mut tab = Tab::new(read::<String>(&raw, "url")?, 0);
-    if let Some(title) = read(&raw, "title") {
+    let raw: RawRecord<'_> = serde_json::from_str(raw.get()).ok()?;
+    let mut tab = Tab::new(raw_field::<String>(&raw, "url")?, 0);
+    if let Some(title) = raw_field(&raw, "title") {
         tab.title = title;
     }
-    tab.last_active = read(&raw, "lastActive").as_ref().and_then(coerce_millis);
-    tab.favicon = read(&raw, "favicon");
-    tab.custom_title = read(&raw, "customTitle");
-    tab.muted = read(&raw, "muted");
-    tab.device = read(&raw, "device");
-    tab.home_url = read(&raw, "homeUrl");
-    tab.unseen = read(&raw, "unseen").unwrap_or_default();
-    tab.agent = read(&raw, "agent").unwrap_or_default();
+    tab.last_active = raw_field(&raw, "lastActive")
+        .as_ref()
+        .and_then(coerce_millis);
+    tab.favicon = raw_field(&raw, "favicon");
+    tab.custom_title = raw_field(&raw, "customTitle");
+    tab.muted = raw_field(&raw, "muted");
+    tab.device = raw_field(&raw, "device");
+    tab.home_url = raw_field(&raw, "homeUrl");
+    tab.unseen = raw_field(&raw, "unseen").unwrap_or_default();
+    tab.agent = raw_field(&raw, "agent").unwrap_or_default();
     tab.history = raw
         .get("history")
         .and_then(|history| repair_history(history));
@@ -467,54 +515,25 @@ fn repair_tab(raw: &RawValue) -> Option<Tab> {
 }
 
 fn repair_history(raw: &RawValue) -> Option<crate::TabHistory> {
-    #[derive(serde::Deserialize)]
-    struct SavedHistory<'a> {
-        #[serde(borrow)]
-        entries: Vec<SavedEntry<'a>>,
-        index: f64,
-    }
-
-    #[derive(serde::Deserialize)]
-    struct SavedEntry<'a> {
-        url: String,
-        title: String,
-        #[serde(
-            rename = "pageState",
-            default,
-            borrow,
-            deserialize_with = "saved_page_state"
-        )]
-        page_state: Option<&'a RawValue>,
-    }
-
-    fn saved_page_state<'de, D: serde::Deserializer<'de>>(
-        value: D,
-    ) -> Result<Option<&'de RawValue>, D::Error> {
-        serde::Deserialize::deserialize(value).map(Some)
-    }
-
-    let saved: SavedHistory<'_> = serde_json::from_str(raw.get()).ok()?;
-    let entries = saved
-        .entries
+    let saved: RawRecord<'_> = serde_json::from_str(raw.get()).ok()?;
+    let index = raw_field(&saved, "index")?;
+    let entries: Vec<RawRecord<'_>> = serde_json::from_str(saved.get("entries")?.get()).ok()?;
+    let entries = entries
         .into_iter()
         .map(|entry| {
             if entry
-                .page_state
-                .as_ref()
+                .get("pageState")
                 .is_some_and(|value| !value.get().starts_with('"'))
             {
                 return None;
             }
             Some(crate::HistoryEntry {
-                url: entry.url,
-                title: entry.title,
+                url: raw_field(&entry, "url")?,
+                title: raw_field(&entry, "title")?,
             })
         })
         .collect::<Option<_>>()?;
-    Some(crate::TabHistory {
-        entries,
-        index: saved.index,
-    })
+    Some(crate::TabHistory { entries, index })
 }
 
 fn repair_space(

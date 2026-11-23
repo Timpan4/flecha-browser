@@ -1,19 +1,50 @@
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use flecha_core::suggestions::{
-    EnvironmentTone, MAX_SUGGESTIONS, MatchQuality, SuggestionAction, describe_environment,
-    developer_suggestions, format_targets, match_quality, parse_suggestions, parse_targets,
-    resolve_input, suggestable,
+    EnvironmentTone, InputResolution, MAX_SUGGESTIONS, MatchQuality, SuggestionAction,
+    describe_environment, developer_suggestions, format_targets, match_quality, parse_suggestions,
+    parse_targets, resolve_input, suggestable,
 };
 use flecha_core::{Environment, SearchEngine};
 use serde_json::{Value, json};
 
 #[test]
-fn explicit_http_addresses_without_hosts_resolve_as_searches() {
-    use flecha_core::suggestions::resolve_input;
+fn explicit_http_addresses_without_hosts_stay_local() {
     let engine = SearchEngine::Google;
-    for input in ["https://", "https:///path", "http://:80/x"] {
-        assert_eq!(resolve_input(input, engine), engine.search_url(input));
+    let inputs = [
+        "https://",
+        "https:///path?token=x#private",
+        "http://:80/x",
+        "https://\t/path?token=x",
+        "https://\n\r/path#private",
+        "https://\t\r\n?token=x",
+    ];
+    assert_eq!(
+        inputs.map(|input| resolve_input(input, engine)),
+        inputs.map(|_| InputResolution::Invalid)
+    );
+    for input in inputs {
+        assert!(engine.suggestion_url(input).is_none());
     }
+}
+
+#[test]
+fn explicit_addresses_keep_non_http_authorities_and_strip_http_controls() {
+    let engine = SearchEngine::Google;
+    for (input, target) in [
+        ("app:///settings", "app:///settings"),
+        ("file:///x", "file:///x"),
+        ("https://ex\tample.org/a", "https://example.org/a"),
+    ] {
+        assert_eq!(
+            resolve_input(input, engine),
+            InputResolution::Navigate(target.into())
+        );
+    }
+    let query = "weather tomorrow";
+    assert_eq!(
+        resolve_input(query, engine),
+        InputResolution::Search(engine.search_url(query))
+    );
 }
 
 #[test]
@@ -68,7 +99,7 @@ fn parses_each_engine_response_and_filters_unsuitable_rows() {
     );
     assert_eq!(
         resolve_input("github.com", SearchEngine::DuckDuckGo),
-        "https://github.com"
+        InputResolution::Navigate("https://github.com".into())
     );
 }
 

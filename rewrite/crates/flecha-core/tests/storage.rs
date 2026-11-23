@@ -189,14 +189,15 @@ fn last_good_is_promoted_only_after_startup() {
     let saved = json!(V2);
     let mut loaded = load(Some(&saved), None).unwrap();
     assert!(recovery_writes(&mut loaded).is_empty());
+    let loaded = loaded.ready().unwrap();
     let startup = loaded.state.as_ref().unwrap().clone();
     loaded.state.as_mut().unwrap().settings.theme = Theme::Light;
     let backup = loaded.started().unwrap();
-    assert_eq!(backup.slot, Slot::LastGood);
-    assert_eq!(decode(backup.value.as_str().unwrap()).unwrap(), startup);
+    assert_eq!(backup.slot(), Slot::LastGood);
+    assert_eq!(decode(backup.value().as_str().unwrap()).unwrap(), startup);
     assert!(loaded.started().is_none());
-    let mut unchanged = load(Some(&backup.value), Some(&backup.value)).unwrap();
-    assert!(unchanged.started().is_none());
+    let mut unchanged = load(Some(backup.value()), Some(backup.value())).unwrap();
+    assert!(unchanged.ready().unwrap().started().is_none());
 }
 
 #[test]
@@ -213,33 +214,35 @@ fn unreadable_and_too_deep_state_recovers_without_losing_the_input() {
     let fallback = json!(V2);
     for damaged in [json!("{\"spaces\": ["), json!(42), deep] {
         let mut loaded = load(Some(&damaged), Some(&fallback)).unwrap();
-        assert_eq!(loaded.recovered, Some(Recovery::LastGood));
-        assert_eq!(loaded.state.as_ref().unwrap().spaces()[0].name, "Personal");
+        assert!(loaded.ready().is_none());
         assert_eq!(
             recovery_writes(&mut loaded),
             [(Slot::Damaged, damaged), (Slot::Current, fallback.clone())]
         );
+        let loaded = loaded.ready().unwrap();
+        assert_eq!(loaded.recovered, Some(Recovery::LastGood));
+        assert_eq!(loaded.state.as_ref().unwrap().spaces()[0].name, "Personal");
         assert!(loaded.started().is_none());
     }
     let damaged = json!(r#"{"spaces":[]}"#);
     let mut loaded = load(Some(&damaged), Some(&json!("not json"))).unwrap();
+    assert!(loaded.ready().is_none());
+    assert_eq!(recovery_writes(&mut loaded), [(Slot::Damaged, damaged)]);
+    let loaded = loaded.ready().unwrap();
     assert_eq!(loaded.recovered, Some(Recovery::Fresh));
     assert!(loaded.state.is_none() && loaded.started().is_none());
-    assert_eq!(recovery_writes(&mut loaded), [(Slot::Damaged, damaged)]);
     let mut first = load(None, Some(&fallback)).unwrap();
+    assert!(recovery_writes(&mut first).is_empty());
+    let first = first.ready().unwrap();
     assert_eq!(first.recovered, None);
-    assert!(
-        first.state.is_none()
-            && recovery_writes(&mut first).is_empty()
-            && first.started().is_none()
-    );
+    assert!(first.state.is_none() && first.started().is_none());
 }
 
 fn recovery_writes(loaded: &mut flecha_core::storage::LoadedState) -> Vec<(Slot, Value)> {
     let mut writes = Vec::new();
     loaded
         .apply_recovery(|write| {
-            writes.push((write.slot, write.value.clone()));
+            writes.push((write.slot(), write.value().clone()));
             Ok::<_, std::convert::Infallible>(())
         })
         .unwrap();
@@ -251,31 +254,45 @@ fn recovery_waits_for_a_successfully_written_damaged_copy() {
     let damaged = json!("{\"spaces\": [");
     let fallback = json!(V2);
     let mut loaded = load(Some(&damaged), Some(&fallback)).unwrap();
+    assert!(loaded.ready().is_none());
     let mut writes = Vec::new();
     assert_eq!(
-        loaded.apply_recovery(|write| {
-            writes.push(write.slot);
-            if write.slot == Slot::Damaged {
-                Err("cannot write damaged copy")
-            } else {
-                Ok(())
-            }
-        }),
-        Err("cannot write damaged copy")
+        loaded
+            .apply_recovery(|write| {
+                writes.push(write.slot());
+                if write.slot() == Slot::Damaged {
+                    Err("cannot write damaged copy")
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap_err(),
+        "cannot write damaged copy"
     );
     assert_eq!(writes, [Slot::Damaged]);
+    assert!(loaded.ready().is_none());
     assert_eq!(
-        loaded.apply_recovery(|write| {
-            if write.slot == Slot::Current {
-                Err("cannot write current copy")
-            } else {
-                Ok(())
-            }
-        }),
-        Err("cannot write current copy")
+        loaded
+            .apply_recovery(|write| {
+                if write.slot() == Slot::Current {
+                    Err("cannot write current copy")
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap_err(),
+        "cannot write current copy"
     );
+    assert!(loaded.ready().is_none());
     assert_eq!(recovery_writes(&mut loaded), [(Slot::Current, fallback)]);
     assert!(recovery_writes(&mut loaded).is_empty());
+    let ready = loaded.ready().unwrap();
+    let state = ready.state.as_mut().unwrap();
+    state.settings.theme = Theme::Dark;
+    let current = ready.save_current(ready.state.as_ref().unwrap()).unwrap();
+    assert_eq!(current.slot(), Slot::Current);
+    let saved = decode(current.value().as_str().unwrap()).unwrap();
+    assert_eq!(saved.settings.theme, Theme::Dark);
 }
 
 #[test]
@@ -291,9 +308,10 @@ fn unknown_deep_tab_fields_do_not_trigger_recovery() {
         "windows":[{{"id":"w","activeSpaceId":"s","spaces":{{"s":{{"today":["t"]}}}}}}]}}"#
     ));
     let mut loaded = load(Some(&saved), None).unwrap();
-    assert_eq!(loaded.recovered, None);
     assert!(recovery_writes(&mut loaded).is_empty());
-    let state = loaded.state.unwrap();
+    let loaded = loaded.ready().unwrap();
+    assert_eq!(loaded.recovered, None);
+    let state = loaded.state.take().unwrap();
     let id = TabId::new("t");
     assert_eq!(state.tab(&id).unwrap().last_active, Some(7.0));
     assert_eq!(
@@ -309,6 +327,36 @@ fn unknown_deep_tab_fields_do_not_trigger_recovery() {
 }
 
 #[test]
+fn saved_history_requires_objects_and_uses_the_last_duplicate_fields() {
+    let history = |input: &str| {
+        let saved = format!(
+            r#"{{"tabs":{{"t":{{"url":"https://example.org","history":{input}}}}},"spaces":[{{"id":"s"}}]}}"#
+        );
+        decode(&saved)
+            .unwrap()
+            .tab(&TabId::new("t"))
+            .unwrap()
+            .history
+            .clone()
+    };
+    for input in [
+        r#"[[],0]"#,
+        r#"{"entries":[["https://example.org","title"]],"index":0}"#,
+        r#"{"entries":[{"url":"https://example.org","title":"title","pageState":null}],"index":0}"#,
+        r#"{"entries":[],"index":0,"index":"bad"}"#,
+    ] {
+        assert_eq!(history(input), None, "{input}");
+    }
+    let empty = history(r#"{"entries":[],"index":0}"#).unwrap();
+    assert!(empty.entries.is_empty());
+    let saved = history(r#"{"entries":null,"index":"bad","entries":[{"url":"old","url":"https://example.org","title":"Setup","pageState":null,"pageState":"opaque"},{"url":"https://example.org/docs","title":"Docs"}],"index":1}"#).unwrap();
+    assert_eq!(saved.index, 1.0);
+    assert_eq!(saved.entries[0].url, "https://example.org");
+    assert_eq!(saved.entries[0].title, "Setup");
+    assert_eq!(saved.entries[1].title, "Docs");
+}
+
+#[test]
 fn missing_or_invalid_activity_remains_unknown_after_restart() {
     use flecha_core::sleep::{DISCARD_AFTER_WALL_CLOCK, SleepState, SleepTab, sleep_state};
     let saved = r#"{"version":3,"tabs":{
@@ -320,20 +368,26 @@ fn missing_or_invalid_activity_remains_unknown_after_restart() {
     let mut state = decode(saved).unwrap();
     state = decode(&encode(&state).unwrap()).unwrap();
     let now = DISCARD_AFTER_WALL_CLOCK + 1;
-    for id in ["missing", "invalid", "boolean"] {
+    for (id, timestamp, expected) in [
+        ("missing", None, SleepState::Alive),
+        ("invalid", None, SleepState::Alive),
+        ("boolean", None, SleepState::Alive),
+        ("epoch", Some(0.0), SleepState::Discarded),
+    ] {
         let tab = state.tab(&TabId::new(id)).unwrap();
-        assert_eq!(tab.last_active, None);
+        assert_eq!(tab.last_active, timestamp);
         assert_eq!(
             sleep_state(
                 SleepTab {
                     url: Some(&tab.url),
+                    last_active: tab.last_active.map(|time| time as i64),
                     ..SleepTab::default()
                 },
                 now,
                 now,
                 false
             ),
-            SleepState::Alive
+            expected
         );
     }
     assert_eq!(state.archive_stale(now), [TabId::new("epoch")]);
@@ -396,11 +450,13 @@ fn damaged_state_is_preserved_even_when_its_backup_needs_a_newer_reader() {
     let damaged = json!("broken JSON");
     let future = json!(r#"{"version":4,"spaces":[{"id":"s"}],"tabs":{}}"#);
     let mut loaded = load(Some(&damaged), Some(&future)).unwrap();
-    assert_eq!(loaded.recovered, Some(Recovery::UnsupportedBackup));
     assert_eq!(recovery_writes(&mut loaded), [(Slot::Damaged, damaged)]);
+    let loaded = loaded.ready().unwrap();
+    assert_eq!(loaded.recovered, Some(Recovery::UnsupportedBackup));
     assert!(loaded.state.is_none());
     assert!(loaded.started().is_none());
     let mut loaded = load(Some(&json!(V2)), Some(&future)).unwrap();
+    let loaded = loaded.ready().unwrap();
     assert!(loaded.state.is_some() && loaded.started().is_none());
 }
 
@@ -486,6 +542,7 @@ fn exact_schema_comparison_protects_current_and_last_good_copies() {
         Err(DecodeError::UnsupportedVersion(_))
     ));
     let mut loaded = load(Some(&json!(V2)), Some(&future)).unwrap();
+    let loaded = loaded.ready().unwrap();
     assert!(loaded.state.is_some());
     assert!(loaded.started().is_none());
     for equivalent in ["3.000", "30e-1", "0.0300e+2"] {

@@ -8,7 +8,7 @@
 
 Once a build ships, changing the snapshot format requires a schema version bump.
 
-`storage::load` returns repaired state. `LoadedState::apply_recovery` saves the damaged copy before restoring the current slot and stops on a failed write. Call `LoadedState::started` after startup succeeds. A newer current schema blocks recovery. A newer last-good copy stays available to a newer reader, and a damaged current value is still set aside. Repairs assign distinct IDs to duplicate Spaces and folders while retaining their contents. Version 2 window memberships keyed by a duplicate Space ID stay with the first Space. The application owns the storage path, atomic writes, and error reporting.
+`storage::load` returns a startup handle. `LoadedState::ready` exposes repaired state and the current-slot writer when there are no pending writes. `LoadedState::apply_recovery` saves the damaged copy before restoring the current slot, stops on failure, and returns the ready state on success. Call `ReadyState::started` after startup succeeds. A newer current schema blocks recovery. A newer last-good copy stays available to a newer reader, and a damaged current value is still set aside. Repairs assign distinct IDs to duplicate Spaces and folders while retaining their contents. Version 2 window memberships keyed by a duplicate Space ID stay with the first Space. The application owns the storage path, atomic writes, and error reporting.
 
 The reader validates the JSON syntax and skips unknown tab and navigation fields without materializing their nested values.
 
@@ -34,4 +34,5 @@ GPUI owns command-bar ranking across sources, Peeks, shortcut registration, loca
 - The archive keeps the shell's front insertion and cap. At capacity, older tabs evicted from closed-window history can displace newer archive entries. Undo compares the original close times of all retained entries and windows. The Chromium shell compares the heads of those lists. Reopening a window whose active Space lost its Today tabs opens the first Space that retained tabs.
 - Suggestion requests keep JWTs local even when pasted directly beside other text or with spaced or repeatedly encoded delimiters. The local decoder accepts either standard Base64 or Base64URL for each segment, and accepts any JSON object header.
 - Environment switches apply to HTTP and HTTPS pages. A blob URL stays on its original origin.
+- The command bar treats malformed explicit HTTP and HTTPS input as invalid so its path, query, and fragment stay local.
 - GitHub issue shortcuts require a complete repository segment and fall back to GitHub search for ambiguous paths.

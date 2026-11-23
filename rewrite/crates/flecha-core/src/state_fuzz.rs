@@ -320,11 +320,13 @@ fn random_transitions_preserve_tab_and_selection_invariants() {
             }
             for win in &state.windows {
                 assert!(state.space(&win.active_space_id).is_some(), "{context}");
-                for ws in win.spaces.values() {
+                for (space, ws) in &win.spaces {
+                    let members = state.tab_ids(&win.id, space).unwrap();
                     for id in ws.active_tab_id.iter().chain(ws.split.iter().flatten()) {
                         assert!(
-                            after.contains(id),
-                            "missing selected/split tab {id:?}: {context}"
+                            members.contains(&id),
+                            "selected/split tab {id:?} is outside window {:?}, Space {space:?}: {context}",
+                            win.id,
                         );
                     }
                 }

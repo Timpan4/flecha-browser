@@ -3,16 +3,22 @@ use url::{Host, Url};
 use super::{decode_component, encode_component};
 use crate::SearchEngine;
 
-pub fn resolve_input(raw: &str, engine: SearchEngine) -> String {
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum InputResolution {
+    Navigate(String),
+    Search(String),
+    Invalid,
+}
+
+pub fn resolve_input(raw: &str, engine: SearchEngine) -> InputResolution {
     let input = raw.trim();
     if let Some(address) = web_address(input) {
-        return address;
+        return InputResolution::Navigate(address);
     }
-    let hostless_http = re!(r"(?i)^https?://(?::[0-9]+)?(?:[/\\?#]|$)").is_match(input);
-    if input.is_empty() || (!hostless_http && rejected_address(input)) {
-        return "about:blank".into();
+    if input.is_empty() || rejected_address(input) {
+        return InputResolution::Invalid;
     }
-    engine.search_url(input)
+    InputResolution::Search(engine.search_url(input))
 }
 
 pub fn web_address(raw: &str) -> Option<String> {
@@ -48,7 +54,13 @@ fn has_credentials(input: &str) -> bool {
 }
 
 pub fn rejected_address(raw: &str) -> bool {
-    if has_credentials(raw) {
+    // Explicit HTTP(S) input that fails address parsing must stay local.
+    if has_credentials(raw)
+        || raw
+            .trim()
+            .split_once(':')
+            .is_some_and(|(scheme, _)| is_http_scheme(&scheme.replace(['\t', '\r', '\n'], "")))
+    {
         return true;
     }
     let input = raw.replace('？', "?");
@@ -90,6 +102,10 @@ pub fn rejected_address(raw: &str) -> bool {
         && re!(r"(?i)^[a-z0-9-]*[a-z][a-z0-9-]*$").is_match(host)
 }
 
+fn is_http_scheme(scheme: &str) -> bool {
+    scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
+}
+
 pub(super) fn address(raw: &str, allow_bare_host: bool) -> Option<String> {
     let input = raw.trim();
     if re!(r"(?i)^(about|data):").is_match(input) {
@@ -97,20 +113,13 @@ pub(super) fn address(raw: &str, allow_bare_host: bool) -> Option<String> {
     }
     if let Some(authority) = re!(r"(?i)^[a-z][a-z0-9+.-]*://[^/?#\\]*").find(input) {
         let authority = authority.as_str();
-        let (scheme, host) = authority.split_once("://")?;
-        let has_host = if scheme.eq_ignore_ascii_case("http")
-            || scheme.eq_ignore_ascii_case("https")
-        {
-            Url::parse(authority).is_ok_and(|url| url.has_host())
-        } else {
-            scheme.eq_ignore_ascii_case("file") || !host.replace(['\t', '\n', '\r'], "").is_empty()
-        };
-        if !has_host {
+        let clean = authority.replace(['\t', '\r', '\n'], "");
+        let (scheme, _) = clean.split_once("://")?;
+        if is_http_scheme(scheme) && !Url::parse(&clean).is_ok_and(|url| url.has_host()) {
             return None;
         }
         return Some(format!(
-            "{}{}",
-            authority.replace(['\t', '\n', '\r'], ""),
+            "{clean}{}",
             escape_controls(&input[authority.len()..])
         ));
     }

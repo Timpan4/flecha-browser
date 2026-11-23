@@ -1,6 +1,7 @@
 //! Platform defaults and conflict handling for Electron-style saved accelerators.
 
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 
 pub type Keybindings = BTreeMap<String, Option<String>>;
 
@@ -181,7 +182,7 @@ pub fn fixed_shortcuts(platform: Platform) -> BTreeMap<String, String> {
 pub fn keys_for<'a>(bindings: &'a Keybindings, id: &str, platform: Platform) -> Option<&'a str> {
     let index = SHORTCUTS.iter().position(|command| command.id == id)?;
     let configured = configured_keys(bindings, id, platform)?;
-    if is_reserved(configured, platform) {
+    if parse_accelerator(configured, platform).is_some_and(|keys| is_reserved(keys, platform)) {
         return None;
     }
     let competing = |command: &Shortcut| {
@@ -206,10 +207,10 @@ pub fn keys_for<'a>(bindings: &'a Keybindings, id: &str, platform: Platform) -> 
 }
 
 fn custom_keys<'a>(bindings: &'a Keybindings, id: &str, platform: Platform) -> Option<&'a str> {
-    bindings
-        .get(id)
-        .and_then(Option::as_deref)
-        .filter(|keys| assignable_keys(keys, platform) && !is_reserved(keys, platform))
+    bindings.get(id).and_then(Option::as_deref).filter(|keys| {
+        assignable_accelerator(keys, platform)
+            .is_some_and(|accelerator| !is_reserved(accelerator, platform))
+    })
 }
 
 fn configured_keys<'a>(bindings: &'a Keybindings, id: &str, platform: Platform) -> Option<&'a str> {
@@ -219,8 +220,8 @@ fn configured_keys<'a>(bindings: &'a Keybindings, id: &str, platform: Platform) 
     }
 }
 
-fn assignable_keys(keys: &str, platform: Platform) -> bool {
-    parse_accelerator(keys, platform).is_some_and(|accelerator| {
+fn assignable_accelerator(keys: &str, platform: Platform) -> Option<Accelerator> {
+    parse_accelerator(keys, platform).filter(|accelerator| {
         accelerator.modifiers != 0 || matches!(accelerator.key, Key::Function(_))
     })
 }
@@ -229,14 +230,27 @@ pub(crate) fn repair_saved_bindings(bindings: &mut Keybindings) {
     // The platform changes the CmdOrCtrl bit, but never whether a key is assignable.
     bindings.retain(|_, keys| {
         keys.as_deref()
-            .is_none_or(|keys| assignable_keys(keys, Platform::Linux))
+            .is_none_or(|keys| assignable_accelerator(keys, Platform::Linux).is_some())
     });
 }
 
-fn is_reserved(keys: &str, platform: Platform) -> bool {
-    fixed_shortcuts(platform)
-        .keys()
-        .any(|fixed| same_keys(fixed, keys, platform))
+fn is_reserved(keys: Accelerator, platform: Platform) -> bool {
+    fn parsed_fixed_shortcuts(platform: Platform) -> Vec<Accelerator> {
+        fixed_shortcuts(platform)
+            .keys()
+            .map(|keys| parse_accelerator(keys, platform).expect("fixed shortcut is valid"))
+            .collect()
+    }
+
+    static MAC: LazyLock<Vec<Accelerator>> =
+        LazyLock::new(|| parsed_fixed_shortcuts(Platform::Mac));
+    static OTHER: LazyLock<Vec<Accelerator>> =
+        LazyLock::new(|| parsed_fixed_shortcuts(Platform::Linux));
+    let reserved = match platform {
+        Platform::Mac => &MAC,
+        Platform::Linux | Platform::Windows => &OTHER,
+    };
+    reserved.contains(&keys)
 }
 
 pub fn shortcut_map(bindings: &Keybindings, platform: Platform) -> BTreeMap<String, String> {
@@ -281,7 +295,7 @@ pub fn set_binding(
             return Ok(Vec::new());
         }
         BindingEdit::Set(keys) => {
-            if !assignable_keys(keys, platform) {
+            if assignable_accelerator(keys, platform).is_none() {
                 return Err(BindingError::InvalidAccelerator);
             }
             Some(keys)
@@ -289,7 +303,7 @@ pub fn set_binding(
     };
     let mut displaced = Vec::new();
     if let Some(keys) = keys {
-        if is_reserved(keys, platform) {
+        if parse_accelerator(keys, platform).is_some_and(|keys| is_reserved(keys, platform)) {
             return Err(BindingError::Reserved);
         }
         for command in SHORTCUTS.iter().filter(|command| command.id != id) {

@@ -81,7 +81,7 @@ fn import_replaces_only_a_pristine_space_and_keeps_a_before_copy() {
     };
 
     let before = set_aside_before_import(&init).unwrap();
-    assert_eq!(before.slot, Slot::BeforeImport);
+    assert_eq!(before.slot(), Slot::BeforeImport);
     let mut state = init.clone();
     assert!(state.open_window(other.clone(), None));
     let result = state
@@ -97,7 +97,7 @@ fn import_replaces_only_a_pristine_space_and_keeps_a_before_copy() {
     assert_eq!(space.color, "#aabbcc");
     assert_eq!(state.window(&other).unwrap().active_space_id, id);
     assert_eq!(
-        state_before_import(Some(&before.value)).unwrap(),
+        state_before_import(Some(before.value())).unwrap(),
         Some(init.clone())
     );
     assert!(state_before_import(None).unwrap().is_none());

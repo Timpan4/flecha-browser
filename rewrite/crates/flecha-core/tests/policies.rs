@@ -245,6 +245,35 @@ fn sleep_distinguishes_active_use_and_wall_clock() {
 }
 
 #[test]
+fn sleep_uses_the_known_clock_if_the_other_is_missing() {
+    use SleepState::{Alive, Discarded, Frozen};
+    let now = DISCARD_AFTER_WALL_CLOCK;
+    let only_wall_clock = SleepTab {
+        last_active: Some(0),
+        ..SleepTab::default()
+    };
+    assert_eq!(sleep_state(only_wall_clock, now - 1, 0, false), Alive);
+    assert_eq!(sleep_state(only_wall_clock, now, 0, false), Discarded);
+
+    let only_active_use = SleepTab {
+        used_at: Some(0),
+        ..SleepTab::default()
+    };
+    assert_eq!(
+        sleep_state(only_active_use, now, FREEZE_AFTER - 1, false),
+        Alive
+    );
+    assert_eq!(
+        sleep_state(only_active_use, now, FREEZE_AFTER, false),
+        Frozen
+    );
+    assert_eq!(
+        sleep_state(only_active_use, now, DISCARD_AFTER, false),
+        Discarded
+    );
+}
+
+#[test]
 fn sleep_prioritizes_visibility_media_and_debounce() {
     use SleepState::{Alive, Discarded, Frozen};
     let now = 10 * DISCARD_AFTER_WALL_CLOCK;
