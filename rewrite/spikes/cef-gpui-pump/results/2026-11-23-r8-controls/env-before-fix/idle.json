@@ -1,0 +1,481 @@
+{
+  "gpui_inactive_frame_interval_ms": 33.333,
+  "window_scale_factor": 1.0,
+  "browsers_closed": true,
+  "context_initialized_after_ms": 0.00493,
+  "page_load_ms": 78.569031,
+  "isolation_after_load": {
+    "forbidden": [
+      "/run/user/1000",
+      "/run/dbus/system_bus_socket",
+      "/home/timpan4"
+    ],
+    "allowed": [
+      "/tmp/cef-gpui-pump-old-runner.OjIv34/rewrite/target/release/cef-gpui-pump-bundle/cef_binary_158.0.3+g8c29be2+chromium-158.0.8127.18_linux64_beta_minimal",
+      "/home/timpan4/.t3/worktrees/flecha-browser/t3-3b42251b-74c4a1e059834541/rewrite/target/release/cef-gpui-pump-bundle/cef_binary_158.0.3+g8c29be2+chromium-158.0.8127.18_linux64_beta_minimal",
+      "/tmp/cef-gpui-pump-old-runner.OjIv34/rewrite/spikes/cef-gpui-pump/pages",
+      "/home/timpan4/.t3/worktrees/flecha-browser/t3-3b42251b-74c4a1e059834541/rewrite/spikes/cef-gpui-pump/results/2026-11-23-r8-controls/env-before-fix"
+    ],
+    "processes": 9,
+    "discovery_errors": [],
+    "open_files": [],
+    "mapped_files": [],
+    "unix_socket_peers": [],
+    "sockets": 59,
+    "sockets_without_peer_info": 13,
+    "unreadable": [],
+    "ss_error": null,
+    "ss_unparsed_rows": [],
+    "clean": true
+  },
+  "idle": {
+    "seconds": 5.005515199,
+    "pump": {
+      "requests_immediate": 43,
+      "requests_delayed": 0,
+      "calls_immediate": 43,
+      "calls_delayed": 0,
+      "calls_periodic": 146,
+      "calls_rerun": 0,
+      "calls_total": 189,
+      "recursive_calls_deferred": 0
+    },
+    "gpui_renders": 1,
+    "gpui_renders_per_second": 0.1997796351112428,
+    "gpui_animation_steps": 0,
+    "gpui_images_uploaded": 1,
+    "on_paint_by_page": [
+      {
+        "count": 1,
+        "per_second": 0.1997796351112428
+      }
+    ],
+    "on_paint_frames_overwritten_before_upload": 0,
+    "on_paint_frames_overwritten_before_upload_per_second": 0.0,
+    "gpui_images_replaced_before_draw": 0,
+    "gpui_images_replaced_before_draw_per_second": 0.0,
+    "cpu": {
+      "wall_seconds": 5.005515199,
+      "clock_ticks_per_second": 100.0,
+      "total_cpu_ticks": 6,
+      "total_cpu_percent_of_one_core_from_ticks": 1.198677810667457,
+      "total_run_ms": 56.605261,
+      "total_cpu_percent_of_one_core": 1.1308578387956665,
+      "method": "sum over the process tree of /proc/PID/task/*/schedstat run time (ns); ticks from /proc/PID/stat utime+stime",
+      "processes": [
+        {
+          "pid": 1316422,
+          "type": "browser",
+          "cpu_ticks": 6,
+          "run_ms": 53.098759,
+          "cpu_percent_of_one_core": 1.060805069787982
+        },
+        {
+          "pid": 1316449,
+          "type": "zygote",
+          "cpu_ticks": 0,
+          "run_ms": 0.0,
+          "cpu_percent_of_one_core": 0.0
+        },
+        {
+          "pid": 1316450,
+          "type": "zygote",
+          "cpu_ticks": 0,
+          "run_ms": 0.0,
+          "cpu_percent_of_one_core": 0.0
+        },
+        {
+          "pid": 1316532,
+          "type": "utility",
+          "cpu_ticks": 0,
+          "run_ms": 1.591092,
+          "cpu_percent_of_one_core": 0.03178677791884175
+        },
+        {
+          "pid": 1316530,
+          "type": "zygote-forked-unsandboxed",
+          "cpu_ticks": 0,
+          "run_ms": 0.53798,
+          "cpu_percent_of_one_core": 0.01074774480971464
+        },
+        {
+          "pid": 1316503,
+          "type": "zygote",
+          "cpu_ticks": 0,
+          "run_ms": 1.19242,
+          "cpu_percent_of_one_core": 0.023822123249934813
+        },
+        {
+          "pid": 1316571,
+          "type": "zygote-forked",
+          "cpu_ticks": 0,
+          "run_ms": 0.0,
+          "cpu_percent_of_one_core": 0.0
+        },
+        {
+          "pid": 1316691,
+          "type": "zygote-forked",
+          "cpu_ticks": 0,
+          "run_ms": 0.0,
+          "cpu_percent_of_one_core": 0.0
+        },
+        {
+          "pid": 1316692,
+          "type": "zygote-forked",
+          "cpu_ticks": 0,
+          "run_ms": 0.18501,
+          "cpu_percent_of_one_core": 0.0036961230291931023
+        },
+        {
+          "pid": 1316719,
+          "type": "zygote-forked",
+          "cpu_ticks": 0,
+          "run_ms": 0.0,
+          "cpu_percent_of_one_core": 0.0
+        }
+      ],
+      "exited_during_window": []
+    }
+  },
+  "pump_trace": {
+    "seconds": 8.011493554,
+    "max_gap_between_calls_ms": 33.122074,
+    "max_gap_bound_ms": 5000.0,
+    "pump_timers_created": 251,
+    "pump_timers_per_second": 31.32998838583351,
+    "pump_timer_deadlines_max_unexpired_since_start": 1,
+    "bridge_timers_created": 0,
+    "scenario_timers_created": 6,
+    "scenario_timer_deadlines_max_unexpired": 5,
+    "analysis": {
+      "requests": 168,
+      "calls": 395,
+      "unexplained_calls": 0,
+      "unexplained_examples": [],
+      "gap_between_calls_ms": {
+        "min": 0.00545,
+        "p50": 33.032675,
+        "p99": 33.078085,
+        "max": 33.122074
+      },
+      "work_duration_ms": {
+        "p50": 0.00452,
+        "p99": 1.083817,
+        "max": 10.002387,
+        "total": 49.673467,
+        "slowest": [
+          10.002387,
+          10.002377,
+          10.002368,
+          10.001817,
+          1.083817
+        ]
+      }
+    }
+  },
+  "pump_pass": true,
+  "idle_paint_log": [
+    {
+      "ms_after_navigation": 135.469371,
+      "in_measured_window": false,
+      "paint_holding_repaint": false,
+      "dirty_rects": [
+        [
+          0,
+          0,
+          1024,
+          640
+        ]
+      ]
+    },
+    {
+      "ms_after_navigation": 4094.986313,
+      "in_measured_window": true,
+      "paint_holding_repaint": true,
+      "dirty_rects": [
+        [
+          0,
+          0,
+          1024,
+          640
+        ]
+      ]
+    }
+  ],
+  "idle_pump_trace": {
+    "requests": 43,
+    "calls": 189,
+    "unexplained_calls": 0,
+    "unexplained_examples": [],
+    "gap_between_calls_ms": {
+      "min": 0.0096,
+      "p50": 33.034874,
+      "p99": 33.078085,
+      "max": 33.097105
+    },
+    "work_duration_ms": {
+      "p50": 0.0042899999999999995,
+      "p99": 0.622059,
+      "max": 10.002387,
+      "total": 22.952725,
+      "slowest": [
+        10.002387,
+        10.002377,
+        0.622059,
+        0.13192,
+        0.12753
+      ]
+    }
+  },
+  "idle_frames": {
+    "gpui_renders_in_window": 1,
+    "on_paint_in_window": 1,
+    "paint_holding_repaints_in_window": 1,
+    "paint_holding_timeout_ms": 4000.0,
+    "strict_no_frames": false
+  },
+  "idle_pass": true,
+  "isolation_before_shutdown": {
+    "forbidden": [
+      "/run/user/1000",
+      "/run/dbus/system_bus_socket",
+      "/home/timpan4"
+    ],
+    "allowed": [
+      "/tmp/cef-gpui-pump-old-runner.OjIv34/rewrite/target/release/cef-gpui-pump-bundle/cef_binary_158.0.3+g8c29be2+chromium-158.0.8127.18_linux64_beta_minimal",
+      "/home/timpan4/.t3/worktrees/flecha-browser/t3-3b42251b-74c4a1e059834541/rewrite/target/release/cef-gpui-pump-bundle/cef_binary_158.0.3+g8c29be2+chromium-158.0.8127.18_linux64_beta_minimal",
+      "/tmp/cef-gpui-pump-old-runner.OjIv34/rewrite/spikes/cef-gpui-pump/pages",
+      "/home/timpan4/.t3/worktrees/flecha-browser/t3-3b42251b-74c4a1e059834541/rewrite/spikes/cef-gpui-pump/results/2026-11-23-r8-controls/env-before-fix"
+    ],
+    "processes": 10,
+    "discovery_errors": [],
+    "open_files": [],
+    "mapped_files": [],
+    "unix_socket_peers": [],
+    "sockets": 75,
+    "sockets_without_peer_info": 20,
+    "unreadable": [],
+    "ss_error": null,
+    "ss_unparsed_rows": [],
+    "clean": true
+  },
+  "isolation_clean": true,
+  "browsers_closed_after_ms": 0.0002,
+  "scenario_seconds": 8.135397152,
+  "totals": {
+    "gpui_renders": 4,
+    "gpui_animation_steps": 0,
+    "gpui_images_uploaded": 2,
+    "gpui_images_dropped": 2,
+    "gpui_images_replaced_before_draw": 0,
+    "on_paint_frames_overwritten_before_upload": 0,
+    "on_paint_by_page": [
+      2
+    ]
+  },
+  "step_timeout_ms": 5000.0,
+  "warmup_ms": 3000.0,
+  "measure_ms": 5000.0,
+  "sandbox": true,
+  "scenario": "Idle",
+  "gpui_ran": true,
+  "pump_totals": {
+    "requests_immediate": 196,
+    "requests_delayed": 0,
+    "calls_immediate": 192,
+    "calls_delayed": 0,
+    "calls_periodic": 229,
+    "calls_rerun": 0,
+    "calls_total": 421,
+    "recursive_calls_deferred": 0
+  },
+  "pump_requests_received_any_thread": 199,
+  "max_pump_interval_ms": 33,
+  "shutdown": {
+    "cef_shutdown_called": true,
+    "cef_shutdown_skipped_reason": null,
+    "cef_shutdown_ms": 74.58368999999999,
+    "children_before_shutdown": [
+      {
+        "pid": 1316449,
+        "ppid": 1316422,
+        "type": "zygote",
+        "start_time": 2044561,
+        "inner_pid": 1316449
+      },
+      {
+        "pid": 1316450,
+        "ppid": 1316422,
+        "type": "zygote",
+        "start_time": 2044561,
+        "inner_pid": 1
+      },
+      {
+        "pid": 1316532,
+        "ppid": 1316422,
+        "type": "utility",
+        "start_time": 2044575,
+        "inner_pid": 1316532
+      },
+      {
+        "pid": 1316530,
+        "ppid": 1316449,
+        "type": "zygote-forked-unsandboxed",
+        "start_time": 2044575,
+        "inner_pid": 1316530
+      },
+      {
+        "pid": 1316503,
+        "ppid": 1316450,
+        "type": "zygote",
+        "start_time": 2044568,
+        "inner_pid": 3
+      },
+      {
+        "pid": 1316571,
+        "ppid": 1316503,
+        "type": "zygote-forked",
+        "start_time": 2044577,
+        "inner_pid": 1
+      },
+      {
+        "pid": 1316691,
+        "ppid": 1316503,
+        "type": "zygote-forked",
+        "start_time": 2044621,
+        "inner_pid": 1
+      },
+      {
+        "pid": 1316692,
+        "ppid": 1316503,
+        "type": "zygote-forked",
+        "start_time": 2044621,
+        "inner_pid": 1
+      },
+      {
+        "pid": 1316719,
+        "ppid": 1316503,
+        "type": "zygote-forked",
+        "start_time": 2044655,
+        "inner_pid": 1
+      }
+    ],
+    "discovery_errors": [],
+    "children_alive_right_after_cef_shutdown": [
+      {
+        "pid": 1316449,
+        "ppid": 1316422,
+        "type": "zygote",
+        "start_time": 2044561,
+        "inner_pid": 1316449
+      },
+      {
+        "pid": 1316450,
+        "ppid": 1316422,
+        "type": "zygote",
+        "start_time": 2044561,
+        "inner_pid": 1
+      },
+      {
+        "pid": 1316503,
+        "ppid": 1316450,
+        "type": "zygote",
+        "start_time": 2044568,
+        "inner_pid": 3
+      }
+    ],
+    "descendants_right_after_cef_shutdown": [
+      {
+        "pid": 1316449,
+        "ppid": 1316422,
+        "type": "zygote",
+        "start_time": 2044561,
+        "inner_pid": 1316449
+      },
+      {
+        "pid": 1316450,
+        "ppid": 1316422,
+        "type": "zygote",
+        "start_time": 2044561,
+        "inner_pid": 1
+      },
+      {
+        "pid": 1316503,
+        "ppid": 1316450,
+        "type": "zygote",
+        "start_time": 2044568,
+        "inner_pid": 3
+      },
+      {
+        "pid": 1316691,
+        "ppid": 1316503,
+        "type": "exiting",
+        "start_time": 2044621,
+        "inner_pid": 1
+      },
+      {
+        "pid": 1316719,
+        "ppid": 1316503,
+        "type": "exiting",
+        "start_time": 2044655,
+        "inner_pid": 1
+      }
+    ]
+  },
+  "scenario_pass": true,
+  "children_after_exit": {
+    "timeout_ms": 5000.0,
+    "exited": [
+      {
+        "pid": 1316449,
+        "gone_after_ms": 0.0,
+        "note": "gone before wait"
+      },
+      {
+        "pid": 1316450,
+        "gone_after_ms": 0.0,
+        "note": "gone before wait"
+      },
+      {
+        "pid": 1316503,
+        "gone_after_ms": 0.0,
+        "note": "gone before wait"
+      },
+      {
+        "pid": 1316530,
+        "gone_after_ms": 0.0,
+        "note": "gone before wait"
+      },
+      {
+        "pid": 1316532,
+        "gone_after_ms": 0.0,
+        "note": "gone before wait"
+      },
+      {
+        "pid": 1316571,
+        "gone_after_ms": 0.0,
+        "note": "gone before wait"
+      },
+      {
+        "pid": 1316691,
+        "gone_after_ms": 0.0,
+        "note": "gone before wait"
+      },
+      {
+        "pid": 1316692,
+        "gone_after_ms": 0.0,
+        "note": "gone before wait"
+      },
+      {
+        "pid": 1316719,
+        "gone_after_ms": 0.0,
+        "note": "gone before wait"
+      }
+    ],
+    "clean": true,
+    "still_alive_at_timeout": [],
+    "inconclusive": []
+  },
+  "shutdown_clean": true,
+  "pass": true
+}

@@ -1,0 +1,29 @@
+{
+  "step_timeout_ms": 1000,
+  "scenario_pass": true,
+  "shutdown": {
+    "children_before_shutdown": [
+      {
+        "pid": "12345",
+        "start_time": 1
+      },
+      {
+        "pid": 4294967297,
+        "start_time": 1
+      }
+    ]
+  },
+  "children_after_exit": {
+    "timeout_ms": 1000.0,
+    "exited": [
+      {
+        "pid": 1,
+        "gone_after_ms": 0.0,
+        "note": "gone or reused before wait"
+      }
+    ],
+    "still_alive_at_timeout": []
+  },
+  "shutdown_clean": true,
+  "pass": true
+}

@@ -1,0 +1,32 @@
+bundle /home/timpan4/.t3/worktrees/flecha-browser/t3-3b42251b-74c4a1e059834541/rewrite/target/release/cef-gpui-pump-bundle (CEF from /home/timpan4/.t3/worktrees/flecha-browser/t3-3b42251b-74c4a1e059834541/rewrite/target/release/build/cef-dll-sys/5ef07ae7f7e11546/out/cef_linux_x86_64)
+Xvfb pid 67559 on :1
+== devtools-0ms-1
+   exit=0 scenario_pass=true shutdown_clean=true pass=true
+== devtools-0ms-2
+   exit=0 scenario_pass=true shutdown_clean=true pass=true
+== devtools-0ms-3
+   exit=0 scenario_pass=true shutdown_clean=true pass=true
+== devtools-0ms-4
+   exit=0 scenario_pass=true shutdown_clean=true pass=true
+== devtools-0ms-5
+   exit=0 scenario_pass=true shutdown_clean=true pass=true
+== devtools-100ms-1
+   exit=0 scenario_pass=true shutdown_clean=true pass=true
+== devtools-100ms-2
+   exit=0 scenario_pass=true shutdown_clean=true pass=true
+== devtools-100ms-3
+   exit=0 scenario_pass=true shutdown_clean=true pass=true
+== devtools-100ms-4
+   exit=0 scenario_pass=true shutdown_clean=true pass=true
+== devtools-100ms-5
+   exit=0 scenario_pass=true shutdown_clean=true pass=true
+== devtools-2000ms-1
+   exit=0 scenario_pass=true shutdown_clean=true pass=true
+== devtools-2000ms-2
+   exit=0 scenario_pass=true shutdown_clean=true pass=true
+== devtools-2000ms-3
+   exit=0 scenario_pass=true shutdown_clean=true pass=true
+== devtools-2000ms-4
+   exit=0 scenario_pass=true shutdown_clean=true pass=true
+== devtools-2000ms-5
+   exit=0 scenario_pass=true shutdown_clean=true pass=true

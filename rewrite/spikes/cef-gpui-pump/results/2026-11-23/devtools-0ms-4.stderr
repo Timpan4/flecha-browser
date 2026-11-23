@@ -1,0 +1,18 @@
+[2026-11-23T07:53:34Z ERROR gpui_linux::linux::x11::client] Found no xinput mouse pointers.
+MESA-EGL: warning: DRI3 error: Could not get DRI3 device
+MESA-EGL: warning: Ensure your X server supports DRI3 to get accelerated rendering
+[scenario] context_initialized_after_ms: 0.0038
+[engine] created Page(0) id=1 runtime_style=Some(RuntimeStyle(CEF_RUNTIME_STYLE_ALLOY))
+[engine] created Page(1) id=2 runtime_style=Some(RuntimeStyle(CEF_RUNTIME_STYLE_ALLOY))
+[scenario] page_load_ms: 12.385028
+[engine] created DevTools id=3 runtime_style=Some(RuntimeStyle(CEF_RUNTIME_STYLE_CHROME))
+
+(cef-gpui-pump:69269): atspi-WARNING **: 08:53:39.952: AT-SPI: Error retrieving accessibility bus address: org.freedesktop.DBus.Error.ServiceUnknown: The name org.a11y.Bus was not provided by any .service files
+[engine] before_close DevTools id=3
+[scenario] devtools: {"second_browser":true,"runtime_style":"RuntimeStyle(CEF_RUNTIME_STYLE_CHROME)","show_devtools_call_ms":38.104165,"devtools_created_after_show_ms":38.105425,"close_devtools_after_show_ms":38.110465000000005,"devtools_closed_after_close_ms":13.621189000000001,"health_before":[{"page":0,"on_paint_in_window":60,"on_paint_per_second":29.703123768070675,"evaluate":2,"evaluate_error":null,"evaluate_ms":7.902552},{"page":1,"on_paint_in_window":60,"on_paint_per_second":29.703123768070675,"evaluate":2,"evaluate_error":null,"evaluate_ms":0.39063}],"health_after":[{"page":0,"on_paint_in_window":61,"on_paint_per_second":30.230365454947457,"evaluate":2,"evaluate_error":null,"evaluate_ms":7.1269},{"page":1,"on_paint_in_window":61,"on_paint_per_second":30.230365454947457,"evaluate":2,"evaluate_error":null,"evaluate_ms":0.13244999999999998}],"renderers_before":[{"pid":69319,"ppid":69276,"type":"zygote-forked","start_time":96166,"inner_pid":1},{"pid":69463,"ppid":69276,"type":"zygote-forked","start_time":96185,"inner_pid":1},{"pid":69464,"ppid":69276,"type":"zygote-forked","start_time":96185,"inner_pid":1},{"pid":69479,"ppid":69276,"type":"zygote-forked","start_time":96185,"inner_pid":1},{"pid":69498,"ppid":69276,"type":"zygote-forked","start_time":96194,"inner_pid":1}],"tree_while_open":null,"renderers_after":[{"pid":69319,"ppid":69276,"type":"zygote-forked","start_time":96166,"inner_pid":1},{"pid":69463,"ppid":69276,"type":"zygote-forked","start_time":96185,"inner_pid":1},{"pid":69464,"ppid":69276,"type":"zygote-forked","start_time":96185,"inner_pid":1},{"pid":69498,"ppid":69276,"type":"zygote-forked","start_time":96194,"inner_pid":1},{"pid":71946,"ppid":69276,"type":"zygote-forked","start_time":96692,"inner_pid":1}],"renderers_before_now_gone":[{"pid":69479,"ppid":69276,"type":"zygote-forked","start_time":96185,"inner_pid":1}],"render_process_terminations":[]}
+[scenario] devtools_pass: true
+[engine] before_close Page(0) id=1
+[engine] before_close Page(1) id=2
+[scenario] browsers_closed_after_ms: 0.00017999999999999998
+[scenario] scenario_seconds: 10.208370605
+[scenario] totals: {"gpui_renders":217,"gpui_animation_steps":0,"gpui_images_uploaded":305,"gpui_images_dropped":305,"on_paint_by_page":[306,306]}

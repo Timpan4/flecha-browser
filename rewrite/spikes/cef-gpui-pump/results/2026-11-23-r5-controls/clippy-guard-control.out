@@ -1,0 +1,9 @@
+patched a copy of 70e99af4bd0939b316c5e5b1de9da31558bfaac2 in /tmp/cef-gpui-pump-clippy-guard.2uGoDf
+error: use of a disallowed method `gpui::BackgroundExecutor::timer`
+   --> spikes/cef-gpui-pump/src/bridge.rs:230:64
+    |
+230 |         let mut timer = futures::FutureExt::fuse(self.executor.timer(self.timeout));
+    |                                                                ^^^^^
+    |
+    = note: arm timers through timers::Timers::arm
+Clippy rejects the direct per-call timer at spikes/cef-gpui-pump/src/bridge.rs:230:64 (exit 101)

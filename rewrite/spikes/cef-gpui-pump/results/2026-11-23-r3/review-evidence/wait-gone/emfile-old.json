@@ -1,0 +1,34 @@
+{
+  "step_timeout_ms": 3000,
+  "scenario_pass": true,
+  "shutdown": {
+    "children_before_shutdown": [
+      {
+        "pid": 1273230,
+        "start_time": 445676
+      },
+      {
+        "pid": 1273231,
+        "start_time": 445676
+      }
+    ]
+  },
+  "children_after_exit": {
+    "timeout_ms": 3000.0,
+    "exited": [
+      {
+        "pid": 1273230,
+        "gone_after_ms": 0.0,
+        "note": "gone or reused before wait"
+      },
+      {
+        "pid": 1273231,
+        "gone_after_ms": 0.0,
+        "note": "gone or reused before wait"
+      }
+    ],
+    "still_alive_at_timeout": []
+  },
+  "shutdown_clean": true,
+  "pass": true
+}
