@@ -13,7 +13,7 @@ Date: 2026-11-23. Pins from `rewrite/pins.toml`: CEF `158.0.3+g8c29be2+chromium-
 | `navigator.webdriver === false` during CDP calls | Pass. 482,760 calls, 903 page samples, 0 true |
 | CDP without a port or pipe | Pass. No `remote-debugging` switch, no listening TCP socket |
 | DevTools close does not kill OSR renderers (CEF #4353) | Pass in 15 of 15 fresh processes. No workaround needed |
-| Clean shutdown | Pass. `CefShutdown()` returns in 47 to 190 ms. Every child exited in all 25 runs |
+| Clean shutdown | Pass. `CefShutdown()` returns in 47 to 190 ms. Every child exited in all 26 runs |
 
 ## What the spike is
 
@@ -25,7 +25,7 @@ Date: 2026-11-23. Pins from `rewrite/pins.toml`: CEF `158.0.3+g8c29be2+chromium-
 
 ## How it was run
 
-Everything ran on Xvfb (`-nolisten tcp`), with `WAYLAND_DISPLAY` unset, inside `dbus-run-session` using `scripts/isolated-session-bus.conf`. That bus has no service directories, so no portal, gvfs or a11y service starts. Each run used a fresh `mktemp` CEF cache, deleted afterwards. Chromium switches: `--ozone-platform=x11 --password-store=basic`. The sandbox was on. No test window opened on the desktop session, and the owner's Flecha install and profiles were not touched.
+Everything ran on Xvfb (`-nolisten tcp`), with `WAYLAND_DISPLAY` unset, inside `dbus-run-session` using `scripts/isolated-session-bus.conf`. That bus has no service directories, so no portal, gvfs or a11y service starts. The first smoke run used stock `dbus-run-session`, which activated a private gvfs daemon, xdg-desktop-portal, the document portal, the gtk and cosmic portal backends and the a11y bus. gvfs failed to mount `/run/user/1000/gvfs` (permission denied). In the same second, 08:41:56, the desktop session's own `xdg-document-portal.service` exited with status 21 and stayed failed, so `/run/user/1000/doc` is not mounted. That run probably caused the failure, but it is not proven. No process from that run survives. The service was not restarted, because that needs the owner's approval. The isolated bus config exists to keep later runs from doing this. Each run used a fresh `mktemp` CEF cache, deleted afterwards. Chromium switches: `--ozone-platform=x11 --password-store=basic`. The sandbox was on. No test window opened on the desktop session, and the owner's Flecha install and profiles were not touched.
 
 ```sh
 cd rewrite
@@ -81,7 +81,7 @@ Page `pages/anim.html`: a CSS `@keyframes` box and a `requestAnimationFrame` cou
 | inactive throttle off | off | 30.01 | 30033 ms | 29.98 | 30.01 | 0 | 31.0 % |
 | inactive throttle off | on | 30.01 | 30033 ms | 30.01 | 62.48 | 1876 | 49.5 % |
 
-The page holds 30 frames/s in every case. 30 is CEF's default `windowless_frame_rate`, unchanged here. With default window options, GPUI draws about 21 frames/s. The window is never focused under Xvfb with no window manager, so GPUI's `inactive_frame_interval` (default 33.3 ms, "approximately 30 fps") applies. With `inactive_frame_interval: None` (`--pump-no-inactive-throttle`), GPUI shows every page frame (30/s), and runs at 62/s while its own animation runs. Its CPU numbers include those extra frames. On a focused window on a real session, the default throttle should not apply. That is unverified here.
+The page holds 30 frames/s in every case. `include/internal/cef_types.h` gives `windowless_frame_rate` "the default value is 30", and the spike does not change it. With default window options, GPUI draws about 21 frames/s. The window is never focused under Xvfb with no window manager, so GPUI's `inactive_frame_interval` (default 33.3 ms, "approximately 30 fps") applies. With `inactive_frame_interval: None` (`--pump-no-inactive-throttle`), GPUI shows every page frame (30/s), and runs at 62/s while its own animation runs. Its CPU numbers include those extra frames. On a focused window on a real session, the default throttle should not apply. That is unverified here.
 
 ## Agent access through `SendDevToolsMessage`
 
@@ -90,6 +90,7 @@ The page holds 30 frames/s in every case. 30 is CEF's default `windowless_frame_
 - List tabs: 1 tab, `Target.getTargetInfo` returned `type: page`, title `anim`, the file URL.
 - Evaluate: `Runtime.evaluate("navigator.webdriver")` back to back for 30.13 s: 482,760 calls, every reply `false`, no errors. The page counted `navigator.webdriver` itself on every animation frame: 903 samples during those calls, 0 not `false`.
 - Screenshot: `Page.captureScreenshot` returned a 1024 × 640 PNG (`cdp.png`) in 107 ms.
+- Negative control (`results/2026-11-23/cdp-enable-automation/`): the same check with `EXTRA_ARGS=--enable-automation`, 3 s warmup and a 5 s window. All 58,080 replies and all 153 page samples during the calls were `true`, and the run failed. The check can therefore detect `navigator.webdriver` turning on.
 - No port or pipe: no process in the tree has `remote-debugging` or `enable-automation` on its command line. No process in the tree has a listening TCP socket, and every fd table was readable. The one listening socket is Chromium's ProcessSingleton Unix socket (`/tmp/org.chromium.Chromium.*/SingletonSocket`), which is not a DevTools endpoint.
 
 ## DevTools and CEF #4353
@@ -110,7 +111,7 @@ Result: #4353 does not reproduce on CEF 158.0.3, and no workaround is needed. Th
 
 ## Shutdown
 
-Each run closes every browser with `CloseBrowser(true)`, waits for every `OnBeforeClose`, drops all `CefBrowser` references and observer registrations, quits GPUI, and then calls `CefShutdown()`. `CefShutdown()` returned in 47 to 190 ms. Right after it returns, some zygote processes are still alive. They exit when the browser process exits and closes their sockets. So after the app exits, the runner calls `cef-gpui-pump --pump-wait-gone=REPORT`. It waits on a pidfd for each child the app saw before shutdown, bounded by `STEP_TIMEOUT_MS`. In all 25 runs, every child had exited before that wait began.
+Each run closes every browser with `CloseBrowser(true)`, waits for every `OnBeforeClose`, drops all `CefBrowser` references and observer registrations, quits GPUI, and then calls `CefShutdown()`. `CefShutdown()` returned in 47 to 190 ms. Right after it returns, some zygote processes are still alive. They exit when the browser process exits and closes their sockets. So after the app exits, the runner calls `cef-gpui-pump --pump-wait-gone=REPORT`. It waits on a pidfd for each child the app saw before shutdown, bounded by `STEP_TIMEOUT_MS`. In all 26 runs, every child had exited before that wait began.
 
 Process types come from `--type=`, but zygote-forked processes keep `--type=zygote` on this build. `probe::Proc::kind` labels them by tree shape. The sandboxed layout seen here is browser, then the sandboxed zygote (PID-namespace init), then the zygote worker, then one process per renderer, each in its own PID namespace.
 
@@ -132,6 +133,7 @@ The archive used is `cef_binary_158.0.3+g8c29be2+chromium-158.0.8127.18_linux64_
 - GPUI frame pacing on a focused window. Under Xvfb the window stays inactive.
 - That the 4 s repaint is `kNewContentRenderingDelay`. It matches source and timing, with no trace.
 - The 10 ms `CefDoMessageLoopWork()` calls.
+- The pump's `delay > 0` path and its reentrancy guard. In all 26 reports CEF sent only `delay <= 0` requests (`requests_delayed` 0), and `calls_rerun` and `recursive_calls_deferred` stayed 0. The code exists but no run exercised it.
 - That the #4353 check fails on a build without the fix.
 - Input, IME, resize and DPI changes. They are not in this spike's done check.
 - The plan's beta archive. The build used the stable archive of the same commit.
