@@ -63,6 +63,13 @@ for (const input of [
 
 for (const input of [...notes.keys(), 'ftp://', 'ws://', 'wss://']) inputs.add(input);
 
+// Labels that URL host parsing reads as IPv4 or rejects as punycode, followed by a port and a private tail.
+const hostLabels = ['xn--', 'xn--a', 'xn--zz', 'XN--ZZ', 'xn---', 'xn--ls8h', 'xn--abc-', 'xn--0', 'xn--a-ecp', '0x', '0x0', '0xa', '0x1f', '0X1F', '0xff', '0x7f000001', '0xdeadbeef', '0xffffffff', '0x100000000', '0x1ffffffff', '0b1', '0o7'];
+
+const portTails = [':80/reset?token=abc', ':8080/p', ':80?token=x', ':3000/api#k'];
+
+for (const label of hostLabels) for (const tail of portTails) inputs.add(label + tail);
+
 const fixturePath = fileURLToPath(new URL('../tests/fixtures/address-parity.jsonl', import.meta.url));
 const fixture = Bun.file(fixturePath);
 const divergences = new Map<string, Divergence>();

@@ -129,12 +129,15 @@ pub fn rejected_address(raw: &str) -> bool {
             && !tail.contains('=');
         return !tail.is_empty() && !separated_question;
     }
+    let ascii_label = |label: &str| re!(r"(?i-u:^[a-z0-9-]*[a-z][a-z0-9-]*$)").is_match(label);
+    // `Host::parse` reads labels such as `0xff` as IPv4 and rejects bad punycode such as `xn--zz`.
+    // The raw label must still count, or those addresses fall through to search with their path.
     port.is_some()
         && !tail.is_empty()
         && (address_tail || numeric_port)
-        && Host::parse(host).is_ok_and(|host| {
-            matches!(host, Host::Domain(domain) if re!(r"(?i-u:^[a-z0-9-]*[a-z][a-z0-9-]*$)").is_match(&domain))
-        })
+        && (ascii_label(host)
+            || Host::parse(host)
+                .is_ok_and(|host| matches!(host, Host::Domain(domain) if ascii_label(&domain))))
 }
 
 fn is_http_scheme(scheme: &str) -> bool {
