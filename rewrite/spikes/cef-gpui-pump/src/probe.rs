@@ -185,15 +185,24 @@ pub fn clock_ticks_per_second() -> u64 {
 
 /// True when a process with this PID and start time still exists and is not a zombie.
 pub fn alive(pid: i32, start_time: u64) -> bool {
-    let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat")) else {
-        return false;
+    alive_checked(pid, start_time).unwrap_or(false)
+}
+
+/// Like `alive`, but an unreadable `/proc` entry (EMFILE, EACCES, ...) is an
+/// error rather than "gone". Only a missing entry means the process exited.
+fn alive_checked(pid: i32, start_time: u64) -> std::io::Result<bool> {
+    let stat = match fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Ok(stat) => stat,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) if e.raw_os_error() == Some(libc::ESRCH) => return Ok(false),
+        Err(e) => return Err(e),
     };
     let Some(close) = stat.rfind(')') else {
-        return false;
+        return Ok(false);
     };
     let fields: Vec<&str> = stat[close + 2..].split(' ').collect();
-    fields.first() != Some(&"Z")
-        && fields.get(19).and_then(|s| s.parse::<u64>().ok()) == Some(start_time)
+    Ok(fields.first() != Some(&"Z")
+        && fields.get(19).and_then(|s| s.parse::<u64>().ok()) == Some(start_time))
 }
 
 /// CPU used by each process between two tree snapshots, matched on PID and start time.
@@ -453,17 +462,27 @@ pub fn wait_gone(procs: &[(i32, u64)], timeout: std::time::Duration) -> Value {
                 rows.push(json!({ "pid": pid, "gone_after_ms": 0.0, "note": "gone before wait" }));
             } else {
                 // ENOSYS, EMFILE and the like say nothing about the process.
-                inconclusive.push(json!({ "pid": pid, "start_time": start_time, "error": err.to_string() }));
+                inconclusive.push(
+                    json!({ "pid": pid, "start_time": start_time, "error": err.to_string() }),
+                );
             }
-        } else if !alive(pid, start_time) {
-            // The PID exists but is a zombie or a different process now.
-            // SAFETY: fd came from pidfd_open above.
-            unsafe { libc::close(fd) };
-            rows.push(
-                json!({ "pid": pid, "gone_after_ms": 0.0, "note": "gone or reused before wait" }),
-            );
         } else {
-            waiting.push((pid, start_time, fd));
+            match alive_checked(pid, start_time) {
+                Ok(true) => waiting.push((pid, start_time, fd)),
+                outcome => {
+                    // SAFETY: fd came from pidfd_open above.
+                    unsafe { libc::close(fd) };
+                    match outcome {
+                        // The PID exists but is a zombie or a different process now.
+                        Ok(_) => rows.push(json!({
+                            "pid": pid, "gone_after_ms": 0.0, "note": "gone or reused before wait"
+                        })),
+                        Err(e) => inconclusive.push(
+                            json!({ "pid": pid, "start_time": start_time, "error": e.to_string() }),
+                        ),
+                    }
+                }
+            }
         }
     }
     while !waiting.is_empty() {

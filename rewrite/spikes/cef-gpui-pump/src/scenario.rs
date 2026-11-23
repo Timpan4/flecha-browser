@@ -135,7 +135,11 @@ impl Run {
         }
         let before_shutdown = self.isolation();
         let clean = before_shutdown["clean"] == true
-            && self.report.borrow().get("isolation_after_load").map(|v| &v["clean"])
+            && self
+                .report
+                .borrow()
+                .get("isolation_after_load")
+                .map(|v| &v["clean"])
                 == Some(&json!(true));
         self.put("isolation_before_shutdown", before_shutdown);
         self.put("isolation_clean", json!(clean));
@@ -233,8 +237,8 @@ impl Run {
                     // The paint-holding repaint: the whole view, once the
                     // timeout has passed since navigation. Chromium clears
                     // paint holding once per navigation.
-                    let holding = *t >= navigation + PAINT_HOLDING_TIMEOUT
-                        && rects.as_slice() == [full_view];
+                    let holding =
+                        *t >= navigation + PAINT_HOLDING_TIMEOUT && rects.as_slice() == [full_view];
                     if inside {
                         in_window += 1;
                         paint_holding += holding as usize;
@@ -254,9 +258,8 @@ impl Run {
         // paint-holding repaint.
         let explained_paints = in_window == paint_holding && paint_holding <= 1;
         let strict = renders == 0;
-        let pass = analysis["unexplained_calls"] == 0
-            && explained_paints
-            && renders <= in_window as u64;
+        let pass =
+            analysis["unexplained_calls"] == 0 && explained_paints && renders <= in_window as u64;
         self.put("idle_paint_log", json!(paints));
         self.put("idle", delta);
         self.put("idle_pump_trace", analysis);
@@ -572,7 +575,10 @@ impl Run {
         self.window
             .update(cx, |view, window, _| view.release_images(window))?;
         let waited = waited?;
-        self.put("browsers_closed_after_ms", json!(waited.as_secs_f64() * 1e3));
+        self.put(
+            "browsers_closed_after_ms",
+            json!(waited.as_secs_f64() * 1e3),
+        );
         self.put("browsers_closed", json!(true));
         Ok(())
     }

@@ -62,7 +62,10 @@ impl Scheduler {
         self.requested = Some(if delay_ms <= 0 {
             (now, Reason::Immediate)
         } else {
-            (now + Duration::from_millis(delay_ms as u64), Reason::Delayed)
+            (
+                now + Duration::from_millis(delay_ms as u64),
+                Reason::Delayed,
+            )
         });
     }
 
@@ -139,8 +142,7 @@ pub fn analyze(trace: &[Event]) -> Value {
                     gaps_ms.push((at - prev).as_secs_f64() * 1e3);
                 }
                 // The most recent request since the previous call started.
-                let pending =
-                    last_request.filter(|(r, _)| last_call.is_none_or(|(c, _)| *r >= c));
+                let pending = last_request.filter(|(r, _)| last_call.is_none_or(|(c, _)| *r >= c));
                 let explained = match reason {
                     Reason::Immediate => pending.is_some_and(|(_, d)| d <= 0),
                     Reason::Delayed => pending
@@ -263,13 +265,35 @@ mod tests {
         let t0 = Instant::now();
         let took = MS;
         let trace = [
-            Event::Call { at: t0, reason: Reason::Periodic, took },
-            Event::Request { at: t0 + 2 * MS, delay_ms: 10 },
-            Event::Call { at: t0 + 12 * MS, reason: Reason::Delayed, took },
-            Event::Request { at: t0 + 14 * MS, delay_ms: 50 },
-            Event::Call { at: t0 + 13 * MS + MAX_PUMP_INTERVAL, reason: Reason::Periodic, took },
+            Event::Call {
+                at: t0,
+                reason: Reason::Periodic,
+                took,
+            },
+            Event::Request {
+                at: t0 + 2 * MS,
+                delay_ms: 10,
+            },
+            Event::Call {
+                at: t0 + 12 * MS,
+                reason: Reason::Delayed,
+                took,
+            },
+            Event::Request {
+                at: t0 + 14 * MS,
+                delay_ms: 50,
+            },
+            Event::Call {
+                at: t0 + 13 * MS + MAX_PUMP_INTERVAL,
+                reason: Reason::Periodic,
+                took,
+            },
             // Too early: less than MAX_PUMP_INTERVAL after the previous call ended.
-            Event::Call { at: t0 + 60 * MS, reason: Reason::Periodic, took },
+            Event::Call {
+                at: t0 + 60 * MS,
+                reason: Reason::Periodic,
+                took,
+            },
         ];
         let a = analyze(&trace);
         assert_eq!(a["calls"], 4);
