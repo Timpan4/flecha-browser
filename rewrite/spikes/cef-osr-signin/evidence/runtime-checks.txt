@@ -1,0 +1,29 @@
+$ run.sh before prepare.sh
+No CEF runtime at …/fresh6/rewrite/target/cef-runtime/158.0.3/cef_linux_x86_64. Run spikes/cef-osr-signin/prepare.sh first.
+$ prepare.sh
+CEF_PATH=…/fresh6/rewrite/target/cef-runtime
+$ build.sh before Spike 1 prepare.sh
+No staged cef-rs source at …/fresh6/rewrite/target/spike1-src/cef-rs. Run spikes/gpui-cef-compositor/prepare.sh first.
+$ spikes/gpui-cef-compositor/prepare.sh (last line)
+Prepared …/fresh6/rewrite/target/spike1-src/cef-runtime/cef_binary_158.0.3+g8c29be2+chromium-158.0.8127.18_linux64_beta_minimal/cef_linux_x86_64
+$ sha1sum of each staged libcef.so
+e91a5a7fd3530f9f69f0a7061b26be75b8cb312e  target/cef-runtime/158.0.3/cef_linux_x86_64/libcef.so
+e91a5a7fd3530f9f69f0a7061b26be75b8cb312e  target/spike1-src/cef-runtime/cef_binary_158.0.3+g8c29be2+chromium-158.0.8127.18_linux64_beta_minimal/cef_linux_x86_64/libcef.so
+$ prepare.sh with include/ moved out of the stage
+The CEF runtime at …/fresh6/rewrite/target/cef-runtime/158.0.3/cef_linux_x86_64 is incomplete: include is missing. Remove the directory and run prepare.sh again.
+$ prepare.sh with a curl that writes a corrupt archive
+…/fresh6/rewrite/target/cef-archives/download.msWtpl: FAILED
+sha1sum: WARNING: 1 computed checksum did NOT match
+$ readelf -d target/debug/cef-osr-signin (PATH and libcef lines)
+ 0x0000000000000001 (NEEDED)             Shared library: [libcef.so]
+$ ls target/debug | grep -c 'libcef|.pak'
+0
+$ target/debug/cef-osr-signin (without run.sh)
+target/debug/cef-osr-signin: error while loading shared libraries: libcef.so: cannot open shared object file: No such file or directory
+exit 127
+$ LD_LIBRARY_PATH=<dir with only libcef.so> target/debug/cef-osr-signin
+wrong CEF runtime: cannot read …/fresh6-out/lonely/archive.json: No such file or directory (os error 2)
+Stage the pinned runtime with spikes/cef-osr-signin/prepare.sh and start through run.sh.
+exit 1
+$ FLECHA_SPIKE_BIN=no-such-spike-binary run.sh --help
+No executable at no-such-spike-binary. Build it with spikes/cef-osr-signin/build.sh.

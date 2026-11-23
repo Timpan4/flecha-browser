@@ -1,0 +1,6 @@
+input run 1: 1 PASS, 0 FAIL, 3 focus events, print start 1
+input run 2: 1 PASS, 0 FAIL, 3 focus events, print start 1
+input run 3: 1 PASS, 0 FAIL, 3 focus events, print start 1
+input run 4: 1 PASS, 0 FAIL, 3 focus events, print start 1
+input run 5: 1 PASS, 0 FAIL, 3 focus events, print start 1
+input run 6: 1 PASS, 0 FAIL, 3 focus events, print start 1

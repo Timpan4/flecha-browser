@@ -1,0 +1,5 @@
+[net]
+# Fetch git dependencies with the git CLI. It follows the user's git config (for example a
+# url.insteadOf rewrite to SSH) and can fetch a pinned commit by hash; cargo's built-in client
+# failed both on the workstation.
+git-fetch-with-cli = true
