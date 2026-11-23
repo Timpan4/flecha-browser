@@ -288,34 +288,64 @@ fn decode_document(json: &str, legacy_only: bool) -> Result<DecodedSnapshot, Dec
     Ok(DecodedSnapshot { state, repairs })
 }
 
+fn check_version(version: &RawValue, legacy_only: bool) -> Result<(), DecodeError> {
+    match version_order(version, SCHEMA_VERSION) {
+        Some(StoredVersion {
+            order: Ordering::Greater,
+            text,
+        }) => Err(DecodeError::UnsupportedVersion(text)),
+        Some(StoredVersion {
+            order: Ordering::Equal,
+            ..
+        }) if legacy_only => Err(DecodeError::AlreadyMigrated),
+        // The Chromium decoder accepted older values and ignored nonnumeric tags.
+        _ => Ok(()),
+    }
+}
+
+/// A stored document's `version`, compared with the reader's schema version.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StoredVersion {
+    /// The version as stored, with a string's quotes and surrounding whitespace removed.
+    pub text: String,
+    pub order: Ordering,
+}
+
+/// Read only the `version` of a JSON object document and compare it with `current`.
+///
+/// Nothing else in the document is decoded, so a newer document is recognised whatever its other
+/// fields hold. A number or numeric string compares by its decimal spelling. A missing or
+/// nonnumeric version gives `None`. An error means the text is not a JSON object.
+pub fn read_schema_version(json: &str, current: u64) -> serde_json::Result<Option<StoredVersion>> {
+    let fields = snapshot::read_record(json)?;
+    Ok(fields
+        .get("version")
+        .and_then(|version| version_order(version, current)))
+}
+
 /// The top-level `version` of a saved JSON document, when it names a schema newer than
 /// `current`. It reads the field as this module reads its own snapshots: any JSON number
 /// spelling or a numeric string with surrounding whitespace, compared without rounding, so
 /// `2`, `"2"`, `" 2 "`, `2.0` and `2e0` all count as 2. `None` when the document doesn't
 /// parse, has no version, or isn't newer.
 pub fn newer_schema_version(json: &str, current: u64) -> Option<String> {
-    let fields = snapshot::read_record(json).ok()?;
-    let text = version_text(fields.get("version")?);
-    (compare_version(&text, &current.to_string()) == Some(Ordering::Greater)).then_some(text)
+    match read_schema_version(json, current).ok()?? {
+        StoredVersion {
+            order: Ordering::Greater,
+            text,
+        } => Some(text),
+        _ => None,
+    }
 }
 
-fn version_text(version: &RawValue) -> String {
+fn version_order(version: &RawValue, current: u64) -> Option<StoredVersion> {
     let raw = version.get();
-    if raw.starts_with('"') {
+    let text = if raw.starts_with('"') {
         trim_input(snapshot::scalar(version).as_str().unwrap_or_default()).to_owned()
     } else {
         raw.to_owned()
-    }
-}
-
-fn check_version(version: &RawValue, legacy_only: bool) -> Result<(), DecodeError> {
-    let text = version_text(version);
-    match compare_version(&text, &SCHEMA_VERSION.to_string()) {
-        Some(Ordering::Greater) => Err(DecodeError::UnsupportedVersion(text)),
-        Some(Ordering::Equal) if legacy_only => Err(DecodeError::AlreadyMigrated),
-        // The Chromium decoder accepted older values and ignored nonnumeric tags.
-        _ => Ok(()),
-    }
+    };
+    compare_version(&text, &current.to_string()).map(|order| StoredVersion { text, order })
 }
 
 /// Compare the decimal spelling without rounding a newer schema to the current version.

@@ -1,0 +1,17 @@
+[package]
+name = "flecha-boosts"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+flecha-core = { path = "../flecha-core" }
+indexmap = "2.14.2"
+serde = { version = "1", features = ["derive"] }
+# The shell's stored objects keep their key order, and Boosts apply in that order.
+serde_json = { version = "1", features = ["preserve_order"] }
+url = "2"
+
+[dev-dependencies]
+sha2 = "0.10"

@@ -39,6 +39,10 @@ jobs:
         run: |
           node rewrite/crates/flecha-import/scripts/generate-import-fixture.ts
           git diff --exit-code -- rewrite/crates/flecha-import/tests/fixtures/import-parity.jsonl
+      - name: Check the Boosts parity fixture
+        run: |
+          node rewrite/crates/flecha-boosts/scripts/generate-boosts-fixture.ts
+          git diff --exit-code -- rewrite/crates/flecha-boosts/tests/fixtures/boosts-parity.jsonl
       - uses: actions/setup-node@v7
         with:
           node-version: 26
@@ -141,6 +145,36 @@ jobs:
           cargo +stable fmt --check -p flecha-downloads
           cargo +stable clippy -p flecha-downloads --all-targets -- -D warnings
           cargo +stable test -p flecha-downloads --all-targets
+      - name: Check the Boosts crate in isolation
+        shell: bash
+        run: |
+          boosts_rewrite="$RUNNER_TEMP/flecha-boosts-ci/rewrite"
+          mkdir -p "$boosts_rewrite/crates"
+          cp -R crates/flecha-core crates/flecha-boosts "$boosts_rewrite/crates/"
+          cp Cargo.lock "$boosts_rewrite/"
+          printf '[workspace]\nresolver = "3"\nmembers = ["crates/flecha-boosts", "crates/flecha-core"]\n' > "$boosts_rewrite/Cargo.toml"
+          cd "$boosts_rewrite"
+          # Resolving the product workspace would fetch Spike 1's Git dependencies.
+          cargo +stable metadata --format-version 1 > metadata.json
+          jq -e '[.packages[].source | select(. != null and startswith("git+"))] | length == 0' metadata.json
+          cargo +stable fmt --check -p flecha-boosts
+          cargo +stable clippy -p flecha-boosts --all-targets -- -D warnings
+          cargo +stable test -p flecha-boosts --all-targets
+          cargo +stable test -p flecha-boosts --doc
+      - name: Check saved profile migration in isolation
+        shell: bash
+        run: |
+          migrate_rewrite="$RUNNER_TEMP/flecha-migrate-ci/rewrite"
+          mkdir -p "$migrate_rewrite/crates"
+          cp -R crates/flecha-core crates/flecha-migrate crates/flecha-services "$migrate_rewrite/crates/"
+          cp Cargo.lock "$migrate_rewrite/"
+          printf '[workspace]\nresolver = "3"\nmembers = ["crates/flecha-core", "crates/flecha-migrate", "crates/flecha-services"]\n' > "$migrate_rewrite/Cargo.toml"
+          cd "$migrate_rewrite"
+          cargo +stable metadata --format-version 1 > metadata.json
+          jq -e '[.packages[].source | select(. != null and startswith("git+"))] | length == 0' metadata.json
+          cargo +stable fmt --check -p flecha-migrate
+          cargo +stable clippy --locked -p flecha-migrate --all-targets -- -D warnings
+          cargo +stable test --locked -p flecha-migrate
 
   rewrite-services:
     name: Flecha services (Rust)
