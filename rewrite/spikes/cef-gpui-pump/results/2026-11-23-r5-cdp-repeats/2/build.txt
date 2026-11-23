@@ -1,0 +1,4 @@
+head 15c65d15dd264f49da2dcd184a77d4aad124f84d
+tracked changes in rewrite/:
+ M rewrite/spikes/cef-gpui-pump/REPORT.md
+ M rewrite/spikes/cef-gpui-pump/results/2026-11-23-r5-controls/README.md

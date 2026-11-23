@@ -1,0 +1,3 @@
+runner exit 1
+   exit=0 scenario_pass=true pump_pass=true isolation_clean=true shutdown_clean=true pass=true
+the runner failed the run because its inventory failed

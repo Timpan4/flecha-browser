@@ -1,0 +1,4 @@
+shim 773705 waiting, process group 773641 (its own group would be 773705)
+runner exit 143
+shim alive after the runner: yes
+processes of the run that started: none

@@ -1,0 +1,30 @@
+[1618627:1618642:1123/102606.613349:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[1618627:1618642:1123/102606.637502:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[1618627:1618642:1123/102606.637526:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[1618627:1618642:1123/102606.637534:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[2026-11-23T09:26:06Z ERROR gpui_linux::linux::x11::client] Found no xinput mouse pointers.
+MESA-EGL: warning: DRI3 error: Could not get DRI3 device
+MESA-EGL: warning: Ensure your X server supports DRI3 to get accelerated rendering
+[1618627:1618642:1123/102606.830234:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[1618627:1618642:1123/102606.830254:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[1618627:1618627:1123/102606.830669:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.Properties.GetAll: object_path= /org/freedesktop/UPower/devices/DisplayDevice: unknown error type: 
+[scenario] browsers_closed: false
+[scenario] context_initialized_after_ms: 0.00362
+[engine] created Page(0) id=1 runtime_style=Some(RuntimeStyle(CEF_RUNTIME_STYLE_ALLOY))
+[engine] created Page(1) id=2 runtime_style=Some(RuntimeStyle(CEF_RUNTIME_STYLE_ALLOY))
+[scenario] page_load_ms: 13.410432
+[scenario] isolation_after_load: {"forbidden":["/run/user/1000","/run/dbus/system_bus_socket"],"processes":10,"open_files":[],"mapped_files":[],"unix_socket_peers":[],"sockets":67,"sockets_without_peer_info":18,"unreadable":[],"ss_error":null,"clean":true}
+[engine] created DevTools id=3 runtime_style=Some(RuntimeStyle(CEF_RUNTIME_STYLE_CHROME))
+
+(cef-gpui-pump:1618627): atspi-WARNING **: 10:26:40.002: AT-SPI: Error retrieving accessibility bus address: org.freedesktop.DBus.Error.ServiceUnknown: The name org.a11y.Bus was not provided by any .service files
+[engine] before_close DevTools id=3
+[scenario] devtools: {"second_browser":true,"runtime_style":"RuntimeStyle(CEF_RUNTIME_STYLE_CHROME)","show_devtools_call_ms":41.11682,"devtools_created_after_show_ms":41.118219999999994,"close_devtools_after_show_ms":100.04733,"close_late_ms":0.047330000000000004,"tree_scan_before_ms":29.698749,"tree_scan_while_open_ms":32.910448,"devtools_closed_after_close_ms":4.2418949999999995,"health_before":[{"page":0,"on_paint_in_window":901,"on_paint_per_second":30.003282884288243,"evaluate":2,"evaluate_error":null,"evaluate_ms":7.804412999999999},{"page":1,"on_paint_in_window":901,"on_paint_per_second":30.003282884288243,"evaluate":2,"evaluate_error":null,"evaluate_ms":0.39076900000000003}],"health_after":[{"page":0,"on_paint_in_window":901,"on_paint_per_second":29.994400044180146,"evaluate":2,"evaluate_error":null,"evaluate_ms":0.264329},{"page":1,"on_paint_in_window":901,"on_paint_per_second":29.994400044180146,"evaluate":2,"evaluate_error":null,"evaluate_ms":0.14707}],"renderers_before":[{"pid":1618678,"ppid":1618634,"type":"zygote-forked","start_time":651363,"inner_pid":1},{"pid":1618818,"ppid":1618634,"type":"zygote-forked","start_time":651382,"inner_pid":1},{"pid":1618819,"ppid":1618634,"type":"zygote-forked","start_time":651382,"inner_pid":1},{"pid":1618834,"ppid":1618634,"type":"zygote-forked","start_time":651382,"inner_pid":1}],"tree_while_open":[{"pid":1618627,"ppid":1618625,"type":"browser","start_time":651356,"inner_pid":1618627},{"pid":1618631,"ppid":1618627,"type":"zygote","start_time":651358,"inner_pid":1618631},{"pid":1618632,"ppid":1618627,"type":"zygote","start_time":651358,"inner_pid":1},{"pid":1618664,"ppid":1618627,"type":"utility","start_time":651361,"inner_pid":1618664},{"pid":1620744,"ppid":1618627,"type":"other:bwrap","start_time":654700,"inner_pid":1620744},{"pid":1618662,"ppid":1618631,"type":"zygote-forked-unsandboxed","start_time":651361,"inner_pid":1618662},{"pid":1618634,"ppid":1618632,"type":"zygote","start_time":651359,"inner_pid":3},{"pid":1620745,"ppid":1620744,"type":"other:bwrap","start_time":654700,"inner_pid":1},{"pid":1618678,"ppid":1618634,"type":"zygote-forked","start_time":651363,"inner_pid":1},{"pid":1618818,"ppid":1618634,"type":"zygote-forked","start_time":651382,"inner_pid":1},{"pid":1618819,"ppid":1618634,"type":"zygote-forked","start_time":651382,"inner_pid":1},{"pid":1618834,"ppid":1618634,"type":"zygote-forked","start_time":651382,"inner_pid":1},{"pid":1620724,"ppid":1618634,"type":"zygote-forked","start_time":654698,"inner_pid":1},{"pid":1620746,"ppid":1620745,"type":"other:glycin-svg","start_time":654700,"inner_pid":2}],"renderers_after":[{"pid":1618678,"ppid":1618634,"type":"zygote-forked","start_time":651363,"inner_pid":1},{"pid":1618818,"ppid":1618634,"type":"zygote-forked","start_time":651382,"inner_pid":1},{"pid":1618819,"ppid":1618634,"type":"zygote-forked","start_time":651382,"inner_pid":1},{"pid":1620724,"ppid":1618634,"type":"zygote-forked","start_time":654698,"inner_pid":1}],"renderers_before_now_gone":[{"pid":1618834,"ppid":1618634,"type":"zygote-forked","start_time":651382,"inner_pid":1}],"render_process_terminations":[]}
+[scenario] devtools_pass: true
+[scenario] isolation_before_shutdown: {"forbidden":["/run/user/1000","/run/dbus/system_bus_socket"],"processes":10,"open_files":[],"mapped_files":[],"unix_socket_peers":[],"sockets":80,"sockets_without_peer_info":20,"unreadable":[],"ss_error":null,"clean":true}
+[scenario] isolation_clean: true
+[engine] before_close Page(0) id=1
+[engine] before_close Page(1) id=2
+[scenario] browsers_closed_after_ms: 0.00037
+[scenario] browsers_closed: true
+[scenario] scenario_seconds: 66.4204153
+[scenario] totals: {"gpui_renders":1582,"gpui_animation_steps":0,"gpui_images_uploaded":1986,"gpui_images_dropped":1580,"gpui_frames_never_drawn":406,"on_paint_by_page":[1987,1987]}

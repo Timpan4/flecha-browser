@@ -1,0 +1,30 @@
+[1580863:1580877:1123/101850.445164:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[1580863:1580877:1123/101850.480081:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[1580863:1580877:1123/101850.480110:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[1580863:1580877:1123/101850.480118:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[2026-11-23T09:18:50Z ERROR gpui_linux::linux::x11::client] Found no xinput mouse pointers.
+MESA-EGL: warning: DRI3 error: Could not get DRI3 device
+MESA-EGL: warning: Ensure your X server supports DRI3 to get accelerated rendering
+[1580863:1580877:1123/101851.035306:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[1580863:1580877:1123/101851.035327:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[1580863:1580863:1123/101851.035746:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.Properties.GetAll: object_path= /org/freedesktop/UPower/devices/DisplayDevice: unknown error type: 
+[scenario] browsers_closed: false
+[scenario] context_initialized_after_ms: 0.00746
+[engine] created Page(0) id=1 runtime_style=Some(RuntimeStyle(CEF_RUNTIME_STYLE_ALLOY))
+[scenario] page_load_ms: 52.430937
+[scenario] isolation_after_load: {"forbidden":["/run/user/1000","/run/dbus/system_bus_socket"],"processes":9,"open_files":[],"mapped_files":[],"unix_socket_peers":[],"sockets":61,"sockets_without_peer_info":11,"unreadable":[],"ss_error":null,"clean":true}
+[scenario] cdp_list_tabs: [{"tab":1,"host_url":"file:///home/timpan4/.t3/worktrees/flecha-browser/t3-3b42251b-74c4a1e059834541/rewrite/spikes/cef-gpui-pump/pages/anim.html","target_info":{"targetId":"A32D55A6AEF71709D71152AF7FE95304","type":"page","title":"anim","url":"file:///home/timpan4/.t3/worktrees/flecha-browser/t3-3b42251b-74c4a1e059834541/rewrite/spikes/cef-gpui-pump/pages/anim.html","attached":true,"canAccessOpener":false,"browserContextId":"E25C560DBF68C90D7492F30572A56A61"},"error":null}]
+[scenario] cdp_evaluate_loop: {"calls":343706,"measure_ms":30000.0,"loop_seconds":30.005721607,"call_latency_ms":{"p50":0.06219,"p99":0.18797,"max":36.267457},"page_raf_frames":900.0,"page_raf_per_second":29.994099054933443,"page_counter_seconds":30.005902106,"webdriver_true_replies":0,"errors":[],"page_webdriver_samples_during_calls":900,"page_webdriver_true_total":0,"page_before":{"raf":92,"css_time":3039.0979999996534,"webdriver_samples":92,"webdriver_true":0,"webdriver_now":false},"page_after":{"raf":992,"css_time":33038.79799999965,"webdriver_samples":992,"webdriver_true":0,"webdriver_now":false}}
+[scenario] cdp_screenshot: {"path":"/home/timpan4/.t3/worktrees/flecha-browser/t3-3b42251b-74c4a1e059834541/rewrite/spikes/cef-gpui-pump/results/2026-11-23-r3/cdp.png","bytes":5620,"png_signature":true,"size":[1024,640],"took_ms":96.34830799999999}
+[scenario] cdp_events_received: 0
+[scenario] process_tree: [{"pid":1580863,"ppid":1580861,"type":"browser","start_time":607738,"inner_pid":1580863},{"pid":1580866,"ppid":1580863,"type":"zygote","start_time":607740,"inner_pid":1580866},{"pid":1580867,"ppid":1580863,"type":"zygote","start_time":607740,"inner_pid":1},{"pid":1580900,"ppid":1580863,"type":"utility","start_time":607747,"inner_pid":1580900},{"pid":1580898,"ppid":1580866,"type":"zygote-forked-unsandboxed","start_time":607747,"inner_pid":1580898},{"pid":1580869,"ppid":1580867,"type":"zygote","start_time":607742,"inner_pid":3},{"pid":1580914,"ppid":1580869,"type":"zygote-forked","start_time":607749,"inner_pid":1},{"pid":1581110,"ppid":1580869,"type":"zygote-forked","start_time":607803,"inner_pid":1},{"pid":1581111,"ppid":1580869,"type":"zygote-forked","start_time":607803,"inner_pid":1}]
+[scenario] devtools_switches_in_cmdlines: []
+[scenario] listening_sockets: {"listening":[{"table":"/proc/net/unix","path":"/tmp/org.chromium.Chromium.qVrr7W/SingletonSocket","pid":1580863}],"sockets_seen":58,"unreadable_fd_tables":[],"table_errors":[],"complete":true}
+[scenario] cdp_pass: true
+[scenario] isolation_before_shutdown: {"forbidden":["/run/user/1000","/run/dbus/system_bus_socket"],"processes":9,"open_files":[],"mapped_files":[],"unix_socket_peers":[],"sockets":66,"sockets_without_peer_info":16,"unreadable":[],"ss_error":null,"clean":true}
+[scenario] isolation_clean: true
+[engine] before_close Page(0) id=1
+[scenario] browsers_closed_after_ms: 0.00035999999999999997
+[scenario] browsers_closed: true
+[scenario] scenario_seconds: 33.321858683
+[scenario] totals: {"gpui_renders":695,"gpui_animation_steps":0,"gpui_images_uploaded":995,"gpui_images_dropped":693,"gpui_frames_never_drawn":302,"on_paint_by_page":[995]}

@@ -1,0 +1,17 @@
+--- a/rewrite/spikes/cef-gpui-pump/src/proctree.rs
++++ b/rewrite/spikes/cef-gpui-pump/src/proctree.rs
+@@ -76,7 +76,13 @@
+             continue;
+         };
+         let file = entry.path().join("stat");
+-        match fs::read_to_string(&file) {
++        // MUTANT D: the root's own stat read fails (EMFILE), as in the verifier's mutant.
++        let read = if pid == std::process::id() as i32 {
++            Err(io::Error::from_raw_os_error(libc::EMFILE))
++        } else {
++            fs::read_to_string(&file)
++        };
++        match read {
+             Ok(stat) => match parse_stat(pid, &stat) {
+                 Some(s) => out.stats.push(s),
+                 None => out.errors.push(format!(

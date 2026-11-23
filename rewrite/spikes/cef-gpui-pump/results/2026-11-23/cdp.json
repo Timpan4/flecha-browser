@@ -1,0 +1,326 @@
+{
+  "gpui_inactive_frame_interval_ms": 33.333,
+  "window_scale_factor": 1.0,
+  "context_initialized_after_ms": 0.00384,
+  "page_load_ms": 14.258842,
+  "cdp_list_tabs": [
+    {
+      "tab": 1,
+      "host_url": "file:///home/timpan4/.t3/worktrees/flecha-browser/t3-3b42251b-74c4a1e059834541/rewrite/spikes/cef-gpui-pump/pages/anim.html",
+      "target_info": {
+        "targetId": "C77D84F2EC0FA78BA051BD1F7067ABB1",
+        "type": "page",
+        "title": "anim",
+        "url": "file:///home/timpan4/.t3/worktrees/flecha-browser/t3-3b42251b-74c4a1e059834541/rewrite/spikes/cef-gpui-pump/pages/anim.html",
+        "attached": true,
+        "canAccessOpener": false,
+        "browserContextId": "87E23A8FB422F290399A0BA58D9AC439"
+      },
+      "error": null
+    }
+  ],
+  "cdp_evaluate_loop": {
+    "calls": 482760,
+    "seconds": 30.13065284,
+    "webdriver_true_replies": 0,
+    "errors": [],
+    "page_webdriver_samples_during_calls": 903,
+    "page_webdriver_true_total": 0,
+    "page_before": {
+      "raf": 91,
+      "css_time": 2999.406999999983,
+      "webdriver_samples": 91,
+      "webdriver_true": 0,
+      "webdriver_now": false
+    },
+    "page_after": {
+      "raf": 994,
+      "css_time": 33099.00699999998,
+      "webdriver_samples": 994,
+      "webdriver_true": 0,
+      "webdriver_now": false
+    }
+  },
+  "cdp_screenshot": {
+    "path": "/home/timpan4/.t3/worktrees/flecha-browser/t3-3b42251b-74c4a1e059834541/rewrite/spikes/cef-gpui-pump/results/2026-11-23/cdp.png",
+    "bytes": 5430,
+    "png_signature": true,
+    "size": [
+      1024,
+      640
+    ],
+    "took_ms": 106.58182
+  },
+  "cdp_events_received": 0,
+  "process_tree": [
+    {
+      "pid": 66020,
+      "ppid": 66018,
+      "type": "browser",
+      "start_time": 89585,
+      "inner_pid": 66020
+    },
+    {
+      "pid": 66023,
+      "ppid": 66020,
+      "type": "zygote",
+      "start_time": 89586,
+      "inner_pid": 66023
+    },
+    {
+      "pid": 66024,
+      "ppid": 66020,
+      "type": "zygote",
+      "start_time": 89586,
+      "inner_pid": 1
+    },
+    {
+      "pid": 66055,
+      "ppid": 66020,
+      "type": "utility",
+      "start_time": 89590,
+      "inner_pid": 66055
+    },
+    {
+      "pid": 66053,
+      "ppid": 66023,
+      "type": "zygote-forked-unsandboxed",
+      "start_time": 89590,
+      "inner_pid": 66053
+    },
+    {
+      "pid": 66026,
+      "ppid": 66024,
+      "type": "zygote",
+      "start_time": 89587,
+      "inner_pid": 3
+    },
+    {
+      "pid": 66069,
+      "ppid": 66026,
+      "type": "zygote-forked",
+      "start_time": 89591,
+      "inner_pid": 1
+    },
+    {
+      "pid": 66214,
+      "ppid": 66026,
+      "type": "zygote-forked",
+      "start_time": 89625,
+      "inner_pid": 1
+    },
+    {
+      "pid": 66215,
+      "ppid": 66026,
+      "type": "zygote-forked",
+      "start_time": 89625,
+      "inner_pid": 1
+    }
+  ],
+  "devtools_switches_in_cmdlines": [],
+  "listening_sockets": {
+    "listening": [
+      {
+        "table": "/proc/net/unix",
+        "path": "/tmp/org.chromium.Chromium.hus5Pq/SingletonSocket",
+        "pid": 66020
+      }
+    ],
+    "sockets_seen": 63,
+    "unreadable_fd_tables": []
+  },
+  "cdp_pass": true,
+  "browsers_closed_after_ms": 0.00026,
+  "scenario_seconds": 33.173682345,
+  "totals": {
+    "gpui_renders": 698,
+    "gpui_animation_steps": 0,
+    "gpui_images_uploaded": 994,
+    "gpui_images_dropped": 994,
+    "on_paint_by_page": [
+      994
+    ]
+  },
+  "step_timeout_ms": 20000.0,
+  "warmup_ms": 3000.0,
+  "measure_ms": 30000.0,
+  "sandbox": true,
+  "scenario": "Cdp",
+  "gpui_ran": true,
+  "pump_totals": {
+    "requests_immediate": 484220,
+    "requests_delayed": 0,
+    "calls_immediate": 484220,
+    "calls_delayed": 0,
+    "calls_periodic": 42,
+    "calls_rerun": 0,
+    "calls_total": 484262,
+    "recursive_calls_deferred": 0
+  },
+  "pump_requests_received_any_thread": 484222,
+  "max_pump_interval_ms": 33,
+  "shutdown": {
+    "cef_shutdown_returned": true,
+    "cef_shutdown_ms": 52.051787,
+    "children_before_shutdown": [
+      {
+        "pid": 66023,
+        "ppid": 66020,
+        "type": "zygote",
+        "start_time": 89586,
+        "inner_pid": 66023
+      },
+      {
+        "pid": 66024,
+        "ppid": 66020,
+        "type": "zygote",
+        "start_time": 89586,
+        "inner_pid": 1
+      },
+      {
+        "pid": 66055,
+        "ppid": 66020,
+        "type": "utility",
+        "start_time": 89590,
+        "inner_pid": 66055
+      },
+      {
+        "pid": 66053,
+        "ppid": 66023,
+        "type": "zygote-forked-unsandboxed",
+        "start_time": 89590,
+        "inner_pid": 66053
+      },
+      {
+        "pid": 66026,
+        "ppid": 66024,
+        "type": "zygote",
+        "start_time": 89587,
+        "inner_pid": 3
+      },
+      {
+        "pid": 66069,
+        "ppid": 66026,
+        "type": "zygote-forked",
+        "start_time": 89591,
+        "inner_pid": 1
+      },
+      {
+        "pid": 66214,
+        "ppid": 66026,
+        "type": "zygote-forked",
+        "start_time": 89625,
+        "inner_pid": 1
+      },
+      {
+        "pid": 66215,
+        "ppid": 66026,
+        "type": "zygote-forked",
+        "start_time": 89625,
+        "inner_pid": 1
+      }
+    ],
+    "children_alive_right_after_cef_shutdown": [
+      {
+        "pid": 66023,
+        "ppid": 66020,
+        "type": "zygote",
+        "start_time": 89586,
+        "inner_pid": 66023
+      },
+      {
+        "pid": 66024,
+        "ppid": 66020,
+        "type": "zygote",
+        "start_time": 89586,
+        "inner_pid": 1
+      },
+      {
+        "pid": 66026,
+        "ppid": 66024,
+        "type": "zygote",
+        "start_time": 89587,
+        "inner_pid": 3
+      }
+    ],
+    "descendants_right_after_cef_shutdown": [
+      {
+        "pid": 66023,
+        "ppid": 66020,
+        "type": "zygote",
+        "start_time": 89586,
+        "inner_pid": 66023
+      },
+      {
+        "pid": 66024,
+        "ppid": 66020,
+        "type": "zygote",
+        "start_time": 89586,
+        "inner_pid": 1
+      },
+      {
+        "pid": 66026,
+        "ppid": 66024,
+        "type": "zygote",
+        "start_time": 89587,
+        "inner_pid": 3
+      },
+      {
+        "pid": 66214,
+        "ppid": 66026,
+        "type": "exiting",
+        "start_time": 89625,
+        "inner_pid": 1
+      }
+    ]
+  },
+  "scenario_pass": true,
+  "children_after_exit": {
+    "timeout_ms": 20000.0,
+    "exited": [
+      {
+        "pid": 66023,
+        "gone_after_ms": 0.0,
+        "note": "gone before wait"
+      },
+      {
+        "pid": 66024,
+        "gone_after_ms": 0.0,
+        "note": "gone before wait"
+      },
+      {
+        "pid": 66055,
+        "gone_after_ms": 0.0,
+        "note": "gone before wait"
+      },
+      {
+        "pid": 66053,
+        "gone_after_ms": 0.0,
+        "note": "gone before wait"
+      },
+      {
+        "pid": 66026,
+        "gone_after_ms": 0.0,
+        "note": "gone before wait"
+      },
+      {
+        "pid": 66069,
+        "gone_after_ms": 0.0,
+        "note": "gone before wait"
+      },
+      {
+        "pid": 66214,
+        "gone_after_ms": 0.0,
+        "note": "gone before wait"
+      },
+      {
+        "pid": 66215,
+        "gone_after_ms": 0.0,
+        "note": "gone before wait"
+      }
+    ],
+    "still_alive_at_timeout": []
+  },
+  "shutdown_clean": true,
+  "pass": true
+}
