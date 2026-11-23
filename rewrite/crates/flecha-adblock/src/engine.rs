@@ -124,7 +124,6 @@ pub fn build_engine<'a>(
 /// gets.
 fn is_page_exception(filter: &NetworkFilter, line: &str) -> bool {
     filter.mask.contains(NetworkFilterMask::IS_EXCEPTION)
-        && filter.mask.contains(NetworkFilterMask::FROM_DOCUMENT)
         && names_document(line)
         && !filter.is_csp()
         && !filter.is_removeparam()

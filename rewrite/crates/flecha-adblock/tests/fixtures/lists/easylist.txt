@@ -35,3 +35,5 @@ example.com##
 @@||partyframe.example^$document,~third-party
 @@||firstframe.example^$document,first-party
 @@||allbut.example^$all,~script
+||blockedframe.example^$subdocument
+@@||blockedframe.example^$document,~third-party

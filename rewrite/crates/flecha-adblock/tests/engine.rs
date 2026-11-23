@@ -224,6 +224,13 @@ fn a_document_exception_exempts_the_page_and_frames_it_covers() {
             "{host}"
         );
     }
+    // The frame request itself: `||blockedframe.example^$subdocument` with
+    // `@@||blockedframe.example^$document,~third-party`. Embedded by another site the frame is
+    // third-party and blocked; by its own site it is exempt.
+    let blocked_frame = "https://blockedframe.example/f";
+    assert!(ad(news, news, SubFrame, blocked_frame));
+    let own_site = "https://www.blockedframe.example/";
+    assert!(!ad(own_site, own_site, SubFrame, blocked_frame));
 }
 
 #[test]
