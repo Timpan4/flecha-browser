@@ -70,10 +70,22 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
           key: cargo-rewrite-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rewrite/Cargo.lock') }}
-      - name: Check the rewrite workspace lock
+      - name: Check staged sources and the rewrite workspace lock
         shell: bash
         run: |
+          check_zed_toolchain_absent() {
+            local found
+            found=$(find target/spike1-src/zed \( -name rust-toolchain -o -name rust-toolchain.toml \))
+            if [[ -n $found ]]; then
+              printf 'Unexpected staged Zed toolchain file:\n%s\n' "$found" >&2
+              return 1
+            fi
+          }
           bash spikes/gpui-cef-compositor/prepare.sh --sources-only
+          check_zed_toolchain_absent
+          touch target/spike1-src/zed/rust-toolchain{,.toml} target/spike1-src/zed/crates/rust-toolchain.toml
+          bash spikes/gpui-cef-compositor/prepare.sh --sources-only
+          check_zed_toolchain_absent
           time cargo +stable metadata --locked --format-version 1 > /dev/null
       - name: Check the core crate in isolation
         shell: bash
@@ -90,6 +102,49 @@ jobs:
           cargo +stable clippy -p flecha-core --all-targets -- -D warnings
           cargo +stable test -p flecha-core --all-targets
           cargo +stable test -p flecha-core --doc
+
+  rewrite-services:
+    name: Flecha services (Rust)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install the stable Rust toolchain
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: The agent tools fixture matches agentTools.ts
+        run: node rewrite/crates/flecha-services/scripts/agent-tools-fixture.mjs --check
+      - name: Cache Cargo dependency downloads
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-rewrite-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rewrite/Cargo.lock') }}
+      - name: Check the services crate in isolation
+        shell: bash
+        working-directory: rewrite
+        run: |
+          services_rewrite="$RUNNER_TEMP/flecha-services-ci/rewrite"
+          mkdir -p "$services_rewrite/crates"
+          cp -R crates/flecha-core crates/flecha-services "$services_rewrite/crates/"
+          cp Cargo.lock "$services_rewrite/"
+          printf '[workspace]\nresolver = "3"\nmembers = ["crates/flecha-core", "crates/flecha-services"]\n' > "$services_rewrite/Cargo.toml"
+          cd "$services_rewrite"
+          # Resolving the product workspace would fetch Spike 1's Git dependencies.
+          cargo +stable metadata --format-version 1 > metadata.json
+          jq -e '[.packages[].source | select(. != null and startswith("git+"))] | length == 0' metadata.json
+          cargo +stable fmt --check -p flecha-services
+          cargo +stable clippy -p flecha-services --all-targets -- -D warnings
+          cargo +stable test -p flecha-services --all-targets
+          cargo +stable test -p flecha-services --doc
+          cargo +stable build -p flecha-services --example fake_agent_server
+      - name: A real MCP client drives the server
+        run: node rewrite/crates/flecha-services/scripts/e2e-client.mjs "$RUNNER_TEMP/flecha-services-ci/rewrite/target/debug/examples/fake_agent_server"
 
   release-scripts:
     name: Release tooling (${{ matrix.os }})
@@ -131,11 +186,11 @@ jobs:
   ci-passed:
     name: CI passed
     if: always()
-    needs: [shell-and-host, rewrite-core, release-scripts, scripts]
+    needs: [shell-and-host, rewrite-core, rewrite-services, release-scripts, scripts]
     runs-on: ubuntu-latest
     steps:
       - name: Require every check to pass
         if: always()
         env:
-          ALL_PASSED: ${{ needs.shell-and-host.result == 'success' && needs.rewrite-core.result == 'success' && needs.release-scripts.result == 'success' && needs.scripts.result == 'success' }}
+          ALL_PASSED: ${{ needs.shell-and-host.result == 'success' && needs.rewrite-core.result == 'success' && needs.rewrite-services.result == 'success' && needs.release-scripts.result == 'success' && needs.scripts.result == 'success' }}
         run: test "$ALL_PASSED" = true

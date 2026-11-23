@@ -8,7 +8,7 @@ Status: approved 2026-11-23.
 - v1 supports Linux, macOS and Windows.
 - If Gmail sign-in fails in Alloy OSR, all work stops and comes back to the owner. No user-agent spoofing.
 - The owner cannot run the manual checks yet. The spikes get built now. Spike 0's sign-in answer and Spike 1's real-Wayland check wait for the owner. Until then, test windows run only on Xvfb or a headless compositor.
-- Work that is the same with or without the sign-in result (`flecha-core`, the compositor, the event loop) proceeds now. Phase 2 feature work waits for the Spike 0 verdict.
+- All of Phase 2 starts while the Spike 0 sign-in result is pending. The Alloy OSR stop rule above still applies.
 
 ## Decision and what it implies
 
@@ -76,6 +76,8 @@ The owner runs these by hand with a purpose-made Google account. Nothing records
 
 This needs a GPUI fork with a surface path on Linux. First evaluate [bite-gpui's dma-buf surface](https://github.com/bite-gpui/bite-gpui/pull/10) and [gpui-pre](https://github.com/vegidio/gpui-pre). Write our own patch only if neither fits. Resolve the wgpu version conflict in this spike.
 
+Spike 1 kept the Zed pin and applied one local Zed patch. It exposes the Linux window's wgpu adapter, device and queue, requests dma-buf support when available, and adds a texture view and source rectangle so the wgpu renderer clips and draws surfaces in GPUI scene order. See the [patch](../rewrite/spikes/gpui-cef-compositor/patches/zed.patch) and [compositor report](../rewrite/spikes/gpui-cef-compositor/REPORT.md).
+
 Done check, on the owner's real native Wayland session with NVIDIA, then on X11:
 
 - A moving frame counter page shows no stale or blank frames. Pass: every captured frame shows a counter value no lower than the previous capture, and no capture is blank.
@@ -103,7 +105,7 @@ The macOS IOSurface path needs the owner's MacBook. Windows D3D11 needs a Window
 
 ## Later phases
 
-The owner approved all phases on 2026-11-23. Phase 1 starts with the spikes. Phase 2 feature work waits for the Spike 0 sign-in verdict. Each phase's details are re-planned from Phase 0 results before its feature work starts.
+The owner approved all phases on 2026-11-23. Phase 1 starts with the spikes. Use Phase 0 results to refine each phase as they arrive.
 
 ### Phase 1: vertical slice
 
@@ -119,6 +121,10 @@ Rust workspace `rewrite/` with these crates:
 
 Slice: open a tab, then split it, Peek and promote, move it to Flechinha and back, close, and restart. Separate-cookie Spaces use one persistent `CefRequestContext` per isolated Space. Port existing store and suggestion fixtures. Adapt the native harness assertions to GPUI.
 
+On Linux, all GPUI timers share one Timer thread. Dropping a timer leaves it queued until its deadline. Keep one timer per component for its earliest deadline, or use a timer source that removes cancelled timers. See the [Spike 2 report](../rewrite/spikes/cef-gpui-pump/REPORT.md#phase-1-risk).
+
+Spike 2 guards public GPUI timer APIs with Clippy's `disallowed-methods` and `disallowed-fields`. GPUI arms timers for async `img()` loading, touch long-press and multi-keystroke binding timeouts outside that guard. Two public API gaps remain. `gpui::InteractiveText::tooltip` arms a timer per hover, and an `Animation` struct literal can set `max_fps` without triggering `disallowed-fields`. See [issue #100](https://github.com/Timpan4/flecha-browser/issues/100).
+
 ### Phase 2: parallel feature work
 
 Each unit gets its own worktree and PR and integrates through the vertical slice. One owner (the parent agent) keeps the typed event contracts.
@@ -126,9 +132,13 @@ Each unit gets its own worktree and PR and integrates through the vertical slice
 - **GPT 6.2 Sol:** core state and migration from today's saved state, command bar and suggestions, Spaces and sidebar UI, history and archive, settings and shortcuts, browser and Arc import (the Node importers stay behind stdio until the Rust port passes their fixtures).
 - **Opus 5.5:** CEF lifecycle and popups, downloads with danger decisions, ad blocking with adblock-rust, Boosts injection, permission prompts, the macOS surface and helper bundles, tab sleep, MCP agent server.
 
+The TypeScript shell and Rust address handling both send the credentials in `user:pass@<U+FEFF>host.example` to search today. `<U+FEFF>` denotes the literal Unicode character before the hostname. The GPUI command bar must keep this input local. See the [PR #90 triage](https://github.com/Timpan4/flecha-browser/pull/90#issuecomment-7103169610).
+
 ### Phase 3: parity and cutover
 
 The owner's workflows pass on installed packages: signed and notarized macOS helpers, the Linux sandbox, restart, update and rollback. Profiles migrate into a new folder, and the old profile stays untouched. The Chromium-fork browser is retired only after the owner accepts.
+
+The macOS release tooling job is advisory. The required `CI passed` check completes independently of that job. See [PR #96](https://github.com/Timpan4/flecha-browser/pull/96).
 
 ## What I need from the owner
 
