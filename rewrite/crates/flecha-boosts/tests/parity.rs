@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use flecha_boosts::compile::{compile_with, once_per_document};
 use flecha_boosts::{
     BoostKind, BoostName, Boosts, CompiledBoost, Effect, Frame, RunAt, ScriptInjection,
-    StyleInjection, boost_host_for, boost_matches,
+    StyleInjection, applies, boost_host_for, boost_matches, user_script_matches,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -92,6 +92,15 @@ fn calls(list: &Value) -> Calls {
                     assert_eq!(script["world"], "MAIN");
                     assert_eq!(script["runAt"], "document_end");
                     assert_eq!(script["allFrames"], false);
+                    // user_script_matches assumes these patterns.
+                    let host = BoostName::parse(str_of(&script["id"])).unwrap();
+                    let host = host.host();
+                    let patterns = if host == "all" {
+                        json!(["http://*/*", "https://*/*"])
+                    } else {
+                        json!([format!("*://{host}/*"), format!("*://*.{host}/*")])
+                    };
+                    assert_eq!(script["matches"], patterns);
                 }
                 assert_eq!(ScriptInjection::RUN_AT, RunAt::DocumentEnd);
                 calls.registered = Some(
@@ -319,8 +328,17 @@ fn boosts_store_and_apply_as_in_the_shell() {
                         Frame::Sub
                     };
                     let url = str_of(&op["url"]);
-                    let scripts: Vec<(String, String)> = boosts
+                    // The fixture records the shell's execute path. Chromium's registered user
+                    // scripts may add more, checked in registered_user_scripts_follow_chromium.
+                    let (executed, registered): (Vec<_>, Vec<_>) = boosts
                         .scripts_for(frame, url)
+                        .into_iter()
+                        .partition(|script| applies(url, script.name().host()));
+                    for script in &registered {
+                        assert!(matches!(script, ScriptInjection::Run { .. }), "{context}");
+                        assert!(user_script_matches(url, script.name().host()), "{context}");
+                    }
+                    let scripts: Vec<(String, String)> = executed
                         .into_iter()
                         .map(|script| match script {
                             ScriptInjection::Run { source, .. } => ("run".into(), source),
@@ -437,10 +455,7 @@ fn hostile_boosts_compile_and_run_as_in_the_shell() {
                     "{case}: escapes the once-per-document guard"
                 )
             }
-            "await-top" => assert_eq!(
-                runs["outcomes"][0].as_str().unwrap().split(':').next(),
-                Some("SyntaxError")
-            ),
+            "await-top" => assert_eq!(runs["outcomes"], json!(["SyntaxError", "SyntaxError"])),
             _ => {
                 assert_eq!(evil, 0, "{case}: hostile text ran");
                 assert!(marks <= 1, "{case}: ran twice in one document");
@@ -464,4 +479,56 @@ fn a_large_boost_compiles_as_in_the_shell() {
     let code = compiled.code.unwrap();
     assert_eq!(sha(&code), row["compiledSha256"]);
     assert_eq!(sha(&once_per_document(&name, &code)), row["injectedSha256"]);
+}
+
+/// Chromium's URLPattern (`extensions/common/url_pattern.cc`) canonicalizes the pattern host and
+/// trims trailing dots, so the shell's registered scripts ran on pages `boostMatches` refuses.
+#[test]
+fn registered_user_scripts_follow_chromium() {
+    let scenario = rows("scenario")
+        .into_iter()
+        .find(|row| row["name"] == "registered user scripts")
+        .unwrap();
+    let stored = &scenario["stored"];
+    let boosts = Boosts::from_shell(stored.get("boosts"), stored.get("boostsCompiled"))
+        .unwrap()
+        .boosts;
+    let expected = [
+        ("https://github.com./", vec!["github.com.ts", "all.ts"]),
+        (
+            "https://gist.github.com../",
+            vec!["github.com.ts", "all.ts"],
+        ),
+        ("https://shout.example/", vec!["Shout.EXAMPLE.ts", "all.ts"]),
+        (
+            "https://a.shout.example:8443/",
+            vec!["Shout.EXAMPLE.ts", "all.ts"],
+        ),
+        ("http://Shout.Example./", vec!["Shout.EXAMPLE.ts", "all.ts"]),
+        ("https://example.org/", vec!["all.ts"]),
+        ("https://notgithub.com/", vec!["all.ts"]),
+    ];
+    let steps = scenario["steps"].as_array().unwrap();
+    assert_eq!(steps.len(), expected.len());
+    for (step, (url, names)) in steps.iter().zip(expected) {
+        assert_eq!(step["do"]["url"], url);
+        let ran: Vec<String> = boosts
+            .scripts_for(Frame::Main, url)
+            .iter()
+            .map(|script| script.name().to_string())
+            .collect();
+        assert_eq!(ran, names, "{url}");
+    }
+    for (url, host) in [
+        ("http://127.0.0.1/", "0.1"),
+        ("https://GITHUB.com/", "GitHub.COM"),
+        ("https://xn--bcher-kva.example/", "xn--bcher-kva.example"),
+    ] {
+        let subdomain_of_ip = url.contains("127.0.0.1");
+        assert_eq!(
+            user_script_matches(url, host),
+            !subdomain_of_ip,
+            "{url} {host}"
+        );
+    }
 }

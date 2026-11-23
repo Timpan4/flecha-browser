@@ -11,8 +11,14 @@ A Boost is named after its host: `github.com.ts` (script), `github.com.css` (sty
   - `all` takes any URL that starts with `http:` or `https:`.
   - Any other host must equal the URL's WHATWG hostname, or the hostname must end in `.<host>`.
   - Ports and user info play no part. IDN hosts compare in punycode.
-  - A stored uppercase or Unicode host never matches. A trailing-dot hostname (`github.com.`) doesn't match `github.com`.
-- `applies` adds the shell's effective scheme rule: http and https only. `boostMatches` accepts any scheme with a host, such as `chrome://settings` for `settings.css`. Chrome's scripting API refused those pages for the shell. CEF has no such layer, so the crate checks the scheme itself.
+  - Under `boostMatches`, a stored uppercase or Unicode host never matches, and a trailing-dot hostname (`github.com.`) doesn't match `github.com`.
+- `applies` adds the shell's effective scheme rule: http and https only. `boostMatches` accepts any scheme with a host, such as `chrome://settings` for `settings.css`. Chrome's scripting API refused those pages for the shell. CEF has no such layer, so the crate checks the scheme itself. Styles, reloads and build-error reports use `applies`.
+- `user_script_matches` follows the user scripts the shell registered with Chromium: `*://<host>/*` and `*://*.<host>/*`. Chromium's `URLPattern` (`extensions/common/url_pattern.cc`) differs from `boostMatches` in three ways:
+  - It lowercases and punycodes the pattern host.
+  - It trims trailing dots from both hosts.
+  - It doesn't match subdomains of an IP address.
+
+  A script Boost ran where either `applies` or this matched. Chromium registers user scripts all or nothing (`user_scripts_api.cc`), so one host it rejects turns this path off for every script.
 - `boost_host_for` follows `boostHostFor`. It names a new Boost after the page's hostname without `www.`.
 
 ## Storing
@@ -41,7 +47,7 @@ Incognito windows apply Boosts but write none, so the app must not call the writ
 - A damaged current snapshot is handed back in a `Damaged` write before the last-good copy replaces it.
 - A snapshot from a newer schema is refused, so an older Flecha can't overwrite it.
 
-`Boosts::from_shell` reads the shell's `chrome.storage.local` values: `boosts` (name to code) and `boostsCompiled` (name to build). It keeps their key order and reports keys the shell never used. The profile migration owns reading the old profile.
+`Boosts::from_shell` reads the shell's `chrome.storage.local` values: `boosts` (name to code) and `boostsCompiled` (name to build). It keeps their key order. It reports keys the shell never used, and builds it had to drop. The profile migration owns reading the old profile.
 
 The shell has no Boost import or export. It sets no size limit on a Boost.
 
@@ -78,9 +84,11 @@ Each Boost runs as its own script, so one Boost's text can't change how another 
 
 `tests/parity.rs` replays `tests/fixtures/boosts-parity.jsonl`. `scripts/generate-boosts-fixture.ts` records that fixture by running the shell's own modules under Node against a mocked `chrome` API. The fixture covers:
 
-- names, hosts and matching;
+- names, hosts and matching, including the user script patterns the shell registered;
 - the shell's calls to store, register, execute, style and reload;
 - sucrase's output for hostile Boosts, and what the wrapped Boost does when it runs twice in one Node `vm` context.
+
+Node can't run Chromium's `URLPattern`. The fixture records the patterns the shell registered, and `registered_user_scripts_follow_chromium` checks the matcher against cases worked out from `url_pattern.cc`.
 
 CI regenerates the fixture and fails on drift. Regenerate it from the repository root:
 

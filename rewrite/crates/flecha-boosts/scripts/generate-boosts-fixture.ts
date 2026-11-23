@@ -274,6 +274,9 @@ await scenario('save, apply and remove', {
     'settings.css': 'body { zoom: 2 }',
     'settings.ts': 'mark()',
     [hostileName]: 'mark()',
+    // list() sorts in UTF-16 order: the astral name sorts before U+E000, unlike code-point order.
+    '\u{E000}private.css': 'p {}',
+    '\u{1F600}astral.css': 'p {}',
   },
   boostsCompiled: {
     'github.com.ts': { code: '(() => {\nmark()\n})();' },
@@ -327,6 +330,20 @@ await scenario('save, apply and remove', {
   { op: 'list' },
   { op: 'boostedHosts' },
 ]);
+
+// Chromium also ran registered user scripts, matched by its own URLPattern rules. These pages
+// differ from boostMatches; tests/parity.rs checks the difference against url_pattern.cc's rules.
+await scenario('registered user scripts', {
+  boosts: { 'github.com.ts': 'mark()', 'Shout.EXAMPLE.ts': 'shout()', 'all.ts': 'every()' },
+  boostsCompiled: {
+    'github.com.ts': { code: 'mark()' },
+    'Shout.EXAMPLE.ts': { code: 'shout()' },
+    'all.ts': { code: 'every()' },
+  },
+}, [], [
+  'https://github.com./', 'https://gist.github.com../', 'https://shout.example/', 'https://a.shout.example:8443/',
+  'http://Shout.Example./', 'https://example.org/', 'https://notgithub.com/',
+].map((url, i): Op => ({ op: 'domReady', tabId: 10 + i, frameId: 0, url, documentId: `doc-r${i}` })));
 
 // ---- compiling, and what the compiled Boost does when a page runs it ---------
 
@@ -410,7 +427,8 @@ function run(source: string) {
       outcomes.push('ran');
     } catch (err) {
       // Errors from inside the context come from its own realm; String() gives "Name: message".
-      outcomes.push(String(err));
+      // Only the name is kept, since the message is V8's wording and changes between Node releases.
+      outcomes.push(String(err).split(':', 1)[0]);
     }
   }
 

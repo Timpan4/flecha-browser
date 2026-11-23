@@ -27,6 +27,9 @@ pub struct ShellImport {
     pub boosts: Boosts,
     /// Keys of `boosts` the shell never used: not a Boost name, or code that isn't a string.
     pub skipped: Vec<String>,
+    /// Boosts kept without their build, because it wasn't an object of strings. A script in
+    /// this list runs nothing until it is saved again.
+    pub dropped_builds: Vec<String>,
 }
 
 impl Boosts {
@@ -45,13 +48,20 @@ impl Boosts {
         let mut import = ShellImport {
             boosts: Boosts::new(),
             skipped: Vec::new(),
+            dropped_builds: Vec::new(),
         };
         for (key, code) in files {
             let (Some(name), Some(code)) = (BoostName::parse(key), code.as_str()) else {
                 import.skipped.push(key.clone());
                 continue;
             };
-            let compiled = builds.get(key).and_then(compiled_boost);
+            let compiled = builds.get(key).and_then(|build| {
+                let compiled = compiled_boost(build);
+                if compiled.is_none() {
+                    import.dropped_builds.push(key.clone());
+                }
+                compiled
+            });
             import.boosts.entries.insert(
                 name,
                 Entry {

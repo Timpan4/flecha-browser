@@ -5,7 +5,7 @@ use indexmap::IndexMap;
 use serde::Serialize;
 
 use crate::compile::{CompiledBoost, console_error, error_message, once_per_document};
-use crate::matching::{applies, boost_host_for};
+use crate::matching::{applies, boost_host_for, pattern_host, user_script_matches};
 use crate::name::{BoostKind, BoostName};
 
 /// One saved Boost.
@@ -222,7 +222,13 @@ impl Boosts {
 
     /// The style Boosts for a document at `url`, inserted when its navigation commits.
     pub fn styles_for(&self, frame: Frame, url: &str) -> Vec<StyleInjection> {
-        self.matching(frame, url, BoostKind::Styles)
+        self.entries
+            .iter()
+            .filter(|(name, _)| {
+                frame == Frame::Main
+                    && name.kind() == BoostKind::Styles
+                    && applies(url, name.host())
+            })
             .map(|(name, entry)| StyleInjection {
                 name: name.clone(),
                 css: entry.code.clone(),
@@ -233,23 +239,60 @@ impl Boosts {
     /// The script Boosts for a document at `url`, run once its DOM is ready.
     ///
     /// Inject each one as its own script, so no Boost's text can reach another's.
+    ///
+    /// The shell reached a document two ways, and a Boost ran where either matched. On
+    /// `DOMContentLoaded` it executed the Boosts [`applies`] picks, and reported build errors.
+    /// It also registered every compiled script with Chromium, which matched by
+    /// [`user_script_matches`]. Registration was all or nothing: one pattern Chromium rejects
+    /// left every script to the first path.
     pub fn scripts_for(&self, frame: Frame, url: &str) -> Vec<ScriptInjection> {
-        self.matching(frame, url, BoostKind::Script)
+        if frame != Frame::Main {
+            return Vec::new();
+        }
+        let registered = self.registered();
+        self.entries
+            .iter()
+            .filter(|(name, _)| name.kind() == BoostKind::Script)
             .filter_map(|(name, entry)| {
                 let compiled = entry.compiled.as_ref()?;
+                let executed = applies(url, name.host());
                 match (&compiled.code, &compiled.error) {
-                    (Some(code), _) if !code.is_empty() => Some(ScriptInjection::Run {
-                        name: name.clone(),
-                        source: once_per_document(name, code),
-                    }),
-                    (_, Some(error)) if !error.is_empty() => Some(ScriptInjection::ReportError {
-                        name: name.clone(),
-                        message: error_message(name, error),
-                    }),
+                    (Some(code), _)
+                        if !code.is_empty()
+                            && (executed
+                                || registered && user_script_matches(url, name.host())) =>
+                    {
+                        Some(ScriptInjection::Run {
+                            name: name.clone(),
+                            source: once_per_document(name, code),
+                        })
+                    }
+                    (Some(code), _) if !code.is_empty() => None,
+                    (_, Some(error)) if executed && !error.is_empty() => {
+                        Some(ScriptInjection::ReportError {
+                            name: name.clone(),
+                            message: error_message(name, error),
+                        })
+                    }
                     _ => None,
                 }
             })
             .collect()
+    }
+
+    /// Whether Chromium accepted the shell's user script registration.
+    fn registered(&self) -> bool {
+        self.entries
+            .iter()
+            .filter(|(name, entry)| {
+                name.kind() == BoostKind::Script
+                    && entry
+                        .compiled
+                        .as_ref()
+                        .and_then(|c| c.code.as_deref())
+                        .is_some_and(|code| !code.is_empty())
+            })
+            .all(|(name, _)| pattern_host(name.host()).is_some())
     }
 
     /// Every Boost in apply order, with its stored code and build.
@@ -257,17 +300,6 @@ impl Boosts {
         self.entries
             .iter()
             .map(|(name, entry)| (name, entry.code.as_str(), entry.compiled.as_ref()))
-    }
-
-    fn matching(
-        &self,
-        frame: Frame,
-        url: &str,
-        kind: BoostKind,
-    ) -> impl Iterator<Item = (&BoostName, &Entry)> {
-        self.entries.iter().filter(move |(name, _)| {
-            frame == Frame::Main && name.kind() == kind && applies(url, name.host())
-        })
     }
 
     fn file(&self, name: &BoostName) -> BoostFile {

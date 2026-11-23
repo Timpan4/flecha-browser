@@ -192,9 +192,11 @@ fn the_shells_stored_shape() {
     let builds = json!({
         "a.example.ts": { "code": "wrapped()" },
         "gone.example.ts": { "code": "orphan" },
+        "b.example.css": { "code": 1 },
     });
     let import = Boosts::from_shell(Some(&files), Some(&builds)).unwrap();
     assert_eq!(import.skipped, ["notes.txt", "c.example.ts"]);
+    assert_eq!(import.dropped_builds, ["b.example.css"]);
     let names: Vec<_> = import
         .boosts
         .iter()
@@ -250,4 +252,51 @@ fn boosts_apply_to_web_pages_only() {
             .is_empty()
     );
     assert_eq!(boosts.styles_for(Frame::Main, "https://settings/").len(), 1);
+}
+
+/// Chromium registers user scripts all or nothing (`user_scripts_api.cc`), so one host it
+/// rejects leaves every script to the shell's execute path.
+#[test]
+fn one_rejected_pattern_disables_every_registered_script() {
+    let build = |code: &str| {
+        Some(CompiledBoost {
+            code: Some(code.into()),
+            error: None,
+        })
+    };
+    let files = json!({ "github.com.ts": "a", "q b.ts": "b" });
+    let builds = json!({ "github.com.ts": { "code": "a()" }, "q b.ts": { "code": "b()" } });
+    let mut boosts = Boosts::from_shell(Some(&files), Some(&builds))
+        .unwrap()
+        .boosts;
+    assert!(
+        boosts
+            .scripts_for(Frame::Main, "https://github.com./")
+            .is_empty()
+    );
+    assert_eq!(
+        boosts.scripts_for(Frame::Main, "https://github.com/").len(),
+        1
+    );
+    boosts.remove("q b.ts");
+    assert_eq!(
+        boosts
+            .scripts_for(Frame::Main, "https://github.com./")
+            .len(),
+        1
+    );
+    boosts.save("all.ts", "", build(""), true).unwrap();
+    assert_eq!(
+        boosts
+            .scripts_for(Frame::Main, "https://github.com./")
+            .len(),
+        1
+    );
+    boosts.save("all.ts", "", build("every()"), true).unwrap();
+    assert_eq!(
+        boosts
+            .scripts_for(Frame::Main, "https://github.com./")
+            .len(),
+        2
+    );
 }
