@@ -1,6 +1,18 @@
 [workspace]
 resolver = "3"
-members = ["crates/flecha-adblock", "crates/flecha-core", "crates/flecha-import", "crates/flecha-services", "crates/flecha-surface", "spikes/cef-gpui-pump", "spikes/cef-osr-signin", "spikes/gpui-cef-compositor"]
+members = [
+    "app",
+    "crates/flecha-adblock",
+    "crates/flecha-cef",
+    "crates/flecha-core",
+    "crates/flecha-import",
+    "crates/flecha-services",
+    "crates/flecha-surface",
+    "crates/flecha-ui",
+    "spikes/cef-gpui-pump",
+    "spikes/cef-osr-signin",
+    "spikes/gpui-cef-compositor",
+]
 exclude = ["target/spike1-src/zed", "target/spike1-src/cef-rs"]
 
 [workspace.package]
@@ -11,6 +23,12 @@ publish = false
 [workspace.dependencies]
 anyhow = "1"
 cef = { path = "target/spike1-src/cef-rs/cef", default-features = false }
+flecha-cef = { path = "crates/flecha-cef" }
+flecha-core = { path = "crates/flecha-core" }
+flecha-services = { path = "crates/flecha-services" }
+flecha-surface = { path = "crates/flecha-surface" }
+flecha-ui = { path = "crates/flecha-ui" }
+futures = "0.3"
 gpui = { path = "target/spike1-src/zed/crates/gpui", default-features = false }
 gpui_platform = { path = "target/spike1-src/zed/crates/gpui_platform", features = ["font-kit", "x11", "wayland"] }
 wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "cddb2f5d80dc0009b2ef6767635140cacf90a007", default-features = false }

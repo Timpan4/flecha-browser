@@ -44,6 +44,45 @@ static int click(Display *display, int x, int y)
            XTestFakeButtonEvent(display, 1, False, CurrentTime);
 }
 
+static int geometry(Display *display, const char *title)
+{
+    Window root = DefaultRootWindow(display);
+    Window returned_root, parent, *children;
+    unsigned int count;
+    if (!XQueryTree(display, root, &returned_root, &parent, &children, &count))
+        return 0;
+
+    Window match = None;
+    for (unsigned int i = 0; i < count; i++) {
+        char *name = NULL;
+        XWindowAttributes attributes;
+        if (XFetchName(display, children[i], &name) && name != NULL &&
+            strcmp(name, title) == 0 && XGetWindowAttributes(display, children[i], &attributes) &&
+            attributes.map_state == IsViewable) {
+            if (match != None) {
+                XFree(name);
+                XFree(children);
+                return 0;
+            }
+            match = children[i];
+        }
+        if (name != NULL)
+            XFree(name);
+    }
+    if (children != NULL)
+        XFree(children);
+    if (match == None)
+        return 0;
+
+    XWindowAttributes attributes;
+    int x, y;
+    Window child;
+    if (!XGetWindowAttributes(display, match, &attributes) ||
+        !XTranslateCoordinates(display, match, root, 0, 0, &x, &y, &child))
+        return 0;
+    return printf("%d %d %d %d\n", x, y, attributes.width, attributes.height) > 0;
+}
+
 static int64_t milliseconds(void)
 {
     struct timespec now;
@@ -111,6 +150,8 @@ int main(int argc, char **argv)
         ok = x >= 0 && y >= 0 && click(display, x, y);
     } else if (argc == 3 && strcmp(argv[1], "key") == 0) {
         ok = tap(display, XStringToKeysym(argv[2]));
+    } else if (argc == 3 && strcmp(argv[1], "geometry") == 0) {
+        ok = geometry(display, argv[2]);
     } else if (argc == 2 && strcmp(argv[1], "copy") == 0) {
         ok = press(display, XK_Control_L, True) && tap(display, XK_a) &&
              tap(display, XK_c) && press(display, XK_Control_L, False);

@@ -1,0 +1,29 @@
+Negative control logs: /home/timpan4/.t3/worktrees/flecha-browser/t3-25e8aab9-8fed79970e8c4302/rewrite/target/phase1-controls.qnb6d7/logs
+PASS direct-launch failed at the expected assertion
+PASS restore failed at the expected assertion
+PASS resolver failed at the expected assertion
+PASS runtime-socket failed at the expected assertion
+PASS cookie failed at the expected assertion
+PASS stale failed at the expected assertion
+PASS stale-paint failed at the expected assertion
+PASS stale-title failed at the expected assertion
+PASS split-swap reached the watchdog with RETRY split-geometry: unexpected #f93520 at (262, 50) in 1280×1024, page starts at (262, 50) and splits at 772
+PASS blank-restart reached the watchdog with RETRY restart-split: blank restart control rendered its replacement frame
+PASS close-archive failed at the expected assertion
+PASS peek-shared failed at the expected assertion
+PASS pane-size reached the watchdog with RETRY split-geometry: unexpected #f93520 at (517, 50) in 1280×1024, page starts at (262, 50) and splits at 772
+PASS pane-height reached the watchdog with RETRY split-geometry: unexpected #fcfcfc at (1267, 50) in 1280×1024, page starts at (262, 50) and splits at 772
+PASS archive-dup failed at the expected assertion
+PASS stale-closedat-ui failed at the expected assertion
+PASS stale-closedat failed at the expected assertion
+PASS pane-offset reached the watchdog with RETRY split-geometry: unexpected #161c20 at (262, 50) in 1280×1024, page starts at (262, 50) and splits at 772
+PASS ratio-002 reached the watchdog with RETRY split-geometry: unexpected #1b7dd at (772, 50) in 1280×1024, page starts at (262, 50) and splits at 772
+PASS ratio-001 reached the watchdog with RETRY split-geometry: unexpected #1b7dd at (772, 50) in 1280×1024, page starts at (262, 50) and splits at 772
+PASS right-both reached the watchdog with RETRY split: missing fixture colors #147A70, #FFCC49
+PASS pane-size-restart reached the watchdog with RETRY restart-split-geometry: unexpected #f93520 at (517, 50) in 1280×1024, page starts at (262, 50) and splits at 772
+PASS peek-blind-click failed at the expected assertion
+PASS flechinha-old-partition failed at the expected assertion
+PASS stale-openlink failed at the expected assertion
+PASS new-variant failed at the expected assertion
+PASS timeout failed at the expected assertion
+error: use of a disallowed method `gpui::FutureExt::with_timeout`

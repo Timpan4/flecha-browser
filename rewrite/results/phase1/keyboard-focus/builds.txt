@@ -1,0 +1,7 @@
+Unfixed build (focus control exit 1)
+454596d1f371d66cb4857b3e3b97a5b323890c72
+e2e6bf794f0b9ac85996d698b5f924117dc394db07df8a7868689ec57a12531a  target/debug/flecha
+
+Fixed build (focus regression exit 0)
+32fcbcf36d96d2bfca95d86857586155f7560a82
+9b8a71ee3db6c8a5d29eb359c906c4e45013a807018d4d8c1034a618d8240d5c  target/debug/flecha

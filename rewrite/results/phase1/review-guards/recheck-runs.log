@@ -1,0 +1,342 @@
+Slice run 1
+Isolated run: /home/timpan4/.t3/worktrees/flecha-browser/t3-25e8aab9-8fed79970e8c4302/rewrite/target/phase1.USSdDo
+Isolation check passed: runtime sockets absent, localhost resolved, localtest.me unresolved
+PASS checked /proc environ for the app and its CEF descendants (10 processes, including a renderer or zygote child)
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+RETRY open: missing fixture colors #147A70, #FFCC49
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+READY open capture
+PASS opened a durable tab, received CEF load and paint, and captured the GPUI fixture frame
+PASS an X11 click and key passed through GPUI into the CEF input field
+PASS CEF rejected the localtest.me navigation (net error -106)
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+PASS split the selected tab, loaded the second pane, and captured both pages at once
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+RETRY peek: missing fixture colors #235089, #83DDFF
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+READY peek capture
+PASS promoted the transient Peek into Today with its browser, document and draft intact
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+PASS moved the live document to Flechinha and back to the last active Flecha window
+PASS closed the returned tab, added a new archive entry, and matched the shipping TS trace
+PASS dropped retired Created, Paint, Title and Address callbacks before shell dispatch
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+PASS clicking Separate cookies through the Peek backdrop dismissed Peek and left the Space shared
+PASS changing a Space partition closed both its Peek and Flechinha CEF browsers
+PASS Peek in an empty isolated Space did not receive the shared cookie
+PASS two tabs in the isolated Space shared the cookie and the ordinary Space did not receive it
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+RETRY restart-split: missing fixture colors #703496, #F386B9
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+READY restart-split capture
+PASS restarted on the same scratch profile and captured both restored pages in their original panes
+PASS the isolated cookie persisted after restart and stayed out of the ordinary Space
+PASS CEF shut down cleanly
+Isolated process namespace exited (0)
+PASS launcher removed its successful scratch tree
+
+Slice run 2
+Isolated run: /home/timpan4/.t3/worktrees/flecha-browser/t3-25e8aab9-8fed79970e8c4302/rewrite/target/phase1.U5o0Vj
+Isolation check passed: runtime sockets absent, localhost resolved, localtest.me unresolved
+PASS checked /proc environ for the app and its CEF descendants (10 processes, including a renderer or zygote child)
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+RETRY open: missing fixture colors #147A70, #FFCC49
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+READY open capture
+PASS opened a durable tab, received CEF load and paint, and captured the GPUI fixture frame
+PASS an X11 click and key passed through GPUI into the CEF input field
+PASS CEF rejected the localtest.me navigation (net error -106)
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+PASS split the selected tab, loaded the second pane, and captured both pages at once
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+RETRY peek: missing fixture colors #235089, #83DDFF
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+READY peek capture
+PASS promoted the transient Peek into Today with its browser, document and draft intact
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+PASS moved the live document to Flechinha and back to the last active Flecha window
+PASS closed the returned tab, added a new archive entry, and matched the shipping TS trace
+PASS dropped retired Created, Paint, Title and Address callbacks before shell dispatch
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+PASS clicking Separate cookies through the Peek backdrop dismissed Peek and left the Space shared
+PASS changing a Space partition closed both its Peek and Flechinha CEF browsers
+PASS Peek in an empty isolated Space did not receive the shared cookie
+PASS two tabs in the isolated Space shared the cookie and the ordinary Space did not receive it
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+PASS restarted on the same scratch profile and captured both restored pages in their original panes
+PASS the isolated cookie persisted after restart and stayed out of the ordinary Space
+PASS CEF shut down cleanly
+Isolated process namespace exited (0)
+PASS launcher removed its successful scratch tree
+
+Slice run 3
+Isolated run: /home/timpan4/.t3/worktrees/flecha-browser/t3-25e8aab9-8fed79970e8c4302/rewrite/target/phase1.vgl45w
+Isolation check passed: runtime sockets absent, localhost resolved, localtest.me unresolved
+PASS checked /proc environ for the app and its CEF descendants (10 processes, including a renderer or zygote child)
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+RETRY open: missing fixture colors #147A70, #FFCC49
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+READY open capture
+PASS opened a durable tab, received CEF load and paint, and captured the GPUI fixture frame
+PASS an X11 click and key passed through GPUI into the CEF input field
+PASS CEF rejected the localtest.me navigation (net error -106)
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+PASS split the selected tab, loaded the second pane, and captured both pages at once
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+RETRY peek: missing fixture colors #235089, #83DDFF
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+READY peek capture
+PASS promoted the transient Peek into Today with its browser, document and draft intact
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+PASS moved the live document to Flechinha and back to the last active Flecha window
+PASS closed the returned tab, added a new archive entry, and matched the shipping TS trace
+PASS dropped retired Created, Paint, Title and Address callbacks before shell dispatch
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+PASS clicking Separate cookies through the Peek backdrop dismissed Peek and left the Space shared
+PASS changing a Space partition closed both its Peek and Flechinha CEF browsers
+PASS Peek in an empty isolated Space did not receive the shared cookie
+PASS two tabs in the isolated Space shared the cookie and the ordinary Space did not receive it
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+PASS restarted on the same scratch profile and captured both restored pages in their original panes
+PASS the isolated cookie persisted after restart and stayed out of the ordinary Space
+PASS CEF shut down cleanly
+Isolated process namespace exited (0)
+PASS launcher removed its successful scratch tree
+
+Slice run 4
+Isolated run: /home/timpan4/.t3/worktrees/flecha-browser/t3-25e8aab9-8fed79970e8c4302/rewrite/target/phase1.Tk7Lx1
+Isolation check passed: runtime sockets absent, localhost resolved, localtest.me unresolved
+PASS checked /proc environ for the app and its CEF descendants (10 processes, including a renderer or zygote child)
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+RETRY open: missing fixture colors #147A70, #FFCC49
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+READY open capture
+PASS opened a durable tab, received CEF load and paint, and captured the GPUI fixture frame
+PASS an X11 click and key passed through GPUI into the CEF input field
+PASS CEF rejected the localtest.me navigation (net error -106)
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+PASS split the selected tab, loaded the second pane, and captured both pages at once
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+RETRY peek: missing fixture colors #235089, #83DDFF
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+READY peek capture
+PASS promoted the transient Peek into Today with its browser, document and draft intact
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+PASS moved the live document to Flechinha and back to the last active Flecha window
+PASS closed the returned tab, added a new archive entry, and matched the shipping TS trace
+PASS dropped retired Created, Paint, Title and Address callbacks before shell dispatch
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+PASS clicking Separate cookies through the Peek backdrop dismissed Peek and left the Space shared
+PASS changing a Space partition closed both its Peek and Flechinha CEF browsers
+PASS Peek in an empty isolated Space did not receive the shared cookie
+PASS two tabs in the isolated Space shared the cookie and the ordinary Space did not receive it
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+PASS restarted on the same scratch profile and captured both restored pages in their original panes
+PASS the isolated cookie persisted after restart and stayed out of the ordinary Space
+PASS CEF shut down cleanly
+Isolated process namespace exited (0)
+PASS launcher removed its successful scratch tree
+
+Slice run 5
+Isolated run: /home/timpan4/.t3/worktrees/flecha-browser/t3-25e8aab9-8fed79970e8c4302/rewrite/target/phase1.gAwlnp
+Isolation check passed: runtime sockets absent, localhost resolved, localtest.me unresolved
+PASS checked /proc environ for the app and its CEF descendants (10 processes, including a renderer or zygote child)
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+RETRY open: missing fixture colors #147A70, #FFCC49
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+READY open capture
+PASS opened a durable tab, received CEF load and paint, and captured the GPUI fixture frame
+PASS an X11 click and key passed through GPUI into the CEF input field
+PASS CEF rejected the localtest.me navigation (net error -106)
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+PASS split the selected tab, loaded the second pane, and captured both pages at once
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+RETRY peek: missing fixture colors #235089, #83DDFF
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+READY peek capture
+PASS promoted the transient Peek into Today with its browser, document and draft intact
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+PASS moved the live document to Flechinha and back to the last active Flecha window
+PASS closed the returned tab, added a new archive entry, and matched the shipping TS trace
+PASS dropped retired Created, Paint, Title and Address callbacks before shell dispatch
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+PASS clicking Separate cookies through the Peek backdrop dismissed Peek and left the Space shared
+PASS changing a Space partition closed both its Peek and Flechinha CEF browsers
+PASS Peek in an empty isolated Space did not receive the shared cookie
+PASS two tabs in the isolated Space shared the cookie and the ordinary Space did not receive it
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+PASS restarted on the same scratch profile and captured both restored pages in their original panes
+PASS the isolated cookie persisted after restart and stayed out of the ordinary Space
+PASS CEF shut down cleanly
+Isolated process namespace exited (0)
+PASS launcher removed its successful scratch tree
+
+Slice run 6
+Isolated run: /home/timpan4/.t3/worktrees/flecha-browser/t3-25e8aab9-8fed79970e8c4302/rewrite/target/phase1.J4e4Nj
+Isolation check passed: runtime sockets absent, localhost resolved, localtest.me unresolved
+PASS checked /proc environ for the app and its CEF descendants (10 processes, including a renderer or zygote child)
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+RETRY open: missing fixture colors #147A70, #FFCC49
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+READY open capture
+PASS opened a durable tab, received CEF load and paint, and captured the GPUI fixture frame
+PASS an X11 click and key passed through GPUI into the CEF input field
+PASS CEF rejected the localtest.me navigation (net error -106)
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+PASS split the selected tab, loaded the second pane, and captured both pages at once
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+RETRY peek: missing fixture colors #235089, #83DDFF
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+READY peek capture
+PASS promoted the transient Peek into Today with its browser, document and draft intact
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+PASS moved the live document to Flechinha and back to the last active Flecha window
+PASS closed the returned tab, added a new archive entry, and matched the shipping TS trace
+PASS dropped retired Created, Paint, Title and Address callbacks before shell dispatch
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+PASS clicking Separate cookies through the Peek backdrop dismissed Peek and left the Space shared
+PASS changing a Space partition closed both its Peek and Flechinha CEF browsers
+PASS Peek in an empty isolated Space did not receive the shared cookie
+PASS two tabs in the isolated Space shared the cookie and the ordinary Space did not receive it
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+PASS restarted on the same scratch profile and captured both restored pages in their original panes
+PASS the isolated cookie persisted after restart and stayed out of the ordinary Space
+PASS CEF shut down cleanly
+Isolated process namespace exited (0)
+PASS launcher removed its successful scratch tree
+
+Slice run 7
+Isolated run: /home/timpan4/.t3/worktrees/flecha-browser/t3-25e8aab9-8fed79970e8c4302/rewrite/target/phase1.AKCucC
+Isolation check passed: runtime sockets absent, localhost resolved, localtest.me unresolved
+PASS checked /proc environ for the app and its CEF descendants (10 processes, including a renderer or zygote child)
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+RETRY open: missing fixture colors #147A70, #FFCC49
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+READY open capture
+PASS opened a durable tab, received CEF load and paint, and captured the GPUI fixture frame
+PASS an X11 click and key passed through GPUI into the CEF input field
+PASS CEF rejected the localtest.me navigation (net error -106)
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+PASS split the selected tab, loaded the second pane, and captured both pages at once
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+RETRY peek: missing fixture colors #235089, #83DDFF
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+READY peek capture
+PASS promoted the transient Peek into Today with its browser, document and draft intact
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+PASS moved the live document to Flechinha and back to the last active Flecha window
+PASS closed the returned tab, added a new archive entry, and matched the shipping TS trace
+PASS dropped retired Created, Paint, Title and Address callbacks before shell dispatch
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+PASS clicking Separate cookies through the Peek backdrop dismissed Peek and left the Space shared
+PASS changing a Space partition closed both its Peek and Flechinha CEF browsers
+PASS Peek in an empty isolated Space did not receive the shared cookie
+PASS two tabs in the isolated Space shared the cookie and the ordinary Space did not receive it
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+PASS restarted on the same scratch profile and captured both restored pages in their original panes
+PASS the isolated cookie persisted after restart and stayed out of the ordinary Space
+PASS CEF shut down cleanly
+Isolated process namespace exited (0)
+PASS launcher removed its successful scratch tree
+
+Slice run 8
+Isolated run: /home/timpan4/.t3/worktrees/flecha-browser/t3-25e8aab9-8fed79970e8c4302/rewrite/target/phase1.sNxy7c
+Isolation check passed: runtime sockets absent, localhost resolved, localtest.me unresolved
+PASS checked /proc environ for the app and its CEF descendants (10 processes, including a renderer or zygote child)
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+RETRY open: missing fixture colors #147A70, #FFCC49
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+READY open capture
+PASS opened a durable tab, received CEF load and paint, and captured the GPUI fixture frame
+PASS an X11 click and key passed through GPUI into the CEF input field
+PASS CEF rejected the localtest.me navigation (net error -106)
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+PASS split the selected tab, loaded the second pane, and captured both pages at once
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+RETRY peek: missing fixture colors #235089, #83DDFF
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+READY peek capture
+PASS promoted the transient Peek into Today with its browser, document and draft intact
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+PASS moved the live document to Flechinha and back to the last active Flecha window
+PASS closed the returned tab, added a new archive entry, and matched the shipping TS trace
+PASS dropped retired Created, Paint, Title and Address callbacks before shell dispatch
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+PASS clicking Separate cookies through the Peek backdrop dismissed Peek and left the Space shared
+PASS changing a Space partition closed both its Peek and Flechinha CEF browsers
+PASS Peek in an empty isolated Space did not receive the shared cookie
+PASS two tabs in the isolated Space shared the cookie and the ordinary Space did not receive it
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+PASS restarted on the same scratch profile and captured both restored pages in their original panes
+PASS the isolated cookie persisted after restart and stayed out of the ordinary Space
+PASS CEF shut down cleanly
+Isolated process namespace exited (0)
+PASS launcher removed its successful scratch tree
+
+Slice run 9
+Isolated run: /home/timpan4/.t3/worktrees/flecha-browser/t3-25e8aab9-8fed79970e8c4302/rewrite/target/phase1.1xhZh7
+Isolation check passed: runtime sockets absent, localhost resolved, localtest.me unresolved
+PASS checked /proc environ for the app and its CEF descendants (10 processes, including a renderer or zygote child)
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+RETRY open: missing fixture colors #147A70, #FFCC49
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+READY open capture
+PASS opened a durable tab, received CEF load and paint, and captured the GPUI fixture frame
+PASS an X11 click and key passed through GPUI into the CEF input field
+PASS CEF rejected the localtest.me navigation (net error -106)
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+PASS split the selected tab, loaded the second pane, and captured both pages at once
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+RETRY peek: missing fixture colors #235089, #83DDFF
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+READY peek capture
+PASS promoted the transient Peek into Today with its browser, document and draft intact
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+PASS moved the live document to Flechinha and back to the last active Flecha window
+PASS closed the returned tab, added a new archive entry, and matched the shipping TS trace
+PASS dropped retired Created, Paint, Title and Address callbacks before shell dispatch
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+PASS clicking Separate cookies through the Peek backdrop dismissed Peek and left the Space shared
+PASS changing a Space partition closed both its Peek and Flechinha CEF browsers
+PASS Peek in an empty isolated Space did not receive the shared cookie
+PASS two tabs in the isolated Space shared the cookie and the ordinary Space did not receive it
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+PASS restarted on the same scratch profile and captured both restored pages in their original panes
+PASS the isolated cookie persisted after restart and stayed out of the ordinary Space
+PASS CEF shut down cleanly
+Isolated process namespace exited (0)
+PASS launcher removed its successful scratch tree
+
+Slice run 10
+Isolated run: /home/timpan4/.t3/worktrees/flecha-browser/t3-25e8aab9-8fed79970e8c4302/rewrite/target/phase1.mcvvxL
+Isolation check passed: runtime sockets absent, localhost resolved, localtest.me unresolved
+PASS checked /proc environ for the app and its CEF descendants (10 processes, including a renderer or zygote child)
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+RETRY open: missing fixture colors #147A70, #FFCC49
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+READY open capture
+PASS opened a durable tab, received CEF load and paint, and captured the GPUI fixture frame
+PASS an X11 click and key passed through GPUI into the CEF input field
+PASS CEF rejected the localtest.me navigation (net error -106)
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+PASS split the selected tab, loaded the second pane, and captured both pages at once
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+RETRY peek: missing fixture colors #235089, #83DDFF
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+READY peek capture
+PASS promoted the transient Peek into Today with its browser, document and draft intact
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+PASS moved the live document to Flechinha and back to the last active Flecha window
+PASS closed the returned tab, added a new archive entry, and matched the shipping TS trace
+PASS dropped retired Created, Paint, Title and Address callbacks before shell dispatch
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+PASS clicking Separate cookies through the Peek backdrop dismissed Peek and left the Space shared
+PASS changing a Space partition closed both its Peek and Flechinha CEF browsers
+PASS Peek in an empty isolated Space did not receive the shared cookie
+PASS two tabs in the isolated Space shared the cookie and the ordinary Space did not receive it
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+PASS restarted on the same scratch profile and captured both restored pages in their original panes
+PASS the isolated cookie persisted after restart and stayed out of the ordinary Space
+PASS CEF shut down cleanly
+Isolated process namespace exited (0)
+PASS launcher removed its successful scratch tree

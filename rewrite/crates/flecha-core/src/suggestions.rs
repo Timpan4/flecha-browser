@@ -167,6 +167,12 @@ fn default_ignorables() -> &'static regex::Regex {
     re!(r"\p{Default_Ignorable_Code_Point}")
 }
 
+/// Detect a JWT before a command-bar submission can become a network request.
+pub fn contains_private_jwt(raw: &str) -> bool {
+    let query = trim_input(raw);
+    private_jwt(query, &query.nfkc().collect::<String>())
+}
+
 fn private_jwt(raw: &str, normalized: &str) -> bool {
     let stripped = default_ignorables().replace_all(raw, "");
     if contains_jwt(&stripped) {

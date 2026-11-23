@@ -1986,6 +1986,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "flecha"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "flecha-cef",
+ "flecha-services",
+ "flecha-ui",
+ "gpui",
+ "gpui_platform",
+]
+
+[[package]]
 name = "flecha-adblock"
 version = "0.1.0"
 dependencies = [
@@ -2000,6 +2012,21 @@ dependencies = [
  "tempfile",
  "ureq",
  "url",
+]
+
+[[package]]
+name = "flecha-cef"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-channel",
+ "async-io",
+ "cef",
+ "flecha-core",
+ "flecha-surface",
+ "futures",
+ "gpui",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -2038,6 +2065,7 @@ dependencies = [
 name = "flecha-services"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "base64 0.23.1",
  "bytes",
  "flecha-core",
@@ -2051,6 +2079,7 @@ dependencies = [
  "serde",
  "serde_json",
  "subtle",
+ "tempfile",
  "tokio",
  "tokio-util",
  "tracing",
@@ -2067,6 +2096,22 @@ dependencies = [
  "image",
  "smallvec",
  "wgpu",
+]
+
+[[package]]
+name = "flecha-ui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "flecha-cef",
+ "flecha-core",
+ "flecha-services",
+ "flecha-surface",
+ "futures",
+ "gpui",
+ "serde",
+ "serde_json",
+ "uuid",
 ]
 
 [[package]]

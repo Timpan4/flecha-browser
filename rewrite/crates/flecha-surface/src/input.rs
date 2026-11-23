@@ -58,25 +58,25 @@ pub fn click(
     }
 }
 
-pub fn mouse_move(host: &BrowserHost, motion: &MouseMoveEvent) {
+pub fn mouse_move(host: &BrowserHost, motion: &MouseMoveEvent, origin: Point<Pixels>) {
     let flags = modifiers(motion.modifiers)
         | motion
             .pressed_button
             .and_then(button)
             .map_or(0, |(_, flag)| flag.0);
-    host.send_mouse_move_event(Some(&event(motion.position, flags)), 0);
+    host.send_mouse_move_event(Some(&event(motion.position - origin, flags)), 0);
 }
 
-pub fn mouse_exit(host: &BrowserHost, motion: &MouseExitEvent) {
+pub fn mouse_exit(host: &BrowserHost, motion: &MouseExitEvent, origin: Point<Pixels>) {
     let flags = modifiers(motion.modifiers)
         | motion
             .pressed_button
             .and_then(button)
             .map_or(0, |(_, flag)| flag.0);
-    host.send_mouse_move_event(Some(&event(motion.position, flags)), 1);
+    host.send_mouse_move_event(Some(&event(motion.position - origin, flags)), 1);
 }
 
-pub fn scroll(host: &BrowserHost, scroll: &ScrollEvent) {
+pub fn scroll(host: &BrowserHost, scroll: &ScrollEvent, origin: Point<Pixels>) {
     let mut flags = modifiers(scroll.modifiers);
     let (dx, dy) = match scroll.delta {
         ScrollDelta::Pixels(delta) => {
@@ -87,7 +87,7 @@ pub fn scroll(host: &BrowserHost, scroll: &ScrollEvent) {
         ScrollDelta::Lines(delta) => (delta.x * 120.0, delta.y * 120.0),
     };
     host.send_mouse_wheel_event(
-        Some(&event(scroll.position, flags)),
+        Some(&event(scroll.position - origin, flags)),
         dx.round() as i32,
         dy.round() as i32,
     );

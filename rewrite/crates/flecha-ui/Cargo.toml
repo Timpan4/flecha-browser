@@ -1,0 +1,18 @@
+[package]
+name = "flecha-ui"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+flecha-cef.workspace = true
+flecha-core.workspace = true
+flecha-services.workspace = true
+flecha-surface.workspace = true
+futures.workspace = true
+gpui.workspace = true
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }

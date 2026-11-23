@@ -1,0 +1,15 @@
+Negative control logs: /home/timpan4/.t3/worktrees/flecha-browser/t3-25e8aab9-8fed79970e8c4302/rewrite/target/phase1-controls.P8CF6W/logs
+PASS direct-launch failed at the expected assertion
+PASS restore failed at the expected assertion
+PASS resolver failed at the expected assertion
+PASS runtime-socket failed at the expected assertion
+PASS cookie failed at the expected assertion
+PASS stale failed at the expected assertion
+PASS stale-paint failed at the expected assertion
+PASS stale-title failed at the expected assertion
+PASS split-swap failed at the expected assertion
+PASS blank-restart failed at the expected assertion
+PASS close-archive failed at the expected assertion
+PASS peek-shared failed at the expected assertion
+PASS timeout failed at the expected assertion
+error: use of a disallowed method `gpui::FutureExt::with_timeout`

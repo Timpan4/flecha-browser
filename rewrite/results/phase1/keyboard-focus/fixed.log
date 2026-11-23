@@ -1,0 +1,14 @@
+Isolated run: /home/timpan4/.t3/worktrees/flecha-browser/t3-25e8aab9-8fed79970e8c4302/rewrite/target/phase1.RhsyiW
+Isolation check passed: runtime sockets absent, localhost resolved, localtest.me unresolved
+PASS checked /proc environ for the app and its CEF descendants (10 processes, including a renderer or zygote child)
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+RETRY open: missing fixture colors #147A70, #FFCC49
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+READY open capture
+PASS opened a durable tab, received CEF load and paint, and captured the GPUI fixture frame
+PASS an X11 click and key passed through GPUI into the CEF input field
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+PASS sidebar split sent y only to pane B
+PASS sidebar select sent z only to pane A
+PASS CEF shut down cleanly
+Isolated process namespace exited (0)
