@@ -1,0 +1,27 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Flecha spike input test</title>
+<style>
+  body { margin: 0; font: 16px sans-serif; height: 3000px; }
+  #text { position: absolute; left: 20px; top: 20px; width: 300px; height: 30px; }
+  #password { position: absolute; left: 20px; top: 70px; width: 300px; height: 30px; }
+  #area { position: absolute; left: 20px; top: 120px; width: 300px; height: 80px; }
+  #choice { position: absolute; left: 20px; top: 220px; width: 300px; height: 30px; }
+  #button { position: absolute; left: 20px; top: 270px; width: 300px; height: 30px; }
+</style>
+<input id="text" autocomplete="off">
+<input id="password" type="password" autocomplete="off">
+<textarea id="area"></textarea>
+<select id="choice"><option>one</option><option>two</option><option>three</option></select>
+<button id="button">button</button>
+<script>
+  const log = (...parts) => console.log('INPUT ' + parts.join(' '));
+  for (const id of ['text', 'password', 'area']) {
+    document.getElementById(id).addEventListener('input', e => log(id, JSON.stringify(e.target.value)));
+  }
+  document.getElementById('choice').addEventListener('change', e => log('choice', e.target.value));
+  document.getElementById('button').addEventListener('click', e => log('click', e.detail));
+  document.getElementById('button').addEventListener('dblclick', () => log('dblclick'));
+  document.addEventListener('keydown', e => log('keydown', e.key, e.code, e.keyCode));
+  addEventListener('scroll', () => log('scroll', Math.round(scrollY)));
+</script>

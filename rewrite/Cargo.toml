@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 # Each unit adds its own crate path here.
-members = []
+members = ["spikes/cef-osr-signin"]
 
 [workspace.package]
 edition = "2024"

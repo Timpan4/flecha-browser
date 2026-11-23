@@ -1,0 +1,19 @@
+[package]
+name = "cef-osr-signin"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# Pins from rewrite/pins.toml. The rev is on branch flecha/cef-158.0.3 of the Flecha fork.
+# The build downloads CEF 158.0.3+g8c29be2+chromium-158.0.8127.18 and checks its SHA-1
+# against the CEF index.
+cef = { git = "https://github.com/Timpan4/cef-rs", rev = "32d6bc558545933eb1b4620aac4bc4799299c129", default-features = false, features = ["sandbox"] }
+# Direct dependency only so build.rs receives DEP_CEF_DLL_WRAPPER_CEF_DIR (see build.rs).
+cef-dll-sys = { git = "https://github.com/Timpan4/cef-rs", rev = "32d6bc558545933eb1b4620aac4bc4799299c129" }
+# winit 0.30 is the newest stable line (0.31 is in beta). softbuffer 0.4 uses the same
+# raw-window-handle 0.6.
+winit = "0.30.13"
+softbuffer = "0.4.8"
+serde_json = "1.0.154"
