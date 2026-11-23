@@ -1,0 +1,34 @@
+# Engine and toolkit pins for the CEF + GPUI rewrite.
+# Change these together, and only after the Phase 0 checks pass on the new build.
+# Rules: docs/cef-gpui-rewrite-plan.md, "Beta channel rule".
+
+[cef]
+channel = "beta"
+version = "158.0.3+g8c29be2+chromium-158.0.8127.18"
+
+# SHA-1 of each "minimal" archive, from https://cef-builds.spotifycdn.com/index.json (read 2026-11-23).
+[cef.beta.sha1]
+linux64 = "057a0b871bf26d26d654d999dba595b92fe0f067"
+macosarm64 = "cfda29104031828faa11cc6686fe86497a2b4233"
+windows64 = "ac9ef7e16e024123ca602beb91c9f8d8e3a78178"
+
+# The same commit (g8c29be2) was also published to the stable channel as separate archives.
+# cef-rs's build script at the rev below picks the first index entry for the version, which is
+# currently the stable archive. Until Flecha's own fetch step downloads the beta archive, checks
+# the SHA-1 above and sets CEF_PATH, builds use these stable archives of the same commit.
+[cef.stable.sha1]
+linux64 = "620b80a02dfe93ed7884a9eb1b265ff34f799024"
+macosarm64 = "25c8a98f652214b852f06ec943b504415d115e74"
+windows64 = "a8634573a10fb514fb9e8bc9fcf39016a2fb17bd"
+
+[cef-rs]
+# Flecha-owned fork, so the pinned commit stays referenced. The commit is upstream's generated
+# CEF 158.0.3 bindings from tauri-apps/cef-rs#520, which closed unmerged when the bot reset its
+# branch. Its tree equals the open #521 head 76b68127.
+git = "https://github.com/Timpan4/cef-rs"
+branch = "flecha/cef-158.0.3"
+rev = "32d6bc558545933eb1b4620aac4bc4799299c129"
+
+[gpui]
+git = "https://github.com/zed-industries/zed"
+rev = "f126950f9d3b62666f97437ae5d4ccac2272c4db"

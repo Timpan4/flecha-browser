@@ -1,0 +1,149 @@
+# Flecha on CEF and GPUI: rewrite plan
+
+Status: approved 2026-11-23.
+
+## Owner decisions, 2026-11-23
+
+- All phases are approved. The spikes and Phase 1 start together.
+- v1 supports Linux, macOS and Windows.
+- If Gmail sign-in fails in Alloy OSR, all work stops and comes back to the owner. No user-agent spoofing.
+- The owner cannot run the manual checks yet. The spikes get built now. Spike 0's sign-in answer and Spike 1's real-Wayland check wait for the owner. Until then, test windows run only on Xvfb or a headless compositor.
+- Work that is the same with or without the sign-in result (`flecha-core`, the compositor, the event loop) proceeds now. Phase 2 feature work waits for the Spike 0 verdict.
+
+## Decision and what it implies
+
+The owner has decided: Flecha's whole frontend moves to GPUI, the engine moves to CEF through cef-rs, and CEF follows the beta channel.
+
+Hosting CEF inside a window that GPUI owns forces CEF's Alloy style on the platforms that matter most:
+
+- **macOS** (the release platform): CEF 158's `cef_types_mac.h` says "Alloy style will always be used if `windowless_rendering_enabled` is true or if `parent_view` is provided."
+- **Native Wayland** (the owner's desktop): stock CEF cannot embed a browser into an existing Wayland window ([#2804](https://github.com/chromiumembedded/cef/issues/2804), [PR #4233](https://github.com/chromiumembedded/cef/pull/4233) is open). The remaining route is off-screen rendering (OSR), and OSR is always Alloy.
+
+Chrome style in a native child window exists only on X11 and Windows. It is not a product option. It stays useful as a control in tests, to tell CEF-wide failures from Alloy-only failures.
+
+So the product is **GPUI drawing every pixel, with each tab an Alloy-style OSR browser whose frames GPUI composites.** Known costs of that, from CEF sources and maintainer statements:
+
+| Area | Alloy OSR behavior | Plan |
+|---|---|---|
+| Chrome Web Store extensions | Chrome extension API is Chrome-style only. `chrome://extensions` is blocked in Alloy ([#3859](https://github.com/chromiumembedded/cef/issues/3859), [#4255](https://github.com/chromiumembedded/cef/issues/4255)) | Spike 0 measures what actually works |
+| Password manager, autofill UI | Unverified for OSR | Spike 0 measures it |
+| Permission prompts | CEF denies media and ignores other requests unless the host handles them | Build GPUI prompts |
+| Print preview | Disabled for windowless browsers | Use `Print` or a GPUI preview over `PrintToPDF` |
+| DevTools | Must open as a separate Chrome-style window ([#4353](https://github.com/chromiumembedded/cef/issues/4353)) | Accept, or build a CDP frontend later |
+| Clipboard on Wayland OSR | Copy does not reach the system clipboard ([#4341](https://github.com/chromiumembedded/cef/issues/4341)) | Spike 1 checks it |
+| RTX video super resolution | Lives inside Viz (patches 0074, 0076). Prebuilt CEF cannot carry it | Owner decision: drop, defer, or build CEF from source |
+| Google sign-in | Google's policy names CEF as blocked ([Google](https://developers.googleblog.com/guidance-to-developers-affected-by-our-effort-to-block-less-secure-browsers-and-applications/)) | Spike 0 gate |
+
+Google sign-in is why Flecha left Electron. If it fails in Alloy OSR, the rewrite cannot reach parity. User-agent spoofing is out of scope.
+
+## Pins (verified 2026-11-23)
+
+- **CEF:** the newest beta-channel build is `158.0.3+g8c29be2+chromium-158.0.8127.18`. It was published as beta on 2026-11-13 and promoted to stable on 2026-11-20 ([index](https://cef-builds.spotifycdn.com/index.json)). No 159 beta exists yet. Flecha today is on Chromium 158.0.8127.2.
+- **cef-rs:** the latest release binds 156.0.31. Upstream's bot generated 158.0.3 bindings at `32d6bc558545933eb1b4620aac4bc4799299c129` in [PR #520](https://github.com/tauri-apps/cef-rs/pull/520). That PR closed unmerged, and the same tree is now in open [PR #521](https://github.com/tauri-apps/cef-rs/pull/521). Flecha keeps the commit referenced on [Timpan4/cef-rs](https://github.com/Timpan4/cef-rs/tree/flecha/cef-158.0.3) branch `flecha/cef-158.0.3`. The commit also has `cef/src/osr_texture_import/` with `dmabuf.rs`, `d3d11.rs` and `iosurface.rs`. It depends on `wgpu = "30"`.
+- **GPUI:** Zed revision `f126950f9d3b62666f97437ae5d4ccac2272c4db` (2026-11-22). Its wgpu renderer drops surface batches (`crates/gpui_wgpu/src/wgpu_renderer.rs:1545`, "Surfaces are macOS-only"). Zed pins wgpu to a git revision (`cddb2f5d`), which conflicts with cef-rs's registry wgpu 30.
+
+### Beta channel rule
+
+- Resolve the newest `beta` entry in the CEF index. `download-cef` supports `Channel::Beta`.
+- Pin the exact CEF version string and SHA-1 in the repo, together with the cef-rs revision.
+- When a new beta appears before cef-rs publishes bindings, regenerate them with cef-rs's own update tooling on a Flecha-owned branch of cef-rs. The update lands only after the Phase 0 sign-in and compositor checks pass on the new build.
+- Do not move to a beta until CEF publishes it in the index. Never track CEF master.
+- Known gap: CEF published 158.0.3 (commit `g8c29be2`) to both channels as separate archives. cef-rs's build script picks the first index entry for the version, which is the stable archive. Until Flecha's own fetch step downloads the beta archive, checks its SHA-1 from `pins.toml` and sets `CEF_PATH`, builds use the stable archive of the same commit. Phase 1 adds that fetch step.
+
+## Phase 0: go/no-go spikes
+
+Phase 0 code lives under `rewrite/spikes/` on this branch. `chromium/` stays the shipping browser and is not touched.
+
+### Spike 0: Alloy OSR sign-in and Chrome features (gate)
+
+Build a minimal cef-rs app on the pins above with an Alloy-style OSR browser. Software `OnPaint` into a plain window is enough, so no GPUI work is needed. Use shipping flags: sandbox on, no remote-debugging port or pipe, `navigator.webdriver` false, CEF's default user agent unmodified.
+
+Build the same binary as a windowed Chrome-style browser on X11, as the control.
+
+The owner runs these by hand with a purpose-made Google account. Nothing records credentials. Every check runs in both modes, and the existing Flecha build serves as a reference:
+
+1. Gmail sign-in with MFA, then restart and confirm the session survives.
+2. Sign out and sign back in.
+3. "Sign in with Google" on a third-party site.
+4. Install a real Web Store extension that has a content script and a popup. Check that the content script runs and that the popup can open.
+5. Save a password and fill it back in.
+6. Grant camera permission through a host prompt.
+7. Print.
+
+**Done check:** a table of pass/fail per check per mode, with no account identifiers. If check 1 fails in Alloy OSR, stop and return to the owner.
+
+### Spike 1: compositor and input on real hardware
+
+This needs a GPUI fork with a surface path on Linux. First evaluate [bite-gpui's dma-buf surface](https://github.com/bite-gpui/bite-gpui/pull/10) and [gpui-pre](https://github.com/vegidio/gpui-pre). Write our own patch only if neither fits. Resolve the wgpu version conflict in this spike.
+
+Done check, on the owner's real native Wayland session with NVIDIA, then on X11:
+
+- A moving frame counter page shows no stale or blank frames. Pass: every captured frame shows a counter value no lower than the previous capture, and no capture is blank.
+- Resize and a DPI change. Pass: after each change, the composited page's pixel size equals the page's own `innerWidth` and `innerHeight` times `devicePixelRatio`, and the counter keeps advancing.
+- A GPUI overlay drawn on top of the page. Pass: pixels inside the overlay rectangle have the overlay's colour, and pixels outside it match the page.
+- `<select>` popup, IME input, and dragging a file in.
+- Copying text from the page and pasting it into another app.
+- The page and the shell are reachable with the screen reader (Orca).
+- CPU, GPU and frame-time numbers, compared with today's Flecha on the same page using `chromium/tests/perf-bench.mjs`. Measurement only, with no pass threshold. The owner judges the comparison.
+
+The macOS IOSurface path needs the owner's MacBook. Windows D3D11 needs a Windows machine; none is known.
+
+### Spike 2: event loop and agent access
+
+- Drive CEF's external message pump from GPUI's main thread. Done check: with a static page, GPUI draws no frames and the pump runs only when CEF schedules work or at CEF's documented periodic wake-up (pass: logged pump calls match those requests). Idle CPU is recorded as a measurement only. Pages keep animating while GPUI animates (pass: both frame counters advance).
+- Reach a tab through CEF's per-browser DevTools calls (`SendDevToolsMessage`), never a port or pipe. Done check: the page sees `navigator.webdriver === false` while the call runs.
+
+### Phase 0 agent split
+
+- Spike 0: one Opus 5.5 agent builds it. The owner runs the manual checks.
+- Spike 1: one GPT 6.2 Sol agent does the GPUI fork evaluation, surface work, OSR input and popups.
+- Spike 2: one Opus 5.5 agent.
+- `flecha-core` (Phase 1): one GPT 6.2 Sol agent, started alongside the spikes because it does not depend on CEF or GPUI.
+- A non-author verifier checks each spike's done check before it counts.
+
+## Later phases
+
+The owner approved all phases on 2026-11-23. Phase 1 starts with the spikes. Phase 2 feature work waits for the Spike 0 sign-in verdict. Each phase's details are re-planned from Phase 0 results before its feature work starts.
+
+### Phase 1: vertical slice
+
+Rust workspace `rewrite/` with these crates:
+
+| Crate | Owns |
+|---|---|
+| `flecha-core` | Durable tab and Space IDs, versioned storage, migration, session restore |
+| `flecha-cef` | Browser and request-context handles, CEF callbacks, typed events keyed by tab ID and browser generation |
+| `flecha-surface` | Texture import and compositing |
+| `flecha-ui` | GPUI windows, sidebar, command bar, focus |
+| `flecha-services` | Import, local-server discovery, MCP over loopback with token |
+
+Slice: open a tab, then split it, Peek and promote, move it to Flechinha and back, close, and restart. Separate-cookie Spaces use one persistent `CefRequestContext` per isolated Space. Port existing store and suggestion fixtures. Adapt the native harness assertions to GPUI.
+
+### Phase 2: parallel feature work
+
+Each unit gets its own worktree and PR and integrates through the vertical slice. One owner (the parent agent) keeps the typed event contracts.
+
+- **GPT 6.2 Sol:** core state and migration from today's saved state, command bar and suggestions, Spaces and sidebar UI, history and archive, settings and shortcuts, browser and Arc import (the Node importers stay behind stdio until the Rust port passes their fixtures).
+- **Opus 5.5:** CEF lifecycle and popups, downloads with danger decisions, ad blocking with adblock-rust, Boosts injection, permission prompts, the macOS surface and helper bundles, tab sleep, MCP agent server.
+
+### Phase 3: parity and cutover
+
+The owner's workflows pass on installed packages: signed and notarized macOS helpers, the Linux sandbox, restart, update and rollback. Profiles migrate into a new folder, and the old profile stays untouched. The Chromium-fork browser is retired only after the owner accepts.
+
+## What I need from the owner
+
+Items 1 to 3 were answered on 2026-11-23 (see "Owner decisions").
+
+1. Approval for Phase 0.
+2. v1 platform scope.
+3. The outcome if Alloy OSR sign-in fails in Spike 0.
+4. Someone to run Spike 0's manual checks with a purpose-made Google account.
+5. Permission to open test windows on the real Wayland session (Spike 1), and someone to confirm what they show.
+6. After Spike 0: accept or reject the extension, password and print-preview results.
+7. After Spike 0: the VSR decision.
+
+No durations are given. There is no measured basis for them yet.
+
+## Sources
+
+- Independent review by GPT 6.2 Astra: [cef-gpui-astra-review-20261123.md](cef-gpui-astra-review-20261123.md)
