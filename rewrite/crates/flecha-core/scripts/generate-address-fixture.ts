@@ -1,13 +1,23 @@
 
 import { suggestable } from '../../../../chromium/shell/lib/suggest';
 import { resolveInput } from '../../../../chromium/shell/lib/url';
+import { z } from 'zod';
 
-type Divergence = { reason: string; url?: string; suggestable?: boolean };
+const divergenceSchema = z.strictObject({ reason: z.string().min(1), url: z.string().optional(), suggestable: z.boolean().optional() });
 
-type AddressCase = { input: string; tsUrl: string; tsSuggestable: boolean; rust?: Divergence };
+const addressCaseSchema = z.strictObject({
+  input: z.string(),
+  tsUrl: z.string(),
+  tsSuggestable: z.boolean(),
+  rust: divergenceSchema.optional(),
+});
+
+type Divergence = z.infer<typeof divergenceSchema>;
+
+type AddressCase = z.infer<typeof addressCaseSchema>;
 
 // Cross-product corpus from independent verification of the command bar.
-const chars = ['﻿','\u0085','᠎','​','‌','‍','⁠','­',' ',' ','　','ſ','K','\t','\n',' ','\u000B',' ','͏','ᅟ','ﾠ','ㅤ','\u{E0001}','\u{1D173}'];
+const chars = ['\ufeff','\u0085','\u180e','\u200b','\u200c','\u200d','\u2060','\u00ad','\u2028','\u00a0','\u3000','\u017f','\u212a','\t','\n',' ','\u000B','\u1680','\u034f','\u115f','\uffa0','\u3164','\u{E0001}','\u{1D173}'];
 
 const templates = [
  '{c}https://host.example/p?token=x','https://host.example/p?token=x{c}','ht{c}tps://host.example/p?token=x','https{c}://host.example/p?token=x',
@@ -31,14 +41,14 @@ for (const input of [
   '\u0085host.example\u0085/p?token=x#private',
   'host.\u0085example/p?token=x#private',
   'host.example\u0085:8443/private?token=x',
-  '​https:///p?token=x',
-  'ht­tps:///p?token=x',
+  '\u200Bhttps:///p?token=x',
+  'ht\u00ADtps:///p?token=x',
   '\u0085https://host.example/p?token=x',
   'ht\u0085tps://host.example/p?token=x',
-  '​ht﻿tps://host.example/p?token=x',
-  'ht⁠tp://host.example/p?token=x',
-  '⁠file:///home/u/secret',
-  '᠎ftp://host.example/p?token=x',
+  '\u200Bht\uFEFFtps://host.example/p?token=x',
+  'ht\u2060tp://host.example/p?token=x',
+  '\u2060file:///home/u/secret',
+  '\u180Eftp://host.example/p?token=x',
   'https://',
   'https:///p?token=x',
   'ht\ttps:///p?token=x',
@@ -49,9 +59,7 @@ const divergences = new Map<string, Divergence>();
 
 if (await fixture.exists()) {
   for (const line of (await fixture.text()).split('\n').filter(Boolean)) {
-    // SAFETY: tests/address_parity.rs deserializes every fixture row into this same shape with serde, so a
-    // malformed or hand-edited row fails the Rust test before regeneration can rely on it.
-    const prior = JSON.parse(line) as AddressCase;
+    const prior = addressCaseSchema.parse(JSON.parse(line));
 
     if (prior.rust) divergences.set(prior.input, prior.rust);
   }
@@ -67,6 +75,6 @@ const rows = Array.from(inputs, (input): AddressCase => {
 if (divergences.size) throw new Error('A documented Rust divergence is missing from the corpus');
 
 const asciiJson = (row: AddressCase) =>
-  JSON.stringify(row).replace(/[\u007F-￿]/g, (unit) => '\\u' + unit.charCodeAt(0).toString(16).padStart(4, '0'));
+  JSON.stringify(row).replace(/[\u007F-\uFFFF]/g, (unit) => '\\u' + unit.charCodeAt(0).toString(16).padStart(4, '0'));
 
 await Bun.write(fixture, rows.map(asciiJson).join('\n') + '\n');
