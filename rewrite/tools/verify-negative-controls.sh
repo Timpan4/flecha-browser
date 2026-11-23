@@ -55,7 +55,8 @@ for mutation in cookie stale stale-paint stale-title split-swap blank-restart cl
   esac
   (
     cd "$shadow"
-    cp -a "$rewrite/crates/." crates/
+    # Reverting a mutation must advance source mtimes for Cargo's fingerprint.
+    cp -R "$rewrite/crates/." crates/
     node "$rewrite/tools/mutate-slice.mjs" "$mutation"
     "${launcher[@]}" build --locked -p flecha -j 14 >"$logs/$mutation-build.log" 2>&1
   ) || { cat "$logs/$mutation-build.log" >&2; exit 1; }
@@ -64,7 +65,7 @@ done
 
 (
   cd "$shadow"
-  cp -a "$rewrite/crates/." crates/
+  cp -R "$rewrite/crates/." crates/
   node "$rewrite/tools/mutate-slice.mjs" timeout
   expect_failure timeout 'use of a disallowed method' \
     "${launcher[@]}" clippy --locked -p flecha -j 14 --all-targets -- -D warnings
