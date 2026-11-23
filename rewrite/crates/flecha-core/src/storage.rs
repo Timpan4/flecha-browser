@@ -323,19 +323,29 @@ pub fn read_schema_version(json: &str, current: u64) -> serde_json::Result<Optio
         .and_then(|version| version_order(version, current)))
 }
 
+/// The top-level `version` of a saved JSON document, when it names a schema newer than
+/// `current`. It reads the field as this module reads its own snapshots: any JSON number
+/// spelling or a numeric string with surrounding whitespace, compared without rounding, so
+/// `2`, `"2"`, `" 2 "`, `2.0` and `2e0` all count as 2. `None` when the document doesn't
+/// parse, has no version, or isn't newer.
+pub fn newer_schema_version(json: &str, current: u64) -> Option<String> {
+    match read_schema_version(json, current).ok()?? {
+        StoredVersion {
+            order: Ordering::Greater,
+            text,
+        } => Some(text),
+        _ => None,
+    }
+}
+
 fn version_order(version: &RawValue, current: u64) -> Option<StoredVersion> {
     let raw = version.get();
-    let decoded;
     let text = if raw.starts_with('"') {
-        decoded = snapshot::scalar(version);
-        trim_input(decoded.as_str().unwrap_or_default())
+        trim_input(snapshot::scalar(version).as_str().unwrap_or_default()).to_owned()
     } else {
-        raw
+        raw.to_owned()
     };
-    compare_version(text, &current.to_string()).map(|order| StoredVersion {
-        text: text.into(),
-        order,
-    })
+    compare_version(&text, &current.to_string()).map(|order| StoredVersion { text, order })
 }
 
 /// Compare the decimal spelling without rounding a newer schema to the current version.

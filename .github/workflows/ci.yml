@@ -130,6 +130,21 @@ jobs:
           cargo +stable fmt --check -p flecha-adblock
           cargo +stable clippy -p flecha-adblock --all-targets -- -D warnings
           cargo +stable test -p flecha-adblock --all-targets
+      - name: Check the downloads crate in isolation
+        shell: bash
+        run: |
+          downloads_rewrite="$RUNNER_TEMP/flecha-downloads-ci/rewrite"
+          mkdir -p "$downloads_rewrite/crates"
+          cp -R crates/flecha-core crates/flecha-downloads "$downloads_rewrite/crates/"
+          cp Cargo.lock "$downloads_rewrite/"
+          printf '[workspace]\nresolver = "3"\nmembers = ["crates/flecha-downloads", "crates/flecha-core"]\n' > "$downloads_rewrite/Cargo.toml"
+          cd "$downloads_rewrite"
+          # Resolving the product workspace would fetch Spike 1's Git dependencies.
+          cargo +stable metadata --format-version 1 > metadata.json
+          jq -e '[.packages[].source | select(. != null and startswith("git+"))] | length == 0' metadata.json
+          cargo +stable fmt --check -p flecha-downloads
+          cargo +stable clippy -p flecha-downloads --all-targets -- -D warnings
+          cargo +stable test -p flecha-downloads --all-targets
       - name: Check the Boosts crate in isolation
         shell: bash
         run: |
