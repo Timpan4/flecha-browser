@@ -43,6 +43,18 @@ impl Model {
             .as_ref()
     }
 
+    pub fn keyboard_pane(&self, window: &WindowId) -> Option<(Owner, &TabId)> {
+        if let Some(page) = self.flechinhas.get(window) {
+            return Some((Owner::Flechinha(window.clone()), &page.id));
+        }
+        self.core.window(window)?;
+        if let Some(page) = self.peeks.get(window) {
+            return Some((Owner::Peek(window.clone()), &page.id));
+        }
+        self.active(window)
+            .map(|tab| (Owner::Tab(window.clone()), tab))
+    }
+
     pub fn open(&mut self, window: &WindowId, url: String, activate: bool) -> Result<TabId> {
         let id = tab_id();
         let after = if activate {

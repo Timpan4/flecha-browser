@@ -16,7 +16,7 @@ const mode = process.argv[2] ?? 'slice';
 const shippingTrace = readFileSync(new URL('./slice-ts-replay.jsonl', import.meta.url), 'utf8')
   .trim().split('\n').map(line => JSON.parse(line));
 
-assert(['slice', 'open', 'break-restore'].includes(mode), 'unknown slice check');
+assert(['slice', 'open', 'focus', 'break-restore'].includes(mode), 'unknown slice check');
 
 const site = await fixture();
 const { base } = site;
@@ -305,6 +305,79 @@ async function nativeInput(app, tab) {
   pass('an X11 click and key passed through GPUI into the CEF input field');
 }
 
+async function keyDelivery(app, tabs, key, step, expected) {
+  const received = site.probe(`${step}-key`);
+
+  for (const [name, tab] of Object.entries(tabs)) {
+    const ready = site.probe(`${step}-${name}-ready`);
+
+    await app.command('script', {
+      tab,
+      source: `
+        window.probeKeys = [];
+        addEventListener('keydown', event => {
+          if (event.key !== '${key}') return;
+          window.probeKeys.push(event.key);
+          fetch('/probe/${step}-key?value=${name}');
+        });
+        fetch('/probe/${step}-${name}-ready?value=ready');
+      `,
+    });
+    assert.equal(await ready, 'ready');
+  }
+
+  waitingFor = `X11 key after sidebar ${step}`;
+  execFileSync(x11Driver, ['key', key]);
+  const actual = await received;
+
+  assert.equal(actual, expected, `sidebar ${step} sent ${key} to pane ${actual}, expected ${expected}`);
+
+  for (const [name, tab] of Object.entries(tabs)) {
+    const report = site.probe(`${step}-${name}-report`);
+
+    await app.command('script', {
+      tab,
+      source: `fetch('/probe/${step}-${name}-report?value=' + JSON.stringify(window.probeKeys));`,
+    });
+    assert.deepEqual(JSON.parse(await report), name === expected ? [key] : [], `keys received by pane ${name}`);
+  }
+
+  pass(`sidebar ${step} sent ${key} only to pane ${expected}`);
+}
+
+async function waitForSelection(app, tab, description) {
+  for (;;) {
+    const state = await app.command('snapshot');
+
+    if (active(state).activeTabId === tab) return state;
+    waitingFor = description;
+    await delay(100); // Matches the capture poll.
+  }
+}
+
+async function sidebarFocus(app, left) {
+  const opened = await app.command('open', { url: base + '/split' });
+  const right = active(opened).activeTabId;
+
+  await app.loaded(right, '/split');
+  await app.command('select', { tab: left });
+  await app.present();
+  await capture('focus-left', ['#147A70', '#FFCC49']);
+
+  // Xvfb fixture geometry with one Space: the page marker, the first tab's
+  // Split button, and the second tab's label.
+  execFileSync(x11Driver, ['click', 340, 110]);
+  execFileSync(x11Driver, ['click', 235, 189]);
+  const split = await waitForSelection(app, right, 'sidebar Split selected pane B');
+
+  assert.deepEqual(active(split).split, [left, right]);
+  await keyDelivery(app, { A: left, B: right }, 'y', 'split', 'B');
+
+  execFileSync(x11Driver, ['click', 95, 227]);
+  await waitForSelection(app, left, 'sidebar selected pane A');
+  await keyDelivery(app, { A: left, B: right }, 'z', 'select', 'A');
+}
+
 async function cookie(app, expected, op = 'open') {
   const after = app.events.length;
   const snapshot = await app.command(op, { url: base + '/cookie/check' });
@@ -392,7 +465,10 @@ try {
   pass('opened a durable tab, received CEF load and paint, and captured the GPUI fixture frame');
   await nativeInput(app, left);
 
-  if (mode !== 'open') {
+  if (mode === 'focus') {
+    await sidebarFocus(app, left);
+    await app.quit();
+  } else if (mode !== 'open') {
     const publicUrl = base.replace('127.0.0.1', 'localtest.me') + '/open';
     const attempted = await app.command('peek', { url: publicUrl });
     const [{ tab: publicTab }] = attempted.peeks;

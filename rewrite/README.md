@@ -54,6 +54,7 @@ Start every Phase 1 app through the launcher. Its Xvfb and headless Weston backe
 # From rewrite/
 tools/isolated-run.sh x11 -- ./target/debug/flecha
 tools/verify-slice.sh
+tools/verify-slice.sh focus
 tools/verify-negative-controls.sh
 ```
 

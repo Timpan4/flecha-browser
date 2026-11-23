@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use flecha_cef::{Owner, Viewport};
+use flecha_cef::{BrowserKey, Owner, Viewport};
 use flecha_core::{
     TabId, WindowId,
     suggestions::{self, InputResolution, SuggestionAction},
@@ -32,7 +32,8 @@ pub(crate) struct Shell {
     id: WindowId,
     focus: FocusHandle,
     page_focus: FocusHandle,
-    focused_page: Option<TabId>,
+    selected_pane: Option<(Owner, TabId)>,
+    focused_browser: Option<BrowserKey>,
     input: String,
     command: Command,
     images: BTreeMap<TabId, Vec<Arc<RenderImage>>>,
@@ -43,37 +44,21 @@ impl Shell {
     pub fn new(state: Shared, id: WindowId, window: &mut Window, cx: &mut App) -> Entity<Self> {
         let focus = cx.focus_handle();
         let page_focus = cx.focus_handle();
-        let focused_page = state
-            .borrow()
-            .model
-            .flechinhas
-            .get(&id)
-            .map(|page| page.id.clone());
-        if let Some(page) = &focused_page {
-            state.borrow().engine.focused(page, true);
-            page_focus.focus(window, cx);
-        } else {
-            focus.focus(window, cx);
-        }
+        focus.focus(window, cx);
         cx.new(|cx| {
-            let activation = cx.observe_window_activation(window, |this: &mut Self, window, _| {
-                let mut state = this.state.borrow_mut();
-                let active = window.is_window_active();
-                if active && state.model.core.window(&this.id).is_some() {
-                    state.model.core.focus_window(&this.id);
+            let activation = cx.observe_window_activation(window, |this: &mut Self, window, cx| {
+                if window.is_window_active() {
+                    this.state.borrow_mut().model.core.focus_window(&this.id);
                 }
-                if let Some(page) = &this.focused_page {
-                    state
-                        .engine
-                        .focused(page, active && this.page_focus.is_focused(window));
-                }
+                let _ = this.sync_page_focus(window, cx);
             });
             Self {
                 state,
                 id,
                 focus,
                 page_focus,
-                focused_page,
+                selected_pane: None,
+                focused_browser: None,
                 input: String::new(),
                 command: Command::Open,
                 images: BTreeMap::new(),
@@ -96,7 +81,6 @@ impl Shell {
 
     fn choose(&mut self, command: Command, window: &mut Window, cx: &mut Context<Self>) {
         self.command = command;
-        self.blur_page();
         self.focus.focus(window, cx);
         cx.notify();
     }
@@ -153,6 +137,7 @@ impl Shell {
     }
 
     fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let focused = self.sync_page_focus(window, cx);
         let stroke = &event.keystroke;
         let shortcut = if cfg!(target_os = "macos") {
             stroke.modifiers.platform
@@ -182,11 +167,11 @@ impl Shell {
                 }
                 _ => {
                     self.page_key(
+                        focused,
                         stroke,
                         false,
                         event.is_held,
                         event.prefer_character_input,
-                        window,
                     );
                     return;
                 }
@@ -212,40 +197,71 @@ impl Shell {
             }
         } else {
             self.page_key(
+                focused,
                 stroke,
                 false,
                 event.is_held,
                 event.prefer_character_input,
-                window,
             );
             return;
         }
         cx.stop_propagation();
     }
 
-    fn blur_page(&mut self) {
-        if let Some(page) = self.focused_page.take() {
-            self.state.borrow().engine.focused(&page, false);
+    fn sync_page_focus(&mut self, window: &mut Window, cx: &mut App) -> Option<BrowserKey> {
+        let state = self.state.borrow();
+        let pane = state.model.keyboard_pane(&self.id);
+        let selection = pane
+            .as_ref()
+            .map(|(owner, tab)| (owner.clone(), (*tab).clone()));
+        if self.selected_pane != selection {
+            self.selected_pane = selection;
+            if self.selected_pane.is_some() {
+                self.page_focus.focus(window, cx);
+            } else {
+                self.focus.focus(window, cx);
+            }
         }
+
+        let focused = pane.and_then(|(owner, tab)| {
+            if window.is_window_active()
+                && self.page_focus.is_focused(window)
+                && state.engine.owner(tab) == Some(&owner)
+                && state.model.page(&owner, tab).is_some()
+            {
+                state.engine.key(tab)
+            } else {
+                None
+            }
+        });
+        if self.focused_browser != focused {
+            // A transfer can leave the previous browser live in another window.
+            if let Some(old) = self.focused_browser.take()
+                && state.engine.key(&old.tab).as_ref() == Some(&old)
+                && matches!(
+                    state.engine.owner(&old.tab),
+                    Some(Owner::Tab(id) | Owner::Peek(id) | Owner::Flechinha(id)) if id == &self.id
+                )
+            {
+                state.engine.focused(&old.tab, false);
+            }
+            if let Some(browser) = &focused {
+                state.engine.focused(&browser.tab, true);
+            }
+            self.focused_browser = focused.clone();
+        }
+        focused
     }
 
     fn page_key(
         &self,
+        focused: Option<BrowserKey>,
         stroke: &gpui::Keystroke,
         up: bool,
         repeat: bool,
         character_input: bool,
-        window: &Window,
     ) {
-        if !self.page_focus.is_focused(window) {
-            return;
-        }
-        let state = self.state.borrow();
-        let host = self.focused_page.as_ref().and_then(|page| {
-            let owner = state.engine.owner(page)?;
-            state.model.page(owner, page)?;
-            state.engine.host(page)
-        });
+        let host = focused.and_then(|key| self.state.borrow().engine.host(&key.tab));
         if let Some(host) = host {
             let altgr = character_input && stroke.modifiers.control && stroke.modifiers.alt;
             input::key(&host, stroke, up, repeat, altgr);
@@ -325,18 +341,14 @@ impl Shell {
                 .on_mouse_down(
                     button,
                     cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                        if this.focused_page.as_ref() != Some(&down_id) {
-                            this.blur_page();
-                            this.focused_page = Some(down_id.clone());
-                        }
                         if matches!(down_owner, Owner::Tab(_))
                             && this.state.borrow().model.active(&this.id) != Some(&down_id)
                         {
                             dispatch(&this.state, &this.id, Action::Select(down_id.clone()), cx);
                         }
                         this.page_focus.focus(window, cx);
+                        let _ = this.sync_page_focus(window, cx);
                         let state = this.state.borrow();
-                        state.engine.focused(&down_id, true);
                         if let Some(host) = state.engine.host(&down_id) {
                             input::click(
                                 &host,
@@ -371,6 +383,7 @@ impl Shell {
 
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let _ = self.sync_page_focus(window, cx);
         let mut main = div()
             .relative()
             .size_full()
@@ -380,8 +393,9 @@ impl Render for Shell {
             .text_color(rgb(0xe2edf1))
             .track_focus(&self.page_focus)
             .on_key_down(cx.listener(|this, event, window, cx| this.key(event, window, cx)))
-            .on_key_up(cx.listener(|this, event: &KeyUpEvent, window, _| {
-                this.page_key(&event.keystroke, true, false, false, window);
+            .on_key_up(cx.listener(|this, event: &KeyUpEvent, window, cx| {
+                let focused = this.sync_page_focus(window, cx);
+                this.page_key(focused, &event.keystroke, true, false, false);
             }));
         let mut images = BTreeMap::new();
         let state = self.state.borrow();
@@ -601,9 +615,7 @@ impl Render for Shell {
                     .size_full()
                     .occlude()
                     .bg(gpui::rgba(0x00000088))
-                    .on_any_mouse_down(cx.listener(|this, _: &MouseDownEvent, window, cx| {
-                        this.blur_page();
-                        this.focus.focus(window, cx);
+                    .on_any_mouse_down(cx.listener(|this, _: &MouseDownEvent, _, cx| {
                         dispatch(&this.state, &this.id, Action::ClosePeek, cx);
                         cx.stop_propagation();
                     })),
