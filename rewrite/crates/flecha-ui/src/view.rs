@@ -14,8 +14,8 @@ use gpui::{
     App, AppContext as _, ClickEvent, ClipboardItem, Context, Div, Entity, FocusHandle,
     InteractiveElement as _, IntoElement, KeyDownEvent, KeyUpEvent, MouseButton, MouseDownEvent,
     MouseExitEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _, Render, RenderImage,
-    ScrollEvent, StatefulInteractiveElement as _, Styled as _, Subscription, Window, canvas, div,
-    px, relative, rgb,
+    ScrollEvent, StatefulInteractiveElement as _, Styled as _, Subscription, Window, canvas,
+    deferred, div, px, relative, rgb,
 };
 
 use crate::{Action, Shared, dispatch, now};
@@ -372,6 +372,7 @@ impl Shell {
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mut main = div()
+            .relative()
             .size_full()
             .flex()
             .flex_col()
@@ -537,56 +538,47 @@ impl Render for Shell {
             }
             let mut page_area = div().relative().flex_1().min_h_0().child(pages);
             if let Some(peek) = state.model.peeks.get(&self.id) {
-                page_area = page_area
-                    .child(
-                        div()
-                            .absolute()
-                            .top_0()
-                            .left_0()
-                            .size_full()
-                            .occlude()
-                            .bg(gpui::rgba(0x00000088)),
-                    )
-                    .child(
-                        div()
-                            .absolute()
-                            .left(relative(0.08))
-                            .right(relative(0.08))
-                            .top(px(8.))
-                            .bottom(px(24.))
-                            .rounded(px(12.))
-                            .overflow_hidden()
-                            .flex()
-                            .flex_col()
-                            .bg(rgb(0x26333a))
-                            .child(
-                                div()
-                                    .h(px(40.))
-                                    .flex_shrink_0()
-                                    .px_2()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(self.action_button(
-                                        "promote",
-                                        "Open in tab",
-                                        Action::Promote,
-                                        cx,
-                                    ))
-                                    .child(self.action_button(
-                                        "close-peek",
-                                        "Close Peek",
-                                        Action::ClosePeek,
-                                        cx,
-                                    )),
-                            )
-                            .child(div().flex_1().min_h_0().child(self.pane(
-                                Owner::Peek(self.id.clone()),
-                                peek.id.clone(),
-                                &mut images,
-                                cx,
-                            ))),
-                    );
+                page_area = page_area.child(deferred(
+                    div()
+                        .absolute()
+                        .left(relative(0.08))
+                        .right(relative(0.08))
+                        .top(px(8.))
+                        .bottom(px(24.))
+                        .rounded(px(12.))
+                        .overflow_hidden()
+                        .occlude()
+                        .flex()
+                        .flex_col()
+                        .bg(rgb(0x26333a))
+                        .child(
+                            div()
+                                .h(px(40.))
+                                .flex_shrink_0()
+                                .px_2()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(self.action_button(
+                                    "promote",
+                                    "Open in tab",
+                                    Action::Promote,
+                                    cx,
+                                ))
+                                .child(self.action_button(
+                                    "close-peek",
+                                    "Close Peek",
+                                    Action::ClosePeek,
+                                    cx,
+                                )),
+                        )
+                        .child(div().flex_1().min_h_0().child(self.pane(
+                            Owner::Peek(self.id.clone()),
+                            peek.id.clone(),
+                            &mut images,
+                            cx,
+                        ))),
+                ));
             }
             main = main.child(commands).child(
                 div()
@@ -599,6 +591,23 @@ impl Render for Shell {
         }
         if !state.status.is_empty() {
             main = main.child(div().p_2().child(state.status.clone()));
+        }
+        if state.model.peeks.contains_key(&self.id) {
+            main = main.child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .occlude()
+                    .bg(gpui::rgba(0x00000088))
+                    .on_any_mouse_down(cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                        this.blur_page();
+                        this.focus.focus(window, cx);
+                        dispatch(&this.state, &this.id, Action::ClosePeek, cx);
+                        cx.stop_propagation();
+                    })),
+            );
         }
         drop(state);
         for (tab, retired) in std::mem::replace(&mut self.images, images) {

@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
 
-import { fixture } from './fixture.mjs';
+import { blankRestartColor, fixture } from './fixture.mjs';
 import { checkProcessEnvironment } from './verify-process-env.mjs';
 
 const out = join(process.env.HOME, '..');
@@ -98,15 +98,7 @@ function browser(name) {
 
 async function splitCapture(app, name, snapshot) {
   await app.present();
-  waitingFor = `${name} split capture`;
-
-  const path = join(out, `${name}.png`);
-  execFileSync('magick', ['import', '-window', 'root', path]);
-  const histogram = execFileSync('magick', [path, '-format', '%c', 'histogram:info:'], { encoding: 'utf8' });
-
-  for (const color of ['#147A70', '#FFCC49', '#703496', '#F386B9']) {
-    assert(histogram.includes(color), `${name} did not paint both split pages (missing ${color})`);
-  }
+  await capture(name, ['#147A70', '#FFCC49', '#703496', '#F386B9']);
 
   // Use solid fixture frames for a complete pixel mask. Keep the original
   // capture for viewing the labelled pages.
@@ -130,14 +122,12 @@ async function splitCapture(app, name, snapshot) {
   }
 
   await app.present();
-  waitingFor = `${name} pane geometry`;
-  const geometryPath = join(out, `${name}-geometry.png`);
-
   const geometry = execFileSync(x11Driver, ['geometry', 'Flecha'], { encoding: 'utf8' })
     .trim().split(' ').map(Number);
+  assert(geometry.length === 4 && geometry.every(Number.isInteger) && geometry[2] > 0 && geometry[3] > 0,
+    'invalid X11 window geometry');
 
-  execFileSync('magick', ['import', '-window', 'root', geometryPath]);
-  assertPanePixels(geometryPath, geometry, splitRatio, colors, name);
+  await captureUntil(`${name}-geometry`, 'root', path => paneMismatch(path, geometry, splitRatio, colors));
 
   for (const tab of split) {
     await app.command('script', {
@@ -147,7 +137,7 @@ async function splitCapture(app, name, snapshot) {
   }
 }
 
-function assertPanePixels(path, geometry, ratio, colors, name) {
+function paneMismatch(path, geometry, ratio, colors) {
   const dimensions = execFileSync('magick', ['identify', '-format', '%w %h', path], { encoding: 'utf8' });
   const [width, height] = dimensions.trim().split(' ').map(Number);
   const bytes = width * height * 3; // ImageMagick's 8-bit RGB stream.
@@ -167,12 +157,12 @@ function assertPanePixels(path, geometry, ratio, colors, name) {
   let top = Math.max(0, windowY);
 
   while (top < bottom && pixel(origin, top) !== sidebar) top++;
-  assert(top < bottom, `${name} pane geometry could not locate the sidebar`);
+  if (top >= bottom) return 'could not locate the sidebar';
 
   let edge = origin;
 
   while (edge < end && pixel(edge, top) === sidebar) edge++;
-  assert(edge < end, `${name} pane geometry could not locate the page area`);
+  if (edge >= end) return 'could not locate the page area';
 
   // The split has no gutters or borders. A fractional boundary can
   // rasterize either way in the single column it crosses.
@@ -190,21 +180,45 @@ function assertPanePixels(path, geometry, ratio, colors, name) {
       }
 
       if (!matches) {
-        assert.fail(`${name} pane geometry: unexpected #${actual.toString(16)} at (${x}, ${y}) in ${width}×${height}, page starts at (${edge}, ${top}) and splits at ${boundary}`);
+        return `unexpected #${actual.toString(16)} at (${x}, ${y}) in ${width}×${height}, page starts at (${edge}, ${top}) and splits at ${boundary}`;
       }
     }
   }
 }
 
 async function capture(name, colors, window = 'root') {
-  waitingFor = `${name} frame with colors ${colors.join(', ')}`;
-  const path = join(out, `${name}.png`);
+  await captureUntil(name, window, path => {
+    const histogram = execFileSync('magick', [path, '-format', '%c', 'histogram:info:'], { encoding: 'utf8' });
+    const missing = colors.filter(color => !histogram.includes(color));
 
+    if (!missing.length) return;
+    if (name === 'restart-split' && histogram.includes(blankRestartColor)) {
+      return 'blank restart control rendered its replacement frame';
+    }
+
+    return `missing fixture colors ${missing.join(', ')}`;
+  });
+}
+
+async function captureUntil(name, window, mismatch) {
+  waitingFor = `${name} capture`;
+  const path = join(out, `${name}.png`);
+  let previous;
+
+  // X can still expose the previous frame after GPUI acknowledges presentation.
+  // The launcher watchdog bounds both the capture attempts and their subprocesses.
   for (;;) {
     execFileSync('magick', ['import', '-window', window, path]);
-    const histogram = execFileSync('magick', [path, '-format', '%c', 'histogram:info:'], { encoding: 'utf8' });
+    const reason = mismatch(path);
 
-    if (colors.every(color => histogram.includes(color))) return;
+    if (!reason) {
+      if (previous) console.log(`READY ${name} capture`);
+      return;
+    }
+    if (reason !== previous) {
+      console.error(`RETRY ${name}: ${reason}`);
+      previous = reason;
+    }
     await delay(100); // Matches Spike 1's capture readiness polling.
   }
 }
@@ -295,6 +309,48 @@ async function cookie(app, expected, op = 'open') {
   assert.equal(result.title, expected, 'cookie request used the wrong Space context');
 
   return tab;
+}
+
+async function isolateWithTransients(app, space) {
+  const isIsolated = snapshot => snapshot.core.spaces.find(entry => entry.id === space).isolated;
+  const clickedPeek = await cookie(app, 'Shared cookie', 'peek');
+  await app.present();
+  await capture('peek-backdrop', ['#147A70', '#FFCC49']);
+
+  // The verifier measured this point inside the Separate cookies row with two Spaces.
+  execFileSync(x11Driver, ['click', 95, 189]);
+  for (;;) {
+    const state = await app.command('snapshot');
+    assert.equal(isIsolated(state), false, 'Peek backdrop passed the click through to Separate cookies');
+    if (!state.peeks.length) break;
+    await delay(100); // Matches the capture poll.
+  }
+  await app.wait('CEF closure after clicking the Peek backdrop', event =>
+    event.type === 'closed' && event.tab === clickedPeek);
+  pass('clicking Separate cookies through the Peek backdrop dismissed Peek and left the Space shared');
+
+  await cookie(app, 'Shared cookie');
+  const [{ window: mini, tab: detached }] = (await app.command('detach')).flechinhas;
+  const peek = await cookie(app, 'Shared cookie', 'peek');
+  const before = await app.command('snapshot');
+  engine(before, detached, 'flechinha', mini);
+  engine(before, peek, 'peek', before.window);
+  assert(before.nativeWindows.includes(mini), 'GPUI opened Flechinha before switching its Space partition');
+
+  // Dispatch isolation directly so the modal cannot hide a stale request context.
+  const after = await app.command('isolate');
+  assert(isIsolated(after));
+  assert.deepEqual(after.peeks, [], 'partition change left a Peek on the previous cookie jar');
+  assert.deepEqual(after.flechinhas, [], 'partition change left a Flechinha on the previous cookie jar');
+  for (const tab of [detached, peek]) {
+    assert(!after.browsers.some(browser => browser.tab === tab), 'transient browser survived its partition change');
+    await app.wait('CEF closed a transient from the previous partition', event =>
+      event.type === 'closed' && event.tab === tab);
+  }
+  assert(!(await app.command('snapshot')).nativeWindows.includes(mini), 'GPUI closed Flechinha after its partition changed');
+  pass('changing a Space partition closed both its Peek and Flechinha CEF browsers');
+
+  return after;
 }
 
 const apps = [];
@@ -391,12 +447,15 @@ try {
     await app.wait('unique title for closing tab', event =>
       event.type === 'title' && event.tab === moved && event.title === closeTitle, beforeNavigation);
 
+    while (Date.now() <= returned.core.tabs[moved].lastActive) await delay(0);
+    const closeStartedAt = Date.now();
     const closed = await app.command('close');
     assert(!closed.core.tabs[moved]);
     assert.deepEqual(closed.core.archive.slice(1), returned.core.archive, 'closing did not add a fresh archive entry');
     const entry = closed.core.archive[0];
     assert.deepEqual([entry.url, entry.title], [closeUrl, closeTitle], 'new archive entry belongs to a different page');
     assert(returned.core.archive.every(old => entry.closedAt > old.closedAt), 'new archive entry does not have a later close time');
+    assert(entry.closedAt >= closeStartedAt, 'archive timestamp predates the close command');
     compareShipping('close', closed, names);
     await app.wait('CEF closure of returned tab', event => event.type === 'closed' && event.tab === moved);
     pass('closed the returned tab, added a new archive entry, and matched the shipping TS trace');
@@ -420,8 +479,7 @@ try {
     await app.loaded(active(sharedWrite).activeTabId, '/cookie/set-shared');
     await cookie(app, 'Shared cookie');
     const isolated = win(await app.command('new_space')).activeSpaceId;
-    const isolatedState = await app.command('isolate');
-    assert(isolatedState.core.spaces.find(space => space.id === isolated).isolated);
+    const isolatedState = await isolateWithTransients(app, isolated);
     assert.deepEqual(isolatedState.core.windows[0].spaces[isolated]?.today ?? [], []);
     await cookie(app, 'Cookie absent', 'peek');
     await app.command('close_peek');

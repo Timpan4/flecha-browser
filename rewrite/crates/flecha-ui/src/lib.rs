@@ -179,7 +179,7 @@ impl Controller {
             }
             Action::Detach => {
                 if let Some(tab) = self.model.active(window).cloned() {
-                    let detached = self.model.detach(&tab)?;
+                    let detached = self.model.detach(window, &tab)?;
                     self.engine
                         .transfer(&tab, detached.tab, Owner::Flechinha(detached.window));
                     for removed in detached.removed {
@@ -248,6 +248,9 @@ impl Controller {
                     .isolated;
                 for tab in self.model.core.set_isolated(&id, !isolated) {
                     self.reconcile_partition(&tab);
+                }
+                for tab in self.model.close_space_transients(&id) {
+                    self.engine.close(&tab);
                 }
             }
         }

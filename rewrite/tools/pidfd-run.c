@@ -34,8 +34,8 @@ static int reap(pid_t child)
 
 int main(int argc, char **argv)
 {
-    if (argc < 3 || strspn(argv[1], "0123456789") != strlen(argv[1])) {
-        fprintf(stderr, "Usage: pidfd-run WATCHDOG_MS COMMAND [ARGS...]\n");
+    if (argc < 4 || strspn(argv[1], "0123456789") != strlen(argv[1])) {
+        fprintf(stderr, "Usage: pidfd-run WATCHDOG_MS SCRATCH COMMAND [ARGS...]\n");
         return EXIT_FAILURE;
     }
     errno = 0;
@@ -74,7 +74,7 @@ int main(int argc, char **argv)
         if (read(start[0], &token, 1) != 1)
             _exit(EXIT_FAILURE);
         if (sigprocmask(SIG_SETMASK, &previous, NULL) == 0)
-            execvp(argv[2], &argv[2]);
+            execvp(argv[3], &argv[3]);
         _exit(failed("exec isolated launcher"));
     }
     close(start[0]);
@@ -101,7 +101,12 @@ int main(int argc, char **argv)
     if (observed > 0 && watched[0].revents & POLLIN) {
         const int status = reap(child);
         printf("Isolated process namespace exited (%d)\n", status);
-        return status;
+        if (status != 0)
+            return status;
+        if (fflush(stdout) == EOF)
+            return failed("flush launcher status");
+        execlp("rm", "rm", "-rf", "--one-file-system", "--", argv[2], (char *)NULL);
+        return failed("prune launcher scratch");
     }
     int status = EXIT_FAILURE;
     if (observed < 0) {

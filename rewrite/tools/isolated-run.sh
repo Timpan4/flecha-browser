@@ -53,7 +53,7 @@ done
 cc -std=c17 -Wall -Wextra -Werror "$rewrite/tools/pidfd-run.c" -o "$scratch/pidfd-run"
 # The shipping Chromium native harness supplies the watchdog. The command
 # runs as PID 1: its exit makes the kernel reap the private namespace.
-exec "$scratch/pidfd-run" "${FLECHA_HARNESS_TIMEOUT_MS:-600000}" \
+exec "$scratch/pidfd-run" "${FLECHA_HARNESS_TIMEOUT_MS:-600000}" "$scratch" \
   bwrap --unshare-pid --as-pid-1 --unshare-ipc --unshare-net --new-session --die-with-parent \
   --cap-add CAP_NET_ADMIN --cap-add CAP_SETPCAP \
   --ro-bind /usr /usr "${system_aliases[@]}" --proc /proc --ro-bind /sys /sys \

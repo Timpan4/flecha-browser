@@ -1,6 +1,8 @@
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 
+export const blankRestartColor = '#E64DA3';
+
 export async function fixture() {
   const pending = new Map();
 

@@ -15,6 +15,7 @@ pub struct Model {
 pub struct Transient {
     pub id: TabId,
     pub tab: Tab,
+    pub space: SpaceId,
     pub partition: Partition,
 }
 
@@ -68,17 +69,15 @@ impl Model {
         url: String,
         source: Option<&TabId>,
     ) -> Result<Option<TabId>> {
-        let active_space = &self
-            .core
-            .window(&window)
-            .context("Peek requires a Flecha window")?
-            .active_space_id;
+        let space = self.origin_space(&window, source)?.clone();
+        let partition = source
+            .and_then(|id| self.partition(id))
+            .unwrap_or_else(|| self.space_partition(&space));
         let transient = Transient {
             id: tab_id(),
             tab: Tab::new(url, now()),
-            partition: source
-                .and_then(|id| self.partition(id))
-                .unwrap_or_else(|| self.space_partition(active_space)),
+            space,
+            partition,
         };
         Ok(self.peeks.insert(window, transient).map(|old| old.id))
     }
@@ -89,8 +88,9 @@ impl Model {
         self.adopt(window, page, after.as_ref())
     }
 
-    pub fn detach(&mut self, source: &TabId) -> Result<Detachment> {
+    pub fn detach(&mut self, window: &WindowId, source: &TabId) -> Result<Detachment> {
         let mut tab = self.core.tab(source).context("no tab to move")?.clone();
+        let space = self.origin_space(window, Some(source))?.clone();
         let partition = self.partition(source).context("tab has no Space")?;
         let id = window_id();
         let change = self.core.close_tab(source, now());
@@ -98,6 +98,7 @@ impl Model {
         let page = Transient {
             id: tab_id(),
             tab,
+            space,
             partition,
         };
         let tab = page.id.clone();
@@ -149,6 +150,28 @@ impl Model {
                 self.space_partition(space)
             }
         })
+    }
+
+    fn origin_space(&self, window: &WindowId, source: Option<&TabId>) -> Result<&SpaceId> {
+        match source.and_then(|tab| self.core.locate(tab)) {
+            Some(Placement::Pinned { space, .. } | Placement::Today { space, .. }) => Ok(space),
+            Some(Placement::Favorite) | None => self
+                .core
+                .window(window)
+                .map(|window| &window.active_space_id)
+                .context("missing Flecha window"),
+        }
+    }
+
+    pub fn close_space_transients(&mut self, space: &SpaceId) -> Vec<TabId> {
+        self.peeks
+            .extract_if(.., |_, page| &page.space == space)
+            .chain(
+                self.flechinhas
+                    .extract_if(.., |_, page| &page.space == space),
+            )
+            .map(|(_, page)| page.id)
+            .collect()
     }
 
     fn space_partition(&self, id: &SpaceId) -> Partition {
@@ -239,7 +262,7 @@ mod tests {
         assert!(model.core.tab(&peek).is_none());
         assert_eq!(model.partition(&peek), Some(isolated.clone()));
         assert_eq!(model.promote(&main).unwrap(), peek);
-        let detached = model.detach(&peek).unwrap();
+        let detached = model.detach(&main, &peek).unwrap();
         assert!(model.core.tab(&peek).is_none());
         assert_eq!(model.partition(&detached.tab), Some(isolated));
 

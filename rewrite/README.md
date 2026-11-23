@@ -57,7 +57,7 @@ tools/verify-slice.sh
 tools/verify-negative-controls.sh
 ```
 
-The launcher needs a C compiler, bubblewrap, `ip`, `setpriv`, D-Bus and the selected compositor. The Xvfb verifier also needs Node, ImageMagick, and X11 and Xtst development headers. It prints the scratch directory for each run. The watchdog uses the same default and `FLECHA_HARNESS_TIMEOUT_MS` override as the Chromium native harness. It signals the launcher by pidfd, so it also works without a delegated cgroup on CI. The kernel reaps the isolated PID namespace when its init exits.
+The launcher needs a C compiler, bubblewrap, `ip`, `setpriv`, D-Bus and the selected compositor. The Xvfb verifier also needs Node, ImageMagick, and X11 and Xtst development headers. The launcher prints each scratch directory, removes it after a successful run, and retains it on failure. The watchdog uses the same default and `FLECHA_HARNESS_TIMEOUT_MS` override as the Chromium native harness. It signals the launcher by pidfd, so it also works without a delegated cgroup on CI. The kernel reaps the isolated PID namespace when its init exits.
 
 The verifier compares live tab ordering, selection and split sides with the shipping TypeScript replay. It checks GPUI pixels before and after restart, native X11 input, CEF lifecycle events, cookies, and inherited session variables. The launcher checks for filesystem sockets and rejects public name resolution before starting its private services. The negative controls include a swapped split, a blank restart, stale callbacks, and a Peek using the shared cookie jar. Build stamps and run output are in [results/phase1](results/phase1).
 
