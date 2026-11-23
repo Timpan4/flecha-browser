@@ -12,8 +12,9 @@ A unit adds its crate path to `members` in `Cargo.toml`.
 
 The compositor spike uses patched copies of the pinned Zed and cef-rs sources.
 From `rewrite/`, run `bash spikes/gpui-cef-compositor/prepare.sh` before resolving
-the workspace with Cargo. Stage the CEF runtime explicitly because Cargo can
-reuse build-script results without rerunning the script. Preparation uses
+the workspace with Cargo. The cef-rs build script only checks the staged
+runtime and links against it. It copies nothing, so the launchers load the
+runtime from `target/spike1-src/cef-runtime`. Preparation uses
 `flock` to serialize staging and verifies the pinned CEF beta archive. Never run
 `cargo`, `rustc`, `rustup` or Clippy inside `rewrite/target/spike1-src/zed`.
 The [spike report](spikes/gpui-cef-compositor/REPORT.md) describes the runtime
@@ -34,7 +35,7 @@ the staged sources first. Reflink them from the main checkout, then let
 ```sh
 # From rewrite/ in the new worktree
 mkdir -p target/spike1-src
-cp -a --reflink=always ~/dev/flecha-browser/rewrite/target/spike1-src/{zed,cef-rs,cef-runtime} target/spike1-src/
+cp -a --reflink=always ~/dev/flecha-browser/rewrite/target/spike1-src/{zed,cef-rs,cef-beta,cef-runtime} target/spike1-src/
 bash spikes/gpui-cef-compositor/prepare.sh --sources-only
 ```
 
