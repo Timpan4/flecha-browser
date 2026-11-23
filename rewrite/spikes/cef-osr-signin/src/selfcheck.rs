@@ -478,10 +478,16 @@ fn finish() {
     if !failures.is_empty() {
         FAILED.store(true, std::sync::atomic::Ordering::SeqCst);
     }
+    // A requested report that cannot be written fails the run, so a missing file is never
+    // mistaken for a pass.
     if let Some(path) = report_path
         && let Err(e) = fs::write(&path, &text)
     {
-        eprintln!("cannot write report {}: {e}", path.display());
+        eprintln!(
+            "self-check failed: cannot write report {}: {e}",
+            path.display()
+        );
+        FAILED.store(true, std::sync::atomic::Ordering::SeqCst);
     }
     common::close_all();
 }
@@ -635,8 +641,10 @@ fn inspect_processes() -> Scan {
                 };
                 // A process can exit between listing and reading (NotFound, or ESRCH); that is
                 // not a scan gap. Any other read error is.
-                let stat = match fs::read_to_string(format!("/proc/{pid}/stat")) {
-                    Ok(stat) => stat,
+                // The command name in stat may hold any bytes (not UTF-8), so read bytes and
+                // decode lossily; only the parent pid after the last `)` is used.
+                let stat = match fs::read(format!("/proc/{pid}/stat")) {
+                    Ok(stat) => String::from_utf8_lossy(&stat).into_owned(),
                     Err(e)
                         if e.kind() == std::io::ErrorKind::NotFound
                             || e.raw_os_error() == Some(ESRCH) =>
@@ -709,10 +717,14 @@ fn inspect_processes() -> Scan {
                 })
                 .unwrap_or(if pid == root { "browser" } else { "?" })
                 .to_string();
-            let status = fs::read_to_string(format!("/proc/{pid}/status")).unwrap_or_else(|e| {
-                errors.push(format!("/proc/{pid}/status: {e}"));
-                String::new()
-            });
+            // `Name:` in status may hold non-UTF-8 bytes too.
+            let status = match fs::read(format!("/proc/{pid}/status")) {
+                Ok(raw) => String::from_utf8_lossy(&raw).into_owned(),
+                Err(e) => {
+                    errors.push(format!("/proc/{pid}/status: {e}"));
+                    String::new()
+                }
+            };
             let field = |name: &str| {
                 status
                     .lines()

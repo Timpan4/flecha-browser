@@ -49,9 +49,11 @@ pub static LOG_CONSOLE: OnceLock<bool> = OnceLock::new();
 /// A URL as the terminal may show it. Paths, queries, fragments and opaque payloads can carry
 /// OAuth codes or account identifiers (`data:` content, a `mailto:` address), so only these
 /// parts are kept:
-/// - a hierarchical URL (`scheme://…`): `scheme://host[:port]`, without any `user:password@`;
+/// - a URL with a scheme in HIERARCHICAL_SCHEMES: `scheme://host[:port]`, without any
+///   `user:password@`;
 /// - `file`, `chrome` and `devtools` URLs: also the path, without query or fragment;
-/// - any other URL (`data:`, `mailto:`, `javascript:`, `blob:`, `about:`): `scheme:` only.
+/// - any other scheme (`data:`, `mailto:`, `javascript:`, `blob:`, `about:`), whatever
+///   follows it, `//` included: `scheme:` only.
 pub fn display_url(url: &str) -> String {
     let Some((scheme, rest)) = url.split_once(':') else {
         return if url.is_empty() {
@@ -70,37 +72,82 @@ pub fn display_url(url: &str) -> String {
         return "(not a URL)".to_string();
     }
     let scheme = scheme.to_ascii_lowercase();
-    // Chromium treats `\` like `/` in special URLs.
-    let Some(hier) = rest
-        .strip_prefix("//")
-        .or_else(|| rest.strip_prefix("\\\\"))
-    else {
+    // Any other scheme is opaque here: `data://X` or `javascript://X` carry payload, not a host.
+    if !HIERARCHICAL_SCHEMES.contains(&scheme.as_str()) {
         return format!("{scheme}:");
+    }
+    let special = SPECIAL_SCHEMES.contains(&scheme.as_str());
+    let hier = if scheme == "file" {
+        // `file:` plus `//`, `\\` or a mix, then the path (usually starting with `/`).
+        let skip = rest
+            .chars()
+            .take(2)
+            .take_while(|c| matches!(c, '/' | '\\'))
+            .count();
+        &rest[skip..]
+    } else if special {
+        // WHATWG URL: special schemes read `\` as `/` and skip any number of leading slashes.
+        rest.trim_start_matches(['/', '\\'])
+    } else {
+        match rest.strip_prefix("//") {
+            Some(hier) => hier,
+            None => return format!("{scheme}:"),
+        }
     };
     let without_query = hier.split(['?', '#']).next().unwrap_or("");
     match scheme.as_str() {
-        "file" | "chrome" | "devtools" => format!("{scheme}://{without_query}"),
+        "file" => format!("file://{}", without_query.replace('\\', "/")),
+        "chrome" | "devtools" => format!("{scheme}://{without_query}"),
         _ => {
-            let authority = without_query.split(['/', '\\']).next().unwrap_or("");
+            let delimiters: &[char] = if special { &['/', '\\'] } else { &['/'] };
+            let authority = without_query.split(delimiters).next().unwrap_or("");
             let host = authority.rsplit('@').next().unwrap_or("");
             format!("{scheme}://{host}")
         }
     }
 }
 
+/// The WHATWG URL standard's special schemes: `\` counts as `/` and the authority is read
+/// however many slashes follow the scheme.
+const SPECIAL_SCHEMES: &[&str] = &["http", "https", "ws", "wss", "ftp", "file"];
+
+/// Schemes whose URLs have an authority (and, for local and internal pages, a path) worth
+/// showing. Every other scheme is shown as `scheme:` only.
+const HIERARCHICAL_SCHEMES: &[&str] = &[
+    "http",
+    "https",
+    "ws",
+    "wss",
+    "ftp",
+    "file",
+    "chrome",
+    "devtools",
+    "chrome-extension",
+];
+
 /// Console output is relayed only for the spike's local fixtures unless `--log-console` is
-/// set. CEF does not say which frame logged a message, so the message's source decides: it must
-/// be a `file://` script or document, and the main frame must be a `file://` page too. A remote
-/// iframe or remote script inside a local page logs with its own (remote) source and is not
-/// relayed; a message without a source is not relayed either.
+/// set. CEF's console callback does not say which frame logged a message, and the message's
+/// source is only a label a script can set (`//# sourceURL=file:///…`). So the frames decide:
+/// a message is relayed only while every frame of the browser is a `file://` page, which
+/// includes the frame that logged it. A local page that embeds any remote frame relays
+/// nothing. The source must also be `file://`, and a message without one is not relayed.
 fn relay_console(browser: Option<&Browser>, source: &str) -> bool {
     if LOG_CONSOLE.get().copied().unwrap_or(false) {
         return true;
     }
+    let Some(browser) = browser else {
+        return false;
+    };
+    let mut ids = CefStringList::new();
+    browser.frame_identifiers(Some(&mut ids));
+    let ids: Vec<String> = ids.into_iter().collect();
     source.starts_with("file://")
-        && browser
-            .and_then(|b| b.main_frame())
-            .is_some_and(|f| userfree_to_string(&f.url()).starts_with("file://"))
+        && !ids.is_empty()
+        && ids.iter().all(|id| {
+            browser
+                .frame_by_identifier(Some(&CefString::from(id.as_str())))
+                .is_some_and(|f| userfree_to_string(&f.url()).starts_with("file://"))
+        })
 }
 
 pub fn mode() -> Mode {
@@ -283,6 +330,25 @@ mod tests {
             (
                 "devtools://devtools/x.html#TOK",
                 "devtools://devtools/x.html",
+            ),
+            ("data://TOK,hi", "data:"),
+            ("data:\\\\TOK,hi", "data:"),
+            ("DATA://TOK,hi", "data:"),
+            ("javascript://TOK%0Avoid(0)", "javascript:"),
+            ("mailto://TOK@example.invalid", "mailto:"),
+            ("blob:https://example.com/TOK-uuid", "blob:"),
+            ("about://TOK", "about:"),
+            ("http:\\\\example.com\\TOK?TOK", "http://example.com"),
+            ("http:example.com/TOK", "http://example.com"),
+            ("wss:///example.com:9/TOK", "wss://example.com:9"),
+            ("chrome:\\\\TOK", "chrome:"),
+            (
+                "chrome-extension://abcdef/popup.html?TOK",
+                "chrome-extension://abcdef",
+            ),
+            (
+                "file:\\\\\\tmp\\fixture.html?TOK",
+                "file:///tmp/fixture.html",
             ),
             ("", "(none)"),
             ("no scheme TOK", "(not a URL)"),

@@ -4,8 +4,9 @@
 //
 // Listens on 127.0.0.1 on a port the OS picks and writes the port to <port-file>. Prints one
 // line per request, `<method> <path and query>`, which the action scripts wait for.
-// /marker   logs FLECHA_CONSOLE_MARKER to the console, then requests /ran with its own
-//           query, and sets a persistent cookie. A `GET /ran` line proves the page loaded
+// /marker   logs two FLECHA_CONSOLE_MARKER lines naming the case (its query), one plain and
+//           one with a spoofed file:// source, then requests /ran with its own query, and
+//           sets a persistent cookie. A `GET /ran` line proves the page loaded
 //           and its script ran.
 // /ran      empty response.
 // /page     a plain page, for navigation checks.
@@ -19,9 +20,13 @@ if (!portFile) {
   process.exit(2);
 }
 
+// Two lines per load, both naming the case (the query): a plain one, and one whose console
+// source is spoofed to a file:// URL with `//# sourceURL`.
 const marker =
   '<!doctype html><title>marker</title><script>' +
-  "console.log('FLECHA_CONSOLE_MARKER');" +
+  "const where = location.search.slice(1) || 'none';" +
+  "console.log('FLECHA_CONSOLE_MARKER plain ' + where);" +
+  'eval("console.log(\'FLECHA_CONSOLE_MARKER spoof \' + where)\\n//# sourceURL=file:///flecha-spoof.js");' +
   "fetch('/ran' + location.search);" +
   '</script>';
 

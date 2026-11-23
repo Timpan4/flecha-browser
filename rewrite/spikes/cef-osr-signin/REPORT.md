@@ -50,8 +50,10 @@ Run from `rewrite/`. Three steps:
 # 1. Download the pinned CEF archive, check its SHA-1 against rewrite/pins.toml, and stage it at
 #    target/cef-runtime/158.0.3/cef_linux_x86_64 (a 324 MB download, 1.6 GB staged).
 bash spikes/cef-osr-signin/prepare.sh
+#    Stage the workspace's cef-rs source (and Spike 1's own copy of the same archive).
+bash spikes/gpui-cef-compositor/prepare.sh
 
-# 2. Build against the staged runtime, through the shared lock (see rewrite/README.md).
+# 2. Build through the shared lock (see rewrite/README.md).
 flock "$XDG_RUNTIME_DIR/flecha-rewrite-build.lock" \
   bash ~/.claude/skills/hosts/scripts/agent-build run bash spikes/cef-osr-signin/build.sh -j 14
 
@@ -60,8 +62,9 @@ flock "$XDG_RUNTIME_DIR/flecha-rewrite-build.lock" \
 
 How the runtime is found:
 
-- `build.sh` checks the staged runtime, then runs `cargo build --locked -p cef-osr-signin` with `CEF_PATH` pointing at it. Without a valid `CEF_PATH`, cef-dll-sys at the pinned rev silently downloads its default archive (the stable one), so the check comes first.
-- The binary has no RUNPATH and nothing is copied next to it. `run.sh` checks the staged runtime and starts the binary with `LD_LIBRARY_PATH` set to it. Started any other way, the dynamic loader fails before `main` (`libcef.so: cannot open shared object file`).
+- Both spikes are members of the `rewrite/` workspace, and a workspace can hold only one cef-dll-sys, because it declares `links = "cef_dll_wrapper"`. So this spike uses the workspace's `cef` dependency: Spike 1's staged copy of the same pinned cef-rs rev, with Spike 1's patch. That patched build script ignores `CEF_PATH`. It checks Spike 1's staged copy of the same pinned beta archive against `pins.toml`, links against it, and copies it into `target/debug`.
+- `build.sh` checks this spike's staged runtime and Spike 1's staged cef-rs source, then runs `cargo build --locked -p cef-osr-signin`.
+- The binary has no RUNPATH, so the dynamic loader never looks in `target/debug`, even with Spike 1's copy there. `run.sh` checks this spike's staged runtime and starts the binary with `LD_LIBRARY_PATH` set to it. Started any other way, the loader fails before `main` (`libcef.so: cannot open shared object file`). The self-check report's `cef.loaded_libcef` names the copy that loaded.
 - At start, before any CEF call, `main` checks that the loaded runtime is the pinned one. It checks the API version (15800), the commit (`8c29be2`), the `archive.json` SHA-1 next to the loaded `libcef.so` (the `pins.toml` value, compiled in by `build.rs`), and the resource files. If any check fails, it exits with `wrong CEF runtime: …`. It points CEF's `resources_dir_path` and `locales_dir_path` at that directory.
 
 Run with a new, dedicated profile directory. Never point `--profile` at a real browser profile or at `.flecha-profile`.
@@ -86,11 +89,13 @@ spikes/cef-osr-signin/run.sh --mode osr --profile "$HOME/flecha-spike0/osr-wayla
 
 The terminal shows load events, popups and permission requests. Paths, queries, fragments and opaque URL payloads can carry OAuth codes or account identifiers, so every URL the app prints goes through one function (`display_url` in `src/common.rs`) that keeps only:
 
-- `scheme://host[:port]` for a URL with `//` after the scheme, without any `user:password@` (`https://accounts.google.com`);
+- `scheme://host[:port]` for `http`, `https`, `ws`, `wss`, `ftp` and `chrome-extension` URLs, without any `user:password@` (`https://accounts.google.com`);
 - the path as well for `file://`, `chrome://` and `devtools://` URLs, still without query or fragment;
-- only `scheme:` for any other URL (`data:`, `mailto:`, `javascript:`, `blob:`, `about:`).
+- only `scheme:` for every other scheme, whatever follows the colon (`data:`, `mailto:`, `javascript:`, `blob:`, `about:`, also `data://…`).
 
-Page `console.log` output is relayed only from the spike's local fixtures: the message's source must be a `file://` URL and the main frame a `file://` page. CEF does not say which frame logged a message, so the source decides; a remote iframe or remote script inside a local page logs with its own remote source and is not relayed. `--log-console` relays every page's console output; do not use it during the sign-in checks.
+The scheme is compared in lower case. A `\` counts as `/` only for the special schemes of the WHATWG URL standard (`http`, `https`, `ws`, `wss`, `ftp`, `file`), as browsers parse them.
+
+Page `console.log` output is relayed only from the spike's local fixtures. CEF's `OnConsoleMessage` does not say which frame logged a message, and a page can set a message's source to any URL with `//# sourceURL`. So a message is relayed only when its source is a `file://` URL and every frame in the browser, the main frame and each iframe, is a `file://` page. A local page that embeds any remote frame relays nothing, not even its own lines. `--log-console` relays every page's console output; do not use it during the sign-in checks.
 
 CEF also keeps its own log, `chrome_debug.log` in the profile directory. By default Chromium writes every page console message that no handler consumed to it at INFO level, with the full source URL. The app consumes every console message (`on_console_message` returns true), and without `--log-console` it sets CEF's log severity to WARNING, so neither console output nor INFO lines reach that file. The action scripts check that the marker page's console line is absent from it in both modes.
 
@@ -125,7 +130,7 @@ spikes/cef-osr-signin/run.sh --mode osr --profile /tmp/spike0-check/osr \
 
 `--self-check-timeout-secs` is required. It bounds each step; 30 is the value used for the runs below, not a product limit.
 
-The self-check exits with status 1, and prints `self-check failed: …` lines, when `chrome://sandbox` does not say "You are adequately sandboxed", a forbidden switch is on any process, `navigator.webdriver` is not `false`, or the process scan was incomplete. The report's `pass` and `failures` fields say the same. Switches are read as Chromium reads them on Linux: `--name` and `-name` are the same switch (`kSwitchPrefixes` in `base/command_line.cc`). The refusal after `--`, the forbidden-switch audit and the report all use that rule.
+The self-check exits with status 1, and prints `self-check failed: …` lines, when `chrome://sandbox` does not say "You are adequately sandboxed", a forbidden switch is on any process, `navigator.webdriver` is not `false`, or the process scan was incomplete. It also exits with status 1 when it cannot write the `--report` file. The scan reads each process's `/proc` name and status as bytes and decodes them lossily, so an unrelated process with a non-UTF-8 name does not make it incomplete; only read errors do. The report's `pass` and `failures` fields say the same. Switches are read as Chromium reads them on Linux: `--name` and `-name` are the same switch (`kSwitchPrefixes` in `base/command_line.cc`). The refusal after `--`, the forbidden-switch audit and the report all use that rule.
 
 The report redacts command lines: each process's switches come from its argv (`/proc/<pid>/cmdline`), names only, with values kept for a short allowlist such as `--type` and `--lang` and only when they contain no path characters. The `Command Line` row of `chrome://version` is dropped, since it joins arguments with spaces. Home directories become `~` in every string, including percent-encoded `file://` URLs.
 
@@ -139,7 +144,7 @@ To run anything on Xvfb with an isolated session, use `WAIT_SECS=<secs> spikes/c
 Xvfb and the app run in their own process groups, and the harness stops those groups. The action scripts need:
 
 - `XDOTOOL`: path to xdotool. It is not installed on the workstation; the runs used nixpkgs' build (`nix --extra-experimental-features 'nix-command flakes' build nixpkgs#xdotool`).
-- `node`: `scripts/fixture-server.mjs` serves loopback pages (a page that logs a console marker, sets a cookie and then requests `/ran`, and a plain page), so no check needs the network. It logs every request; the scripts wait for the marker page's `/ran` request before asserting that its console line was not relayed, so a page that never loaded or never ran fails the check.
+- `node`: `scripts/fixture-server.mjs` serves loopback pages (a page that logs two console markers naming its case, one plain and one with its source spoofed to `file://` through `//# sourceURL`, sets a cookie and then requests `/ran`; and a plain page), so no check needs the network. It logs every request; the scripts wait for the marker page's `/ran` request before asserting that its console line was not relayed, so a page that never loaded or never ran fails the check.
 - `WM` (only `persist-actions.sh`): an EWMH window manager binary. Xvfb has none, and closing a window the way a desktop does needs one. The runs used nixpkgs' openbox 3.6.1.
 - `EXPECT_MARKER` (only `console-actions.sh`): 0 for a default run, 1 with `--log-console`.
 - `PROFILE` (optional): the app's `--profile` directory. `osr-actions.sh`, `chrome-actions.sh` and `console-actions.sh` read `chrome_debug.log` there; the default is `<out-dir>/profile`.
@@ -155,7 +160,7 @@ ACTIONS=$PWD/spikes/cef-osr-signin/scripts/osr-actions.sh WAIT_SECS=30 XDOTOOL=/
 ### Workarounds in this spike
 
 - `rewrite/.cargo/config.toml` sets `net.git-fetch-with-cli = true`. Cargo's built-in git client failed to fetch the pinned commit on the workstation (`revision … not found`, through the user's `url.insteadOf` SSH rewrite). The git CLI fetches it.
-- The CEF runtime is staged by `prepare.sh` instead of cef-dll-sys's build script. At the pinned rev, cef-dll-sys copies the runtime to `OUT_DIR`'s third parent. Under Cargo 1.100's build-dir layout that is `target/debug/build`, not `target/debug` ([tauri-apps/cef-rs#522](https://github.com/tauri-apps/cef-rs/pull/522), open). A build-script copy next to the binary also proved unreliable: a fresh build through the workstation's caching `cargo` left no `libcef.so` next to the binary. `prepare.sh` is adapted from Spike 1's, with the same pin parser and the same `CEF_PATH/<x.y.z>/cef_linux_x86_64` layout. Spike 1 sets `CEF_PATH` in the shared `rewrite/.cargo/config.toml` with `force = true`, pointing at its own staging directory; this spike sets it only in `build.sh`. If both merge, the forced value wins for every build in the workspace, so one shared prepare step should replace both.
+- The CEF runtime this spike loads is staged by its own `prepare.sh`, not by a build script. At the pinned rev, upstream cef-dll-sys copies the runtime to `OUT_DIR`'s third parent, which under Cargo 1.100's build-dir layout is `target/debug/build`, not `target/debug` ([tauri-apps/cef-rs#522](https://github.com/tauri-apps/cef-rs/pull/522), open). Since the merge with Spike 1, the workspace builds Spike 1's patched cef-rs, which links against Spike 1's own stage and copies it into `target/debug`. Both stages are the same pinned beta archive, SHA-1 checked by each prepare step, so the build links against the same files the binary loads; the binary loads only this spike's stage, through `run.sh`. One shared prepare step should replace both.
 
 ## Automated results
 
@@ -242,8 +247,8 @@ Each row is one scripted run through `scripts/xvfb-isolated.sh` on `scripts/inpu
 | OSR Ctrl+A on French AZERTY | `osr-actions.sh` | With `setxkbmap fr`, the page saw `keydown a KeyQ 65 ctrl true` (VK_A from the layout, physical position Q, Ctrl held; a plain `a` would also be `KeyQ 65`, so the Ctrl flag is asserted too). Before the fix it saw `keydown q KeyQ 81`, so Ctrl+A acted as Ctrl+Q |
 | OSR `pdf <path>` | `osr-actions.sh` | `[pdf] ok=true`, file not empty |
 | OSR `go <url>` | `osr-actions.sh` | `[load-end] http://127.0.0.1:<port>`, logged after the command |
-| OSR console relay, default | `osr-actions.sh`, `console-actions.sh` with `EXPECT_MARKER=0` | The loopback marker page loaded and ran (its `/ran` request arrived), as the main frame and as a remote iframe inside a local `file://` page; 0 marker lines in stderr, while the local page's own console line was relayed. 0 marker lines in the profile's `chrome_debug.log` |
-| OSR console relay, `--log-console` | `console-actions.sh` with `EXPECT_MARKER=1` | 2 marker lines (main frame and iframe), `[console] FLECHA_CONSOLE_MARKER (http://127.0.0.1:<port>:1)`: the check can see the marker. 0 marker lines in `chrome_debug.log` |
+| OSR console relay, default | `osr-actions.sh`, `console-actions.sh` with `EXPECT_MARKER=0` | The loopback marker page loaded and ran (its `/ran` request arrived), as the main frame and as a remote iframe inside a local `file://` page. Each load logs a plain marker and one whose source is spoofed to `file:///flecha-spoof.js`. Each of the four was counted on its own: 0 lines in stderr, while `input-test.html`'s own console lines were relayed. 0 marker lines in the profile's `chrome_debug.log`. A mutant that relays any message with a `file://` source failed this run on the spoofed main-frame marker |
+| OSR console relay, `--log-console` | `console-actions.sh` with `EXPECT_MARKER=1` | 1 line for each of the four markers (plain and spoofed, main frame and iframe), counted on its own: the check can see each one. 0 marker lines in `chrome_debug.log` |
 | OSR `quit` | `osr-actions.sh` | app exit status 0 |
 | Chrome: tab opened from Chrome's UI | `chrome-actions.sh` | Ctrl+T, then the loopback marker page through the omnibox: the new tab got the app's client (`[browser] created id=2 open=2`, `[load-end] http://127.0.0.1:<port>`) ([screenshot](evidence/chrome-two-tabs.png)); 0 marker lines in stderr and in `chrome_debug.log` |
 | Chrome: close the first tab | `chrome-actions.sh` | Ctrl+1, Ctrl+W: browser 1 closed, the app kept running with one tab |
@@ -349,3 +354,9 @@ These were reviewed and left as they are. Each either fails closed (stops with a
 - The self-check injects its collector into every main-frame page of the current step and binds results to the first browser and a per-run nonce, not to one navigation. A page reached by an unexpected redirect could report for the step. The steps load fixed internal pages and the Web Store; the low risk was accepted.
 - In chrome mode a failed first browser creation quits the message loop through a posted task. If CEF also refused that task, the app would hang instead of exiting. That needs CEF to refuse two calls in a row; not handled.
 - `xvfb-isolated.sh` signals the app's process group only while the app's wrapper (`dbus-run-session`) is still running. If the wrapper exited after a browser crash, browser children left in that group would not be stopped. No leftover processes were seen in any run.
+- Without `--mode`, an argument that looks like `--type` makes `main` hand the process to CEF's subprocess entry point before the CLI parser runs, even after `--` and in its single-dash or valueless forms (`-- -type=bogus`). The process then runs CEF's `execute_process` with those arguments, and the CLI parser and its error message are skipped. Always pass `--mode`.
+- `run.sh` resolves a bare `FLECHA_SPIKE_BIN` with `command -v`, which finds shell builtins first: `FLECHA_SPIKE_BIN=printf` is refused even with an executable of that name on `PATH`. Pass a path that contains `/`.
+- `prepare.sh` checks the staged payload with `-e`, so a directory named `resources.pak` passes it. The binary's start-up check then refuses the runtime.
+- The console checks count after the marker page's `/ran` request and a round trip through another local page, not after an acknowledgement for each console callback. A marker that CEF delivered later than that would be missed: a `--log-console` run would fail, a default run would pass.
+- Console relay checks the frames that exist when CEF reports the message. A remote iframe removed between logging and that report is no longer counted.
+- `input-actions.sh` asserts `[print] start` and that the app is still running a moment later. It does not wait for Chromium's no-printer error, so a crash after that point would go unnoticed by the script.
