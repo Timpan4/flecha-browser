@@ -1,0 +1,14 @@
+=== accept two paint-holding repaints
+test idle::tests::a_second_repaint_in_the_window_fails ... FAILED
+test idle::tests::a_repaint_after_an_earlier_paint_holding_repaint_fails ... FAILED
+test result: FAILED. 3 passed; 2 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.00s
+=== paint-holding timeout 0 s
+test idle::tests::the_paint_holding_repaint_in_the_window_passes ... FAILED
+test idle::tests::a_repaint_after_an_earlier_paint_holding_repaint_fails ... FAILED
+test idle::tests::a_second_repaint_in_the_window_fails ... FAILED
+test result: FAILED. 2 passed; 3 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.00s
+=== allowance counted only inside the window (the old rule)
+test idle::tests::a_repaint_after_an_earlier_paint_holding_repaint_fails ... FAILED
+test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.00s
+=== unmutated
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.00s
