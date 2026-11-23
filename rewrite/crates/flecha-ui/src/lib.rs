@@ -61,10 +61,8 @@ pub fn start(
     }
     runtime.drive(cx, move |ready, cx| {
         let keep_running = controller.borrow_mut().tick(ready, cx);
-        if keep_running {
-            if let Err(error) = sync_windows(&controller, cx) {
-                controller.borrow_mut().fail(error, cx);
-            }
+        if keep_running && let Err(error) = sync_windows(&controller, cx) {
+            controller.borrow_mut().fail(error, cx);
         }
         keep_running
     });
