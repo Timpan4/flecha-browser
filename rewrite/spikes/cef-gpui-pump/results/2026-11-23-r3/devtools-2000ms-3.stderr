@@ -1,0 +1,31 @@
+[1644128:1644147:1123/103251.610974:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[1644128:1644147:1123/103251.633844:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[1644128:1644147:1123/103251.633867:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[1644128:1644147:1123/103251.633875:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[2026-11-23T09:32:51Z ERROR gpui_linux::linux::x11::client] Found no xinput mouse pointers.
+MESA-EGL: warning: DRI3 error: Could not get DRI3 device
+MESA-EGL: warning: Ensure your X server supports DRI3 to get accelerated rendering
+[1644128:1644147:1123/103251.824243:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[1644128:1644147:1123/103251.824260:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[1644128:1644128:1123/103251.824633:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.Properties.GetAll: object_path= /org/freedesktop/UPower/devices/DisplayDevice: unknown error type: 
+[scenario] browsers_closed: false
+[scenario] context_initialized_after_ms: 0.00313
+[engine] created Page(0) id=1 runtime_style=Some(RuntimeStyle(CEF_RUNTIME_STYLE_ALLOY))
+[engine] created Page(1) id=2 runtime_style=Some(RuntimeStyle(CEF_RUNTIME_STYLE_ALLOY))
+[scenario] page_load_ms: 13.248089
+[scenario] isolation_after_load: {"forbidden":["/run/user/1000","/run/dbus/system_bus_socket"],"processes":10,"open_files":[],"mapped_files":[],"unix_socket_peers":[],"sockets":67,"sockets_without_peer_info":18,"unreadable":[],"ss_error":null,"clean":true}
+[engine] created DevTools id=3 runtime_style=Some(RuntimeStyle(CEF_RUNTIME_STYLE_CHROME))
+
+(cef-gpui-pump:1644128): atspi-WARNING **: 10:33:24.994: AT-SPI: Error retrieving accessibility bus address: org.freedesktop.DBus.Error.ServiceUnknown: The name org.a11y.Bus was not provided by any .service files
+[1644167:1644167:1123/103325.196756:ERROR:gpu/command_buffer/service/context_group.cc:140] ContextResult::kFatalFailure: WebGL1 blocklisted
+[engine] before_close DevTools id=3
+[scenario] devtools: {"second_browser":true,"runtime_style":"RuntimeStyle(CEF_RUNTIME_STYLE_CHROME)","show_devtools_call_ms":38.880423,"devtools_created_after_show_ms":38.882183,"close_devtools_after_show_ms":2000.0472939999997,"close_late_ms":0.047293999999999996,"tree_scan_before_ms":27.278589,"tree_scan_while_open_ms":29.806764,"devtools_closed_after_close_ms":4.1086409999999995,"health_before":[{"page":0,"on_paint_in_window":901,"on_paint_per_second":30.00063834865482,"evaluate":2,"evaluate_error":null,"evaluate_ms":7.646102999999999},{"page":1,"on_paint_in_window":901,"on_paint_per_second":30.00063834865482,"evaluate":2,"evaluate_error":null,"evaluate_ms":0.40259999999999996}],"health_after":[{"page":0,"on_paint_in_window":899,"on_paint_per_second":29.934068510959335,"evaluate":2,"evaluate_error":null,"evaluate_ms":15.018327999999999},{"page":1,"on_paint_in_window":898,"on_paint_per_second":29.900771438088412,"evaluate":2,"evaluate_error":null,"evaluate_ms":0.386699}],"renderers_before":[{"pid":1644184,"ppid":1644139,"type":"zygote-forked","start_time":691863,"inner_pid":1},{"pid":1644327,"ppid":1644139,"type":"zygote-forked","start_time":691881,"inner_pid":1},{"pid":1644328,"ppid":1644139,"type":"zygote-forked","start_time":691881,"inner_pid":1},{"pid":1644342,"ppid":1644139,"type":"zygote-forked","start_time":691881,"inner_pid":1}],"tree_while_open":[{"pid":1644128,"ppid":1644126,"type":"browser","start_time":691856,"inner_pid":1644128},{"pid":1644132,"ppid":1644128,"type":"zygote","start_time":691857,"inner_pid":1644132},{"pid":1644133,"ppid":1644128,"type":"zygote","start_time":691857,"inner_pid":1},{"pid":1644169,"ppid":1644128,"type":"utility","start_time":691861,"inner_pid":1644169},{"pid":1645837,"ppid":1644128,"type":"other:bwrap","start_time":695199,"inner_pid":1645837},{"pid":1644167,"ppid":1644132,"type":"zygote-forked-unsandboxed","start_time":691861,"inner_pid":1644167},{"pid":1644139,"ppid":1644133,"type":"zygote","start_time":691859,"inner_pid":3},{"pid":1645838,"ppid":1645837,"type":"other:bwrap","start_time":695199,"inner_pid":1},{"pid":1644184,"ppid":1644139,"type":"zygote-forked","start_time":691863,"inner_pid":1},{"pid":1644327,"ppid":1644139,"type":"zygote-forked","start_time":691881,"inner_pid":1},{"pid":1644328,"ppid":1644139,"type":"zygote-forked","start_time":691881,"inner_pid":1},{"pid":1644342,"ppid":1644139,"type":"zygote-forked","start_time":691881,"inner_pid":1},{"pid":1645817,"ppid":1644139,"type":"zygote-forked","start_time":695197,"inner_pid":1},{"pid":1645839,"ppid":1645838,"type":"other:glycin-svg","start_time":695199,"inner_pid":2}],"renderers_after":[{"pid":1644184,"ppid":1644139,"type":"zygote-forked","start_time":691863,"inner_pid":1},{"pid":1644327,"ppid":1644139,"type":"zygote-forked","start_time":691881,"inner_pid":1},{"pid":1644328,"ppid":1644139,"type":"zygote-forked","start_time":691881,"inner_pid":1},{"pid":1645817,"ppid":1644139,"type":"zygote-forked","start_time":695197,"inner_pid":1}],"renderers_before_now_gone":[{"pid":1644342,"ppid":1644139,"type":"zygote-forked","start_time":691881,"inner_pid":1}],"render_process_terminations":[]}
+[scenario] devtools_pass: true
+[scenario] isolation_before_shutdown: {"forbidden":["/run/user/1000","/run/dbus/system_bus_socket"],"processes":11,"open_files":[],"mapped_files":[],"unix_socket_peers":[],"sockets":79,"sockets_without_peer_info":19,"unreadable":[],"ss_error":null,"clean":true}
+[scenario] isolation_clean: true
+[engine] before_close Page(1) id=2
+[engine] before_close Page(0) id=1
+[scenario] browsers_closed_after_ms: 16.518834
+[scenario] browsers_closed: true
+[scenario] scenario_seconds: 68.444877044
+[scenario] totals: {"gpui_renders":1642,"gpui_animation_steps":0,"gpui_images_uploaded":2042,"gpui_images_dropped":1640,"gpui_frames_never_drawn":402,"on_paint_by_page":[2046,2043]}
