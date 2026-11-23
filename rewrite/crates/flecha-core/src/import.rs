@@ -3,14 +3,11 @@
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::state::DEFAULT_SPACE_COLOR;
+use crate::state::{DEFAULT_SPACE_COLOR, walk_pins};
 use crate::{
     ARCHIVE_LIMIT, ArchivedTab, BrowserState, Device, EpochMillis, FolderId, PinnedNode, SpaceId,
     Tab, TabId, WindowId,
 };
-
-/// Bookmark folder depth kept by chromium/native-host/browserImport.ts.
-const MAX_FOLDER_DEPTH: usize = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ImportMode {
@@ -49,6 +46,19 @@ pub enum ImportNode {
     },
 }
 
+impl Drop for ImportNode {
+    fn drop(&mut self) {
+        if let Self::Folder { children, .. } = self {
+            let mut stack = std::mem::take(children);
+            while let Some(mut node) = stack.pop() {
+                if let Self::Folder { children, .. } = &mut node {
+                    stack.append(children);
+                }
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ImportTab {
     pub id: TabId,
@@ -71,7 +81,6 @@ pub struct ImportOutcome {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ImportError {
     UnknownWindow,
-    FolderDepth,
     DuplicateSpace(SpaceId),
     DuplicateFolder(FolderId),
     DuplicateTab(TabId),
@@ -90,9 +99,6 @@ impl BrowserState {
     ) -> Result<ImportOutcome, ImportError> {
         if self.window(window).is_none() {
             return Err(ImportError::UnknownWindow);
-        }
-        for space in &batch.spaces {
-            validate_folder_depth(&space.pinned, 0)?;
         }
         let mut next = self.clone();
         let out = next.apply_import(batch, mode, window, now)?;
@@ -321,18 +327,6 @@ impl BrowserState {
     }
 }
 
-fn validate_folder_depth(nodes: &[ImportNode], depth: usize) -> Result<(), ImportError> {
-    for node in nodes {
-        if let ImportNode::Folder { children, .. } = node {
-            if depth == MAX_FOLDER_DEPTH {
-                return Err(ImportError::FolderDepth);
-            }
-            validate_folder_depth(children, depth + 1)?;
-        }
-    }
-    Ok(())
-}
-
 fn name_key(name: &str) -> String {
     name.trim().to_lowercase()
 }
@@ -358,12 +352,10 @@ fn insert_tab(
 }
 
 fn collect_folders(nodes: &[PinnedNode], ids: &mut BTreeSet<FolderId>) {
-    for node in nodes {
-        if let PinnedNode::Folder { id, children, .. } = node {
-            ids.insert(id.clone());
-            collect_folders(children, ids);
-        }
-    }
+    ids.extend(walk_pins(nodes).filter_map(|(node, _, _)| match node {
+        PinnedNode::Folder { id, .. } => Some(id.clone()),
+        PinnedNode::Tab { .. } => None,
+    }));
 }
 
 struct PinnedImport<'a> {
@@ -371,6 +363,18 @@ struct PinnedImport<'a> {
     folder_ids: &'a mut BTreeSet<FolderId>,
     outcome: &'a mut ImportOutcome,
     now: EpochMillis,
+}
+
+struct ImportFrame<'a> {
+    incoming: std::slice::Iter<'a, ImportNode>,
+    output: Vec<PinnedNode>,
+    folder: Option<ImportFolder>,
+}
+
+struct ImportFolder {
+    node: PinnedNode,
+    previous_index: Option<usize>,
+    keep_empty: bool,
 }
 
 impl PinnedImport<'_> {
@@ -381,46 +385,77 @@ impl PinnedImport<'_> {
         merge: bool,
         skip: &impl Fn(&ImportTab) -> bool,
     ) -> Result<(), ImportError> {
-        for node in incoming {
-            match node {
-                ImportNode::Tab(tab) if !skip(tab) => {
+        let mut frames = vec![ImportFrame {
+            incoming: incoming.iter(),
+            output: std::mem::take(dest),
+            folder: None,
+        }];
+
+        while let Some(frame) = frames.last_mut() {
+            match frame.incoming.next() {
+                Some(ImportNode::Tab(tab)) if !skip(tab) => {
                     insert_tab(self.tabs, tab, true, self.now)?;
-                    dest.push(PinnedNode::Tab {
+                    frame.output.push(PinnedNode::Tab {
                         tab_id: tab.id.clone(),
                     });
                     self.outcome.tabs += 1;
                 }
-                ImportNode::Tab(_) => {}
-                ImportNode::Folder { id, name, children } => {
-                    let mut same = None;
-                    if merge {
+                Some(ImportNode::Tab(_)) => {}
+                Some(ImportNode::Folder { id, name, children }) => {
+                    let previous_index = if merge {
                         let key = name_key(name);
-                        same = dest.iter_mut().find_map(|node| match node {
-                            PinnedNode::Folder { name, children, .. } if name_key(name) == key => {
-                                Some(children)
-                            }
-                            _ => None,
-                        });
-                    }
-                    if let Some(same) = same {
-                        self.add_nodes(same, children, merge, skip)?;
-                        continue;
-                    }
-                    let mut added = Vec::new();
-                    self.add_nodes(&mut added, children, merge, skip)?;
-                    if added.is_empty() && !children.is_empty() {
-                        continue;
-                    }
-                    if !self.folder_ids.insert(id.clone()) {
-                        return Err(ImportError::DuplicateFolder(id.clone()));
-                    }
-                    dest.push(PinnedNode::Folder {
-                        id: id.clone(),
-                        name: name.clone(),
-                        open: false,
-                        children: added,
+                        frame.output.iter().position(|node| {
+                            matches!(node, PinnedNode::Folder { name, .. } if name_key(name) == key)
+                        })
+                    } else {
+                        None
+                    };
+                    let mut node = match previous_index {
+                        Some(index) => frame.output.remove(index),
+                        None => PinnedNode::Folder {
+                            id: id.clone(),
+                            name: name.clone(),
+                            open: false,
+                            children: Vec::new(),
+                        },
+                    };
+                    let PinnedNode::Folder {
+                        children: existing, ..
+                    } = &mut node
+                    else {
+                        unreachable!("the name match only selects folders");
+                    };
+                    let output = std::mem::take(existing);
+                    frames.push(ImportFrame {
+                        incoming: children.iter(),
+                        output,
+                        folder: Some(ImportFolder {
+                            node,
+                            previous_index,
+                            keep_empty: children.is_empty(),
+                        }),
                     });
-                    self.outcome.folders += 1;
+                }
+                None => {
+                    let done = frames.pop().expect("an active frame finished");
+                    let Some(mut folder) = done.folder else {
+                        *dest = done.output;
+                        return Ok(());
+                    };
+                    let parent = frames.last_mut().expect("a folder has a parent list");
+                    let PinnedNode::Folder { id, children, .. } = &mut folder.node else {
+                        unreachable!("a folder frame contains a folder");
+                    };
+                    *children = done.output;
+                    if let Some(index) = folder.previous_index {
+                        parent.output.insert(index, folder.node);
+                    } else if folder.keep_empty || !children.is_empty() {
+                        if !self.folder_ids.insert(id.clone()) {
+                            return Err(ImportError::DuplicateFolder(id.clone()));
+                        }
+                        parent.output.push(folder.node);
+                        self.outcome.folders += 1;
+                    }
                 }
             }
         }

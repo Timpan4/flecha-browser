@@ -4,11 +4,11 @@
 
 ## Storage
 
-`storage::encode` writes schema version 3. `storage::migrate_legacy` reads the saved JSON value from a copy or export of a Chromium profile. It accepts versions 1 and 2 and unversioned snapshots. Version 1 moves each Space's Today tabs into a single window. Version 2 carries over each window's own Today tabs, shared pins and Favorites, and recently closed windows.
+`storage::encode` writes schema version 3. It stores pinned trees as ordered records with depths so deep folders can save and restore without deeply nested JSON. The reader also accepts nested pin records. `storage::migrate_legacy` reads the saved JSON value from a copy or export of a Chromium profile. It accepts versions 1 and 2 and unversioned snapshots. Version 1 moves each Space's Today tabs into a single window. Version 2 carries over each window's own Today tabs, shared pins and Favorites, and recently closed windows.
 
 `storage::load` returns repaired state plus the writes needed to keep damaged and last-good copies. Apply recovery writes in order and call `LoadedState::started` after startup succeeds. A newer current schema blocks recovery. A newer last-good copy stays available to a newer reader, and a damaged current value is still set aside. Repairs assign distinct IDs to duplicate Spaces and folders while retaining their contents. Version 2 window memberships keyed by a duplicate Space ID stay with the first Space. The application owns the storage path, atomic writes, and error reporting.
 
-`import_spaces` merges or appends parsed Spaces, folders, favorites, splits, and archive entries in one transaction. The input uses the eight-level folder depth from Chromium's bookmark importer. The core rejects deeper trees so services can normalize them before applying an import.
+`import_spaces` merges or appends parsed Spaces, folders, favorites, splits, and archive entries in one transaction. It preserves folder depth. Source readers can flatten their own input before calling it.
 
 For whole-state file imports, call `storage::set_aside_before_import` and persist the result before replacing the current state. Read the pre-import copy with `storage::state_before_import`.
 
@@ -23,5 +23,7 @@ GPUI owns command-bar ranking across sources, Peeks, shortcut registration, loca
 - Shortcut comparisons use the native Chromium accelerator parser's rules. Unsupported saved keys fall back to defaults. Editing a shortcut unbinds every command configured to take the same key, including a shadowed default.
 - When two saved keys resolve to one accelerator, Chromium's registration order picks the winner. The core displays no shortcut for the earlier binding when it loses.
 - Exit Split selects the desktop source if its phone mirror was selected. This follows the responsive toggle and keeps the source visible after removing the mirror.
-- Tabs from evicted windows keep their original close time and go behind ordinary archive entries. Ordinary closes retain close order, including after restarting. Reopening a window whose active Space lost its Today tabs opens the first Space that retained tabs.
-- Suggestion requests keep JWTs in pasted prose local. GitHub issue shortcuts require a complete repository segment and fall back to GitHub search for ambiguous paths.
+- Close Other Tabs keeps both panes when invoked on either responsive pane so it preserves the selected tab.
+- Tabs from evicted windows go to the front of the archive and retain their original close time. Ordinary closes retain close order, including after restarting. Reopening a window whose active Space lost its Today tabs opens the first Space that retained tabs.
+- Suggestion requests keep JWTs local even when pasted directly beside other text. The local decoder accepts any JSON object header, including headers with leading whitespace, an empty object, or pretty-printed JSON.
+- GitHub issue shortcuts require a complete repository segment and fall back to GitHub search for ambiguous paths.

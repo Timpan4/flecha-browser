@@ -8,7 +8,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, value::RawValue};
 
-use crate::state::{DEFAULT_SPACE_COLOR, compare_recency};
+use crate::state::{DEFAULT_SPACE_COLOR, PinnedTree, compare_recency};
 use crate::{
     ArchivePolicy, ArchivedTab, BrowserState, ClosedWindow, Device, Environment, EnvironmentTarget,
     EpochMillis, FolderId, PinnedNode, Settings, SidebarWidth, Space, SpaceId, Tab, TabId, Window,
@@ -339,6 +339,7 @@ fn repair(mut raw: Map<String, Value>) -> Option<BrowserState> {
     let mut folder_ids = BTreeSet::new();
     for (_, space) in &raw_spaces {
         collect_folder_ids(space.get("pinned"), &mut folder_ids);
+        collect_folder_ids(space.get("pinnedFlat"), &mut folder_ids);
     }
     let mut folders = RecoveredIds::new("folder", folder_ids);
     let spaces = raw_spaces
@@ -464,7 +465,11 @@ fn repair_space(
         color: field(raw, "color").unwrap_or_else(|| DEFAULT_SPACE_COLOR.into()),
         isolated: field(raw, "isolated").unwrap_or_default(),
         pinned_collapsed: field(raw, "pinnedCollapsed").unwrap_or_default(),
-        pinned: repair_pins(raw.get("pinned"), folders, claim),
+        pinned: if let Some(nested) = raw.get("pinned").filter(|value| value.is_array()) {
+            repair_pins(Some(nested), folders, claim)
+        } else {
+            repair_flat_pins(raw.get("pinnedFlat"), folders, claim)
+        },
     }
 }
 
@@ -474,22 +479,52 @@ fn repair_pins(
     claim: &mut impl FnMut(&Value) -> Option<TabId>,
 ) -> Vec<PinnedNode> {
     list(raw)
-        .filter_map(|node| match node.get("kind")?.as_str()? {
-            "tab" => Some(PinnedNode::Tab {
-                tab_id: claim(node.get("tabId")?)?,
-            }),
-            "folder" => {
-                let id = FolderId::new(folders.claim(Some(node.get("id")?.as_str()?)));
-                Some(PinnedNode::Folder {
-                    id,
-                    name: field(node, "name").unwrap_or_else(|| "Folder".into()),
-                    open: field(node, "open").unwrap_or_default(),
-                    children: repair_pins(node.get("children"), folders, claim),
-                })
+        .filter_map(|value| {
+            let mut node = repair_pin(value, folders, claim)?;
+            if let PinnedNode::Folder { children, .. } = &mut node {
+                *children = repair_pins(value.get("children"), folders, claim);
             }
-            _ => None,
+            Some(node)
         })
         .collect()
+}
+
+fn repair_flat_pins(
+    raw: Option<&Value>,
+    folders: &mut RecoveredIds<'_>,
+    claim: &mut impl FnMut(&Value) -> Option<TabId>,
+) -> Vec<PinnedNode> {
+    let mut tree = PinnedTree::default();
+    for value in list(raw) {
+        if let Some(depth) = field::<usize>(value, "depth")
+            && tree.accepts_depth(depth)
+        {
+            tree.ascend(depth);
+            if let Some(node) = repair_pin(value, folders, claim) {
+                tree.push(depth, node);
+            }
+        }
+    }
+    tree.finish()
+}
+
+fn repair_pin(
+    node: &Value,
+    folders: &mut RecoveredIds<'_>,
+    claim: &mut impl FnMut(&Value) -> Option<TabId>,
+) -> Option<PinnedNode> {
+    match node.get("kind")?.as_str()? {
+        "tab" => Some(PinnedNode::Tab {
+            tab_id: claim(node.get("tabId")?)?,
+        }),
+        "folder" => Some(PinnedNode::Folder {
+            id: FolderId::new(folders.claim(Some(node.get("id")?.as_str()?))),
+            name: field(node, "name").unwrap_or_else(|| "Folder".into()),
+            open: field(node, "open").unwrap_or_default(),
+            children: Vec::new(),
+        }),
+        _ => None,
+    }
 }
 
 struct RecoveredIds<'a> {

@@ -321,42 +321,65 @@ fn a_duplicate_id_rolls_back_the_entire_import() {
 }
 
 #[test]
-fn import_folder_depth_is_bounded_by_the_chromium_bookmark_import_limit() {
+fn deep_imports_keep_their_folders_across_merge_and_restore() {
+    // Use the same nesting as the damaged-state fixture to exercise the complete tree lifecycle.
+    let depth = 20_000;
     let window = WindowId::new("w");
+    let space = SpaceId::new("copy");
     let mut state = BrowserState::new(SpaceId::new("s"), window.clone());
-    let before = state.clone();
-    let mut incoming = incoming_space("copy", "Work");
-    let mut nodes = vec![ImportNode::Tab(incoming_tab("tab", "https://example.org/"))];
-    // browserImport.ts admits eight nested folders.
-    for level in 0..8 {
-        nodes = vec![ImportNode::Folder {
-            id: FolderId::new(format!("folder-{level}")),
-            name: "Folder".into(),
-            children: nodes,
-        }];
-    }
-    incoming.pinned = nodes;
-    let mut batch = ImportBatch {
-        spaces: vec![incoming],
-        ..ImportBatch::default()
+    let leaf = incoming_tab("leaf", "https://example.org/leaf");
+    let new_leaf = incoming_tab("new-leaf", "https://example.org/new-leaf");
+    let deep_space = |tab, offset| {
+        let mut incoming = incoming_space(space.as_str(), "Work");
+        let mut nodes = vec![ImportNode::Tab(tab)];
+        for level in 0..depth {
+            nodes = vec![ImportNode::Folder {
+                id: FolderId::new(format!("folder-{}", level + offset)),
+                name: format!("Folder {level}"),
+                children: nodes,
+            }];
+        }
+        incoming.pinned = nodes;
+        ImportBatch {
+            spaces: vec![incoming],
+            ..ImportBatch::default()
+        }
     };
-    assert!(
-        state
-            .clone()
-            .import_spaces(&batch, ImportMode::Append, &window, 0)
-            .is_ok()
-    );
-    let children = std::mem::take(&mut batch.spaces[0].pinned);
-    batch.spaces[0].pinned.push(ImportNode::Folder {
-        id: FolderId::new("extra"),
-        name: "Extra".into(),
-        children,
-    });
+
+    let imported = state
+        .import_spaces(&deep_space(leaf.clone(), 0), ImportMode::Append, &window, 0)
+        .unwrap();
+    assert_eq!(imported.folders, depth);
+    let merged = state
+        .import_spaces(
+            &deep_space(new_leaf.clone(), depth),
+            ImportMode::Merge,
+            &window,
+            1,
+        )
+        .unwrap();
+    assert_eq!((merged.folders, merged.tabs), (0, 1));
+
+    let saved = flecha_core::storage::encode(&state).unwrap();
+    let restored = flecha_core::storage::decode(&saved).unwrap();
+    assert!(state == restored);
+    let mut state = restored;
     assert_eq!(
-        state.import_spaces(&batch, ImportMode::Append, &window, 0),
-        Err(ImportError::FolderDepth)
+        state.space(&space).unwrap().pinned_tabs(),
+        [&leaf.id, &new_leaf.id]
     );
-    assert_eq!(state, before);
+    let mut nodes = state.space(&space).unwrap().pinned.as_slice();
+    for level in (0..depth).rev() {
+        let [PinnedNode::Folder { name, children, .. }] = nodes else {
+            panic!("expected the imported folder")
+        };
+        assert_eq!(name, &format!("Folder {level}"));
+        nodes = children;
+    }
+    assert_eq!(nodes.len(), 2);
+    assert!(state.delete_folder(&FolderId::new("folder-0"), true, 2));
+    assert!(state.delete_tab(&new_leaf.id, 3));
+    assert_eq!(state.space(&space).unwrap().pinned_tabs(), [&leaf.id]);
 }
 
 #[test]
@@ -369,6 +392,7 @@ fn empty_recovered_windows_leave_no_stale_space_after_import() {
         "closedWindows":[{"id":"closed","activeSpaceId":"personal","closedAt":1,"spaces":{"personal":{"today":[]}}}]
     }"##;
     let mut state = flecha_core::storage::decode(saved).unwrap();
+    assert!(state.closed_windows().is_empty());
     let batch = ImportBatch {
         spaces: vec![incoming_space("copy", "Work")],
         ..ImportBatch::default()

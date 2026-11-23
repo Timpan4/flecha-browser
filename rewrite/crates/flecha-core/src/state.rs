@@ -92,7 +92,7 @@ pub struct HistoryEntry {
     pub title: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum PinnedNode {
     Tab {
@@ -132,6 +132,7 @@ pub struct Space {
     pub color: String,
     pub isolated: bool,
     pub pinned_collapsed: bool,
+    #[serde(rename = "pinnedFlat", serialize_with = "serialize_pins")]
     pub pinned: Vec<PinnedNode>,
 }
 
@@ -578,7 +579,7 @@ impl BrowserState {
                 for old in dropped {
                     for id in old.window.spaces.into_values().flat_map(|ws| ws.today) {
                         if let Some(entry) = self.take_archive_entry(&id, old.closed_at) {
-                            self.archive.push(entry);
+                            self.archive.insert(0, entry);
                         }
                     }
                 }
@@ -710,7 +711,7 @@ impl BrowserState {
             return Some(Placement::Favorite);
         }
         for space in &self.spaces {
-            if let Some(folder) = pin_parent(&space.pinned, id, None) {
+            if let Some(folder) = pin_parent(&space.pinned, id) {
                 return Some(Placement::Pinned {
                     space: &space.id,
                     folder,
@@ -949,14 +950,10 @@ impl BrowserState {
             .expect("Today placement has an open window")
             .spaces[space];
         let agent = in_agent_folder(&self.tabs, ws, tab);
-        let kept_source = match &ws.split {
-            Some([source, mirror])
-                if ws.split_mode == Some(SplitMode::Responsive) && mirror == tab =>
-            {
-                Some(source)
-            }
-            _ => None,
-        };
+        let kept_pair = ws
+            .split
+            .as_ref()
+            .filter(|pair| ws.split_mode == Some(SplitMode::Responsive) && pair.contains(tab));
         let siblings = ws
             .today
             .iter()
@@ -968,7 +965,7 @@ impl BrowserState {
                 .cloned()
                 .collect(),
             CloseToday::Others => siblings
-                .filter(|id| *id != tab && Some(*id) != kept_source)
+                .filter(|id| *id != tab && !kept_pair.is_some_and(|pair| pair.contains(id)))
                 .cloned()
                 .collect(),
         };
@@ -1194,9 +1191,9 @@ impl BrowserState {
         else {
             return false;
         };
-        if let PinnedNode::Folder { children, .. } = folder {
+        if let PinnedNode::Folder { children, .. } = &folder {
             let mut ids = Vec::new();
-            collect_pins(&children, &mut ids);
+            collect_pins(children, &mut ids);
             for id in ids {
                 self.archive_removed(id, now);
             }
@@ -1393,57 +1390,189 @@ pub(crate) fn compare_recency(
         .then_with(|| compare_activity(tabs, left, right))
 }
 
-fn collect_pins<'a>(nodes: &'a [PinnedNode], tabs: &mut Vec<&'a TabId>) {
-    for node in nodes {
-        match node {
-            PinnedNode::Tab { tab_id } => tabs.push(tab_id),
-            PinnedNode::Folder { children, .. } => collect_pins(children, tabs),
+pub(crate) fn walk_pins(
+    nodes: &[PinnedNode],
+) -> impl Iterator<Item = (&PinnedNode, usize, Option<&FolderId>)> {
+    let mut frames = vec![(nodes.iter(), None)];
+    std::iter::from_fn(move || {
+        loop {
+            let depth = frames.len().checked_sub(1)?;
+            let (siblings, parent) = frames.last_mut()?;
+            if let Some(node) = siblings.next() {
+                let parent = *parent;
+                if let PinnedNode::Folder { id, children, .. } = node {
+                    frames.push((children.iter(), Some(id)));
+                }
+                return Some((node, depth, parent));
+            }
+            frames.pop();
+        }
+    })
+}
+
+impl Clone for PinnedNode {
+    fn clone(&self) -> Self {
+        let mut tree = PinnedTree::default();
+        for (node, depth, _) in walk_pins(std::slice::from_ref(self)) {
+            let node = match node {
+                Self::Tab { tab_id } => Self::Tab {
+                    tab_id: tab_id.clone(),
+                },
+                Self::Folder { id, name, open, .. } => Self::Folder {
+                    id: id.clone(),
+                    name: name.clone(),
+                    open: *open,
+                    children: Vec::new(),
+                },
+            };
+            tree.push(depth, node);
+        }
+        tree.finish().pop().expect("cloning one root yields a root")
+    }
+}
+
+impl PartialEq for PinnedNode {
+    fn eq(&self, other: &Self) -> bool {
+        let flatten = |(node, depth, _)| pin_record(node, depth);
+        walk_pins(std::slice::from_ref(self))
+            .map(flatten)
+            .eq(walk_pins(std::slice::from_ref(other)).map(flatten))
+    }
+}
+
+impl Drop for PinnedNode {
+    fn drop(&mut self) {
+        if let Self::Folder { children, .. } = self {
+            let mut stack = std::mem::take(children);
+            while let Some(mut node) = stack.pop() {
+                if let Self::Folder { children, .. } = &mut node {
+                    stack.append(children);
+                }
+            }
         }
     }
 }
 
-fn pin_parent<'a>(
-    nodes: &'a [PinnedNode],
-    tab: &TabId,
-    parent: Option<&'a FolderId>,
-) -> Option<Option<&'a FolderId>> {
-    nodes.iter().find_map(|node| match node {
+#[derive(Default)]
+pub(crate) struct PinnedTree {
+    parents: Vec<(Vec<PinnedNode>, PinnedNode)>,
+    siblings: Vec<PinnedNode>,
+}
+
+impl PinnedTree {
+    pub(crate) fn accepts_depth(&self, depth: usize) -> bool {
+        depth <= self.parents.len()
+    }
+
+    pub(crate) fn push(&mut self, depth: usize, node: PinnedNode) {
+        self.ascend(depth);
+        if matches!(node, PinnedNode::Folder { .. }) {
+            self.parents
+                .push((std::mem::take(&mut self.siblings), node));
+        } else {
+            self.siblings.push(node);
+        }
+    }
+
+    pub(crate) fn finish(mut self) -> Vec<PinnedNode> {
+        self.ascend(0);
+        self.siblings
+    }
+
+    pub(crate) fn ascend(&mut self, depth: usize) {
+        while self.parents.len() > depth {
+            let (siblings, mut folder) = self.parents.pop().expect("an ancestor remains");
+            let PinnedNode::Folder { children, .. } = &mut folder else {
+                unreachable!("only folders can be ancestors");
+            };
+            *children = std::mem::replace(&mut self.siblings, siblings);
+            self.siblings.push(folder);
+        }
+    }
+}
+
+#[derive(PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+enum PinRecord<'a> {
+    Tab {
+        depth: usize,
+        #[serde(rename = "tabId")]
+        tab_id: &'a TabId,
+    },
+    Folder {
+        depth: usize,
+        id: &'a FolderId,
+        name: &'a str,
+        open: bool,
+    },
+}
+
+fn pin_record(node: &PinnedNode, depth: usize) -> PinRecord<'_> {
+    match node {
+        PinnedNode::Tab { tab_id } => PinRecord::Tab { depth, tab_id },
+        PinnedNode::Folder { id, name, open, .. } => PinRecord::Folder {
+            depth,
+            id,
+            name,
+            open: *open,
+        },
+    }
+}
+
+fn serialize_pins<S: serde::Serializer>(
+    nodes: &[PinnedNode],
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    // Keep the snapshot's JSON nesting independent of the domain tree's depth.
+    serializer.collect_seq(walk_pins(nodes).map(|(node, depth, _)| pin_record(node, depth)))
+}
+
+fn collect_pins<'a>(nodes: &'a [PinnedNode], tabs: &mut Vec<&'a TabId>) {
+    tabs.extend(walk_pins(nodes).filter_map(|(node, _, _)| match node {
+        PinnedNode::Tab { tab_id } => Some(tab_id),
+        PinnedNode::Folder { .. } => None,
+    }));
+}
+
+fn pin_parent<'a>(nodes: &'a [PinnedNode], tab: &TabId) -> Option<Option<&'a FolderId>> {
+    walk_pins(nodes).find_map(|(node, _, parent)| match node {
         PinnedNode::Tab { tab_id } if tab_id == tab => Some(parent),
-        PinnedNode::Folder { id, children, .. } => pin_parent(children, tab, Some(id)),
-        PinnedNode::Tab { .. } => None,
+        _ => None,
     })
 }
 
 fn find_folder<'a>(nodes: &'a [PinnedNode], id: &FolderId) -> Option<&'a PinnedNode> {
-    nodes.iter().find_map(|node| match node {
-        PinnedNode::Folder { id: candidate, .. } if candidate == id => Some(node),
-        PinnedNode::Folder { children, .. } => find_folder(children, id),
-        PinnedNode::Tab { .. } => None,
-    })
+    walk_pins(nodes)
+        .map(|(node, _, _)| node)
+        .find(|node| node.key() == PinnedKey::Folder(id))
 }
 
 fn find_folder_mut<'a>(nodes: &'a mut [PinnedNode], id: &FolderId) -> Option<&'a mut PinnedNode> {
-    for node in nodes {
-        if matches!(node, PinnedNode::Folder { id: candidate, .. } if candidate == id) {
-            return Some(node);
-        }
-        if let PinnedNode::Folder { children, .. } = node
-            && let Some(found) = find_folder_mut(children, id)
-        {
-            return Some(found);
+    let mut frames = vec![nodes.iter_mut()];
+    while let Some(siblings) = frames.last_mut() {
+        if let Some(node) = siblings.next() {
+            if node.key() == PinnedKey::Folder(id) {
+                return Some(node);
+            }
+            if let PinnedNode::Folder { children, .. } = node {
+                frames.push(children.iter_mut());
+            }
+        } else {
+            frames.pop();
         }
     }
     None
 }
 
 fn remove_pin(nodes: &mut Vec<PinnedNode>, id: &TabId) {
-    nodes.retain_mut(|node| match node {
-        PinnedNode::Tab { tab_id } => tab_id != id,
-        PinnedNode::Folder { children, .. } => {
-            remove_pin(children, id);
-            true
-        }
-    });
+    let mut stack = vec![nodes];
+    while let Some(siblings) = stack.pop() {
+        siblings.retain(|node| node.key() != PinnedKey::Tab(id));
+        stack.extend(siblings.iter_mut().filter_map(|node| match node {
+            PinnedNode::Folder { children, .. } => Some(children),
+            _ => None,
+        }));
+    }
 }
 
 fn take_folder(
@@ -1451,27 +1580,22 @@ fn take_folder(
     id: &FolderId,
     promote_children: bool,
 ) -> Option<PinnedNode> {
-    for (index, node) in nodes.iter_mut().enumerate() {
-        if let PinnedNode::Folder {
-            id: candidate,
-            children,
-            ..
-        } = node
+    let mut stack = vec![nodes];
+    while let Some(siblings) = stack.pop() {
+        if let Some(index) = siblings
+            .iter()
+            .position(|node| node.key() == PinnedKey::Folder(id))
         {
-            if candidate == id {
-                let promoted = if promote_children {
-                    std::mem::take(children)
-                } else {
-                    Vec::new()
-                };
-                let removed = nodes.remove(index);
-                nodes.splice(index..index, promoted);
-                return Some(removed);
+            let mut folder = siblings.remove(index);
+            if promote_children && let PinnedNode::Folder { children, .. } = &mut folder {
+                siblings.splice(index..index, std::mem::take(children));
             }
-            if let Some(removed) = take_folder(children, id, promote_children) {
-                return Some(removed);
-            }
+            return Some(folder);
         }
+        stack.extend(siblings.iter_mut().rev().filter_map(|node| match node {
+            PinnedNode::Folder { children, .. } => Some(children),
+            _ => None,
+        }));
     }
     None
 }

@@ -407,3 +407,83 @@ fn padded_whitespace_in_jwt_header_still_keeps_prose_local() {
         SuggestionAction::Copy(_)
     ));
 }
+
+#[test]
+fn jwt_filter_checks_adjacent_characters_and_encoded_forms() {
+    use base64::engine::general_purpose::STANDARD;
+    let payload = URL_SAFE_NO_PAD.encode(br#"{"sub":"synthetic"}"#);
+    let raw_headers = [
+        r#"{"alg":"HS256"}"#,
+        " {\n \"alg\": \"HS256\" }",
+        r#"{"alg":"HS256","kid":"¾ÿÿa"}"#,
+    ];
+    let wrappers = [
+        "",
+        "x",
+        "123",
+        "-_",
+        "_",
+        ".",
+        "%",
+        "%zz",
+        "\"",
+        "[",
+        "note-",
+        "note=",
+        "https://example.org/?token=",
+    ];
+    for header in raw_headers {
+        for encoded in [URL_SAFE_NO_PAD.encode(header), STANDARD.encode(header)] {
+            let compact = format!("{encoded}.{payload}.c2lnbmF0dXJl");
+            let percent = compact
+                .bytes()
+                .map(|byte| format!("%{byte:02X}"))
+                .collect::<String>();
+            for spelling in [&compact, &percent] {
+                for prefix in wrappers {
+                    for suffix in wrappers {
+                        let input = format!("review {prefix}{spelling}{suffix} please");
+                        assert!(
+                            SearchEngine::Google.suggestion_url(&input).is_none(),
+                            "prefix {prefix:?}, suffix {suffix:?}, percent-encoded: {}",
+                            spelling == &percent
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn jwt_decoder_accepts_standard_base64_and_padding() {
+    use base64::engine::general_purpose::STANDARD;
+    let header = json!({"alg":"HS256", "kid":"¾ÿÿa"});
+    let encoded = STANDARD.encode(header.to_string());
+    assert!(encoded.contains('+') && encoded.contains('/') && encoded.ends_with("=="));
+    let query = format!("{encoded}.e30.signature");
+    let rows = developer_suggestions(&query, None, &[], 0);
+    let [row] = rows.as_slice() else {
+        panic!("expected a decoded JWT")
+    };
+    let SuggestionAction::Copy(text) = &row.action else {
+        panic!("expected decoded JSON")
+    };
+    assert_eq!(
+        serde_json::from_str::<Value>(text).unwrap()["header"],
+        header
+    );
+}
+
+#[test]
+fn jwt_privacy_and_decoder_require_a_json_object_header() {
+    let array = URL_SAFE_NO_PAD.encode(br#"["header"]"#);
+    let non_token = format!("{array}.e30.signature");
+    assert!(
+        SearchEngine::Google
+            .suggestion_url(&format!("inspect {non_token} please"))
+            .is_some()
+    );
+    assert!(developer_suggestions(&non_token, None, &[], 0).is_empty());
+    assert_eq!(developer_suggestions("e30.e30.x", None, &[], 0).len(), 1);
+}

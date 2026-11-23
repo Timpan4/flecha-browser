@@ -137,6 +137,12 @@ pub fn suggestable(raw: &str) -> bool {
         return false;
     }
     let normalized: String = query.nfkc().collect();
+    let decoded = percent_decode_str(&normalized).decode_utf8_lossy();
+    if (normalized != query && contains_jwt(&normalized))
+        || (decoded != normalized && contains_jwt(&decoded.nfkc().collect::<String>()))
+    {
+        return false;
+    }
     let separator = re!(r"[^\p{L}\p{N}\p{M}\p{Default_Ignorable_Code_Point}\x21-\x7e。．｡]+");
     let alone = normalized
         .split_whitespace()
@@ -148,9 +154,6 @@ pub fn suggestable(raw: &str) -> bool {
     let punct_end = re!(r#"[.。．｡,;:!)"'”’\]]+$"#);
     for word in normalized.split_whitespace() {
         let decoded: String = decode_component(word).chars().nfkc().collect();
-        if contains_jwt(&decoded) {
-            return false;
-        }
         for form in [word, decoded.as_str()] {
             for part in std::iter::once(form).chain(separator.split(form)) {
                 let unwrapped = punct_start.replace(part, "");
@@ -184,19 +187,45 @@ fn decode_component(word: &str) -> std::borrow::Cow<'_, str> {
 }
 
 fn contains_jwt(text: &str) -> bool {
-    // A dotted prefix can precede a pasted token. Check each triple of segments.
-    let candidates = re!(r"[A-Za-z0-9_-]+={0,2}(?:\.[A-Za-z0-9_-]*={0,2}){2,}");
+    // Check every dot-separated triple and every possible start of its header,
+    // including tokens pasted immediately after letters, punctuation, or URL text.
+    let candidates = re!(r"[A-Za-z0-9_+/=-]+(?:\.[A-Za-z0-9_+/=-]*){2,}");
     for candidate in candidates.find_iter(text) {
         let mut parts = candidate.as_str().split('.');
         let (Some(mut header), Some(mut payload)) = (parts.next(), parts.next()) else {
             continue;
         };
         for signature in parts {
-            if !payload.is_empty() && decode_jwt_json(header).is_some_and(|json| json.is_object()) {
+            if !payload.is_empty() && has_jwt_header_suffix(header) {
                 return true;
             }
             header = payload;
             payload = signature;
+        }
+    }
+    false
+}
+
+fn has_jwt_header_suffix(segment: &str) -> bool {
+    let header = segment.trim_end_matches('=');
+    let start = header.rfind('=').map_or(0, |equals| equals + 1);
+    let segment = &segment[start..];
+    // Every Base64 start has one of four alignments. Decode each alignment once:
+    // subsequent four-character group boundaries decode to three-byte boundaries.
+    for alignment in 0..4 {
+        let Some(bytes) = segment.get(alignment..).and_then(decode_base64) else {
+            continue;
+        };
+        for (group, chunk) in bytes.chunks(3).enumerate() {
+            if let Some(first) = chunk
+                .iter()
+                .position(|byte| !matches!(byte, b' ' | b'\r' | b'\n' | b'\t'))
+                && matches!(chunk[first], b'{' | b'[')
+                && serde_json::from_slice::<Value>(&bytes[group * 3 + first..])
+                    .is_ok_and(|header| header.is_object())
+            {
+                return true;
+            }
         }
     }
     false
@@ -409,11 +438,21 @@ fn jwt_parts(text: &str) -> Option<(&str, &str)> {
 
 fn decode_jwt_json(part: &str) -> Option<Value> {
     let part = part.trim_matches([' ', '\t', '\r', '\n', '\x0c']);
-    let bytes = general_purpose::URL_SAFE_NO_PAD
+    serde_json::from_slice(&decode_base64(part)?).ok()
+}
+
+fn decode_base64(part: &str) -> Option<Vec<u8>> {
+    let normalized;
+    let part = if part.contains(['-', '_']) {
+        normalized = part.replace('-', "+").replace('_', "/");
+        normalized.as_str()
+    } else {
+        part
+    };
+    general_purpose::STANDARD_NO_PAD
         .decode(part)
-        .or_else(|_| general_purpose::URL_SAFE.decode(part))
-        .ok()?;
-    serde_json::from_slice(&bytes).ok()
+        .or_else(|_| general_purpose::STANDARD.decode(part))
+        .ok()
 }
 
 fn decode_jwt(text: &str, now: EpochMillis) -> Option<DeveloperSuggestion> {

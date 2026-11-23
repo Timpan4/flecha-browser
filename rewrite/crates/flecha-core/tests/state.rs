@@ -234,6 +234,57 @@ fn closed_window_limit_archives_displaced_today_tabs() {
 }
 
 #[test]
+fn evicted_window_tabs_take_the_front_even_when_the_archive_is_full() {
+    use flecha_core::ARCHIVE_LIMIT;
+    let main = WindowId::new("main");
+    let mut state = BrowserState::new(SpaceId::new("s"), main.clone());
+    for n in 0..ARCHIVE_LIMIT {
+        let tab = TabId::new(format!("archived{n}"));
+        let time = i64::try_from(n).unwrap();
+        assert!(state.open_today(
+            tab.clone(),
+            Tab::new(format!("https://example.org/archived{n}"), time),
+            &main,
+            None,
+            true
+        ));
+        assert_eq!(state.close_tab(&tab, time), CloseTab::Archived);
+    }
+    let first_closed = i64::try_from(ARCHIVE_LIMIT).unwrap();
+    for n in 0..=CLOSED_WINDOW_LIMIT {
+        let window = WindowId::new(format!("window{n}"));
+        assert!(state.open_window(window.clone(), None));
+        assert!(state.open_today(
+            TabId::new(format!("x{n}")),
+            Tab::new(format!("https://example.org/x{n}"), 0),
+            &window,
+            None,
+            true
+        ));
+        assert!(state.close_window(&window, first_closed + i64::try_from(n).unwrap()));
+    }
+    assert_eq!(state.archive().len(), ARCHIVE_LIMIT);
+    assert_eq!(state.archive()[0].url, "https://example.org/x0");
+    assert_eq!(state.archive()[0].closed_at, first_closed);
+    assert_eq!(
+        state.archive()[1].url,
+        format!("https://example.org/archived{}", ARCHIVE_LIMIT - 1)
+    );
+    assert_eq!(
+        state.archive().last().unwrap().url,
+        "https://example.org/archived1"
+    );
+    let mut state = decode(&encode(&state).unwrap()).unwrap();
+    assert_eq!(
+        state.reopen_last(TabId::new("reopened"), first_closed),
+        Some(Reopened::Window(WindowId::new(format!(
+            "window{CLOSED_WINDOW_LIMIT}"
+        ))))
+    );
+    assert_eq!(state.archive()[0].url, "https://example.org/x0");
+}
+
+#[test]
 fn pinned_tab_and_folder_ids_do_not_collide_as_ordering_anchors() {
     let space = SpaceId::new("s");
     let mut state = BrowserState::new(space.clone(), WindowId::new("w"));
@@ -476,13 +527,21 @@ fn closing_other_today_tabs_keeps_the_selected_responsive_pair() {
         true,
     );
     state.open_responsive(&window, mirror.clone(), 1).unwrap();
-    state.activate(&mirror, &window, None).unwrap();
-    assert_eq!(
-        state.close_today_tabs(&mirror, flecha_core::CloseToday::Others, 2),
-        [other]
-    );
-    assert_eq!(state.focused_window().visible_tabs(), [desktop, mirror]);
-    assert_eq!(state.archive().len(), 1);
+    for kept in [&desktop, &mirror] {
+        let mut state = state.clone();
+        assert_eq!(state.activate(kept, &window, None), Some(window.clone()));
+        assert_eq!(
+            state
+                .close_today_tabs(kept, flecha_core::CloseToday::Others, 2)
+                .as_slice(),
+            std::slice::from_ref(&other)
+        );
+        assert_eq!(
+            state.focused_window().visible_tabs(),
+            [desktop.clone(), mirror.clone()]
+        );
+        assert_eq!(state.archive().len(), 1);
+    }
 }
 
 #[test]

@@ -397,3 +397,11 @@ fn generated_space_ids_do_not_claim_stale_window_memberships() {
         assert!(state.tab(&TabId::new(id)).is_some());
     }
 }
+
+#[test]
+fn legacy_root_active_space_cannot_point_to_a_generated_id() {
+    let raw = r#"{"spaces":[{"id":"s"},{"id":"s"}],"tabs":{},"activeSpaceId":"recovered-space-1"}"#;
+    let state = migrate_legacy(raw).unwrap();
+    assert_eq!(state.focused_window().active_space_id, SpaceId::new("s"));
+    assert_ne!(state.spaces()[1].id, SpaceId::new("recovered-space-1"));
+}
