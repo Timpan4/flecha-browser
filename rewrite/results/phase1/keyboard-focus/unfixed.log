@@ -1,0 +1,26 @@
+Isolated run: /home/timpan4/.t3/worktrees/flecha-browser/t3-25e8aab9-8fed79970e8c4302/rewrite/target/phase1.Ev507J
+Isolation check passed: runtime sockets absent, localhost resolved, localtest.me unresolved
+PASS checked /proc environ for the app and its CEF descendants (10 processes, including a renderer or zygote child)
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+RETRY open: missing fixture colors #147A70, #FFCC49
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+READY open capture
+PASS opened a durable tab, received CEF load and paint, and captured the GPUI fixture frame
+PASS an X11 click and key passed through GPUI into the CEF input field
+magick: unable to access configure file `colors.xml' @ warning/configure.c/GetConfigureOptions/722.
+FAIL while waiting for X11 key after sidebar split AssertionError [ERR_ASSERTION]: sidebar split sent y to pane A, expected B
+
+'A' !== 'B'
+
+    at keyDelivery (file:///mnt/work/tools/verify-slice.mjs:333:10)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async sidebarFocus (file:///mnt/work/tools/verify-slice.mjs:374:3)
+    at async file:///mnt/work/tools/verify-slice.mjs:469:5 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: 'A',
+  expected: 'B',
+  operator: 'strictEqual',
+  diff: 'simple'
+}
+Isolated process namespace exited (1)
