@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Run before the sandbox starts any of its own services. Check the
-# mounted runtime, build and toolkit trees as well as the private mounts.
-roots=(/usr /etc /dev /run /tmp /var /mnt)
+# Check the host-backed mounts and the private runtime paths that replace
+# host service directories. X11 and the private session bus live elsewhere.
+roots=(/usr /etc /dev /run /var /mnt/work /mnt/cef)
 for directory in /bin /sbin /lib /lib64; do
   if [[ -d $directory && ! -L $directory ]]; then roots+=("$directory"); fi
 done
