@@ -25,9 +25,16 @@ pub(crate) enum Place {
 /// open in Peek (patch 0026). A Peek's new tabs open in its window as foreground tabs
 /// unless they ask for the background (patch 0026). A Flechinha's or popup's new tabs
 /// open in the main window (patch 0023). Scripted popups stay popups everywhere.
-pub(crate) fn place(model: &Model, owner: &Owner, opener: &TabId, disposition: Disposition) -> Place {
-    let (Owner::Tab(window) | Owner::Peek(window) | Owner::Flechinha(window) | Owner::Popup(window)) =
-        owner;
+pub(crate) fn place(
+    model: &Model,
+    owner: &Owner,
+    opener: &TabId,
+    disposition: Disposition,
+) -> Place {
+    let (Owner::Tab(window)
+    | Owner::Peek(window)
+    | Owner::Flechinha(window)
+    | Owner::Popup(window)) = owner;
     if disposition == Disposition::Popup {
         return Place::Popup(window.clone());
     }
@@ -229,7 +236,10 @@ mod tests {
         );
         assert!(matches!(
             place(&model, &owner, &favorite, Disposition::BackgroundTab),
-            Place::Tab { activate: false, .. }
+            Place::Tab {
+                activate: false,
+                ..
+            }
         ));
         model.core.settings.peek_pinned_links = Some(false);
         assert!(matches!(

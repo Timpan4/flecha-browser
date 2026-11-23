@@ -9,7 +9,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use cef::{Client, CefString, PopupFeatures, RuntimeStyle, WindowInfo, WindowOpenDisposition};
+use cef::{CefString, Client, PopupFeatures, RuntimeStyle, WindowInfo, WindowOpenDisposition};
 use flecha_core::TabId;
 
 use crate::Event;
@@ -133,9 +133,18 @@ mod tests {
     #[test]
     fn page_dispositions_map_to_the_shipping_shells_placements() {
         let cases = [
-            (WindowOpenDisposition::NEW_FOREGROUND_TAB, Some(Disposition::ForegroundTab)),
-            (WindowOpenDisposition::SINGLETON_TAB, Some(Disposition::ForegroundTab)),
-            (WindowOpenDisposition::NEW_BACKGROUND_TAB, Some(Disposition::BackgroundTab)),
+            (
+                WindowOpenDisposition::NEW_FOREGROUND_TAB,
+                Some(Disposition::ForegroundTab),
+            ),
+            (
+                WindowOpenDisposition::SINGLETON_TAB,
+                Some(Disposition::ForegroundTab),
+            ),
+            (
+                WindowOpenDisposition::NEW_BACKGROUND_TAB,
+                Some(Disposition::BackgroundTab),
+            ),
             (WindowOpenDisposition::NEW_WINDOW, Some(Disposition::Window)),
             (WindowOpenDisposition::NEW_POPUP, Some(Disposition::Popup)),
             (WindowOpenDisposition::CURRENT_TAB, None),

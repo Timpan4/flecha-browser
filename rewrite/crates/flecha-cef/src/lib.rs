@@ -27,6 +27,9 @@ use popup::{Pending, Popups};
 pub use runtime::Runtime;
 use runtime::path_string;
 
+/// `Opened`: CEF is creating this browser for a page, and the engine already owns it.
+/// `ClosedByPage`: the page closed its browser (`window.close()`), or CEF abandoned
+/// creating it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
     Created(i32),
@@ -37,9 +40,7 @@ pub enum Event {
     LoadFailed { url: String, code: i32 },
     Paint,
     PaintFailed,
-    /// CEF is creating this browser for a page. The engine already owns it.
     Opened(Opened),
-    /// The page closed its browser (`window.close()`) or CEF abandoned creating it.
     ClosedByPage,
 }
 

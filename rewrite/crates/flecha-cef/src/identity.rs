@@ -101,7 +101,11 @@ pub(crate) struct Counter(Rc<Cell<u64>>);
 
 impl Counter {
     pub fn reserve(&self, tab: TabId) -> BrowserKey {
-        let last = self.0.get().checked_add(1).expect("browser generation overflow");
+        let last = self
+            .0
+            .get()
+            .checked_add(1)
+            .expect("browser generation overflow");
         self.0.set(last);
         BrowserKey {
             tab,

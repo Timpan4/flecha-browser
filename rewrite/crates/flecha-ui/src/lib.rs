@@ -484,7 +484,8 @@ fn sync_windows(controller: &Shared, cx: &mut App) -> Result<()> {
                 px(height as f32) + view::POPUP_BAR_HEIGHT,
             )),
         };
-        let bounds = content.map(|content| WindowBounds::Windowed(Bounds::centered(None, content, cx)));
+        let bounds =
+            content.map(|content| WindowBounds::Windowed(Bounds::centered(None, content, cx)));
         let handle = cx.open_window(
             WindowOptions {
                 window_bounds: bounds,
