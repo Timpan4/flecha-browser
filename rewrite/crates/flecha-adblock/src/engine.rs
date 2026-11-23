@@ -96,20 +96,24 @@ impl Filters {
     /// request (uBlock Origin's rule for letting a page load), so the main engine can't answer
     /// this; only filters that name `$document` count.
     pub fn exempts_page(&self, page_url: &str, initiator: Initiator<'_>) -> bool {
-        let (engine, source) = match initiator {
-            // adblock-rust reads a source it can't parse as third-party with no hostname: the
-            // opaque initiator declarativeNetRequest gives a main frame.
-            Initiator::None => (&self.with_initiator, ""),
-            Initiator::Url(url) if has_host(url) => (&self.with_initiator, url),
-            Initiator::Url(_) | Initiator::Unknown => (&self.whatever_initiator, page_url),
+        // adblock-rust reads a source it can't parse as third-party with no hostname: the opaque
+        // initiator declarativeNetRequest gives a main frame.
+        let source = match initiator {
+            Initiator::None => "",
+            Initiator::Unknown => page_url,
+            Initiator::Url(url) => url,
         };
-        Request::new(page_url, source, "document", "get")
-            .is_ok_and(|request| engine.check_network_request(&request).should_block())
+        let Ok(request) = Request::new(page_url, source, "document", "get") else {
+            return false;
+        };
+        // The page exceptions without party or `$domain=` options don't depend on the source.
+        let engine = match initiator {
+            Initiator::None => &self.with_initiator,
+            Initiator::Url(_) if request.source_hostname_hashes.is_some() => &self.with_initiator,
+            Initiator::Url(_) | Initiator::Unknown => &self.whatever_initiator,
+        };
+        engine.check_network_request(&request).should_block()
     }
-}
-
-fn has_host(url: &str) -> bool {
-    url::Url::parse(url).is_ok_and(|url| url.host_str().is_some_and(|host| !host.is_empty()))
 }
 
 fn side_engine(lines: String) -> Engine {
@@ -150,7 +154,8 @@ pub fn engine_key<'a>(lists: impl IntoIterator<Item = (&'a str, &'a str)>) -> En
 /// look like filters but don't parse (adblock-rust skips those itself), and `$redirect`,
 /// `$redirect-rule` and `$rewrite` filters. Without their resources adblock-rust would cancel
 /// a `$redirect` request outright, where the list meant to serve a stub; build-adblock.mjs left
-/// them out, and so does this.
+/// them out, and so does this. Page exceptions that would match every page are left out and
+/// reported too, as build-adblock.mjs dropped them.
 pub fn build_engine<'a>(
     lists: impl IntoIterator<Item = (&'a str, &'a str)>,
 ) -> (Filters, Vec<SkippedLine>) {
@@ -192,9 +197,10 @@ fn names_document(line: &str) -> bool {
 }
 
 /// A page exception with no hostname, no pattern and no listed domain covers every page. The
-/// shell dropped such rules ("Would match everything"), and so does this.
+/// shell dropped such rules ("Would match everything"), and its `||*` patterns, and so does
+/// this. adblock-rust parses `||*` and `||` with an empty hostname.
 fn matches_every_page(filter: &NetworkFilter) -> bool {
-    filter.hostname.is_none()
+    filter.hostname.as_deref().is_none_or(str::is_empty)
         && matches!(filter.filter, FilterPart::Empty)
         && filter.opt_domains.is_none()
 }
@@ -267,7 +273,8 @@ fn port_anchored_as_regex(line: &str) -> Option<String> {
     Some(regex)
 }
 
-/// The list without its redirect filters. Comments, blank lines and the header neither parse
+/// The list without its redirect filters and the page exceptions that would match every page.
+/// The kept page exceptions go to `page_exceptions`. Comments, blank lines and the header neither parse
 /// nor count as errors; adblock-rust calls syntax it doesn't take at all `Unsupported`.
 fn kept_lines(
     id: &str,
@@ -484,7 +491,8 @@ mod tests {
             // Domains compare in lower case, as the shell read them.
             ("$document,domain=~NEWS.Example", true, true, false, false),
             ("$document,domain=A.EXAMPLE", false, true, false, false),
-            ("$document,FROM=~NEWS.EXAMPLE", false, false, false, false),
+            ("$document,~~domain=~NEWS.Example", true, true, false, false),
+            ("$document,from=~NEWS.Example", true, true, false, false),
         ];
         for (options, tab, by_own, by_news, unknown) in cases {
             let (filters, _) = filters(&format!("@@||cdn.a.example^{options}\n"));
@@ -510,6 +518,9 @@ mod tests {
         let dropped = [
             "@@$document",
             "@@*$document",
+            "@@||*$document",
+            "@@||$document",
+            "@@|*$document",
             "@@$document,~third-party",
             "@@$document,first-party",
             "@@$document,third-party",
