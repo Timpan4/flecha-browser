@@ -36,7 +36,7 @@ Both modes use the same settings except the windowing ones (`windowless_renderin
 
 | Item | Pin (`rewrite/pins.toml`) | Observed |
 |---|---|---|
-| cef-rs | `Timpan4/cef-rs` rev `32d6bc55` | Built from that rev |
+| cef-rs | `Timpan4/cef-rs` rev `32d6bc55` | Built from that rev, as Spike 1's `prepare.sh` stages it (`.flecha-revision` names the rev) with `spikes/gpui-cef-compositor/patches/cef-rs.patch` applied. The patch changes cef-dll-sys's build script and `Cargo.toml`, adds a compiled-in archive SHA-1 constant, and changes the `accelerated_osr` texture import code, which this spike does not enable (`cargo tree -e features`: `cef` with `sandbox` only) |
 | CEF version | `158.0.3+g8c29be2+chromium-158.0.8127.18` | `chrome://version`: `CEF 158.0.3+g8c29be2+chromium-158.0.8127.18`, `Chromium 158.0.8127.18 (Official Build)` |
 | CEF commit | `g8c29be2` | `cef_api_hash(…, 2)` at run time: `8c29be240971eebee960ac92114d3efccb5780ff` |
 | Archive | beta SHA-1 `057a0b87…` | `cef_binary_158.0.3+g8c29be2+chromium-158.0.8127.18_linux64_beta_minimal.tar.bz2`, SHA-1 `057a0b871bf26d26d654d999dba595b92fe0f067`, checked by `prepare.sh` before staging and by the binary at start (`archive.json` next to the loaded `libcef.so`). The beta gap of the first round is closed for this spike. |
@@ -62,9 +62,9 @@ flock "$XDG_RUNTIME_DIR/flecha-rewrite-build.lock" \
 
 How the runtime is found:
 
-- Both spikes are members of the `rewrite/` workspace, and a workspace can hold only one cef-dll-sys, because it declares `links = "cef_dll_wrapper"`. So this spike uses the workspace's `cef` dependency: Spike 1's staged copy of the same pinned cef-rs rev, with Spike 1's patch. That patched build script ignores `CEF_PATH`. It checks Spike 1's staged copy of the same pinned beta archive against `pins.toml`, links against it, and copies it into `target/debug`.
+- Both spikes are members of the `rewrite/` workspace, and a workspace can hold only one cef-dll-sys, because it declares `links = "cef_dll_wrapper"`. So this spike uses the workspace's `cef` dependency: Spike 1's staged copy of the same pinned cef-rs rev, with Spike 1's patch. That patched build script ignores `CEF_PATH`. It checks Spike 1's staged copy of the same pinned beta archive against `pins.toml`, links against it, and copies it into `target/debug`. A build through the workstation's caching `cargo` can skip that copy: the fresh clone had none, the working tree had one.
 - `build.sh` checks this spike's staged runtime and Spike 1's staged cef-rs source, then runs `cargo build --locked -p cef-osr-signin`.
-- The binary has no RUNPATH, so the dynamic loader never looks in `target/debug`, even with Spike 1's copy there. `run.sh` checks this spike's staged runtime and starts the binary with `LD_LIBRARY_PATH` set to it. Started any other way, the loader fails before `main` (`libcef.so: cannot open shared object file`). The self-check report's `cef.loaded_libcef` names the copy that loaded.
+- The binary has no RUNPATH, so the dynamic loader never looks in `target/debug`, even with Spike 1's copy there. `run.sh` checks this spike's staged runtime and starts the binary with `LD_LIBRARY_PATH` set to it. Started any other way, the loader fails before `main` (`libcef.so: cannot open shared object file`). The self-check report's `cef.loaded_libcef` names the copy that loaded. In a run with a full runtime copy in `target/debug`, all 10 app processes mapped `libcef.so`, the paks, ICU data and locales from this spike's stage, and none mapped or held open a file under `target/debug` (other than the binary) or Spike 1's stage.
 - At start, before any CEF call, `main` checks that the loaded runtime is the pinned one. It checks the API version (15800), the commit (`8c29be2`), the `archive.json` SHA-1 next to the loaded `libcef.so` (the `pins.toml` value, compiled in by `build.rs`), and the resource files. If any check fails, it exits with `wrong CEF runtime: …`. It points CEF's `resources_dir_path` and `locales_dir_path` at that directory.
 
 Run with a new, dedicated profile directory. Never point `--profile` at a real browser profile or at `.flecha-profile`.
@@ -93,7 +93,7 @@ The terminal shows load events, popups and permission requests. Paths, queries, 
 - the path as well for `file://`, `chrome://` and `devtools://` URLs, still without query or fragment;
 - only `scheme:` for every other scheme, whatever follows the colon (`data:`, `mailto:`, `javascript:`, `blob:`, `about:`, also `data://…`).
 
-The scheme is compared in lower case. A `\` counts as `/` only for the special schemes of the WHATWG URL standard (`http`, `https`, `ws`, `wss`, `ftp`, `file`), as browsers parse them.
+The scheme is compared in lower case. A `\` counts as `/` only for the special schemes of the WHATWG URL standard (`http`, `https`, `ws`, `wss`, `ftp`, `file`), as browsers parse them; for every scheme a `\` ends the host.
 
 Page `console.log` output is relayed only from the spike's local fixtures. CEF's `OnConsoleMessage` does not say which frame logged a message, and a page can set a message's source to any URL with `//# sourceURL`. So a message is relayed only when its source is a `file://` URL and every frame in the browser, the main frame and each iframe, is a `file://` page. A local page that embeds any remote frame relays nothing, not even its own lines. `--log-console` relays every page's console output; do not use it during the sign-in checks.
 
@@ -159,7 +159,7 @@ ACTIONS=$PWD/spikes/cef-osr-signin/scripts/osr-actions.sh WAIT_SECS=30 XDOTOOL=/
 
 ### Workarounds in this spike
 
-- `rewrite/.cargo/config.toml` sets `net.git-fetch-with-cli = true`. Cargo's built-in git client failed to fetch the pinned commit on the workstation (`revision … not found`, through the user's `url.insteadOf` SSH rewrite). The git CLI fetches it.
+- `rewrite/.cargo/config.toml` sets `net.git-fetch-with-cli = true`. With the user's `url.insteadOf` SSH rewrite, Cargo's built-in git client cannot fetch the workspace's pinned git dependencies: with an empty `CARGO_HOME` and the setting off, it failed with `revision 3759371fee14c40066d64777e2a36b6ffcc22590 not found` for the zed calloop fork. The git CLI fetches them.
 - The CEF runtime this spike loads is staged by its own `prepare.sh`, not by a build script. At the pinned rev, upstream cef-dll-sys copies the runtime to `OUT_DIR`'s third parent, which under Cargo 1.100's build-dir layout is `target/debug/build`, not `target/debug` ([tauri-apps/cef-rs#522](https://github.com/tauri-apps/cef-rs/pull/522), open). Since the merge with Spike 1, the workspace builds Spike 1's patched cef-rs, which links against Spike 1's own stage and copies it into `target/debug`. Both stages are the same pinned beta archive, SHA-1 checked by each prepare step, so the build links against the same files the binary loads; the binary loads only this spike's stage, through `run.sh`. One shared prepare step should replace both.
 
 ## Automated results
@@ -177,7 +177,9 @@ Command output: [evidence/runtime-checks.txt](evidence/runtime-checks.txt).
 | `prepare.sh` with `include/` moved out of the stage | exit 1: `The CEF runtime at … is incomplete: include is missing. Remove the directory and run prepare.sh again.` |
 | `prepare.sh` with the archive removed and a `curl` that writes junk | exit 1: `sha1sum` reports the mismatch; no `download.*` file left |
 | `run.sh` with `FLECHA_SPIKE_BIN=no-such-spike-binary` | exit 1: the bare name is resolved through `PATH` before the check |
-| `build.sh` through the lock, PATH `cargo` (the caching `mbx` shim) | exit 0; `readelf -d`: `NEEDED libcef.so`, no RUNPATH; no `libcef.so` or `.pak` at the top level of `target/debug`. cef-dll-sys's build script still copies a runtime under `target/debug/build/`, which is on no library search path and is never loaded |
+| `build.sh` before Spike 1's `prepare.sh` | exit 1: `No staged cef-rs source at …/target/spike1-src/cef-rs. Run spikes/gpui-cef-compositor/prepare.sh first.` |
+| Spike 1's `prepare.sh` | exit 0; its stage's `libcef.so` has the same SHA-1 as this spike's |
+| `build.sh` through the lock, PATH `cargo` (the caching `mbx` shim) | exit 0; `Cargo.lock` unchanged; `readelf -d`: `NEEDED libcef.so`, no RUNPATH. In this clone no runtime was copied to `target/debug`; where one is, it is on no library search path and is never loaded (see [Build and run](#build-and-run)) |
 | The binary started without `run.sh` | exit 127: `libcef.so: cannot open shared object file` (dynamic loader) |
 | `libcef.so` copied alone into a directory, `LD_LIBRARY_PATH` pointing there | exit 1: `wrong CEF runtime: cannot read …/archive.json` |
 | Self-check, both modes | loaded `target/cef-runtime/158.0.3/cef_linux_x86_64/libcef.so`, API version 15800, commit `8c29be24…`, archive `cef_binary_158.0.3+g8c29be2+chromium-158.0.8127.18_linux64_beta_minimal.tar.bz2`, SHA-1 `057a0b87…` |
@@ -247,7 +249,7 @@ Each row is one scripted run through `scripts/xvfb-isolated.sh` on `scripts/inpu
 | OSR Ctrl+A on French AZERTY | `osr-actions.sh` | With `setxkbmap fr`, the page saw `keydown a KeyQ 65 ctrl true` (VK_A from the layout, physical position Q, Ctrl held; a plain `a` would also be `KeyQ 65`, so the Ctrl flag is asserted too). Before the fix it saw `keydown q KeyQ 81`, so Ctrl+A acted as Ctrl+Q |
 | OSR `pdf <path>` | `osr-actions.sh` | `[pdf] ok=true`, file not empty |
 | OSR `go <url>` | `osr-actions.sh` | `[load-end] http://127.0.0.1:<port>`, logged after the command |
-| OSR console relay, default | `osr-actions.sh`, `console-actions.sh` with `EXPECT_MARKER=0` | The loopback marker page loaded and ran (its `/ran` request arrived), as the main frame and as a remote iframe inside a local `file://` page. Each load logs a plain marker and one whose source is spoofed to `file:///flecha-spoof.js`. Each of the four was counted on its own: 0 lines in stderr, while `input-test.html`'s own console lines were relayed. 0 marker lines in the profile's `chrome_debug.log`. A mutant that relays any message with a `file://` source failed this run on the spoofed main-frame marker |
+| OSR console relay, default | `osr-actions.sh`, `console-actions.sh` with `EXPECT_MARKER=0` | The loopback marker page loaded and ran (its `/ran` request arrived), as the main frame and as a remote iframe inside a local `file://` page. Each load logs a plain marker and one whose source is spoofed to `file:///flecha-spoof.js`. Each of the four was counted on its own: 0 lines in stderr, while `input-test.html`'s own console lines were relayed. 0 marker lines in the profile's `chrome_debug.log`. With the previous rule (a `file://` source and a `file://` main frame), this run failed on the spoofed iframe marker; with a rule that trusts any `file://` source, on the spoofed main-frame marker |
 | OSR console relay, `--log-console` | `console-actions.sh` with `EXPECT_MARKER=1` | 1 line for each of the four markers (plain and spoofed, main frame and iframe), counted on its own: the check can see each one. 0 marker lines in `chrome_debug.log` |
 | OSR `quit` | `osr-actions.sh` | app exit status 0 |
 | Chrome: tab opened from Chrome's UI | `chrome-actions.sh` | Ctrl+T, then the loopback marker page through the omnibox: the new tab got the app's client (`[browser] created id=2 open=2`, `[load-end] http://127.0.0.1:<port>`) ([screenshot](evidence/chrome-two-tabs.png)); 0 marker lines in stderr and in `chrome_debug.log` |

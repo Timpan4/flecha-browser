@@ -99,8 +99,9 @@ pub fn display_url(url: &str) -> String {
         "file" => format!("file://{}", without_query.replace('\\', "/")),
         "chrome" | "devtools" => format!("{scheme}://{without_query}"),
         _ => {
-            let delimiters: &[char] = if special { &['/', '\\'] } else { &['/'] };
-            let authority = without_query.split(delimiters).next().unwrap_or("");
+            // A `\` ends the authority for every scheme here: for special schemes it is a
+            // path separator, and for the others it is never part of a host worth printing.
+            let authority = without_query.split(['/', '\\']).next().unwrap_or("");
             let host = authority.rsplit('@').next().unwrap_or("");
             format!("{scheme}://{host}")
         }
@@ -344,6 +345,10 @@ mod tests {
             ("chrome:\\\\TOK", "chrome:"),
             (
                 "chrome-extension://abcdef/popup.html?TOK",
+                "chrome-extension://abcdef",
+            ),
+            (
+                "chrome-extension://abcdef\\TOK",
                 "chrome-extension://abcdef",
             ),
             (
