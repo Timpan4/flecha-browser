@@ -2063,6 +2063,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "flecha-boosts"
+version = "0.1.0"
+dependencies = [
+ "flecha-core",
+ "indexmap",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "url",
+]
+
+[[package]]
 name = "flecha-cef"
 version = "0.1.0"
 dependencies = [

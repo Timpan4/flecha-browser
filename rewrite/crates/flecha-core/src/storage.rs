@@ -289,6 +289,41 @@ fn decode_document(json: &str, legacy_only: bool) -> Result<DecodedSnapshot, Dec
 }
 
 fn check_version(version: &RawValue, legacy_only: bool) -> Result<(), DecodeError> {
+    match version_order(version, SCHEMA_VERSION) {
+        Some(StoredVersion {
+            order: Ordering::Greater,
+            text,
+        }) => Err(DecodeError::UnsupportedVersion(text)),
+        Some(StoredVersion {
+            order: Ordering::Equal,
+            ..
+        }) if legacy_only => Err(DecodeError::AlreadyMigrated),
+        // The Chromium decoder accepted older values and ignored nonnumeric tags.
+        _ => Ok(()),
+    }
+}
+
+/// A stored document's `version`, compared with the reader's schema version.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StoredVersion {
+    /// The version as stored, with a string's quotes and surrounding whitespace removed.
+    pub text: String,
+    pub order: Ordering,
+}
+
+/// Read only the `version` of a JSON object document and compare it with `current`.
+///
+/// Nothing else in the document is decoded, so a newer document is recognised whatever its other
+/// fields hold. A number or numeric string compares by its decimal spelling. A missing or
+/// nonnumeric version gives `None`. An error means the text is not a JSON object.
+pub fn read_schema_version(json: &str, current: u64) -> serde_json::Result<Option<StoredVersion>> {
+    let fields = snapshot::read_record(json)?;
+    Ok(fields
+        .get("version")
+        .and_then(|version| version_order(version, current)))
+}
+
+fn version_order(version: &RawValue, current: u64) -> Option<StoredVersion> {
     let raw = version.get();
     let decoded;
     let text = if raw.starts_with('"') {
@@ -297,12 +332,10 @@ fn check_version(version: &RawValue, legacy_only: bool) -> Result<(), DecodeErro
     } else {
         raw
     };
-    match compare_version(text, &SCHEMA_VERSION.to_string()) {
-        Some(Ordering::Greater) => Err(DecodeError::UnsupportedVersion(text.into())),
-        Some(Ordering::Equal) if legacy_only => Err(DecodeError::AlreadyMigrated),
-        // The Chromium decoder accepted older values and ignored nonnumeric tags.
-        _ => Ok(()),
-    }
+    compare_version(text, &current.to_string()).map(|order| StoredVersion {
+        text: text.into(),
+        order,
+    })
 }
 
 /// Compare the decimal spelling without rounding a newer schema to the current version.
