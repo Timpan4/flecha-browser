@@ -481,17 +481,20 @@ impl DownloadList {
         entry.total = u64::try_from(snapshot.total).unwrap_or(0);
         let reported = snapshot.full_path;
         if !reported.as_os_str().is_empty() {
-            // The intermediate file sits in the folder the person picked, so its folder is
-            // the dialog's answer (`RequestConfirmationDone` → `SetSaveFilePath`).
+            // Chromium first reports a path once the target is decided, which is after the
+            // dialog (`OnDownloadRenamedToIntermediateName` → `SetFullPath`), and it keeps the
+            // intermediate file in the target's folder (`OnDownloadTargetDetermined`'s DCHECK).
+            // So that folder is the dialog's answer (`RequestConfirmationDone` →
+            // `SetSaveFilePath`).
             if entry.prompted
                 && let Some(folder) = reported.parent()
             {
                 self.last_prompt_folder = Some(folder.to_path_buf());
                 entry.prompted = false;
             }
-            // Until completion the full path is the intermediate `.crdownload` file
-            // (`DownloadItem::GetFullPath`), so the decided target keeps the reservation and
-            // the row until the file reaches its final name.
+            // Until completion the full path may be an intermediate file such as
+            // `.crdownload` (`DownloadItem::GetFullPath`), so the decided target keeps the
+            // reservation and the row until the file reaches its final name.
             if to == State::Complete {
                 entry.path = reported.to_path_buf();
             }
