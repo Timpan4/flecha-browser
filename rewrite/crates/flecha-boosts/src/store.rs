@@ -58,7 +58,11 @@ impl Effect {
         !matches!(self, Self::Unchanged)
     }
 
-    /// Whether the open page at `url` has to be restyled or reloaded.
+    /// Whether the open page at `url` has to be restyled or reloaded: [`applies`] for the host.
+    ///
+    /// The shell reloaded every tab `boostMatches` took, including `chrome://`, extension and
+    /// `file:` tabs, and restyled all but the `file:` ones, which Chromium kept it out of. The
+    /// rewrite leaves non-web pages alone on purpose.
     pub fn affects(&self, url: &str) -> bool {
         match self {
             Self::Restyle { host } | Self::Reload { host } => applies(url, host),

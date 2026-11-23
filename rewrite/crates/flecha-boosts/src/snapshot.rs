@@ -5,9 +5,11 @@
 //! damaged current snapshot is set aside before anything replaces it, and a snapshot from a
 //! newer Flecha is refused so an older one can't overwrite it.
 
+use std::cmp::Ordering;
 use std::fmt;
 
 pub use flecha_core::storage::Recovery;
+use flecha_core::storage::{StoredVersion, read_schema_version};
 use serde::Serialize;
 use serde_json::{Map, Value};
 
@@ -91,17 +93,20 @@ pub fn encode(boosts: &Boosts) -> String {
 }
 
 pub fn decode(json: &str) -> Result<DecodedBoosts, DecodeError> {
-    let document: Value = serde_json::from_str(json).map_err(DecodeError::Json)?;
-    let fields = document.as_object().ok_or(DecodeError::InvalidShape)?;
-    match fields.get("version") {
-        Some(Value::Number(version)) if version.as_u64() == Some(SCHEMA_VERSION) => {}
-        Some(Value::Number(version))
-            if version.as_f64().is_some_and(|v| v > SCHEMA_VERSION as f64) =>
-        {
-            return Err(DecodeError::UnsupportedVersion(version.to_string()));
-        }
+    // Read the version alone first, so a newer file is refused whatever else it holds.
+    match read_schema_version(json, SCHEMA_VERSION).map_err(DecodeError::Json)? {
+        Some(StoredVersion {
+            order: Ordering::Equal,
+            ..
+        }) => {}
+        Some(StoredVersion {
+            order: Ordering::Greater,
+            text,
+        }) => return Err(DecodeError::UnsupportedVersion(text)),
         _ => return Err(DecodeError::InvalidShape),
     }
+    let document: Value = serde_json::from_str(json).map_err(DecodeError::Json)?;
+    let fields = document.as_object().ok_or(DecodeError::InvalidShape)?;
     let saved = fields
         .get("boosts")
         .and_then(Value::as_array)

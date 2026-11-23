@@ -74,7 +74,8 @@ rows.push({ kind: 'url-hosts', hosts });
 
 type Tab = { id: number; url: string };
 
-type Stored = { boosts?: Record<string, string>; boostsCompiled?: Record<string, CompiledBoost> };
+// The shell read these keys with `?? {}`, so the malformed scenarios store other JSON values too.
+type Stored = { boosts?: Json; boostsCompiled?: Json };
 
 type Navigation = { tabId: number; frameId: number; url: string; documentId?: string };
 
@@ -86,10 +87,11 @@ type Call =
   | { api: 'storage.set'; items: Json }
   | { api: 'unregister' }
   | { api: 'register'; scripts: Registered[] }
-  | { api: 'execute'; tabId: number; documentId: string; code: string; world: string }
-  | { api: 'insertCSS' | 'removeCSS'; tabId: number; css: string; origin: string }
-  | { api: 'consoleError'; tabId: number; documentId: string; message: string; world: string }
-  | { api: 'reload'; tabId: number };
+  | { api: 'execute'; tabId: number; documentId: string; code: string; world: string; refused?: true }
+  | { api: 'insertCSS' | 'removeCSS'; tabId: number; css: string; origin: string; refused?: true }
+  | { api: 'consoleError'; tabId: number; documentId: string; message: string; world: string; refused?: true }
+  | { api: 'reload'; tabId: number }
+  | { api: 'warn'; message: string };
 
 type UserScript = { id: string; matches: string[]; js: { code: string }[]; world: string; runAt: string; allFrames?: boolean };
 
@@ -99,9 +101,22 @@ let instance = 0;
 
 async function shell(stored: Stored, tabs: Tab[]) {
   const calls: Call[] = [];
+  const tabUrls = new Map(tabs.map((tab) => [tab.id, tab.url]));
+
+  // The shell was a component extension (patch 0021), so Chromium let it script every scheme
+  // except file:, which it had no access to. A refused call is recorded, then rejects as Chromium's did.
+  const access = (call: Extract<Call, { refused?: true }>) => {
+    if (!tabUrls.get(call.tabId)?.startsWith('file:')) return void calls.push(call);
+    calls.push({ ...call, refused: true });
+    throw new Error('Cannot access contents of the page.');
+  };
+
   const listeners = new Map<string, Listener>();
   const listen = (key: string) => ({ addListener: (fn: Listener) => void listeners.set(key, fn) });
   const ignore = { addListener: () => undefined };
+
+  // The shell's warnings are kept with its calls; their stacks would print the bundled module.
+  console.warn = (message: string) => void calls.push({ api: 'warn', message });
 
   Object.assign(globalThis, {
     chrome: {
@@ -121,18 +136,18 @@ async function shell(stored: Stored, tabs: Tab[]) {
             scripts: scripts.map((s) => ({ id: s.id, code: s.js[0].code, matches: s.matches, world: s.world, runAt: s.runAt, allFrames: s.allFrames ?? false })),
           }),
         execute: async ({ target, js, world }: { target: Target; js: { code: string }[]; world: string }) => {
-          calls.push({ api: 'execute', tabId: target.tabId, documentId: target.documentIds[0], code: js[0].code, world });
+          access({ api: 'execute', tabId: target.tabId, documentId: target.documentIds[0], code: js[0].code, world });
 
           return [{}];
         },
       },
       scripting: {
         insertCSS: async ({ target, css, origin }: { target: Target; css: string; origin: string }) =>
-          void calls.push({ api: 'insertCSS', tabId: target.tabId, css, origin }),
+          access({ api: 'insertCSS', tabId: target.tabId, css, origin }),
         removeCSS: async ({ target, css, origin }: { target: Target; css: string; origin: string }) =>
-          void calls.push({ api: 'removeCSS', tabId: target.tabId, css, origin }),
+          access({ api: 'removeCSS', tabId: target.tabId, css, origin }),
         executeScript: async ({ target, args, world }: { target: Target; args: string[]; world: string }) => {
-          calls.push({ api: 'consoleError', tabId: target.tabId, documentId: target.documentIds[0], message: args[0], world });
+          access({ api: 'consoleError', tabId: target.tabId, documentId: target.documentIds[0], message: args[0], world });
 
           return [{}];
         },
@@ -174,7 +189,7 @@ async function shell(stored: Stored, tabs: Tab[]) {
   await settle();
   const take = () => calls.splice(0);
 
-  return { boosts, fire, settle, take };
+  return { boosts, fire, settle, take, tabUrls };
 }
 
 type Op =
@@ -204,10 +219,12 @@ async function perform(s: Shell, op: Op): Promise<Json> {
     case 'get': return plain(s.boosts.get(op.name));
     case 'boostedHosts': return plain(s.boosts.boostedHosts());
     case 'commit':
+      if (op.frameId === 0) s.tabUrls.set(op.tabId, op.url);
       s.fire('committed', { tabId: op.tabId, frameId: op.frameId, url: op.url });
 
       return null;
     case 'domReady':
+      if (op.frameId === 0) s.tabUrls.set(op.tabId, op.url);
       s.fire('domReady', { tabId: op.tabId, frameId: op.frameId, url: op.url, documentId: op.documentId });
 
       return null;
@@ -234,6 +251,8 @@ const tabs: Tab[] = [
   { id: 2, url: 'https://gist.github.com/x' },
   { id: 3, url: 'https://example.org/' },
   { id: 4, url: 'chrome://settings/' },
+  { id: 6, url: 'file://server/share/x.txt' },
+  { id: 7, url: 'chrome-extension://abcdefghijklmnop/x.html' },
 ];
 
 const createdHosts = [
@@ -270,9 +289,14 @@ await scenario('save, apply and remove', {
     'Upper.example.ts': 'stored with an uppercase host',
     'example.org.ts': 'template only',
     'stray.example.txt': 'not a boost',
-    // boostMatches takes any scheme. Chrome's scripting API kept this off chrome:// pages.
+    // boostMatches takes any scheme. The shell styled and scripted chrome:// and extension
+    // pages, and reloaded file: pages it couldn't script. The rewrite limits Boosts to web pages.
     'settings.css': 'body { zoom: 2 }',
     'settings.ts': 'mark()',
+    'server.css': 'pre { tab-size: 2 }',
+    'server.ts': 'mark()',
+    'abcdefghijklmnop.css': 'p { margin: 0 }',
+    'abcdefghijklmnop.ts': 'broken(',
     [hostileName]: 'mark()',
     // list() sorts in UTF-16 order: the astral name sorts before U+E000, unlike code-point order.
     '\u{E000}private.css': 'p {}',
@@ -284,12 +308,24 @@ await scenario('save, apply and remove', {
     'example.org.ts': {},
     'orphan.example.ts': { code: 'never run' },
     'settings.ts': { code: 'mark()' },
-    [hostileName]: compileBoost(hostileName, 'mark()'),
+    'server.ts': { code: 'mark()' },
+    'abcdefghijklmnop.ts': { error: 'Error transforming abcdefghijklmnop.ts: Unexpected token (1:7)' },
+    [hostileName]: plain(compileBoost(hostileName, 'mark()')),
   },
 }, tabs, [
   { op: 'commit', tabId: 4, frameId: 0, url: 'chrome://settings/' },
   { op: 'domReady', tabId: 4, frameId: 0, url: 'chrome://settings/', documentId: 'doc-4' },
   { op: 'save', name: 'settings.css', code: 'body { zoom: 3 }' },
+  { op: 'save', name: 'settings.ts', code: 'mark(2)', build: { code: 'mark(2)' } },
+  { op: 'commit', tabId: 6, frameId: 0, url: 'file://server/share/x.txt' },
+  { op: 'domReady', tabId: 6, frameId: 0, url: 'file://server/share/x.txt', documentId: 'doc-6' },
+  { op: 'save', name: 'server.css', code: 'pre { tab-size: 4 }' },
+  { op: 'save', name: 'server.ts', code: 'mark(2)', build: { code: 'mark(2)' } },
+  { op: 'commit', tabId: 7, frameId: 0, url: 'chrome-extension://abcdefghijklmnop/x.html' },
+  { op: 'domReady', tabId: 7, frameId: 0, url: 'chrome-extension://abcdefghijklmnop/x.html', documentId: 'doc-7' },
+  { op: 'save', name: 'abcdefghijklmnop.css', code: 'p { margin: 1px }' },
+  { op: 'save', name: 'abcdefghijklmnop.ts', code: 'fixed()', build: { code: 'fixed()' } },
+  { op: 'domReady', tabId: 7, frameId: 0, url: 'chrome-extension://abcdefghijklmnop/x.html', documentId: 'doc-7b' },
   { op: 'list' },
   { op: 'boostedHosts' },
   { op: 'get', name: 'github.com.ts' },
@@ -345,6 +381,30 @@ await scenario('registered user scripts', {
   'http://Shout.Example./', 'https://example.org/', 'https://notgithub.com/',
 ].map((url, i): Op => ({ op: 'domReady', tabId: 10 + i, frameId: 0, url, documentId: `doc-r${i}` })));
 
+// The shell read each key with `?? {}` and looked Boosts up by name in whatever it found. Another
+// JSON value holds no Boost or build there, so the shell still used the other key.
+const malformed = Object.entries({ array: ['a.example.css'], string: 'a.example.css', number: 5, boolean: true });
+
+for (const [label, value] of malformed) {
+  const page = 'https://a.example/';
+
+  await scenario(`malformed builds: ${label}`, { boosts: { 'a.example.css': 'p {}', 'a.example.ts': 'mark()' }, boostsCompiled: value }, [{ id: 1, url: page }], [
+    { op: 'list' },
+    { op: 'commit', tabId: 1, frameId: 0, url: page },
+    { op: 'domReady', tabId: 1, frameId: 0, url: page, documentId: 'doc-1' },
+    { op: 'save', name: 'a.example.ts', code: 'mark(2)', build: { code: 'mark(2)' } },
+    { op: 'domReady', tabId: 1, frameId: 0, url: page, documentId: 'doc-1b' },
+  ]);
+
+  await scenario(`malformed files: ${label}`, { boosts: value, boostsCompiled: { 'a.example.ts': { code: 'mark()' } } }, [{ id: 1, url: page }], [
+    { op: 'list' },
+    { op: 'commit', tabId: 1, frameId: 0, url: page },
+    { op: 'domReady', tabId: 1, frameId: 0, url: page, documentId: 'doc-1' },
+    { op: 'save', name: 'a.example.css', code: 'p {}' },
+    { op: 'list' },
+  ]);
+}
+
 // ---- compiling, and what the compiled Boost does when a page runs it ---------
 
 const compileCases = Object.entries({
@@ -390,7 +450,7 @@ const injectedBy = new Map<string, string>();
 {
   const s = await shell({
     boosts: Object.fromEntries(compileCases.map(([key, source]) => [boostName(key), source])),
-    boostsCompiled: Object.fromEntries(compileCases.map(([key, source]) => [boostName(key), compileBoost(boostName(key), source)])),
+    boostsCompiled: plain(Object.fromEntries(compileCases.map(([key, source]) => [boostName(key), compileBoost(boostName(key), source)]))),
   }, []);
 
   for (const [key] of compileCases) s.fire('domReady', { tabId: 1, frameId: 0, url: `https://${key}.example/`, documentId: key });
@@ -446,7 +506,7 @@ for (const [key, source] of compileCases) {
     case: key,
     name,
     source,
-    transform: sucrase(name, source),
+    transform: plain(sucrase(name, source)),
     compiled: plain(compileBoost(name, source)),
     injected: injected ?? null,
     runs: injected ? run(injected) : null,
@@ -462,7 +522,7 @@ for (const [key, source] of compileCases) {
   const sha = (text: string) => createHash('sha256').update(text).digest('hex');
   const transformed = sucrase(name, big);
   const compiled = compileBoost(name, big);
-  const s = await shell({ boosts: { [name]: big }, boostsCompiled: { [name]: compiled } }, []);
+  const s = await shell({ boosts: { [name]: big }, boostsCompiled: { [name]: plain(compiled) } }, []);
   let injected: string | undefined;
 
   for (const call of s.take()) if (call.api === 'register') injected = call.scripts[0].code;

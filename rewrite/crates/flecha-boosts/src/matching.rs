@@ -20,13 +20,14 @@ pub fn boost_matches(url: &str, host: &str) -> bool {
     })
 }
 
-/// Whether the shell styled, reloaded or ran (through its execute path) a Boost for `host` on the
-/// page at `url`.
+/// Whether a Boost for `host` applies to the page at `url`: [`boost_matches`] on an http or
+/// https page.
 ///
-/// The shell's manifest asks for `<all_urls>`, and `boostMatches` takes any scheme with a host,
-/// such as `chrome://settings` for a Boost named `settings.css`. Chrome's scripting and user
-/// script APIs refused every page that isn't http or https: internal, extension and `file:` pages
-/// (the shell has no file access). CEF has no such layer, so the rewrite checks the scheme here.
+/// This deliberately narrows the shell. `boostMatches` takes any scheme with a host, such as
+/// `chrome://settings` for a Boost named `settings.css`, and the shell was a component extension
+/// with `<all_urls>`, so Chromium let it style and script `chrome://` and extension pages. It had
+/// no `file:` access, but it still reloaded matching `file:` tabs. The rewrite's internal pages
+/// are GPUI screens, so it applies Boosts to web pages only.
 pub fn applies(url: &str, host: &str) -> bool {
     is_web_page(url) && boost_matches(url, host)
 }

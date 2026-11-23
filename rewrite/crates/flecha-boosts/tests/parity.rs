@@ -5,8 +5,9 @@ use std::collections::BTreeMap;
 
 use flecha_boosts::compile::{compile_with, once_per_document};
 use flecha_boosts::{
-    BoostKind, BoostName, Boosts, CompiledBoost, Effect, Frame, RunAt, ScriptInjection,
-    StyleInjection, applies, boost_host_for, boost_matches, user_script_matches,
+    BoostKind, BoostName, Boosts, CompiledBoost, Effect, Frame, RunAt, SHELL_BUILDS_KEY,
+    SHELL_FILES_KEY, ScriptInjection, StyleInjection, applies, boost_host_for, boost_matches,
+    user_script_matches,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -78,12 +79,18 @@ struct Calls {
     styles: BTreeMap<u64, Vec<String>>,
     reloads: Vec<u64>,
     scripts: Vec<(String, String)>,
+    /// Tabs where Chromium refused a call, which then had no effect.
+    refused: Vec<u64>,
 }
 
 fn calls(list: &Value) -> Calls {
     let mut calls = Calls::default();
     for call in list.as_array().unwrap() {
         let tab = || call["tabId"].as_u64().unwrap();
+        if call["refused"] == true {
+            calls.refused.push(tab());
+            continue;
+        }
         match str_of(&call["api"]) {
             "storage.set" => calls.stored = Some(call["items"].clone()),
             "register" => {
@@ -135,7 +142,7 @@ fn calls(list: &Value) -> Calls {
                     .scripts
                     .push(("error".into(), str_of(&call["message"]).into()));
             }
-            "unregister" => {}
+            "unregister" | "warn" => {}
             api => panic!("unexpected call {api}"),
         }
     }
@@ -189,13 +196,112 @@ fn kind(value: &Value) -> Option<BoostKind> {
     serde_json::from_value(value.clone()).ok()
 }
 
-fn effect_matches(effect: &Effect, tabs: &[(u64, String)], boosts: &Boosts, calls: &Calls) {
+/// An intended difference: the rewrite applies Boosts to http and https pages only.
+///
+/// The shell didn't. `boostMatches` takes any scheme with a host, and the shell was a component
+/// extension (patch 0021), so Chromium let it style and script `chrome://` and extension pages.
+/// It had no `file:` access, but `chrome.tabs.reload` still reloaded `file:` tabs. On non-web
+/// pages these tests check the fixture against this model of the shell, and the crate against
+/// its own rule, so a change on either side fails here.
+mod web_only_deviation {
+    use flecha_boosts::compile::once_per_document;
+    use flecha_boosts::{BoostKind, Boosts, Frame, boost_matches};
+
+    /// Chromium refused the shell's style and script calls on `file:` pages.
+    pub fn shell_could_script(url: &str) -> bool {
+        !url.starts_with("file:")
+    }
+
+    /// The styles the shell inserted on a page.
+    pub fn shell_styles(boosts: &Boosts, frame: Frame, url: &str) -> Vec<String> {
+        if frame != Frame::Main || !shell_could_script(url) {
+            return Vec::new();
+        }
+        boosts
+            .iter()
+            .filter(|(name, _, _)| {
+                name.kind() == BoostKind::Styles && boost_matches(url, name.host())
+            })
+            .map(|(_, code, _)| code.to_owned())
+            .collect()
+    }
+
+    /// What the shell's execute path ran or reported on a page.
+    pub fn shell_scripts(boosts: &Boosts, frame: Frame, url: &str) -> Vec<(String, String)> {
+        if frame != Frame::Main || !shell_could_script(url) {
+            return Vec::new();
+        }
+        boosts
+            .iter()
+            .filter(|(name, _, _)| {
+                name.kind() == BoostKind::Script && boost_matches(url, name.host())
+            })
+            .filter_map(|(name, _, compiled)| {
+                let compiled = compiled?;
+                match (compiled.code.as_deref(), compiled.error.as_deref()) {
+                    (Some(code), _) if !code.is_empty() => {
+                        Some(("run".into(), once_per_document(name, code)))
+                    }
+                    (_, Some(error)) if !error.is_empty() => {
+                        Some(("error".into(), format!("[Flecha boost {name}] {error}")))
+                    }
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
+    /// Which shell effects on non-web pages the fixture showed, so the deviation stays covered.
+    #[derive(Debug, Default, PartialEq)]
+    pub struct Seen {
+        pub styled: bool,
+        pub ran: bool,
+        pub reported: bool,
+        pub restyled: bool,
+        pub reloaded: bool,
+        pub reloaded_file: bool,
+        pub refused_file: bool,
+    }
+}
+
+use web_only_deviation::{Seen, shell_could_script, shell_scripts, shell_styles};
+
+fn effect_matches(
+    effect: &Effect,
+    tabs: &[(u64, String)],
+    boosts: &Boosts,
+    calls: &Calls,
+    seen: &mut Seen,
+) {
     for (tab, url) in tabs {
         let affected = effect.affects(url);
         let shell_reloaded = calls.reloads.contains(tab);
         let shell_restyled = calls.styles.get(tab);
         if !is_web(url) {
-            assert!(!affected, "non-web tab {url} affected by {effect:?}");
+            assert!(!affected, "the rewrite leaves non-web tab {url} alone");
+            let matched = match effect {
+                Effect::Restyle { host } | Effect::Reload { host } => boost_matches(url, host),
+                Effect::Unchanged | Effect::Saved => false,
+            };
+            let reloaded = matches!(effect, Effect::Reload { .. }) && matched;
+            assert_eq!(reloaded, shell_reloaded, "the shell reloaded {url}");
+            let restyle = matches!(effect, Effect::Restyle { .. }) && matched;
+            let restyled = (restyle && shell_could_script(url))
+                .then(|| shell_styles(boosts, Frame::Main, url));
+            assert_eq!(
+                restyled.as_ref(),
+                shell_restyled,
+                "the shell restyled {url}"
+            );
+            assert_eq!(
+                restyle && !shell_could_script(url),
+                calls.refused.contains(tab),
+                "Chromium refused the shell on {url}"
+            );
+            seen.restyled |= restyled.is_some();
+            seen.reloaded |= reloaded;
+            seen.reloaded_file |= reloaded && !shell_could_script(url);
+            seen.refused_file |= calls.refused.contains(tab);
             continue;
         }
         assert_eq!(
@@ -221,15 +327,23 @@ fn effect_matches(effect: &Effect, tabs: &[(u64, String)], boosts: &Boosts, call
 #[test]
 fn boosts_store_and_apply_as_in_the_shell() {
     assert_eq!(StyleInjection::RUN_AT, RunAt::DocumentStart);
+    let mut seen = Seen::default();
     for scenario in rows("scenario") {
         let name = str_of(&scenario["name"]);
         let stored_before = &scenario["stored"];
-        let mut boosts = Boosts::from_shell(
+        let import = Boosts::from_shell(
             stored_before.get("boosts"),
             stored_before.get("boostsCompiled"),
-        )
-        .expect("the shell's stored shape")
-        .boosts;
+        );
+        let unreadable: &[&str] = if name.starts_with("malformed builds") {
+            &[SHELL_BUILDS_KEY]
+        } else if name.starts_with("malformed files") {
+            &[SHELL_FILES_KEY]
+        } else {
+            &[]
+        };
+        assert_eq!(import.unreadable, unreadable, "{name}: unreadable keys");
+        let mut boosts = import.boosts;
         let tabs: Vec<(u64, String)> = scenario["tabs"]
             .as_array()
             .unwrap()
@@ -313,11 +427,13 @@ fn boosts_store_and_apply_as_in_the_shell() {
                     if is_web(url) {
                         assert_eq!(css, shell, "{context}");
                     } else {
-                        assert!(css.is_empty(), "{context}");
                         assert!(
-                            !shell.is_empty(),
-                            "{context}: the fixture should show the shell's matcher"
+                            css.is_empty(),
+                            "{context}: the rewrite styles web pages only"
                         );
+                        assert_eq!(shell, shell_styles(&boosts, frame, url), "{context}: shell");
+                        seen.styled |= !shell.is_empty();
+                        seen.refused_file |= calls.refused.contains(&tab);
                     }
                     continue;
                 }
@@ -350,11 +466,15 @@ fn boosts_store_and_apply_as_in_the_shell() {
                     if is_web(url) {
                         assert_eq!(scripts, calls.scripts, "{context}");
                     } else {
-                        assert!(scripts.is_empty(), "{context}");
                         assert!(
-                            !calls.scripts.is_empty(),
-                            "{context}: the fixture should show the shell's matcher"
+                            scripts.is_empty() && registered.is_empty(),
+                            "{context}: the rewrite scripts web pages only"
                         );
+                        let shell = shell_scripts(&boosts, frame, url);
+                        assert_eq!(calls.scripts, shell, "{context}: shell");
+                        seen.ran |= shell.iter().any(|(what, _)| what == "run");
+                        seen.reported |= shell.iter().any(|(what, _)| what == "error");
+                        seen.refused_file |= !calls.refused.is_empty();
                     }
                     continue;
                 }
@@ -382,9 +502,22 @@ fn boosts_store_and_apply_as_in_the_shell() {
             if let Some(registered) = &calls.registered {
                 assert_eq!(registered, &registrations(&boosts), "{context}: registered");
             }
-            effect_matches(&effect, &tabs, &boosts, &calls);
+            effect_matches(&effect, &tabs, &boosts, &calls, &mut seen);
         }
     }
+    let every = Seen {
+        styled: true,
+        ran: true,
+        reported: true,
+        restyled: true,
+        reloaded: true,
+        reloaded_file: true,
+        refused_file: true,
+    };
+    assert_eq!(
+        seen, every,
+        "the fixture covers each shell effect on non-web pages"
+    );
 }
 
 fn shell_transform(row: &Value) -> impl FnOnce(&str, &str) -> Result<String, String> + '_ {
@@ -490,9 +623,7 @@ fn registered_user_scripts_follow_chromium() {
         .find(|row| row["name"] == "registered user scripts")
         .unwrap();
     let stored = &scenario["stored"];
-    let boosts = Boosts::from_shell(stored.get("boosts"), stored.get("boostsCompiled"))
-        .unwrap()
-        .boosts;
+    let boosts = Boosts::from_shell(stored.get("boosts"), stored.get("boostsCompiled")).boosts;
     let expected = [
         ("https://github.com./", vec!["github.com.ts", "all.ts"]),
         (

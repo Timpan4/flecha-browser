@@ -14,5 +14,5 @@ mod store;
 pub use compile::CompiledBoost;
 pub use matching::{applies, boost_host_for, boost_matches, user_script_matches};
 pub use name::{BoostKind, BoostName};
-pub use shell::{InvalidShellShape, SHELL_BUILDS_KEY, SHELL_FILES_KEY, ShellImport};
+pub use shell::{SHELL_BUILDS_KEY, SHELL_FILES_KEY, ShellImport};
 pub use store::{BoostFile, Boosts, Effect, Frame, RunAt, ScriptInjection, StyleInjection};

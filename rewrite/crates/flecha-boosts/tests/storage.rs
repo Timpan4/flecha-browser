@@ -3,7 +3,9 @@
 use flecha_boosts::snapshot::{
     self, BackupWrite, DecodeError, Recovery, SCHEMA_VERSION, Slot, SnapshotRepairs,
 };
-use flecha_boosts::{Boosts, CompiledBoost, Frame, applies, boost_matches};
+use flecha_boosts::{
+    Boosts, CompiledBoost, Frame, SHELL_BUILDS_KEY, SHELL_FILES_KEY, applies, boost_matches,
+};
 use serde_json::{Value, json};
 
 fn sample() -> Boosts {
@@ -77,11 +79,11 @@ fn versions_and_shapes() {
     for (json, newer) in [
         (json!({ "version": 2, "boosts": [] }), true),
         (json!({ "version": 1.5, "boosts": [] }), true),
+        (json!({ "version": "2", "boosts": [] }), true),
         (json!({ "version": 0, "boosts": [] }), false),
-        (json!({ "version": "1", "boosts": [] }), false),
+        (json!({ "version": "v1", "boosts": [] }), false),
         (json!({ "boosts": [] }), false),
         (json!({ "version": 1, "boosts": {} }), false),
-        (json!([]), false),
     ] {
         match snapshot::decode(&json.to_string()) {
             Err(DecodeError::UnsupportedVersion(_)) => assert!(newer, "{json}"),
@@ -89,7 +91,57 @@ fn versions_and_shapes() {
             other => panic!("{json}: {other:?}"),
         }
     }
-    assert!(matches!(snapshot::decode("{"), Err(DecodeError::Json(_))));
+    // The version is read as flecha-core reads its own: a numeric string counts.
+    assert!(snapshot::decode(&json!({ "version": "1", "boosts": [] }).to_string()).is_ok());
+    for json in ["{", "[]", "\"text\""] {
+        assert!(
+            matches!(snapshot::decode(json), Err(DecodeError::Json(_))),
+            "{json}"
+        );
+    }
+}
+
+/// The version is read before anything else, so a newer file is refused, never set aside as
+/// damaged, whatever its other fields hold.
+#[test]
+fn a_newer_snapshot_is_refused_whatever_it_holds() {
+    let deep = format!("{}1{}", "[".repeat(200), "]".repeat(200));
+    let newer = [
+        r#"{"version":2,"boosts":[],"x":1e400}"#.to_owned(),
+        r#"{"version":2,"boosts":[],"x":"\ud800"}"#.to_owned(),
+        format!(r#"{{"version":2,"boosts":[],"x":{deep}}}"#),
+        r#"{"version":"2","boosts":[]}"#.to_owned(),
+    ];
+    for body in newer {
+        let value = Value::String(body.clone());
+        assert!(
+            matches!(
+                snapshot::load(Some(&value), Some(&text(&sample()))),
+                Err(DecodeError::UnsupportedVersion(_))
+            ),
+            "current {body}"
+        );
+        let mut loaded = snapshot::load(Some(&json!("{")), Some(&value)).unwrap();
+        let mut writes = Vec::new();
+        let ready = loaded
+            .apply_recovery(|write| {
+                writes.push((write.slot(), write.value().clone()));
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+        assert_eq!(
+            ready.recovered,
+            Some(Recovery::UnsupportedBackup),
+            "last-good {body}"
+        );
+        assert_eq!(writes, [(Slot::Damaged, json!("{"))], "last-good {body}");
+    }
+    // The same text at the current version is damaged: it can't be read.
+    let current = r#"{"version":1,"boosts":[],"x":1e400}"#;
+    assert!(matches!(
+        snapshot::decode(current),
+        Err(DecodeError::Json(_))
+    ));
 }
 
 #[test]
@@ -194,9 +246,10 @@ fn the_shells_stored_shape() {
         "gone.example.ts": { "code": "orphan" },
         "b.example.css": { "code": 1 },
     });
-    let import = Boosts::from_shell(Some(&files), Some(&builds)).unwrap();
+    let import = Boosts::from_shell(Some(&files), Some(&builds));
     assert_eq!(import.skipped, ["notes.txt", "c.example.ts"]);
     assert_eq!(import.dropped_builds, ["b.example.css"]);
+    assert!(import.unreadable.is_empty());
     let names: Vec<_> = import
         .boosts
         .iter()
@@ -211,13 +264,44 @@ fn the_shells_stored_shape() {
         1
     );
 
-    assert!(Boosts::from_shell(None, None).unwrap().boosts.is_empty());
-    assert!(Boosts::from_shell(Some(&json!("text")), None).is_err());
-    assert!(Boosts::from_shell(Some(&json!({})), Some(&json!([]))).is_err());
+    let empty = Boosts::from_shell(None, Some(&Value::Null));
+    assert!(empty.boosts.is_empty() && empty.unreadable.is_empty());
 }
 
+/// The shell read any non-object value as having no Boosts, or no builds, and kept going.
 #[test]
-fn boosts_apply_to_web_pages_only() {
+fn malformed_shell_values_import_what_the_shell_used() {
+    let files = json!({ "a.example.css": "a {}", "b.example.ts": "b()" });
+    for builds in [json!([]), json!("x"), json!(5), json!(true)] {
+        let import = Boosts::from_shell(Some(&files), Some(&builds));
+        assert_eq!(import.unreadable, [SHELL_BUILDS_KEY], "{builds}");
+        assert_eq!(import.boosts.list().len(), 2, "{builds}");
+        assert_eq!(
+            import
+                .boosts
+                .styles_for(Frame::Main, "https://a.example/")
+                .len(),
+            1
+        );
+        assert!(
+            import
+                .boosts
+                .scripts_for(Frame::Main, "https://b.example/")
+                .is_empty()
+        );
+    }
+    for files in [json!(["a.example.css"]), json!("a.example.css"), json!(5)] {
+        let import = Boosts::from_shell(Some(&files), None);
+        assert_eq!(import.unreadable, [SHELL_FILES_KEY], "{files}");
+        assert!(import.boosts.is_empty(), "{files}");
+    }
+}
+
+/// A deliberate difference from the shell. As a component extension, the shell styled and ran
+/// Boosts on `chrome://` and extension pages, and reloaded `file:` pages. The rewrite limits
+/// Boosts to http and https; `tests/parity.rs` records what the shell did.
+#[test]
+fn the_rewrite_limits_boosts_to_web_pages() {
     for (url, host) in [
         ("chrome://settings/", "settings"),
         ("flecha://boosts", "boosts"),
@@ -266,9 +350,7 @@ fn one_rejected_pattern_disables_every_registered_script() {
     };
     let files = json!({ "github.com.ts": "a", "q b.ts": "b" });
     let builds = json!({ "github.com.ts": { "code": "a()" }, "q b.ts": { "code": "b()" } });
-    let mut boosts = Boosts::from_shell(Some(&files), Some(&builds))
-        .unwrap()
-        .boosts;
+    let mut boosts = Boosts::from_shell(Some(&files), Some(&builds)).boosts;
     assert!(
         boosts
             .scripts_for(Frame::Main, "https://github.com./")
