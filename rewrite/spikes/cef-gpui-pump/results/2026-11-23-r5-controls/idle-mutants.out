@@ -1,14 +1,23 @@
+mutating a copy of d530b37b31b512cb4617790e6b09eec2327ab925 in /tmp/cef-gpui-pump-idle-mutants.k4kNcE
+=== unmutated
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 17 filtered out; finished in 0.00s
 === accept two paint-holding repaints
 test idle::tests::a_second_repaint_in_the_window_fails ... FAILED
 test idle::tests::a_repaint_after_an_earlier_paint_holding_repaint_fails ... FAILED
-test result: FAILED. 3 passed; 2 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.00s
+test result: FAILED. 5 passed; 2 failed; 0 ignored; 0 measured; 17 filtered out; finished in 0.00s
 === paint-holding timeout 0 s
+test idle::tests::a_lone_late_repaint_fails ... FAILED
+test idle::tests::a_repaint_after_an_earlier_paint_holding_repaint_fails ... FAILED
 test idle::tests::the_paint_holding_repaint_in_the_window_passes ... FAILED
-test idle::tests::a_repaint_after_an_earlier_paint_holding_repaint_fails ... FAILED
 test idle::tests::a_second_repaint_in_the_window_fails ... FAILED
-test result: FAILED. 2 passed; 3 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.00s
-=== allowance counted only inside the window (the old rule)
+test result: FAILED. 3 passed; 4 failed; 0 ignored; 0 measured; 17 filtered out; finished in 0.00s
+=== allowance counted inside the window only (round 2's rule)
 test idle::tests::a_repaint_after_an_earlier_paint_holding_repaint_fails ... FAILED
-test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.00s
-=== unmutated
-test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.00s
+test result: FAILED. 6 passed; 1 failed; 0 ignored; 0 measured; 17 filtered out; finished in 0.00s
+=== no upper bound on the repaint time
+test idle::tests::a_lone_late_repaint_fails ... FAILED
+test result: FAILED. 6 passed; 1 failed; 0 ignored; 0 measured; 17 filtered out; finished in 0.00s
+=== no earlier paint required
+test idle::tests::a_repaint_that_is_the_first_paint_fails ... FAILED
+test result: FAILED. 6 passed; 1 failed; 0 ignored; 0 measured; 17 filtered out; finished in 0.00s
+every mutant failed its named tests; the unmutated rule passed

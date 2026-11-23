@@ -1,0 +1,5 @@
+stopped browser 572501 (process group 572498) at 14:10:02.028
+runner exit 1 at 14:10:40.002
+processes left in group 572498: none
+app or session processes left anywhere: none
+watchdog ended the hung run and its process group

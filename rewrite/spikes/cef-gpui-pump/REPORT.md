@@ -2,22 +2,36 @@
 
 Date: 2026-11-23. Pins from `rewrite/pins.toml`: CEF `158.0.3+g8c29be2+chromium-158.0.8127.18` (beta-channel minimal archive), cef-rs `32d6bc55` (Timpan4/cef-rs), Zed/GPUI `f126950f`. cef-rs and Zed are the sources Spike 1's `prepare.sh` stages and patches (see "Dependencies").
 
-Current results: `results/2026-11-23-r5/`, one run of `scripts/run-checks.sh` as committed, on the head that merges main at `04b013d` (see "How it was run"). `results/2026-11-23-r5-cdp-repeats/` holds 3 more cdp runs with the browser's threads sampled, and `results/2026-11-23-r5-controls/` the negative controls of this round. `build.txt` in each names the commit and `cef-archive.json` the CEF archive. History, cited only where this report says so: `results/2026-11-23/` is the first round, `results/2026-11-23-r3/` the first fix round (its `review-evidence/` holds that round's repro inputs and outputs, not to be rerun), and `results/2026-11-23-r4/` the second. r4 used the CDP bridge that starved the pump (see "The CDP slowdown").
+Current results: `results/2026-11-23-r6/`, one run of `scripts/run-checks.sh` as committed at `d530b37`, with every verdict rule this report describes (see "r6: the current head"). The detailed figures in the sections below come from `results/2026-11-23-r5/`, the round before. r6 kept r5's pump and bridge behavior and changed verdicts, timer accounting, measurement fields and the harness, so r5's figures still describe the pump and the bridge; r6's are in its own section. `results/2026-11-23-r5-cdp-repeats/` holds 3 more r5 cdp runs with the browser's threads sampled. `results/2026-11-23-r5-controls/` and `results/2026-11-23-r6-controls/` hold the negative controls. `build.txt` in each names the commit and `cef-archive.json` the CEF archive. History, cited only where this report says so: `results/2026-11-23/` is the first round, `results/2026-11-23-r3/` the first fix round (its `review-evidence/` holds that round's repro inputs and outputs, not to be rerun), and `results/2026-11-23-r4/` the second. r4 used the CDP bridge that starved the pump (see "The CDP slowdown").
 
 ## Verdict
 
 | Done check | Result |
 |---|---|
-| Pump runs only on CEF requests or CEF's documented periodic wake-up | Pass. 0 unexplained calls in every run. The pump trace now covers every scenario, and the largest gap between calls was 88.8 ms |
-| Static page: GPUI draws no frames | Pass, with one explained frame. GPUI drew 1 frame for CEF's one paint-holding repaint at 4099 ms after navigation, and nothing else (see "Pump and idle") |
-| Idle CPU (measurement only) | 0.53 % of one core for the whole process tree |
+| Pump runs only on CEF requests or CEF's documented periodic wake-up | Pass. 0 unexplained calls in every run. The pump trace now covers every scenario, and the largest gap between calls was 88.8 ms in r5 and 177.1 ms in r6, during a slow synchronous `ShowDevTools` call (see "r6: the current head") |
+| Static page: GPUI draws no frames | Pass, with one explained frame. GPUI drew 1 frame for CEF's one paint-holding repaint at 4099 ms after navigation in r5 and 4098 ms in r6, and nothing else (see "Pump and idle") |
+| Idle CPU (measurement only) | 0.53 % (r5) and 0.62 % (r6) of one core for the whole process tree |
 | Page and GPUI animate together | Pass. Both frame counters advance |
-| `navigator.webdriver === false` during CDP calls | Pass. 786,719 calls in 30.000 s, 900 page samples, 0 true. A control run with `--enable-automation` fails |
-| CDP calls do not stall the page or the pump | Pass in 4 of 4 cdp runs after the fix. Before it, the bridge's per-call timers starved the pump (see "The CDP slowdown"). A control with the old timers fails |
+| `navigator.webdriver === false` during CDP calls | Pass. 786,719 calls in 30.000 s in r5 and 798,831 in r6, 900 page samples each, 0 true. A control run with `--enable-automation` fails |
+| CDP calls do not stall the page or the pump | Pass in 4 of 4 r5 cdp runs and the r6 cdp run after the fix. Before it, the bridge's per-call timers starved the pump (see "The CDP slowdown"). A control with the old timers fails |
 | CDP without a port or pipe | Pass. No `remote-debugging` switch, no listening TCP socket in any of the tree's network namespaces, every fd and socket table read |
-| DevTools close does not kill OSR renderers (CEF #4353) | Pass in 15 of 15 fresh processes. No workaround needed |
-| Clean shutdown | Pass. `CefShutdown()` returns in 48 to 117 ms. Every child exited in all 19 runs |
-| Runs isolated from the desktop session and the owner's home | Pass in 19 of 19 runs. Controls with the first round's environment, and with the scan pointed at the scratch home, fail |
+| DevTools close does not kill OSR renderers (CEF #4353) | Pass in 15 of 15 fresh processes in r5 and again in r6. No workaround needed |
+| Clean shutdown | Pass. `CefShutdown()` returns in 48 to 117 ms (r5) and 43 to 66 ms (r6). Every child exited in all 19 runs of each |
+| Runs isolated from the desktop session and the owner's home | Pass in 19 of 19 runs in r5 and in r6. Controls with the first round's environment, and with the scan pointed at the scratch home, fail |
+
+## r6: the current head
+
+`results/2026-11-23-r6/`, one full suite at `d530b37` with this report's knobs (`WARMUP_MS=3000`, `MEASURE_MS=30000`, `STEP_TIMEOUT_MS=20000`, `DEVTOOLS_CLOSE_MS="0 100 2000"`, `DEVTOOLS_TRIALS=5`), run once through the runner with its full isolation. 19 of 19 runs passed and the runner printed `all runs passed` (`run.log`). Each run's watchdog line in `run.log` gives its budget: 153 s idle, 266 s animate, 273 s cdp, 346 s, 346.1 s and 348 s devtools. No run came near it.
+
+- Pump: 0 unexplained calls in every run, and the pump never held more than 1 outstanding timer. The largest gap between pump calls was 43.1 ms in idle, 44.5 ms in cdp, 51.1 and 54.7 ms in the animate runs, and 61.0 to 177.1 ms in the devtools runs. r5's devtools runs peaked at 88.8 ms. The larger gaps came in the runs whose synchronous `ShowDevTools` call, which blocks the GPUI thread, took longer: 36.8 to 133.4 ms in r6 against 36.6 to 40.6 ms in r5. r6 did not change that call or the pump, and why `ShowDevTools` took longer than r5's slowest call in 9 of the 15 r6 runs was not isolated. Every gap stayed far inside its bound of one `STEP_TIMEOUT_MS`.
+- Idle: first paint at 135.4 ms after navigation, the paint-holding repaint at 4097.7 ms, inside the window of 4000 to 4168.4 ms (first paint + 4 s + `REPAINT_DELIVERY`). It came 37.7 ms before first paint + 4 s, earlier than the 27 ms of the earlier rounds; the rule's lower bound is navigation + 4 s, so earliness relative to first paint does not matter. GPUI drew 1 frame. The process tree used 0.62 % of one core (r5: 0.53 %).
+- Animate: the page held 30.02 and 29.99 frames/s over its own intervals of 30,044 and 30,040 ms, with host windows of 30,024 and 30,020 ms. GPUI drew 20.85 and 20.89 frames/s with the default inactive throttle, and 30.01 and 62.46 frames/s without it. No `OnPaint` frame was overwritten before upload in any animate window. With the throttle, GPUI replaced 276 and 274 uploaded images before drawing them; without it, none.
+- CDP: 798,831 `Runtime.evaluate` calls in 30.000 s, p50 0.029 ms, p99 0.11 ms, max 43.1 ms, 0 errors, 0 `true` replies. The page counted 900 rAF frames, 29.9998 frames/s over its own 30,000.2 ms against a 30,000.1 ms host window, and all 900 page samples were `false`. The bridge armed 3 timers with at most 1 outstanding. The timeout probe returned after 20,000.03 ms, 0.03 ms past the call deadline and inside its 40 s bound (`within_deadline: true`). 1 `OnPaint` frame was overwritten before upload and 268 uploaded images were replaced before draw. The screenshot took 104.8 ms.
+- Isolation: both samples in every run were clean, with 0 forbidden references and 0 unreadable entries. Each sample covered 9 processes (10 in the devtools runs, with the second browser) and 59 to 75 sockets. The cdp run read every fd and socket table (`listening_sockets.complete: true`, 0 fd entry errors).
+- Shutdown: `CefShutdown()` returned in 43.3 to 65.6 ms, and every child process had exited before the wait began in all 19 runs (8 children in idle and cdp, 9 in the others).
+- Controls for r6's changes: the watchdog control below, the Clippy guard control and the rewritten idle mutants in `results/2026-11-23-r5-controls/` (see "The CDP slowdown" and "Unit tests").
+
+`results/2026-11-23-r6-controls/watchdog/` is the watchdog control: `watchdog-control.sh` runs the idle scenario through the runner with `WARMUP_MS=3000 MEASURE_MS=5000 STEP_TIMEOUT_MS=5000`, a 38 s watchdog, and stops the app's browser process (the `cef-gpui-pump` process with this run's `--pump-out` and no `--type=` switch) with `SIGSTOP` as soon as it exists. The runner reported `watchdog expired after 38.000 s (exit 124)`, failed the run, wrote `idle.watchdog.txt` and its scratch-dir listing, and exited 1. No process was left in the session's process group, no `cef-gpui-pump` or session process was left anywhere, and the run's scratch dir under `/tmp` was gone. A first attempt matched the `--pump-out` argument alone, which picked `timeout` itself, the oldest process with that argument; stopping it left the session to finish and pass, so the control now selects the browser by its binary name and switches.
 
 ## What the spike is
 
@@ -27,9 +41,11 @@ The library (`src/lib.rs`, no CEF, unit-tested) holds the rules the checks depen
 
 - `src/schedule.rs` decides when to call `CefDoMessageLoopWork()`. It calls right away for `delay <= 0`, after the delay for `delay > 0`, and no later than 33 ms after the previous call ended. A new request replaces the pending one, as `OnScheduleMessagePumpWork` specifies, but cannot push the 33 ms deadline back. A request made before the last call started was served by that call. The 33 ms is from CEF 158 `include/cef_app.h`: "A maximum interval of approximately 33 milliseconds between calls (30 calls per second) is recommended." A guard defers a call made while one is running until it returns, as `cef_app.h` requires, and is released when the call unwinds. `analyze` checks a call log against those rules.
 - `src/idle.rs` is the idle check's frame rule (see "The one frame: paint holding").
+- `src/procfs.rs` parses the `/proc/PID/maps` and `ss -xan` text and reads fd tables for the isolation scan, keeping paths with spaces and recording every fd entry it could not resolve.
 
-The binary:
+The binary, Linux only (`src/main.rs` builds a stub that exits with "Linux only" elsewhere):
 
+- `src/timers.rs` is the only place the crate arms a GPUI timer (`Timers::arm`), and each call goes into a ledger that counts timers created and the most outstanding at once. The pump, the bridge and the scenario each own one. `clippy.toml` disallows `gpui::BackgroundExecutor::timer` and both `scheduler_executor` methods, whose executors have their own `timer`, so CI's Clippy run rejects a timer armed anywhere else (see "Phase 1 risk").
 - `src/pump.rs` wires the schedule to CEF and GPUI. `OnScheduleMessagePumpWork` only sends the delay, stamped with the time CEF asked, on a channel. A GPUI main-thread task owns the schedule, makes the guarded call, and logs each call with its reason. It arms a GPUI timer only when a request is due earlier than the timer already armed.
 - `src/bridge.rs` is the in-process agent bridge. It sends CDP messages with `CefBrowserHost::SendDevToolsMessage` and reads replies with an `AddDevToolsMessageObserver` registration per browser. It lists tabs (`Target.getTargetInfo`), evaluates JavaScript (`Runtime.evaluate`) and takes screenshots (`Page.captureScreenshot`). Every call has a deadline, because CEF drops malformed messages without a reply. One sweeper task fails calls past their deadline and holds at most one GPUI timer.
 - `src/scenario.rs` holds the scripted checks. `src/probe.rs` reads `/proc` for the process tree, CPU time, command lines, sockets and references to the desktop session and the owner's home.
@@ -51,11 +67,13 @@ for i in 1 2 3; do scripts/run-checks.sh results/2026-11-23-r5-cdp-repeats/$i cd
 
 The runner exits 0 only if every run passes. It ran as a transient `systemd-run --user` unit and printed `all runs passed` for the full suite and each repeat (`run.log` in each dir). `build.txt` names `21c9ef3`; the head after it changes only the controls' files. The timing values are harness parameters, not product values. `STEP_TIMEOUT_MS` bounds each wait for CEF (Xvfb start, load, a CDP reply, DevTools open and close, browser close, child exit), and since this round also the longest CDP call, the CDP loop's overrun and the longest gap between pump calls. The runner stages a bundle in `target/release/cef-gpui-pump-bundle/<archive name>` (see "Cargo 1.100 and cef-rs"). Every run writes a JSON report, its stderr, and a listing of its scratch dirs.
 
+Each run also has an outer watchdog, since `CefInitialize` and `CefShutdown` run outside every scenario deadline. `run-checks.sh` runs the session under `timeout`, which gives it its own process group, signals the whole group on expiry and sends `SIGKILL` one `STEP_TIMEOUT_MS` later. The budget comes from the run's own knobs: one warmup plus one measurement per measured window, plus one `STEP_TIMEOUT_MS` per wait the app bounds and per synchronous CEF call it cannot bound (`CefInitialize`, `CreateBrowserSync` per page, `ShowDevTools`, `CefShutdown`), counted from the code (`watchdog_ms` in the runner). With this report's knobs that is 153 s for idle, 266 s for animate, 273 s for cdp and 346 s plus the close delay for devtools. A run that hits it fails, `NAME.watchdog.txt` records it, and cleanup runs as usual. `results/2026-11-23-r6-controls/watchdog/` shows it ending a run whose browser process was frozen with `SIGSTOP` right after it started: the run failed at 38 s with no process left (see "r6: the current head").
+
 Build: release profile. GPUI picked `NVIDIA GeForce RTX 5080 (Vulkan)` on Xvfb, so GPUI was not on a software renderer (`results/2026-11-23-r4/adapter-smoke/`, a 5 s idle run with `RUST_LOG=gpui_wgpu=info` on the r4 build). CEF itself used software OSR (`OnPaint`, no shared textures). Chromium switches: `--ozone-platform=x11 --password-store=basic`. The sandbox was on.
 
 ### Isolation
 
-Each app run gets one `mktemp -d` base (mode 700), deleted afterwards, which holds:
+Each app run gets one `mktemp -d` base (mode 700) under `/tmp`, deleted afterwards. It is created under `/tmp` rather than the caller's `TMPDIR`, and its path is checked to hold only letters, digits, `/`, `.` and `-`, because the bus config and the bus address embed it unescaped. It holds:
 
 - the CEF cache;
 - `XDG_RUNTIME_DIR`;
@@ -69,7 +87,7 @@ The run also gets:
 - `dbus-run-session` with a config written from `scripts/isolated-session-bus.conf.in`: no service directories, so nothing is activated, and `<listen>unix:dir=SCRATCH</listen>`, so dbus-daemon creates a socket with a new random name in that run's scratch runtime dir. The first fix round listened at `$XDG_RUNTIME_DIR/bus` (`unix:runtime=yes`). A test with two buses on one scratch dir showed that listener replacing an existing socket at its path and deleting it on exit, so pointed at the desktop's runtime dir it would remove `/run/user/1000/bus`. `scripts/check-bus-listener.sh` starts a second bus on the same dir while the first runs and requires the first socket to be the same file and still answering afterwards. The runner runs it before any app run. It passes with the new listener and fails with the old one ("second bus reused …/bus", "first bus socket … is gone").
 - `DBUS_SYSTEM_BUS_ADDRESS=unix:path=/nonexistent`.
 
-The app checks this itself. After the page loads and again before shutdown, `probe::forbidden_refs` lists every file the process tree has open or memory-mapped and every Unix socket peer (from `ss -xan`). It fails the run if any lies under the caller's `XDG_RUNTIME_DIR` (`/run/user/1000`), `/run/dbus/system_bus_socket`, or the caller's real `HOME`, except the bundle, the test pages and the results dir, which the runner passes as allowed (`--pump-allow-paths`). Paths match by whole components. In r5 all 38 samples were clean, with every fd table and map readable and no `ss` error. The limits: it samples twice, so a connection opened and closed between samples is missed, and sandboxed renderers live in their own network namespace, so their sockets (12 to 22 per sample) get no peer path from `ss`. Their open and mapped files are still scanned.
+The app checks this itself. After the page loads and again before shutdown, `probe::forbidden_refs` lists every file the process tree has open or memory-mapped and every Unix socket peer (from `ss -xan`). It fails the run if any lies under the caller's `XDG_RUNTIME_DIR` (`/run/user/1000`), `/run/dbus/system_bus_socket`, or the caller's real `HOME`, except the bundle, the test pages and the results dir, which the runner passes as allowed (`--pump-allow-paths`). Paths match by whole components, and `--pump-forbid-paths` and `--pump-allow-paths` reject relative entries, which could never match. Map paths and `ss` addresses keep their spaces (`procfs::maps_path`, `procfs::ss_unix_row`). Every fd entry the scan could not resolve, whether it vanished mid-scan or could not be read, marks the scan incomplete and fails `isolation_clean`. In r5 all 38 samples were clean, with every fd table and map readable and no `ss` error. The limits: it samples twice, so a connection opened and closed between samples is missed, and sandboxed renderers live in their own network namespace, so their sockets (12 to 22 per sample) get no peer path from `ss`. Their open and mapped files are still scanned.
 
 What used to reach the desktop session, the owner's home and the shared `/tmp` now lands in the scratch dirs (`*.scratch-dirs.txt`, a listing taken after each run): `runtime/dconf/user`, Chromium's NSS db in `home/.local/share/pki/nssdb`, and Mesa, RADV and NVIDIA shader caches in `home/.cache`. Chromium's ProcessSingleton socket sits under the scratch `TMPDIR` and is gone by the time of the listing.
 
@@ -125,9 +143,9 @@ The one paint is a full-view repaint (`[0, 0, 1024, 640]`) 4099 ms after navigat
 
 It is Chromium's paint-holding timeout. In the local Chromium 158.0.8119.0 tree, `third_party/blink/common/widget/constants.cc:15` sets `kNewContentRenderingDelay = base::Seconds(4)`. `RenderWidgetHostImpl::InitializePaintHolding` starts it at navigation, and on expiry `ClearDisplayedGraphics` makes the renderer repaint once. The PR verifier confirmed the cause: a CDP `Input.dispatchMouseEvent` about 1.5 s after load moved the repaint to 1503 ms and removed the 4 s paint. That path is `content/browser/devtools/protocol/input_handler.cc:694`, which calls `ForceFirstFrameAfterNavigationTimeout()`.
 
-The parent agent's decision: the idle check passes with that frame explained. The rule is `idle::judge` in the library. The paint-holding repaint is the navigation's first full-view paint at least `kNewContentRenderingDelay` after navigation, counted over every paint since navigation, not only the window. `idle_pass` requires 0 unexplained pump calls in the window, every paint in the window to be that repaint, and no more GPUI renders than CEF paints in the window. `idle_frames.strict_no_frames` records whether the window had no frame at all.
+The parent agent's decision: the idle check passes with that frame explained. The rule is `idle::judge` in the library. The paint-holding repaint is the first full-view paint that follows the navigation's first paint, comes at least `kNewContentRenderingDelay` after navigation, and comes no later than `kNewContentRenderingDelay` plus `REPAINT_DELIVERY` after that first paint. Only the first such paint counts, over every paint since navigation, not only the window. `REPAINT_DELIVERY` is the pump's 33 ms `MAX_PUMP_INTERVAL` (`cef_app.h`). Chromium starts the timer when the navigation commits, before the first paint, so the repaint is due by first paint + 4 s, and CEF can deliver it only inside a pump call. Measured: the repaint came 3973 (r3), 3976 (r4) and 4002 ms (r5) after the first paint, and 3995 to 4007 ms in the first round's 4 runs, so between 27 ms early and 7 ms late; r6's came 3962 ms after, 38 ms early. The upper bound is the one that matters for a late repaint, and no run came later than 7 ms. `idle_pass` requires 0 unexplained pump calls in the window, every paint in the window to be that repaint, and no more GPUI renders than CEF paints in the window. `idle_frames.strict_no_frames` records whether the window had no frame at all.
 
-The second fix round counted the allowance inside the window only, so a lone full-view repaint at 8 s passed when the real repaint fell before the window. Its rule also lived in the binary, which has no tests. See "Unit tests" for the cases and mutants.
+The second fix round counted the allowance inside the window only, so a lone full-view repaint at 8 s passed when the real repaint fell before the window. Its rule also lived in the binary, which has no tests. The third counted it over the whole navigation but had no upper bound, so a lone full-view repaint at 8 s still passed when no earlier repaint was logged (review thread 4665850156). See "Unit tests" for the cases and mutants.
 
 ### 10 ms calls: CEF's pump time slice
 
@@ -148,6 +166,8 @@ Page `pages/anim.html`: a CSS `@keyframes` box and a `requestAnimationFrame` cou
 | inactive throttle off | off | 30.04 | 30066 ms | 30.01 | 30.01 | 0 | 23.9 % |
 | inactive throttle off | on | 30.01 | 30033 ms | 29.98 | 62.46 | 1875 | 46.2 % |
 
+Since r6 the page rates divide by the page's own clock between its two counter reads (`performance.now()`, `page_counter_interval_ms`), next to the host window (`seconds`), so page frames outside the counted interval cannot raise the rate. Each window also reports `on_paint_frames_overwritten_before_upload`, page frames the next `OnPaint` replaced before GPUI took them, and `gpui_images_replaced_before_draw`, uploaded images replaced before GPUI drew them. They are measurements; no verdict uses them.
+
 The page holds 30 frames/s in every case. `include/internal/cef_types.h` gives `windowless_frame_rate` "the default value is 30", and the spike does not change it. With default window options, GPUI draws about 21 frames/s. The window is never focused under Xvfb with no window manager, so GPUI's `inactive_frame_interval` (default 33.3 ms, "approximately 30 fps") applies. With `inactive_frame_interval: None` (`--pump-no-inactive-throttle`), GPUI shows every page frame, and draws more while its own animation runs. Its CPU numbers include those extra frames. On a focused window on a real session, the default throttle should not apply. That is unverified here.
 
 ## Agent access through `SendDevToolsMessage`
@@ -156,7 +176,7 @@ The page holds 30 frames/s in every case. `include/internal/cef_types.h` gives `
 
 - List tabs: 1 tab, `Target.getTargetInfo` returned `type: page`, title `anim`, the file URL.
 - Evaluate: `Runtime.evaluate("navigator.webdriver")` back to back. The loop ran 30.000 s for a 30 s window: 786,719 calls, every reply `false`, no errors. Per-call latency: p50 0.029 ms, p99 0.11 ms, max 43.0 ms. The page counted `navigator.webdriver` on every animation frame: 900 samples during the loop, 0 not `false`, and its rAF rate over the loop was 30.00 frames/s.
-- Timeout under load: while the loop runs, a second call evaluates `new Promise(() => {})` with `awaitPromise`, which never replies. The bridge failed it after 20000.0 ms, 0.03 ms past its 20 s deadline. `cdp_pass` requires it to time out.
+- Timeout under load: while the loop runs, a second call evaluates `new Promise(() => {})` with `awaitPromise`, which never replies. The bridge failed it after 20000.0 ms, 0.03 ms past its 20 s deadline. `cdp_pass` requires it to time out, and since r6 also requires the measured time to stay within the probe's bound of two `STEP_TIMEOUT_MS` (`cdp_timeout_probe.within_deadline`), so a timeout reply picked after both futures were ready cannot count.
 - Screenshot: `Page.captureScreenshot` returned a 1024 × 640 PNG (`cdp.png`) in 105 ms.
 - Negative control (`results/2026-11-23/cdp-enable-automation/`, first-round build): the same check with `EXTRA_ARGS=--enable-automation`, 3 s warmup and a 5 s window. All 58,080 replies and all 153 page samples were `true`, and the run failed. The check detects `navigator.webdriver` turning on.
 - No port or pipe: no process in the tree has `remote-debugging` or `enable-automation` on its command line. No process has a listening TCP socket. The check reads `/proc/PID/net/{tcp,tcp6,unix}` once per network namespace in the tree (the `/proc/PID/ns/net` link tells them apart), so sandboxed renderers' namespaces are covered. In each cdp run it read 2 namespaces. The run fails unless every fd table and socket table was read (`listening_sockets.complete`), and in r5 all were. The one listening socket is Chromium's ProcessSingleton Unix socket (`$TMPDIR/org.chromium.Chromium.*/SingletonSocket`, under the run's scratch `TMPDIR`), which is not a DevTools endpoint.
@@ -200,11 +220,16 @@ Controls are in `results/2026-11-23-r5-controls/`, each run once through the run
 
 The bounds the parent asked for, a call over `STEP_TIMEOUT_MS` or a loop over the window plus `STEP_TIMEOUT_MS`, did not catch the controls here. The controls ran on the same host as the verifier, but with this round's pump (lazy timers, request draining, a yield after each call) and the old bridge timer, not a7a92bd's code. Their stalls were shorter than the verifier's (worst calls of 11 s against 22 to 30 s) and intermittent: control 2 saturated the Timer thread and still ran on time. Which difference shortened them was not isolated. So `cdp_pass` also checks the cause directly: the bridge may never hold more than one outstanding timer, which is the sweeper's design. Control 3 fails on that and passes the latency bounds. Why r4's single run did not stall is not known.
 
-The ledger sees only timers armed through `Timers::arm`. A per-call timer reinstated by calling `executor.timer()` directly, as control 1 does, bypasses it. Such a mutant fails `cdp_pass` only when its stall exceeds the `STEP_TIMEOUT_MS` bounds, and control 1's did not.
+The ledger sees only timers armed through `Timers::arm`. A per-call timer armed with `executor.timer()` directly, as control 1 does, bypassed it and passed `cdp_pass` at run time. Since r6, `Timers::arm` is the only place the crate may call GPUI's timer: `clippy.toml` disallows `gpui::BackgroundExecutor::timer` and both `scheduler_executor` methods, and only `Timers::arm` carries `#[allow(clippy::disallowed_methods)]`. Control 1's mutant, reapplied to the current bridge (`results/2026-11-23-r5-controls/direct-timer.patch`), fails workspace `cargo clippy --locked --all-targets -- -D warnings` with "use of a disallowed method `gpui::BackgroundExecutor::timer`" at `bridge.rs:213` (`clippy-guard-control.sh`, `clippy-guard-control.out`). So control 1 passes `cdp_pass` at run time and is rejected at build time. The two `scheduler_executor` entries were checked once in a disposable copy, not kept as a control: calls to both in `Bridge::new` failed with "use of a disallowed method" for each, and a third entry naming a method GPUI lacks drew the warning "does not refer to a reachable function", so Clippy 1.100 checks that each configured path resolves.
 
 ### Phase 1 risk
 
-GPUI timers on Linux share one thread and are not cancelled on drop. Any per-request timer pattern in Flecha, such as timeouts in the MCP server, CDP calls or downloads, must not create one GPUI timer per request. Keep one timer per component, set for the earliest deadline, as the bridge does now, or use a timer source that removes cancelled timers. A Timer thread backlog delays every GPUI timer in the process, including the CEF pump's.
+GPUI timers on Linux share one thread and are not cancelled on drop. Any per-request timer pattern in Flecha, such as timeouts in the MCP server, CDP calls or downloads, must not create one GPUI timer per request. Keep one timer per component, set for the earliest deadline, as the bridge does now, or use a timer source that removes cancelled timers. A Timer thread backlog delays every GPUI timer in the process, including the CEF pump's. This spike enforces the rule with a Clippy `disallowed-methods` entry and one allowed call site; Phase 1 can reuse that guard.
+
+Two more Phase 1 risks from review, not changed here:
+
+- A cancelled bridge call keeps its pending entry until its deadline (review thread 4665850142), because only the receiver is dropped. Here every call is awaited to completion. An agent server that cancels requests needs a drop guard that removes the entry.
+- The pump drains every queued CEF request before it picks the next call, with no bound (summary item `pump.rs:165`). A producer that keeps the queue full could keep the pump from checking its deadline or yielding to GPUI. CEF's requests did not do that in any run here, but Phase 1 should bound the drain by its own deadline.
 
 ## DevTools and CEF #4353
 
@@ -224,13 +249,13 @@ Result: #4353 does not reproduce on CEF 158.0.3, and no workaround is needed. Th
 
 ## Shutdown
 
-Each run closes every browser with `CloseBrowser(true)` and waits for every `OnBeforeClose`, which removes that browser's handle. Then it drops the observer registrations, quits GPUI, and calls `CefShutdown()`. If any browser is still open when the wait times out, the app skips `CefShutdown()` (calling it with live browsers is not allowed), records why, and fails the run. `CefShutdown()` returned in 48 to 117 ms. Right after it returns, some zygote processes are still alive. They exit when the browser process exits and closes their sockets. So after the app exits, the runner calls `cef-gpui-pump --pump-wait-gone=REPORT` under `env -i` with the run's scratch `HOME` and `TMPDIR`. It waits on a pidfd for each child the app saw before shutdown, bounded by `STEP_TIMEOUT_MS`. A malformed child record, or a `/proc` or `pidfd_open` error other than "no such process", fails the check instead of counting as gone. In all 19 runs, every child had exited before that wait began.
+Each run closes every browser with `CloseBrowser(true)` and waits for every `OnBeforeClose`, which removes that browser's handle. Then it drops the observer registrations, quits GPUI, and calls `CefShutdown()`. If any browser is still open when the wait times out, the app skips `CefShutdown()` (calling it with live browsers is not allowed), records why, and fails the run. `CefShutdown()` returned in 48 to 117 ms. Right after it returns, some zygote processes are still alive. They exit when the browser process exits and closes their sockets. So after the app exits, the runner calls `cef-gpui-pump --pump-wait-gone=REPORT` under `env -i` with the run's scratch `HOME` and `TMPDIR`. It waits on a pidfd for each process in either snapshot the app took, the children before shutdown and the descendants right after `CefShutdown()`, deduplicated by PID and start time, bounded by `STEP_TIMEOUT_MS`. A malformed child record, or a `/proc` or `pidfd_open` error other than "no such process", fails the check instead of counting as gone. In all 19 runs, every child had exited before that wait began.
 
 Process types come from `--type=`, but zygote-forked processes keep `--type=zygote` on this build. `probe::Proc::kind` labels them by tree shape. The sandboxed layout seen here is browser, then the sandboxed zygote (PID-namespace init), then the zygote worker, then one process per renderer, each in its own PID namespace.
 
 ## Unit tests
 
-`cargo test --release -p cef-gpui-pump` runs 19 tests without CEF: 11 in `src/schedule.rs`, 5 in `src/idle.rs` and 3 in `src/lib.rs`.
+`cargo test --release -p cef-gpui-pump` runs 24 tests without CEF: 11 in `src/schedule.rs`, 7 in `src/idle.rs`, 3 in `src/procfs.rs` and 3 in `src/lib.rs`.
 
 `src/schedule.rs`:
 
@@ -241,14 +266,18 @@ Process types come from `--type=`, but zygote-forked processes keep `--type=zygo
 
 Each fix was checked by breaking it on purpose. Removing the reentrancy check fails the reentrancy test. Dropping the delayed path fails 2 tests. Letting a delayed request restart the 33 ms clock, as the first round's pump did, fails the stream test.
 
-`src/idle.rs` tests the frame rule with synthetic paint logs: the r4-style log with one repaint at 4099 ms passes; a second repaint, a full-view repaint at 3.5 s, and a lone repaint at 8 s after an earlier paint-holding repaint before the window each fail, as do a partial repaint, an extra GPUI render and an unexplained pump call. Mutants, applied one at a time (`results/2026-11-23-r5-controls/idle-mutants.sh`, output in `idle-mutants.out`):
+`src/idle.rs` tests the frame rule with synthetic paint logs. The r4 and r5 logs, a first paint and then one repaint at 4099 ms, pass. These fail: a second repaint, a full-view repaint at 3.5 s, a repaint after an earlier paint-holding repaint before the window, a lone repaint at 8 s, a repaint 1 ms past the delivery bound, a repaint that is the first paint, a partial repaint, an extra GPUI render and an unexplained pump call. Mutants, each applied to a disposable `git archive` copy of the committed tree, never the caller's checkout (`results/2026-11-23-r5-controls/idle-mutants.sh`, output in `idle-mutants.out`). The script fails unless the unmutated rule passes its idle tests and each mutant fails the tests named for it:
 
 | Mutant | Tests that fail |
 |---|---|
-| Accept two paint-holding repaints (`candidates <= 2`) | 2: the second repaint and the 8 s case |
-| `PAINT_HOLDING_TIMEOUT` = 0 s | 3 |
-| Allowance counted inside the window only (the second round's rule) | 1: the 8 s case |
-| None | 0 of 5 |
+| Accept two paint-holding repaints (`candidates <= 2`) | 2, including the second repaint |
+| `PAINT_HOLDING_TIMEOUT` = 0 s | 4, including the r4 and r5 logs |
+| Allowance counted inside the window only (the second round's rule) | 1: the repaint after an earlier one |
+| No upper bound on the repaint time (the third round's rule) | 1: the lone repaint at 8 s |
+| No earlier paint required | 1: the repaint that is the first paint |
+| None | 0 of 7 |
+
+`src/procfs.rs` tests the isolation scan's parsing: a map path and an `ss` address under `/home/Test User` keep their spaces and match that forbidden root, and an fd directory with one symlink and one entry `readlink` cannot resolve gives one target, one failure and an incomplete table (review thread `probe.rs:284`).
 
 `src/lib.rs`: `path_under` matches whole path components, which the isolation scan's allow-list relies on. `report_has_no_template_tokens` fails if REPORT.md still holds a fill token: an uppercase name wrapped in `@` signs, or one wrapped in the same digits on both sides, the shape a broken fill left in commit 7375b80 (`966` before and after each name). Run against that commit's REPORT.md, it fails and lists all of them. A guard in `run-checks.sh` would run before the report is written, and the fill is not a committed step, so the check lives in the test suite.
 
@@ -258,6 +287,19 @@ From the PR #93 verifiers and the OpenCodeReview threads. "Reproduced" means sho
 
 | Finding | Reproduced? | Fix or reason |
 |---|---|---|
+| A per-call timer armed with `executor.timer()` bypasses the ledger (parent, control 1) | Yes, control 1 passed `cdp_pass` | `Timers::arm` is the only allowed timer call; Clippy rejects control 1 at build time |
+| fd readlink failures ignored by the isolation scan (`probe.rs:284`, 4665850168) | By reading; unit test with a synthetic failure | Failures mark the scan incomplete and fail `isolation_clean` |
+| Map and `ss` paths truncated at a space (4665850181) | By reading: the old `split_whitespace().nth(5)` turns the test's path into `/home/Test` | `procfs::maps_path` and `procfs::ss_unix_row` keep the rest of the line |
+| Relative forbid or allow paths accepted (4665850151) | By reading | Rejected, naming the option |
+| `wait_gone` ignores processes first seen during `CefShutdown` (4665850161) | By reading | Both snapshots checked, deduplicated by PID and start time |
+| Timeout probe verdict ignores the measured time (4665850204) | By reading | `cdp_timeout_probe.pass` requires the return within two `STEP_TIMEOUT_MS` |
+| A lone late repaint counts as paint holding (4665850156) | Yes: the 8 s test fails on the "no upper bound" mutant, the third round's rule | Upper bound of first paint + 4 s + `MAX_PUMP_INTERVAL` |
+| Page rAF rate divided by the host interval (4665850190) | By reading | Divided by the page's own clock; both intervals reported |
+| No outer deadline around `CefInitialize` and `CefShutdown` (4665850134) | By reading | Per-run watchdog from the run's knobs; `SIGSTOP` control |
+| Scratch path from the caller's `TMPDIR` reaches `sed`, XML and the bus address (4665850125) | By reading | Scratch dirs under `/tmp`, path checked |
+| Linux-only code breaks non-Linux workspace checks (4665850088) | By reading (`libc::SYS_pidfd_open`); no non-Linux target installed | Linux modules and dependencies gated; stub elsewhere |
+| Mutant script edited the caller's checkout and could pass on a failure (4665850097, 4665850104, 4665850114) | By reading | Disposable copy, argument and tool checks, named-test checks, cargo status checked |
+| Overwritten paints not counted (`view.rs:29`, 4665850225) | By reading | `on_paint_frames_overwritten_before_upload` and `gpui_images_replaced_before_draw` |
 | CDP bridge starves the pump | Yes, by the verifier (5 of 5 runs) and controls 1 and 3 here | One bridge timer at a time, lazy pump timers, timeout probe, latency bounds and the timer ledger in `cdp_pass` (see "The CDP slowdown") |
 | `idle_pass` rule untested; an 8 s repaint passes after an earlier paint-holding repaint (`scenario.rs:241`) | Yes, the mutants passed all 9 tests of the second round | Rule moved to `src/idle.rs`, allowance counted over the whole navigation, tests and mutants above |
 | Runs used the real `HOME` and shared `/tmp`; a sandboxed process mapped the owner's Mesa shader cache | Yes, by the verifier | Scratch `HOME` and `TMPDIR` per run, real `HOME` scanned with an allow-list, control 4 |
@@ -295,22 +337,27 @@ From the PR #93 verifiers and the OpenCodeReview threads. "Reproduced" means sho
 The parent agent accepted these without a change. They affect the harness's robustness, not the done checks' results:
 
 - Concurrent invocations for the same CEF archive share one bundle dir, so one can overwrite the binary another is about to start.
-- A trial has no external deadline. GPUI's step timers cannot interrupt a synchronous CEF call that hangs (initialization, shutdown), so one hang stops the suite.
 - `wait_gone` treats any nonzero pidfd event as exit, so a latent `POLLNVAL` or `POLLERR` would count as gone.
-- The runner's `sed` substitutes scratch paths unescaped, so a `TMPDIR` containing `&` or `|` would produce a wrong bus config path.
 - Two invocations into one results dir can delete or replace each other's reports.
 - `--pump-wait-gone` panics on a malformed report instead of failing cleanly.
 - A malformed `/proc/PID/stat` reads as "process exited" in `wait_gone`.
 - `pump.rs:80`: a request dequeued just before the idle window could flag its call just after as unexplained. `analyze_between` now keeps the earlier trace, which closes this case too.
-- `forbidden_refs` waits for `ss` with no deadline, on the GPUI thread.
-- `gpui_frames_never_drawn` counts images built for the view and replaced before GPUI drew them, not frames GPUI skipped in the paint phase. The name overstates it.
+- `forbidden_refs` waits for `ss` with no deadline, on the GPUI thread. The per-run watchdog now bounds the run as a whole.
+- The schedule analyzer keeps a request the scheduler would ignore as already served (review thread 4665850212). A request stamped before the previous call but enqueued after a fresh immediate request can replace it in the analysis, and the next call is then flagged unexplained. That gives a false failure, never a false pass. No run hit it.
+- The cdp scenario writes its screenshot on the GPUI thread while the pump trace runs (summary item `scenario.rs:439`). Slow storage could stretch a pump gap and fail `pump_pass`; it cannot make one pass. The whole screenshot step, capture and write, took 88 to 105 ms in the 4 r5 cdp runs.
+- Each tree snapshot reads every visible process before keeping the descendants (summary item `probe.rs:136`). That adds unrelated `/proc` reads to timed runs on a busy host.
 
-Open review threads, not addressed in this round and not classified by the parent:
+Limits of this round's changes:
+
+- The `ss` parser takes the peer address as one token, which iproute2 7.3's `ss` prints as `*` for every Unix socket (1,531 of 1,531 rows on this host).
+- An fd that closes between the scan listing its directory and reading its link now fails `isolation_clean`, by design. No r6 run hit that.
+- The non-Linux stub was not compiled here: only the `x86_64-unknown-linux-gnu` target is installed, and adding one changes the user's toolchain.
+- Fixed this round, and so dropped from this list: the missing per-run deadline (the watchdog), the `sed` case for a `TMPDIR` with `&` or `|` (scratch under `/tmp`, path checked), and the `gpui_frames_never_drawn` name (now `gpui_images_replaced_before_draw`, next to `on_paint_frames_overwritten_before_upload`).
+
+Review notes the parent kept without a change:
 
 - `schedule.rs:73`: the 33 ms fallback counts from the previous call's end, not its start, so a 10 ms call puts the next start about 43 ms later. The idle trace shows that maximum.
 - `scenario.rs:490`: the 0 ms DevTools close is issued after `ShowDevTools` returns, so no trial closes DevTools while its creation is pending.
-- `probe.rs:284`: a readlink failure on an fd entry is skipped without marking the scan incomplete.
-- `view.rs:29`: an `OnPaint` that overwrites a frame GPUI has not taken yet is not counted as dropped.
 
 ## Cargo 1.100 and cef-rs
 

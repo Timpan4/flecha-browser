@@ -18,11 +18,24 @@ Controls 1 and 2 ran before the timer ledger existed. They show that the
 latency bounds alone miss an intermittent stall. Control 2's pump change keeps
 the current loop's request draining and yield, so it is not a7a92bd's pump.
 
-`idle-mutants.sh` applies each idle-rule mutant to `src/idle.rs`, runs the
-CEF-free `idle::` tests through the build lock, and restores the file with git.
-`idle-mutants.out` is its output on c6c2f00's `src/idle.rs` (unchanged since):
-every mutant fails at least one test, the unmutated rule passes 5 of 5.
+Controls 1 to 4 were applied to the checkout and reverted. From round 6 on,
+every mutant runs in a disposable `git archive` copy of the committed tree,
+deleted on exit, and never touches the caller's checkout:
+
+- `idle-mutants.sh` applies each idle-rule mutant to `src/idle.rs` in a copy and
+  runs the CEF-free `idle::` tests there through the build lock. It fails unless
+  the unmutated rule passes and each mutant fails the tests named for it.
+  `idle-mutants.out` is its output on d530b37: the unmutated rule passes 7 of 7,
+  and all 5 mutants fail their named tests.
+- `clippy-guard-control.sh` applies `direct-timer.patch`, control 1's per-call
+  `executor.timer()` reapplied to the current bridge, and runs workspace
+  `cargo clippy --locked --all-targets -- -D warnings` in a copy. It fails
+  unless Clippy rejects the call. `clippy-guard-control.out` is its output on
+  d530b37: "use of a disallowed method `gpui::BackgroundExecutor::timer`" at
+  `bridge.rs:213`, exit 101. So control 1 passes `cdp_pass` at run time and
+  Clippy rejects it at build time.
 
 The ledger counts only timers armed through `Timers::arm`. A per-call timer
 that calls `executor.timer()` directly, as in control 1, bypasses it and fails
-`cdp_pass` only if its stall exceeds the `STEP_TIMEOUT_MS` bounds.
+`cdp_pass` only if its stall exceeds the `STEP_TIMEOUT_MS` bounds. Since round 6,
+Clippy rejects such a call at build time (`clippy-guard-control.sh`).
