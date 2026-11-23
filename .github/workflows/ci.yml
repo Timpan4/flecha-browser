@@ -140,6 +140,20 @@ jobs:
           cargo +stable fmt --check -p flecha-migrate
           cargo +stable clippy --locked -p flecha-migrate --all-targets -- -D warnings
           cargo +stable test --locked -p flecha-migrate
+      - name: Check site permissions in isolation
+        shell: bash
+        run: |
+          permissions_rewrite="$RUNNER_TEMP/flecha-permissions-ci/rewrite"
+          mkdir -p "$permissions_rewrite/crates"
+          cp -R crates/flecha-permissions "$permissions_rewrite/crates/"
+          cp Cargo.lock "$permissions_rewrite/"
+          printf '[workspace]\nresolver = "3"\nmembers = ["crates/flecha-permissions"]\n' > "$permissions_rewrite/Cargo.toml"
+          cd "$permissions_rewrite"
+          cargo +stable metadata --format-version 1 > metadata.json
+          jq -e '[.packages[].source | select(. != null and startswith("git+"))] | length == 0' metadata.json
+          cargo +stable fmt --check -p flecha-permissions
+          cargo +stable clippy --locked -p flecha-permissions --all-targets -- -D warnings
+          cargo +stable test --locked -p flecha-permissions --all-targets
 
   rewrite-services:
     name: Flecha services (Rust)
