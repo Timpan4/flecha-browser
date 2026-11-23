@@ -175,16 +175,26 @@ for (const value of savedValues) {
 
   if (!decoded) throw new Error(`The minimal saved state no longer decodes with ${JSON.stringify(value)}`);
 
-  const tsValidEntries = Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string' && isSiteHost(entry)) : null;
+  const entries = z.array(z.unknown()).safeParse(value);
+
+  const tsValidEntries = entries.success
+    ? entries.data.flatMap((entry) => {
+        const host = z.string().safeParse(entry);
+
+        return host.success && isSiteHost(host.data) ? [host.data] : [];
+      })
+    : null;
 
   rows.push({ kind: 'saved', value, tsDecoded: decoded.adBlockAllowed ?? null, tsValidEntries });
 }
 
-const kinds = { url: 0, host: 0, saved: 0 };
+const kinds: Record<Row['kind'], number> = { url: 0, host: 0, saved: 0 };
 
 for (const row of rows) kinds[row.kind] += 1;
 
-const asciiJson = (value: unknown) =>
+type FixtureLine = Row | { counts: Record<Row['kind'], number> };
+
+const asciiJson = (value: FixtureLine) =>
   JSON.stringify(value).replace(/[\u007F-￿]/g, (unit) => '\\u' + unit.charCodeAt(0).toString(16).padStart(4, '0'));
 
 const fixturePath = fileURLToPath(new URL('../tests/fixtures/site-parity.jsonl', import.meta.url));
