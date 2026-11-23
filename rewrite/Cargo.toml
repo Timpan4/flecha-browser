@@ -6,6 +6,7 @@ members = [
     "crates/flecha-cef",
     "crates/flecha-core",
     "crates/flecha-import",
+    "crates/flecha-migrate",
     "crates/flecha-services",
     "crates/flecha-surface",
     "crates/flecha-ui",
