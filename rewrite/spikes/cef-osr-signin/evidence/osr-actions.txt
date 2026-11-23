@@ -1,18 +1,20 @@
-xvfb pid 113118 display :2
-app pid 113120
-[console] INPUT storage loads 1 (file://.../scripts/input-test.html:25)
-[popup] file://.../scripts/input-test.html?child
-[console] INPUT child opener true (file://.../scripts/input-test.html?child:25)
+xvfb pid 1262302 display :1
+app pid 1262304
+[console] INPUT storage loads 1 (file://…/fresh2/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[popup] file://…/fresh2/rewrite/spikes/cef-osr-signin/scripts/input-test.html?child
+[console] INPUT child opener true (file://…/fresh2/rewrite/spikes/cef-osr-signin/scripts/input-test.html?child:25)
 [browser] created id=2 open=2
 [browser] closed id=2 open=1
 PASS alive
 [permission 1] file:/// requests permission types 0x8000 (cef_permission_request_types_t). Type `allow 1` or `deny 1` and press Enter.
-[console] INPUT notification granted (file://.../scripts/input-test.html:25)
-[console] INPUT camera error NotFoundError (file://.../scripts/input-test.html:25)
+[console] INPUT notification granted (file://…/fresh2/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT camera error NotFoundError (file://…/fresh2/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
 permission prompts for camera: 0
-[console] INPUT text "@åäö" (file://.../scripts/input-test.html:25)
-[console] INPUT text "@åäö" (file://.../scripts/input-test.html:25)
-[pdf] ok=true act-osr/osr-print.pdf
-PASS test -s act-osr/osr-print.pdf
-[load-end] https://www.google.com/
+[console] INPUT text "@åäö" (file://…/fresh2/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown a KeyQ 65 (file://…/fresh2/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[pdf] ok=true …/fresh2-out/act-osr/osr-print.pdf
+PASS test -s …/fresh2-out/act-osr/osr-print.pdf
+[load-end] http://127.0.0.1:39469
+[console] INPUT storage loads 2 (file://…/fresh2/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+PASS test 0 = 0
 app exit 0

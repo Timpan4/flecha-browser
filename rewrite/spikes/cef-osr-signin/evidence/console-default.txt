@@ -1,0 +1,7 @@
+xvfb pid 1263853 display :1
+app pid 1263855
+[load-end] http://127.0.0.1:38543
+[console] INPUT storage loads 2 (file://…/fresh2/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+marker lines: 0
+PASS test 0 = 0
+app exit 0

@@ -1,0 +1,13 @@
+$ run.sh before prepare.sh
+No CEF runtime at …/fresh2/rewrite/target/cef-runtime/158.0.3/cef_linux_x86_64. Run spikes/cef-osr-signin/prepare.sh first.
+$ prepare.sh
+CEF_PATH=…/fresh2/rewrite/target/cef-runtime
+$ readelf -d target/debug/cef-osr-signin (PATH and libcef lines)
+ 0x0000000000000001 (NEEDED)             Shared library: [libcef.so]
+$ ls target/debug | grep -c 'libcef|.pak'
+0
+$ target/debug/cef-osr-signin (without run.sh)
+./target/debug/cef-osr-signin: error while loading shared libraries: libcef.so: cannot open shared object file: No such file or directory
+$ LD_LIBRARY_PATH=<dir with only libcef.so> target/debug/cef-osr-signin
+wrong CEF runtime: cannot read …/fresh2-out/lonely/archive.json: No such file or directory (os error 2)
+Stage the pinned runtime with spikes/cef-osr-signin/prepare.sh and start through run.sh.

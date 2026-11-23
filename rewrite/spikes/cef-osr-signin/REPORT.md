@@ -48,7 +48,7 @@ Run from `rewrite/`. Three steps:
 
 ```sh
 # 1. Download the pinned CEF archive, check its SHA-1 against rewrite/pins.toml, and stage it at
-#    target/cef-runtime/158.0.3/cef_linux_x86_64 (about 1.5 GB unpacked).
+#    target/cef-runtime/158.0.3/cef_linux_x86_64 (a 324 MB download, 1.6 GB staged).
 bash spikes/cef-osr-signin/prepare.sh
 
 # 2. Build against the staged runtime, through the shared lock (see rewrite/README.md).
@@ -149,6 +149,8 @@ ACTIONS=$PWD/spikes/cef-osr-signin/scripts/osr-actions.sh WAIT_SECS=30 XDOTOOL=/
 Run on 2026-11-23 on the workstation, in a fresh `git clone` of the branch, built with the [Build and run](#build-and-run) commands through the `cargo` on PATH. Everything ran on Xvfb only, through `scripts/xvfb-isolated.sh`, with a fresh profile per run (the second persistence run reuses the first run's profile) and `WAIT_SECS=30`. The self-checks used `--self-check-timeout-secs 30` and a profile path containing `#`, `%` and a space. The JSON reports and logs are in [evidence/](evidence/), with scratch paths shortened to `…`.
 
 ### Runtime checks
+
+Command output: [evidence/runtime-checks.txt](evidence/runtime-checks.txt).
 
 | Check | Result |
 |---|---|

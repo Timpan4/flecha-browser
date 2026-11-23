@@ -1,5 +1,7 @@
-xvfb pid 113737 display :2
-app pid 113739
-[console] INPUT storage loads 2 (file://.../scripts/input-test.html:25)
-cookie hosts at start: .google.com
+xvfb pid 1262683 display :1
+app pid 1262685
+[console] INPUT storage loads 3 (file://…/fresh2/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+PASS test 3 -ge 2
+fixture cookie hosts: 127.0.0.1
+PASS test 127.0.0.1 = 127.0.0.1
 app exit 0
