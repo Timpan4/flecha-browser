@@ -14,8 +14,8 @@ windows64 = "ac9ef7e16e024123ca602beb91c9f8d8e3a78178"
 
 # The same commit (g8c29be2) was also published to the stable channel as separate archives.
 # cef-rs's build script at the rev below picks the first index entry for the version, which is
-# currently the stable archive. Until Flecha's own fetch step downloads the beta archive, checks
-# the SHA-1 above and sets CEF_PATH, builds use these stable archives of the same commit.
+# currently the stable archive. The compositor spike's prepare.sh verifies the beta archive
+# above and provides it through CEF_PATH. The hashes below identify the default upstream archives.
 [cef.stable.sha1]
 linux64 = "620b80a02dfe93ed7884a9eb1b265ff34f799024"
 macosarm64 = "25c8a98f652214b852f06ec943b504415d115e74"

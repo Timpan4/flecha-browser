@@ -1,0 +1,223 @@
+use std::sync::Arc;
+
+use anyhow::{Context as _, Result, ensure};
+use cef::AcceleratedPaintInfo;
+use gpui::{Bounds, Canvas, ContentMask, Pixels, RenderImage, Styled as _, canvas};
+
+#[derive(Clone)]
+pub enum Frame {
+    #[cfg(target_os = "linux")]
+    Texture {
+        view: wgpu::TextureView,
+        device: wgpu::Device,
+        source_uv: [f32; 4],
+    },
+    Image(Arc<RenderImage>),
+}
+
+impl Frame {
+    /// Copy a complete CEF software frame (top-down, premultiplied BGRA).
+    ///
+    /// # Safety
+    ///
+    /// `buffer` must be the live OnPaint buffer for these dimensions.
+    pub unsafe fn copy_bgra(
+        buffer: *const u8,
+        width: i32,
+        height: i32,
+        window: &SurfaceTarget,
+    ) -> Result<Self> {
+        let width = u32::try_from(width)?;
+        let height = u32::try_from(height)?;
+        let stride = width.checked_mul(4).context("BGRA row is too wide")?;
+        let len = usize::try_from(u64::from(stride) * u64::from(height))?;
+        ensure!(
+            !buffer.is_null() && width != 0 && height != 0 && isize::try_from(len).is_ok(),
+            "invalid CEF software frame"
+        );
+        // CEF supplies width * height * 4 readable bytes until OnPaint returns.
+        let data = unsafe { std::slice::from_raw_parts(buffer, len) };
+
+        #[cfg(target_os = "linux")]
+        if let Some(gpu) = &window.gpu {
+            let max_size = gpu.device.limits().max_texture_dimension_2d;
+            ensure!(
+                width <= max_size && height <= max_size,
+                "frame exceeds the renderer limit"
+            );
+            let size = wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            };
+            let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("CEF software frame"),
+                size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Bgra8Unorm,
+                usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            gpu.queue.write_texture(
+                texture.as_image_copy(),
+                data,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(stride),
+                    rows_per_image: None,
+                },
+                size,
+            );
+            return Ok(Self::Texture {
+                view: texture.create_view(&Default::default()),
+                device: gpu.device.clone(),
+                source_uv: [0.0, 0.0, 1.0, 1.0],
+            });
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = window;
+
+        let image = image::RgbaImage::from_raw(width, height, data.to_vec())
+            .context("invalid BGRA frame length")?;
+        Ok(Self::Image(Arc::new(RenderImage::new(
+            smallvec::smallvec![image::Frame::new(image)],
+        ))))
+    }
+
+    #[cfg(target_os = "linux")]
+    /// Copy a callback-scoped dma-buf, then retain the view of the owned texture.
+    ///
+    /// # Safety
+    ///
+    /// Call inside the originating callback with the GPU used by CEF.
+    pub unsafe fn copy_accelerated(
+        info: &AcceleratedPaintInfo,
+        gpu: &gpui::SurfaceDevice,
+    ) -> Result<Self> {
+        let texture = unsafe { import_accelerated(info, &gpu.device, &gpu.queue) }?;
+        let visible = &info.extra.visible_rect;
+        let right = visible
+            .x
+            .checked_add(visible.width)
+            .context("visible rect overflows")?;
+        let bottom = visible
+            .y
+            .checked_add(visible.height)
+            .context("visible rect overflows")?;
+        ensure!(
+            visible.x >= 0
+                && visible.y >= 0
+                && visible.width > 0
+                && visible.height > 0
+                && u32::try_from(right)? <= texture.width()
+                && u32::try_from(bottom)? <= texture.height(),
+            "CEF visible rect lies outside the coded frame"
+        );
+        let width = texture.width() as f32;
+        let height = texture.height() as f32;
+        Ok(Self::Texture {
+            view: texture.create_view(&Default::default()),
+            device: gpu.device.clone(),
+            source_uv: [
+                visible.x as f32 / width,
+                visible.y as f32 / height,
+                right as f32 / width,
+                bottom as f32 / height,
+            ],
+        })
+    }
+
+    pub fn image(&self) -> Option<&Arc<RenderImage>> {
+        match self {
+            Self::Image(image) => Some(image),
+            #[cfg(target_os = "linux")]
+            Self::Texture { .. } => None,
+        }
+    }
+}
+
+/// Copy CEF's dma-buf (Vulkan), IOSurface (Metal), or shared D3D11 texture
+/// (D3D12/Vulkan interop) into a wgpu-owned texture.
+///
+/// # Safety
+///
+/// Call inside the originating OnAcceleratedPaint callback. The device and
+/// queue must match each other and the CEF producer's GPU and Vulkan driver.
+pub unsafe fn import_accelerated(
+    info: &AcceleratedPaintInfo,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+) -> Result<wgpu::Texture> {
+    let source = cef::osr_texture_import::SharedTextureHandle::new(info);
+    // The importer finishes the source read before returning.
+    Ok(unsafe { source.import_texture(device, queue) }?)
+}
+
+#[derive(Clone, Default)]
+pub struct SurfaceTarget {
+    #[cfg(target_os = "linux")]
+    pub gpu: Option<gpui::SurfaceDevice>,
+}
+
+impl SurfaceTarget {
+    pub fn for_window(window: &gpui::Window) -> Self {
+        #[cfg(target_os = "linux")]
+        {
+            Self {
+                gpu: window.surface_device(),
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = window;
+            Self::default()
+        }
+    }
+}
+
+/// Paint the view followed by its optional popup. Popup bounds are in logical
+/// pixels relative to the browser view, as supplied by CEF.
+pub fn surface(view: Option<Frame>, popup: Option<(Bounds<Pixels>, Frame)>) -> Canvas<()> {
+    canvas(
+        |_, _, _| (),
+        move |bounds, (), window, _| {
+            window.with_content_mask(Some(ContentMask { bounds }), |window| {
+                if let Some(view) = view {
+                    paint(view, bounds, window);
+                }
+                if let Some((relative, frame)) = popup {
+                    let popup = Bounds::new(bounds.origin + relative.origin, relative.size);
+                    paint(frame, popup, window);
+                }
+            });
+        },
+    )
+    .size_full()
+}
+
+fn paint(frame: Frame, bounds: Bounds<Pixels>, window: &mut gpui::Window) {
+    match frame {
+        #[cfg(target_os = "linux")]
+        Frame::Texture {
+            view,
+            device,
+            source_uv,
+        } => {
+            if window
+                .surface_device()
+                .is_some_and(|gpu| gpu.device == device)
+            {
+                window.paint_texture_surface(bounds, view, source_uv);
+            }
+        }
+        Frame::Image(image) => {
+            if let Err(error) =
+                window.paint_image(bounds, bounds, Default::default(), image, 0, false)
+            {
+                eprintln!("CEF image paint: {error:#}");
+            }
+        }
+    }
+}

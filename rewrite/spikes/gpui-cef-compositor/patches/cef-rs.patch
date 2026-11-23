@@ -1,0 +1,57 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 6819748..411c2b3 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -58,7 +58,7 @@ syn = { version = "3", features = ["full"] }
+ thiserror = "2"
+ toml_edit = "0.25"
+ tracing = "0.1"
+-wgpu = "30"
++wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "cddb2f5d80dc0009b2ef6767635140cacf90a007" }
+ winres = "0.1"
+ x11-dl = "2"
+
+diff --git a/cef/src/osr_texture_import/d3d11.rs b/cef/src/osr_texture_import/d3d11.rs
+index 0ce4d72..f7e2c70 100644
+--- a/cef/src/osr_texture_import/d3d11.rs
++++ b/cef/src/osr_texture_import/d3d11.rs
+@@ -102,6 +102,7 @@ impl D3D11Importer {
+                 hal_texture,
+                 &descriptor,
+                 wgpu::TextureUses::PRESENT,
++                true,
+             )
+         };
+         texture::copy_to_owned(device, queue, source, Some(wgpu::TextureUses::PRESENT))
+@@ -142,6 +143,7 @@ impl D3D11Importer {
+                 hal_texture,
+                 &descriptor,
+                 super::vulkan::EXTERNAL_TEXTURE_STATE,
++                true,
+             )
+         };
+         super::vulkan::copy_to_owned(device, queue, source, ash::vk::QUEUE_FAMILY_EXTERNAL)
+diff --git a/cef/src/osr_texture_import/dmabuf.rs b/cef/src/osr_texture_import/dmabuf.rs
+index 768781f..c385fbd 100644
+--- a/cef/src/osr_texture_import/dmabuf.rs
++++ b/cef/src/osr_texture_import/dmabuf.rs
+@@ -180,6 +180,7 @@ impl DmaBufImporter {
+                     view_formats: &[],
+                 },
+                 super::vulkan::EXTERNAL_TEXTURE_STATE,
++                true,
+             )
+         };
+
+diff --git a/cef/src/osr_texture_import/iosurface.rs b/cef/src/osr_texture_import/iosurface.rs
+index de3d67a..5799c8c 100644
+--- a/cef/src/osr_texture_import/iosurface.rs
++++ b/cef/src/osr_texture_import/iosurface.rs
+@@ -156,6 +156,7 @@ impl IOSurfaceImporter {
+                 hal_tex,
+                 &texture_desc,
+                 wgpu::TextureUses::RESOURCE,
++                true,
+             )
+         })
+     }
