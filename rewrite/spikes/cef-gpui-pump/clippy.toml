@@ -1,9 +1,32 @@
 # GPUI's Linux timers share one Timer thread and are not cancelled on drop, so
 # a timer per request starves the CEF pump (REPORT.md, "The CDP slowdown").
 # Every timer in this crate goes through `timers::Timers::arm`, which counts it.
-# The scheduler executors behind `scheduler_executor` expose the same timers.
+#
+# These are the public GPUI APIs at f126950f whose call ends in a GPUI timer or
+# a delayed dispatch to the Timer thread (REPORT.md, "Phase 1 risk", lists
+# what was checked and what Clippy cannot guard).
 disallowed-methods = [
     { path = "gpui::BackgroundExecutor::timer", reason = "arm timers through timers::Timers::arm" },
+    # The scheduler executors behind these expose the same timers.
     { path = "gpui::BackgroundExecutor::scheduler_executor", reason = "its timer bypasses timers::Timers::arm" },
     { path = "gpui::ForegroundExecutor::scheduler_executor", reason = "its timer bypasses timers::Timers::arm" },
+    { path = "gpui::SchedulerLocalExecutor::timer", reason = "arm timers through timers::Timers::arm" },
+    # util.rs: calls `executor.timer(timeout)` for every future it wraps.
+    { path = "gpui::FutureExt::with_timeout", reason = "arms a GPUI timer per call; arm timers through timers::Timers::arm" },
+    # Reachable through the doc(hidden) `dispatcher()` accessors; the Linux
+    # dispatcher queues it on the Timer thread.
+    { path = "gpui::PlatformDispatcher::dispatch_after", reason = "queues work on GPUI's Timer thread" },
+    # animation.rs: a GPUI timer per frame while the animation runs.
+    { path = "gpui::Animation::with_max_fps", reason = "arms a GPUI timer per animation frame" },
+    # div.rs: a GPUI timer per hover for the show and hide delays.
+    { path = "gpui::Interactivity::tooltip", reason = "arms GPUI timers per hover" },
+    { path = "gpui::Interactivity::hoverable_tooltip", reason = "arms GPUI timers per hover" },
+    { path = "gpui::StatefulInteractiveElement::tooltip", reason = "arms GPUI timers per hover" },
+    { path = "gpui::StatefulInteractiveElement::hoverable_tooltip", reason = "arms GPUI timers per hover" },
+    # gpui_linux: a 10 s GPUI timer per call.
+    { path = "gpui::App::prevent_idle_sleep", reason = "arms a GPUI timer per call" },
+]
+# animation.rs: `Animation { max_fps: Some(..), .. }` sets what `with_max_fps` sets.
+disallowed-fields = [
+    { path = "gpui::Animation::max_fps", reason = "a GPUI timer per animation frame" },
 ]
