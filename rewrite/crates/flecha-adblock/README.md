@@ -42,8 +42,8 @@ Measured on 2026-11-23 on BIG-CHONKER-cachy (AMD Ryzen 7 9800X3D, Linux 7.3.5-2-
 
 | Load | Time | Peak RSS |
 | --- | --- | --- |
-| Cold: `build_engine` parses both lists | 59–60 ms | 33.5–33.9 MB |
-| Warm: `warm_start` reads both lists, hashes them and deserializes `engine.dat` | 3.7–4.1 ms | 20.6–20.7 MB |
+| Cold: `build_engine` parses both lists | 57.9–61.3 ms | 33.3–33.9 MB |
+| Warm: `warm_start` reads both lists, hashes them and deserializes `engine.dat` | 4.1 ms | 20.5–20.7 MB |
 
 The two timers cover different steps. The cold time leaves out reading the lists and saving `engine.dat`, but the cold peak includes the buffer that serialization allocates. The warm time includes reading and hashing the list text.
 
