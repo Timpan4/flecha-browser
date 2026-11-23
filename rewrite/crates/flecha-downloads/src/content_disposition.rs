@@ -1,16 +1,24 @@
 //! The file name in a `Content-Disposition` header, as `net::HttpContentDisposition` reads it
 //! (`net/http/http_content_disposition.cc`): `filename*` (RFC 5987) wins over `filename`.
 //!
-//! Chromium converts any charset ICU knows. This port decodes UTF-8, US-ASCII and ISO-8859-1,
-//! the charsets RFC 5987 requires; another charset gives no name, so the caller falls back to
-//! the URL. The header arrives as UTF-8 text from CEF, so Chromium's referrer-charset guess
-//! for raw non-UTF-8 bytes has nothing to do.
+//! Chromium converts any charset its ICU knows. This port decodes the two charsets RFC 5987
+//! requires, under every label Chromium's ICU gives them (`third_party/icu/source/data/
+//! mappings/convrtrs.txt`): UTF-8, and `windows-1252-html`, which also answers to ISO-8859-1
+//! and US-ASCII. Another charset gives no name, so the caller falls back to the URL. The
+//! header arrives as UTF-8 text from CEF, so Chromium's referrer-charset guess for raw
+//! non-UTF-8 bytes has nothing to do.
 
 use percent_encoding::percent_decode_str;
+use unicode_normalization::UnicodeNormalization;
 
 /// The decoded file name, or `None` when the header names none Chromium would accept.
 pub fn content_disposition_filename(header: &str) -> Option<String> {
-    let params = after_disposition_type(header);
+    // The string constructor reads only the first comma-separated value.
+    let first = split_outside_quotes(header, ',', false)
+        .into_iter()
+        .next()
+        .unwrap_or_default();
+    let params = after_disposition_type(first);
     let mut filename = String::new();
     let mut ext_filename = String::new();
     for (name, value) in pairs(params) {
@@ -74,7 +82,7 @@ impl Value<'_> {
 
 /// `NameValuePairsIterator(params, ';')`: stops at the first malformed pair.
 fn pairs(params: &str) -> impl Iterator<Item = (&str, Value<'_>)> {
-    let mut parts = split_outside_quotes(params, ';').into_iter();
+    let mut parts = split_outside_quotes(params, ';', true).into_iter();
     std::iter::from_fn(move || {
         let part = parts.next()?;
         let equals = part.find('=')?;
@@ -93,8 +101,8 @@ fn pairs(params: &str) -> impl Iterator<Item = (&str, Value<'_>)> {
     })
 }
 
-/// `HttpUtil::ValuesIterator`: splits outside double quotes and skips empty values.
-fn split_outside_quotes(text: &str, delimiter: char) -> Vec<&str> {
+/// `HttpUtil::ValuesIterator`: splits outside double quotes and trims each value.
+fn split_outside_quotes(text: &str, delimiter: char, ignore_empty: bool) -> Vec<&str> {
     let mut parts = Vec::new();
     let mut start = 0;
     let mut in_quotes = false;
@@ -119,7 +127,7 @@ fn split_outside_quotes(text: &str, delimiter: char) -> Vec<&str> {
     parts
         .into_iter()
         .map(trim_lws)
-        .filter(|part| !part.is_empty())
+        .filter(|part| !ignore_empty || !part.is_empty())
         .collect()
 }
 
@@ -166,14 +174,31 @@ fn decode_word(word: &str) -> Option<(String, bool)> {
             "q" | "Q" => decode_q(text)?,
             _ => return None,
         };
-        return Some((decode_charset(charset, &bytes)?, true));
+        if bytes.is_empty() {
+            // DecodeBQEncoding returns an empty word before looking at the charset.
+            return Some((String::new(), true));
+        }
+        // ConvertToUtf8 keeps ICU's default substitution for malformed input.
+        return Some((
+            decode_charset(charset, &bytes, Malformed::Substitute)?,
+            true,
+        ));
     }
     if word.starts_with("=?") {
         // An encoded word that doesn't close fails the whole value, as in Chromium.
         return None;
     }
     let bytes: Vec<u8> = percent_decode_str(word).collect();
-    String::from_utf8(bytes).ok().map(|text| (text, false))
+    String::from_utf8(bytes)
+        .ok()
+        .filter(|text| text.chars().all(is_valid_character))
+        .map(|text| (text, false))
+}
+
+/// `base::IsValidCharacter`, which `base::IsStringUTF8` applies: no noncharacters.
+fn is_valid_character(c: char) -> bool {
+    let code = u32::from(c);
+    !(0xFDD0..=0xFDEF).contains(&code) && code & 0xFFFE != 0xFFFE
 }
 
 /// `DecodeExtValue`: `charset'language'percent-encoded`.
@@ -194,20 +219,99 @@ fn decode_ext_value(raw: &str) -> Option<String> {
         return Some(String::new());
     }
     let bytes: Vec<u8> = percent_decode_str(value).collect();
-    decode_charset(charset, &bytes)
+    // ConvertToUtf8AndNormalize: fail on malformed input, then NFC.
+    decode_charset(charset, &bytes, Malformed::Fail).map(|text| text.nfc().collect())
 }
 
-fn decode_charset(charset: &str, bytes: &[u8]) -> Option<String> {
-    let charset = charset.to_ascii_lowercase();
-    match charset.as_str() {
-        "utf-8" | "utf8" => String::from_utf8(bytes.to_vec()).ok(),
-        "us-ascii" | "ascii" => bytes
-            .is_ascii()
-            .then(|| String::from_utf8(bytes.to_vec()).ok())
-            .flatten(),
-        "iso-8859-1" | "latin1" | "l1" => Some(bytes.iter().map(|&b| char::from(b)).collect()),
-        _ => None,
+#[derive(Clone, Copy)]
+enum Malformed {
+    Fail,
+    Substitute,
+}
+
+/// The `UTF-8` entry in Chromium's `convrtrs.txt`.
+const UTF_8_LABELS: &[&str] = &["UTF-8", "unicode-1-1-utf-8", "utf8"];
+
+/// The `windows-1252-html` entry in Chromium's `convrtrs.txt`.
+const WINDOWS_1252_LABELS: &[&str] = &[
+    "windows-1252-html",
+    "windows-1252",
+    "ansi_x3.4-1968",
+    "ascii",
+    "cp1252",
+    "cp819",
+    "csisolatin1",
+    "ibm819",
+    "iso-8859-1",
+    "iso-ir-100",
+    "iso8859-1",
+    "iso88591",
+    "iso_8859-1",
+    "iso_8859-1:1987",
+    "l1",
+    "latin1",
+    "us-ascii",
+    "x-cp1252",
+];
+
+/// `windows-1252-html.ucm` for bytes 0x80 to 0x9F; every other byte is its own code point.
+const WINDOWS_1252_80_9F: [char; 32] = [
+    '\u{20AC}', '\u{0081}', '\u{201A}', '\u{0192}', '\u{201E}', '\u{2026}', '\u{2020}', '\u{2021}',
+    '\u{02C6}', '\u{2030}', '\u{0160}', '\u{2039}', '\u{0152}', '\u{008D}', '\u{017D}', '\u{008F}',
+    '\u{0090}', '\u{2018}', '\u{2019}', '\u{201C}', '\u{201D}', '\u{2022}', '\u{2013}', '\u{2014}',
+    '\u{02DC}', '\u{2122}', '\u{0161}', '\u{203A}', '\u{0153}', '\u{009D}', '\u{017E}', '\u{0178}',
+];
+
+fn decode_charset(label: &str, bytes: &[u8], malformed: Malformed) -> Option<String> {
+    let key = icu_alias_key(label);
+    let is = |labels: &[&str]| labels.iter().any(|known| icu_alias_key(known) == key);
+    if is(UTF_8_LABELS) {
+        return match malformed {
+            Malformed::Fail => String::from_utf8(bytes.to_vec()).ok(),
+            Malformed::Substitute => Some(String::from_utf8_lossy(bytes).into_owned()),
+        };
     }
+    if is(WINDOWS_1252_LABELS) {
+        return Some(
+            bytes
+                .iter()
+                .map(|&byte| match byte {
+                    0x80..=0x9F => WINDOWS_1252_80_9F[usize::from(byte - 0x80)],
+                    _ => char::from(byte),
+                })
+                .collect(),
+        );
+    }
+    None
+}
+
+/// `ucnv_io_stripASCIIForCompare`: ICU matches converter names ignoring case, everything but
+/// letters and digits, and a zero that starts a number.
+fn icu_alias_key(name: &str) -> String {
+    let bytes = name.as_bytes();
+    let mut key = String::with_capacity(bytes.len());
+    let mut after_digit = false;
+    for (index, &byte) in bytes.iter().enumerate() {
+        match byte {
+            b'0' => {
+                let next_is_digit = bytes.get(index + 1).is_some_and(u8::is_ascii_digit);
+                if !after_digit && next_is_digit {
+                    continue;
+                }
+                key.push('0');
+            }
+            b'1'..=b'9' => {
+                after_digit = true;
+                key.push(char::from(byte));
+            }
+            _ if byte.is_ascii_alphabetic() => {
+                after_digit = false;
+                key.push(char::from(byte.to_ascii_lowercase()));
+            }
+            _ => after_digit = false,
+        }
+    }
+    key
 }
 
 fn decode_q(text: &str) -> Option<Vec<u8>> {

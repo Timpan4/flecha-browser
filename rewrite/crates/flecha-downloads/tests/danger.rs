@@ -137,11 +137,13 @@ fn verdict(
     trigger: Trigger,
 ) -> InsecureVerdict {
     let chain: Vec<Url> = chain.iter().map(|u| url(u)).collect();
+    let (download_url, redirects) = chain.split_last().expect("a download URL");
     let initiator = initiator.map(url);
     insecure_verdict(
         name,
         InsecureSignals {
-            url_chain: &chain,
+            download_url,
+            redirects,
             initiator: initiator.as_ref(),
             trigger,
             https_first_mode: false,
@@ -162,7 +164,8 @@ fn plain_http_downloads_are_held_unless_likely_safe() {
     let https_first = insecure_verdict(
         "notes.txt",
         InsecureSignals {
-            url_chain: &[url(http)],
+            download_url: &url(http),
+            redirects: &[],
             initiator: None,
             trigger: LINK,
             https_first_mode: true,
@@ -297,7 +300,7 @@ fn decided(
         folder: PathBuf::from("/home/me/Downloads"),
         ask_where_to_save: ask,
     };
-    let chain = [url(url_text)];
+    let download_url = url(url_text);
     let initiator = initiator.map(url);
     let decision = decide(
         DownloadRequest {
@@ -312,7 +315,8 @@ fn decided(
             started: started(),
             danger,
             insecure: InsecureSignals {
-                url_chain: &chain,
+                download_url: &download_url,
+                redirects: &[],
                 initiator: initiator.as_ref(),
                 trigger: LINK,
                 https_first_mode: false,

@@ -368,6 +368,44 @@ fn rows_show_this_session_newest_first() {
 }
 
 #[test]
+fn the_intermediate_file_never_replaces_the_target_before_completion() {
+    let (mut list, id) = one();
+    let target = Path::new("/dl/7.bin");
+    for state in [
+        SnapshotState::InProgress,
+        SnapshotState::Paused,
+        interrupted(InterruptReason::NetworkFailed),
+        SnapshotState::InProgress,
+    ] {
+        list.update(
+            7,
+            Snapshot {
+                state,
+                received: 1,
+                total: 2,
+                full_path: Path::new("/dl/7.bin.crdownload"),
+            },
+        )
+        .unwrap();
+        assert_eq!(list.get(id).unwrap().path(), target);
+        assert_eq!(list.row(list.get(id).unwrap()).filename, "7.bin");
+    }
+    assert!(list.reserves(target));
+    assert!(!list.reserves(Path::new("/dl/7.bin.crdownload")));
+    list.update(
+        7,
+        Snapshot {
+            state: SnapshotState::Complete,
+            received: 2,
+            total: 2,
+            full_path: target,
+        },
+    )
+    .unwrap();
+    assert!(!list.reserves(target));
+}
+
+#[test]
 fn a_dialog_answer_becomes_the_next_dialogs_folder() {
     let mut list = DownloadList::new();
     list.begin(NewDownload {
@@ -386,7 +424,7 @@ fn a_dialog_answer_becomes_the_next_dialogs_folder() {
             state: SnapshotState::InProgress,
             received: 0,
             total: -1,
-            full_path: Path::new("/home/me/Pictures/a.png"),
+            full_path: Path::new("/home/me/Pictures/a.png.crdownload"),
         },
     )
     .unwrap();
@@ -395,6 +433,20 @@ fn a_dialog_answer_becomes_the_next_dialogs_folder() {
         Some(Path::new("/home/me/Pictures"))
     );
     assert_eq!(list.row(list.iter().next().unwrap()).total, 0);
+    list.update(
+        1,
+        Snapshot {
+            state: SnapshotState::Complete,
+            received: 3,
+            total: 3,
+            full_path: Path::new("/home/me/Pictures/b.png"),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        list.iter().next().unwrap().path(),
+        Path::new("/home/me/Pictures/b.png")
+    );
     list.downloads_folder_changed(Path::new("/media/usb"));
     assert_eq!(list.last_prompt_folder(), Some(Path::new("/media/usb")));
 }

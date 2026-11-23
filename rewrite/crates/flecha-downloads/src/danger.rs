@@ -89,8 +89,10 @@ pub enum Trigger {
 /// The URLs that decide whether a download was delivered securely.
 #[derive(Clone, Copy, Debug)]
 pub struct InsecureSignals<'a> {
-    /// The redirect chain, ending with the URL the bytes came from. Must not be empty.
-    pub url_chain: &'a [Url],
+    /// The URL the bytes came from: the end of the redirect chain (`GetURL`).
+    pub download_url: &'a Url,
+    /// The URLs before it in the redirect chain, oldest first; empty without redirects.
+    pub redirects: &'a [Url],
     /// The frame that asked for the download, or `None` when unknown. Chromium falls back to
     /// the tab's URL when the request has no initiator; pass that here.
     pub initiator: Option<&'a Url>,
@@ -122,9 +124,7 @@ const SILENTLY_UNBLOCKED: &[&str] = &["silently_unblocked_for_testing"];
 /// `GetInsecureDownloadStatusForDownload`. `target_name` is the file name being saved; its
 /// final extension picks the lists.
 pub fn insecure_verdict(target_name: &str, signals: InsecureSignals<'_>) -> InsecureVerdict {
-    let Some((download_url, redirects)) = signals.url_chain.split_last() else {
-        return InsecureVerdict::Safe;
-    };
+    let download_url = signals.download_url;
     // InsecureDownloadData takes `FinalExtension()` as is; ContainsExtension compares it
     // ignoring ASCII case.
     let extension = match target_name.rfind('.') {
@@ -133,7 +133,7 @@ pub fn insecure_verdict(target_name: &str, signals: InsecureSignals<'_>) -> Inse
         }
         _ => String::new(),
     };
-    let chain_secure = redirects.iter().all(is_url_potentially_trustworthy);
+    let chain_secure = signals.redirects.iter().all(is_url_potentially_trustworthy);
     let delivered_securely = chain_secure
         && (is_url_potentially_trustworthy(download_url)
             || matches!(download_url.scheme(), "blob" | "file"));

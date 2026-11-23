@@ -133,6 +133,24 @@ fn content_disposition_values_decode_like_chromium() {
         from_header("attachment; filename*=\"UTF-8''x.txt\""),
         "from-url.bin"
     );
+    // Chromium's ICU decodes ISO-8859-1 and US-ASCII as windows-1252
+    // (`convrtrs.txt`, `windows-1252-html.ucm`), matching labels as ICU does.
+    assert_eq!(
+        from_header("attachment; filename*=ISO 8859_01''%80%99%9F%E9.txt"),
+        "€™Ÿé.txt"
+    );
+    assert_eq!(
+        from_header("attachment; filename*=us-ascii''caf%E9.txt"),
+        "café.txt"
+    );
+    assert_eq!(
+        from_header("attachment; filename=\"=?Latin1?Q?=80=81.txt?=\""),
+        "€_.txt"
+    );
+    assert_eq!(
+        from_header("attachment; filename*=x-unknown''a.txt"),
+        "from-url.bin"
+    );
 }
 
 #[test]

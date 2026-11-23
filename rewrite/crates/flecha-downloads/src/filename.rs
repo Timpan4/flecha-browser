@@ -228,3 +228,73 @@ pub(crate) fn split_extension(name: &str) -> (&str, &str) {
     }
     name.split_at(last)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `kIllegalCharacterCases` in Chromium 158's `base/i18n/file_util_icu_unittest.cc`,
+    /// `ReplaceIllegalCharactersInPathTest`. Chromium replaces with `-`; this port replaces
+    /// with `_`, and no input holds a `-`, so every `-` in Chromium's expectation becomes `_`.
+    #[test]
+    fn replace_illegal_characters_matches_chromiums_table() {
+        let rows: &[(&str, &str)] = &[
+            ("bad*file:name?.jpg", "bad-file-name-.jpg"),
+            ("**********::::.txt", "--------------.txt"),
+            (
+                "bad\u{3}\u{91} file\u{200E}\u{200F}name.png",
+                "bad-- file--name.png",
+            ),
+            ("bad*file\\?name.jpg", "bad-file--name.jpg"),
+            ("\t  bad*file\\name/.jpg", "-  bad-file-name-.jpg"),
+            ("this_file_name is okay!.mp3", "this_file_name is okay!.mp3"),
+            ("\u{4E00}\u{AC00}.mp3", "\u{4E00}\u{AC00}.mp3"),
+            ("\u{0635}\u{200C}\u{0644}.mp3", "\u{0635}-\u{0644}.mp3"),
+            ("\u{10330}\u{10331}.mp3", "\u{10330}\u{10331}.mp3"),
+            ("\u{0378}\u{40001}.mp3", "\u{0378}\u{40001}.mp3"),
+            ("bad\u{FFFF}file\u{10FFFE}name.jpg", "bad-file-name.jpg"),
+            ("bad\u{FDD0}file\u{FDEF}name.jpg", "bad-file-name.jpg"),
+            (
+                "(\u{200C}.\u{200D}.\u{200E}.\u{200F}.\u{202A}.\u{202B}.\u{202C}.\u{202D}.\
+                 \u{202E}.\u{206A}.\u{206B}.\u{206C}.\u{206D}.\u{206F}.\u{FEFF})",
+                "(-.-.-.-.-.-.-.-.-.-.-.-.-.-.-)",
+            ),
+            (" _ ", "-_-"),
+            (" ", "-"),
+            ("\u{2008}.(\u{2007}).\u{3000}", "-.(\u{2007}).-"),
+            ("     ", "-   -"),
+            (".    ", "-   -"),
+            ("~config1.txt", "-config1.txt"),
+            ("config1.txt~", "config1.txt-"),
+            ("conf g~1", "conf g~1"),
+            ("conf,g~1.txt", "conf,g~1.txt"),
+            ("conf~1.jpeg", "conf~1.jpeg"),
+            ("config~12.md", "config~12.md"),
+            ("config.txt", "config.txt"),
+            ("config~12.txt", "config~12.txt"),
+            (
+                "config~1VeryLongCannotBeShortNameOK.txt",
+                "config~1VeryLongCannotBeShortNameOK.txt",
+            ),
+            ("config~1txt", "config~1txt"),
+        ];
+        for platform in [Platform::Linux, Platform::Mac, Platform::Windows] {
+            for (bad, good) in rows {
+                assert_eq!(
+                    replace_illegal_characters(bad, platform),
+                    good.replace('-', "_"),
+                    "{bad:?} on {platform:?}"
+                );
+            }
+        }
+        // `~` in a possible 8.3 short name is illegal only on Windows.
+        for (bad, windows) in [("config~1", "config-1"), ("config~1.txt", "config-1.txt")] {
+            assert_eq!(
+                replace_illegal_characters(bad, Platform::Windows),
+                windows.replace('-', "_")
+            );
+            assert_eq!(replace_illegal_characters(bad, Platform::Linux), bad);
+            assert_eq!(replace_illegal_characters(bad, Platform::Mac), bad);
+        }
+    }
+}

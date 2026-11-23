@@ -435,7 +435,9 @@ impl DownloadList {
         Ok(id)
     }
 
-    /// Applies a CEF snapshot.
+    /// Applies a CEF snapshot. CEF may call `OnDownloadUpdated` before `OnBeforeDownload`
+    /// (`cef_download_handler.h`), so a CEF id that [`DownloadList::begin`] hasn't seen yet
+    /// gives [`ListError::UnknownCefId`], which the shell ignores.
     pub fn update(&mut self, cef_id: u32, snapshot: Snapshot<'_>) -> Result<(), ListError> {
         let id = self
             .id_for_cef(cef_id)
@@ -477,14 +479,21 @@ impl DownloadList {
         entry.interrupt_reason = reason;
         entry.received = u64::try_from(snapshot.received).unwrap_or(0);
         entry.total = u64::try_from(snapshot.total).unwrap_or(0);
-        if !snapshot.full_path.as_os_str().is_empty() {
-            entry.path = snapshot.full_path.to_path_buf();
+        let reported = snapshot.full_path;
+        if !reported.as_os_str().is_empty() {
+            // The intermediate file sits in the folder the person picked, so its folder is
+            // the dialog's answer (`RequestConfirmationDone` → `SetSaveFilePath`).
             if entry.prompted
-                && let Some(folder) = entry.path.parent()
+                && let Some(folder) = reported.parent()
             {
-                // DownloadTargetDeterminer::RequestConfirmationDone → SetSaveFilePath.
                 self.last_prompt_folder = Some(folder.to_path_buf());
                 entry.prompted = false;
+            }
+            // Until completion the full path is the intermediate `.crdownload` file
+            // (`DownloadItem::GetFullPath`), so the decided target keeps the reservation and
+            // the row until the file reaches its final name.
+            if to == State::Complete {
+                entry.path = reported.to_path_buf();
             }
         }
         if !entry.in_progress() {
