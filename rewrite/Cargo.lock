@@ -2045,6 +2045,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "flecha-downloads"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "flecha-core",
+ "libc",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+ "unicode-general-category",
+ "url",
+]
+
+[[package]]
 name = "flecha-import"
 version = "0.1.0"
 dependencies = [
