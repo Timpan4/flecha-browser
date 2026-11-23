@@ -208,13 +208,14 @@ fn a_document_exception_exempts_the_page_and_frames_it_covers() {
     let allbut = "https://allbut.example/";
     assert!(ad(allbut, allbut, Script, "https://ads.example/a.js"));
     assert!(ad(allbut, news, Script, "https://ads.example/a.js"));
-    // `$document` with a party option: a frame is first-party only to a page of its own site, as
-    // the shell matched a frame against the page that loaded it.
+    // `$document` with a first-party option: a frame is first-party only to a page of its own
+    // site, as the shell matched a frame against the page that loaded it. A tab's page has an
+    // opaque initiator in declarativeNetRequest, which is third-party, so it isn't exempt.
     for host in ["partyframe.example", "firstframe.example"] {
         let page = format!("https://{host}/");
         let frame = format!("https://{host}/f");
         assert!(
-            !ad(&page, &page, Script, "https://ads.example/a.js"),
+            ad(&page, &page, Script, "https://ads.example/a.js"),
             "{host}"
         );
         assert!(
@@ -236,7 +237,8 @@ fn a_document_exception_exempts_the_page_and_frames_it_covers() {
 }
 
 /// Party and `$domain=` options on `$document` exceptions, as the shell's `allowAllRequests`
-/// rules applied them: a tab's page has no initiator, and a frame's initiator is its embedder.
+/// rules applied them: a tab's page has an opaque initiator, and a frame's initiator is its
+/// embedder.
 #[test]
 fn page_exception_options_match_a_frame_against_its_embedder() {
     let (blocker, _cache) = loaded(true, &[]);
@@ -277,6 +279,18 @@ fn page_exception_options_match_a_frame_against_its_embedder() {
         news,
         Script
     ));
+    // An embedder URL with no host names no origin, so it counts as no embedder.
+    for parent in [
+        "about:blank",
+        "about:srcdoc",
+        "blob:https://news.example/0f1e",
+        "",
+    ] {
+        assert!(ad(tracker, inner, Some(parent), news, Script), "{parent}");
+    }
+    // As the tab's page, its initiator is opaque: third-party.
+    let tab = "https://cdn.tpnest.example/";
+    assert!(!ad(tracker, tab, None, tab, Script));
 
     // `@@||cdn.excl.example^$document,domain=~excl.example`: the same, by domain.
     let inner = "https://cdn.excl.example/f";
@@ -289,7 +303,8 @@ fn page_exception_options_match_a_frame_against_its_embedder() {
         Script
     ));
 
-    // A tab's page has no initiator: a listed domain never matches it, an excluded one does.
+    // A tab's page has an opaque initiator: a listed domain never matches it, an excluded one
+    // does.
     let selfdom = "https://selfdom.example/";
     assert!(ad(tracker, selfdom, None, selfdom, Script));
     let notother = "https://notother.example/";

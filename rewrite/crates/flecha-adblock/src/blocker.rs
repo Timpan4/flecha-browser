@@ -72,7 +72,10 @@ pub struct Request<'a> {
     pub top_level_url: &'a str,
     /// The document that embeds the frame at `source_url`, when that frame isn't the tab's page.
     /// A page exception limited by a party or `$domain=` option matches a frame against its
-    /// embedder. Without it, only page exceptions without such options cover the frame.
+    /// embedder. Without it, or with a URL that has no host, only page exceptions without such
+    /// options cover the frame. Pass the embedder's origin rather than its URL: an
+    /// `about:blank`, `about:srcdoc` or `blob:` document takes its origin from the document that
+    /// created it.
     pub frame_parent_url: Option<&'a str>,
     pub request_type: RequestType,
 }
@@ -158,7 +161,7 @@ impl AdBlocker {
         }
         // Pages and frames the lists exempt whole, as the shell's `allowAllRequests` rules for
         // main and sub frames did: the frame itself and everything inside it. The tab's page has
-        // no initiator; a frame's initiator is the document that embeds it.
+        // an opaque initiator; a frame's initiator is the document that embeds it.
         let source_initiator = request
             .frame_parent_url
             .map_or(Initiator::Unknown, Initiator::Url);
