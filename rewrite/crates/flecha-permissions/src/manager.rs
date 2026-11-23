@@ -256,19 +256,27 @@ impl PermissionManager {
             PromptOutcome::BlockAlways => (Some(Verdict::Block), true),
             PromptOutcome::Dismiss => (None, false),
         };
-        if let Some(verdict) = answer {
-            let target = if saved {
-                self.dirty |= prompt.partition.is_persistent();
-                self.grants_mut(&prompt.partition)
-            } else {
-                self.once
+        match answer {
+            Some(verdict) if saved => {
+                self.save_decision(
+                    &prompt.partition,
+                    &prompt.origin,
+                    prompt.ask,
+                    verdict.into(),
+                );
+            }
+            Some(verdict) => {
+                let decided = self
+                    .once
                     .entry((tab.clone(), prompt.partition.clone()))
                     .or_default()
-            };
-            let decided = target.entry(prompt.origin.clone()).or_default();
-            for kind in prompt.ask.iter() {
-                decided.insert(kind, verdict);
+                    .entry(prompt.origin.clone())
+                    .or_default();
+                for kind in prompt.ask.iter() {
+                    decided.insert(kind, verdict);
+                }
             }
+            None => {}
         }
         let verdict = match (
             answer,
@@ -344,7 +352,19 @@ impl PermissionManager {
         if !origin.is_potentially_trustworthy() {
             return Err(PermissionError::InsecureOrigin);
         }
-        let kinds = kinds.into();
+        self.save_decision(partition, origin, kinds.into(), decision);
+        Ok(self.settle())
+    }
+
+    /// Saves a decision for the kinds and drops every tab's one-time answer for them, so a
+    /// saved decision is never shadowed by an older one-time answer.
+    fn save_decision(
+        &mut self,
+        partition: &Partition,
+        origin: &Origin,
+        kinds: PermissionSet,
+        decision: Decision,
+    ) {
         let persistent = partition.is_persistent();
         let grants = self.grants_mut(partition);
         let decided = grants.entry(origin.clone()).or_default();
@@ -367,7 +387,6 @@ impl PermissionManager {
                 decided.retain(|kind, _| !kinds.contains(*kind));
             }
         }
-        Ok(self.settle())
     }
 
     /// Forgets every saved and one-time decision for the origin in the partition, as clearing
@@ -384,8 +403,22 @@ impl PermissionManager {
     }
 
     /// Forgets every decision in the partition, for a deleted Space or a closed incognito
-    /// session.
+    /// session, and denies the partition's queued requests.
     pub fn clear_partition(&mut self, partition: &Partition) -> Vec<Completion> {
+        let mut completions = Vec::new();
+        for queue in self.prompts.values_mut() {
+            queue.retain(|prompt| {
+                if prompt.partition != *partition {
+                    return true;
+                }
+                completions.extend(prompt.waiters.iter().map(|&request| Completion {
+                    request,
+                    verdict: Verdict::Block,
+                }));
+                false
+            });
+        }
+        self.prompts.retain(|_, queue| !queue.is_empty());
         match partition {
             Partition::Ephemeral(id) => {
                 self.ephemeral.remove(id);
@@ -401,7 +434,8 @@ impl PermissionManager {
             }
         }
         self.once.retain(|(_, owner), _| owner != partition);
-        self.settle()
+        completions.extend(self.settle());
+        completions
     }
 
     fn grants(&self, partition: &Partition) -> Option<&Grants> {

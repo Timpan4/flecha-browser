@@ -402,3 +402,46 @@ fn site_panel_names_match_the_chromium_shell() {
         [Camera, Microphone]
     );
 }
+
+#[test]
+fn a_saved_answer_replaces_other_tabs_one_time_answers() {
+    let mut manager = PermissionManager::new();
+    let (tab, other_tab) = (TabId::new("a"), TabId::new("b"));
+    let site = origin("https://meet.example");
+    let shared = Partition::Shared;
+
+    let id = prompt(manager.evaluate(&shared, &tab, &site, Camera));
+    manager
+        .resolve_prompt(id, PromptOutcome::AllowOnce)
+        .unwrap();
+    let id = prompt(manager.evaluate(&shared, &other_tab, &site, Camera));
+    manager
+        .resolve_prompt(id, PromptOutcome::BlockAlways)
+        .unwrap();
+
+    assert_eq!(
+        manager.evaluate(&shared, &tab, &site, Camera),
+        Evaluation::Resolved(Verdict::Block)
+    );
+}
+
+#[test]
+fn clearing_a_partition_denies_its_queued_prompts() {
+    let mut manager = PermissionManager::new();
+    let tab = TabId::new("a");
+    let site = origin("https://meet.example");
+    let work = Partition::Isolated("work".into());
+
+    let in_work = prompt(manager.evaluate(&work, &tab, &site, Camera));
+    let shared = prompt(manager.evaluate(&Partition::Shared, &tab, &site, Camera));
+    assert_eq!(
+        manager.clear_partition(&work),
+        vec![done(in_work, Verdict::Block)]
+    );
+    assert_eq!(
+        manager.resolve_prompt(in_work, PromptOutcome::AllowAlways),
+        Err(PermissionError::UnknownRequest)
+    );
+    assert_eq!(manager.snapshot(), Default::default());
+    assert_eq!(manager.pending_prompt(&tab).unwrap().request, shared);
+}
