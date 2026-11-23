@@ -2162,6 +2162,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "flecha-permissions"
+version = "0.1.0"
+dependencies = [
+ "flecha-core",
+ "serde_json",
+ "tempfile",
+ "url",
+]
+
+[[package]]
 name = "flecha-services"
 version = "0.1.0"
 dependencies = [
