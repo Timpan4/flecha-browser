@@ -508,6 +508,11 @@ mod tests {
                 "||a.example^$document,important",
             ),
         ];
+        // Options start after the last `$`; the earlier one is part of the pattern.
+        let in_pattern = "||a.example/$third-party,y$document";
+        let cases = cases
+            .into_iter()
+            .chain([(in_pattern, false, true, in_pattern)]);
         for (line, limited, passes, unconditional) in cases {
             let condition = InitiatorCondition::of(line);
             assert_eq!(condition.limited, limited, "{line}");
