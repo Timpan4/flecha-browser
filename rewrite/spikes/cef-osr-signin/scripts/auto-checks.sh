@@ -27,6 +27,9 @@
 # pdftotext, sqlite3, node, dbus-run-session. WAIT_SECS bounds each wait in a check; it is a
 # test bound, not a product value.
 set -euo pipefail
+# xvfb-isolated.sh drops LD_LIBRARY_PATH for everything it starts; the tools this script runs
+# itself (the build stamp, sqlite3, pdftotext) get the same environment.
+unset LD_LIBRARY_PATH
 : "${WAIT_SECS:?set WAIT_SECS, the per-step wait in seconds}"
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 spike=$(cd -- "$here/.." && pwd)
@@ -235,6 +238,14 @@ row0() { # typing and paste merged into the REPORT's row 0
     printf 'typing %s; paste %s' "$a" "$b" | sed 's/|/\\|/g'
 }
 
+# Some Xvfb builds reject -version; fall back to the package manager's record, if any.
+xvfb_version() {
+    local v
+    v=$(Xvfb -version 2>&1 | grep -o 'X.Org X Server [0-9.]*' | sed -n 1p || true)
+    [[ -n $v ]] || v=$(pacman -Q xorg-server-xvfb 2>/dev/null || true)
+    echo "${v:-Xvfb version unknown}"
+}
+
 dirty=$(git -C "$rewrite" status --porcelain | grep -c '' || true)
 bin=${FLECHA_SPIKE_BIN:-$rewrite/target/debug/cef-osr-signin}
 {
@@ -252,11 +263,12 @@ bin=${FLECHA_SPIKE_BIN:-$rewrite/target/debug/cef-osr-signin}
     # shellcheck source=cef-pins.sh
     echo "| CEF pin | \`$(. "$here/cef-pins.sh" && echo "$cef_version") $(. "$here/cef-pins.sh" && echo "$cef_channel")\` |"
     if [[ " ${modes[*]} " == *' flecha '* ]]; then
-        echo "| Flecha | \`$("$FLECHA_DIR/chrome" --version 2>/dev/null || echo unknown)\`, chrome sha256 \`$(sha256sum "$FLECHA_DIR/chrome" | cut -c1-16)…\` |"
+        flecha_version=$("$FLECHA_DIR/chrome" --version 2>/dev/null || echo unknown)
+        echo "| Flecha | \`${flecha_version% }\`, chrome sha256 \`$(sha256sum "$FLECHA_DIR/chrome" | cut -c1-16)…\` |"
     fi
     echo "| Password store | \`--password-store=basic\` in a scratch HOME on every run; no keyring is reachable (no session bus but the private one, system bus address points nowhere) |"
     echo "| WAIT_SECS | $WAIT_SECS (per-step wait; a test bound) |"
-    echo "| Tools | $("$XDOTOOL" --version 2>&1 | sed -n 1p), xclip $("$XCLIP" -version 2>&1 | sed -n 's/^xclip version \([^ ]*\).*/\1/p'), $(Xvfb -version 2>&1 | grep -o 'X.Org X Server [0-9.]*' | sed -n 1p), $(convert -version | sed -n '1s/^Version: \(ImageMagick [^ ]*\).*/\1/p'), $(pdftotext -v 2>&1 | sed -n 1p) |"
+    echo "| Tools | $("$XDOTOOL" --version 2>&1 | sed -n 1p), xclip $("$XCLIP" -version 2>&1 | sed -n 's/^xclip version \([^ ]*\).*/\1/p'), $(xvfb_version), $(convert -version | sed -n '1s/^Version: \(ImageMagick [^ ]*\).*/\1/p'), $(pdftotext -v 2>&1 | sed -n 1p) |"
     echo
     echo "## Results"
     echo
