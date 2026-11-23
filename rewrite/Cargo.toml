@@ -34,5 +34,10 @@ gpui = { path = "target/spike1-src/zed/crates/gpui", default-features = false }
 gpui_platform = { path = "target/spike1-src/zed/crates/gpui_platform", features = ["font-kit", "x11", "wayland"] }
 wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "cddb2f5d80dc0009b2ef6767635140cacf90a007", default-features = false }
 
+# Third-party crates build without DWARF in dev builds. Workspace crates keep
+# full debuginfo.
+[profile.dev.package."*"]
+debug = 0
+
 [patch.crates-io]
 calloop = { git = "https://github.com/zed-industries/calloop", rev = "3759371fee14c40066d64777e2a36b6ffcc22590" }

@@ -21,17 +21,48 @@ and the compositor checks.
 
 ## Building on the workstation
 
-The workstation runs one heavy build at a time. Use `~/.cargo/bin/cargo`
-because `cargo` on `PATH` can be a wrapper shim. Every `cargo build`, `cargo test`
-or `cargo run` that compiles CEF or GPUI waits for the shared lock and runs in the
-agent build slice:
+Use plain `cargo` from `PATH`. On the workstation it is the `mbx` shim, which
+shares compiled dependencies across worktrees and prunes its own storage. Run
+from `rewrite/`, with Cargo's target dir left at `rewrite/target`. Dev builds
+keep full debuginfo for workspace crates only. Third-party crates build without
+it (`[profile.dev.package."*"]` in `Cargo.toml`).
+
+Cargo resolves the whole workspace for every command, so a new worktree needs
+the staged sources first. Reflink them from the main checkout, then let
+`prepare.sh` check them against the pins and patches:
+
+```sh
+# From rewrite/ in the new worktree
+mkdir -p target/spike1-src
+cp -a --reflink=always ~/dev/flecha-browser/rewrite/target/spike1-src/{zed,cef-rs,cef-runtime} target/spike1-src/
+bash spikes/gpui-cef-compositor/prepare.sh --sources-only
+```
+
+If `prepare.sh` reports that a staged tree does not match the pins or patch,
+remove that copy from the new worktree's `target/spike1-src` and run
+`prepare.sh --sources-only` again. It downloads and patches a fresh copy.
+
+Crates with no CEF or GPUI dependency (`flecha-core`, `flecha-adblock`,
+`flecha-import`, `flecha-migrate` and `flecha-services`) build with crate-scoped
+commands and no build lock. Never use `--workspace` for them, because it
+compiles CEF and GPUI too:
+
+```sh
+cargo check --locked -p flecha-core
+cargo test --locked -p flecha-core
+cargo clippy --locked -p flecha-core --all-targets -- -D warnings
+```
+
+The workstation runs one heavy build at a time. Every command that compiles
+CEF or GPUI (`flecha`, `flecha-ui`, `flecha-cef`, `flecha-surface` and the
+spikes) waits for the shared lock and runs in the agent build slice:
 
 ```sh
 flock "$XDG_RUNTIME_DIR/flecha-rewrite-build.lock" \
-  bash ~/.claude/skills/hosts/scripts/agent-build run ~/.cargo/bin/cargo build --locked -j 14 -p flecha
+  bash ~/.claude/skills/hosts/scripts/agent-build run cargo build --locked -j 14 -p flecha
 ```
 
-Run it from `rewrite/`, with Cargo's target dir left at `rewrite/target`. If a build is killed for memory, check `free -g` before retrying.
+If a build is killed for memory, check `free -g` before retrying.
 
 ## Isolated CEF launches
 
