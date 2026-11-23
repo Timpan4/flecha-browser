@@ -617,8 +617,10 @@ async function flechinhaLinks(app) {
   const after = app.events.length;
 
   await clickElement(app, page, '#blank', openerColors, 'flechinha-blank', mini);
+
   const { tab } = await app.wait("a Flechinha link's tab load", event =>
     event.type === 'loaded' && event.url === base + '/cookie/check' && event.tab !== page, after);
+
   const state = await app.command('snapshot');
 
   engine(state, tab, 'tab', state.window);
