@@ -473,7 +473,11 @@ impl Run {
     async fn devtools(&mut self, cx: &mut AsyncApp, bridge: &Bridge) -> Result<()> {
         self.sleep(cx, self.cfg.warmup).await;
         let health_before = self.page_health(cx, bridge).await;
+        let scan_cost_start = Instant::now();
         let renderers_before = Self::renderers();
+        // One full /proc scan, timed here so the scan while DevTools is open
+        // runs only when it fits before the close is due.
+        let scan_cost = scan_cost_start.elapsed();
 
         // CEF #4353 times the close from the ShowDevTools() call, so this does too.
         let inspected = self.hub.page(0).context("page 0")?;
@@ -493,9 +497,10 @@ impl Run {
                 .and_then(|t| t.browser.host())
                 .map(|h| format!("{:?}", h.runtime_style()))
         };
-        // Reading /proc takes time, so the tree is captured only when the close is not yet due.
+        // Reading /proc takes time, so the tree is captured only when a scan
+        // as long as the one above ends before the close is due.
         let scan_start = Instant::now();
-        let tree_open = (shown_at.elapsed() < self.cfg.devtools_close_after)
+        let tree_open = (shown_at.elapsed() + scan_cost < self.cfg.devtools_close_after)
             .then(|| probe::tree(probe::self_pid()));
         let tree_scan = scan_start.elapsed();
         let due =
@@ -532,6 +537,7 @@ impl Run {
             "devtools_created_after_show_ms": created.as_secs_f64() * 1e3,
             "close_devtools_after_show_ms": close_at.as_secs_f64() * 1e3,
             "close_late_ms": close_at.saturating_sub(self.cfg.devtools_close_after).as_secs_f64() * 1e3,
+            "tree_scan_before_ms": scan_cost.as_secs_f64() * 1e3,
             "tree_scan_while_open_ms": tree_scan.as_secs_f64() * 1e3,
             "devtools_closed_after_close_ms": closed.as_secs_f64() * 1e3,
             "health_before": health_before,

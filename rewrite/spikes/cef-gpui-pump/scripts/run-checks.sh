@@ -57,15 +57,18 @@ system_bus_socket=/run/dbus/system_bus_socket
 
 xvfb_pid=
 scratch=()
+# An EXIT trap's last status becomes the script's, so this keeps the status it
+# was called with.
 cleanup() {
+    local status=$? d
     if [[ -n $xvfb_pid ]] && kill -0 "$xvfb_pid" 2>/dev/null; then
         kill "$xvfb_pid"
         wait "$xvfb_pid" 2>/dev/null || true
     fi
-    local d
     for d in "${scratch[@]}"; do
-        [[ -d $d ]] && rm -rf -- "$d"
+        if [[ -d $d ]]; then rm -rf -- "$d"; fi
     done
+    exit "$status"
 }
 trap cleanup EXIT
 
