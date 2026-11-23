@@ -94,7 +94,7 @@ arcMain.items = arcMain.items.map((item) => {
 const windowsArc = 'local/Packages/TheBrowserCompany.Arc_fixture/LocalCache/Local/Arc';
 const macArc = 'Library/Application Support/Arc';
 
-const cases: Array<{ name: string; profile: Profile; starterName?: string; rust?: { reason: string; dataWarnings?: string[]; omitHistoryUrl?: string; repairTitles?: boolean } }> = [
+const cases: Array<{ name: string; profile: Profile; starterName?: string; rust?: { reason: string; dataWarnings?: string[]; omitHistoryUrl?: string; repairTitles?: boolean; sharedPins?: boolean } }> = [
   { name: 'chrome-linux', profile: { platform: 'linux', browser: 'chrome', files: {
     'chrome-config/google-chrome/Local State': JSON.stringify({ profile: { info_cache: { Default: { name: 'First' }, 'Profile 2': { name: 'Second' } } } }),
     'chrome-config/google-chrome/Default/Bookmarks': bookmarks([
@@ -140,7 +140,11 @@ const cases: Array<{ name: string; profile: Profile; starterName?: string; rust?
         { id: 'tab', data: { tab: { savedURL: 'https://example.org/space-matching' } } },
       ],
     }] } }),
-  } } },
+  } }, rust: {
+    reason: 'Rust keeps the shared container in the first Space and leaves the second Space empty.',
+    sharedPins: true,
+    dataWarnings: ['Kept 1 shared Arc sidebar references at their first location.'],
+  } },
   { name: 'arc-malformed-record', profile: { platform: 'darwin', browser: 'arc', files: arcFiles(macArc, malformedArc) },
     rust: { reason: 'The type-mismatched Arc item is skipped on both sides. Rust also reports the malformed record.',
       dataWarnings: ['Skipped or repaired 1 malformed Arc sidebar records.'] } },
@@ -254,6 +258,7 @@ try {
         reason: rust.reason,
         expected: await expected({
           ...data,
+          arc: rust.sharedPins && data.arc ? { ...data.arc, spaces: data.arc.spaces.map((space, i) => i === 0 ? space : { ...space, pinned: [] }) } : data.arc,
           bookmarks: rust.repairTitles ? data.bookmarks?.map((node) => node.kind === 'tab' ? { ...node, title: node.title.toWellFormed() } : node) : data.bookmarks,
           history: data.history.filter((row) => row.url !== rust.omitHistoryUrl),
           warnings: [...data.warnings, ...(rust.dataWarnings ?? [])],

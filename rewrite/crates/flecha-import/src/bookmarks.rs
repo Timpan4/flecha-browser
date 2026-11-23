@@ -37,10 +37,6 @@ impl BookmarkTree {
         }
     }
 
-    pub(crate) fn current(&self) -> &[Bookmark] {
-        self.folders.last().map_or(&self.root, |(_, nodes)| nodes)
-    }
-
     pub(crate) fn finish(mut self) -> Vec<Bookmark> {
         while !self.folders.is_empty() {
             self.close(true);

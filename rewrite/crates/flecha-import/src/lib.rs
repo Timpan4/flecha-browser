@@ -46,7 +46,7 @@ impl fmt::Display for ReadError {
             Self::UnsafeFile => "Expected a regular file without symbolic links.",
             Self::Unreadable => "File could not be opened or read.",
             Self::TooLarge => "File exceeds the supported size.",
-            Self::InvalidJson => "Invalid JSON or JSON nesting exceeds the parser limit.",
+            Self::InvalidJson => "Invalid JSON.",
             Self::InvalidSidebar => "This does not look like an Arc StorableSidebar.json file.",
             Self::InvalidDatabase => "Invalid or unreadable browser database.",
             Self::InvalidPropertyList => "Invalid Safari bookmark property list.",

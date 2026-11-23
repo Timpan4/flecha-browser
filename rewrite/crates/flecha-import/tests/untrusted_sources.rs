@@ -36,9 +36,7 @@ fn unsafe_bookmark_files_do_not_discard_the_other_file() {
     assert_eq!(plan.bookmark_count, 1);
     assert_eq!(
         plan.warnings,
-        [
-            "Couldn’t read bookmarks from Chrome: Invalid JSON or JSON nesting exceeds the parser limit."
-        ]
+        ["Skipped 1 JSON subtrees beyond the nesting limit in Bookmarks."]
     );
 }
 

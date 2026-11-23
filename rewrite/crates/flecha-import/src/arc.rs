@@ -8,7 +8,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::bookmarks::BookmarkTree;
-use crate::input::{json, open_dir, open_root, text_or, truthy, web_scheme};
+use crate::input::{JsonRead, json, open_dir, open_root, text_or, truthy, web_scheme};
 use crate::plan::tabs_in;
 use crate::{Bookmark, ReadError, SavedTab};
 
@@ -49,27 +49,36 @@ pub fn read_arc(root: &Path) -> Result<(ArcImport, Vec<String>), ReadError> {
 }
 
 pub(crate) fn read_arc_dir(root: &Dir) -> Result<(ArcImport, Vec<String>), ReadError> {
-    let sidebar = json(root, "StorableSidebar.json")?;
     let mut warnings = Vec::new();
-    let mut optional = |result: Result<Value, ReadError>, what| match result {
-        Ok(value) => value,
+    let sidebar = json(root, "StorableSidebar.json")?.into_value("Arc’s sidebar", &mut warnings);
+    let mut optional = |result: Result<JsonRead, ReadError>, label| match result {
+        Ok(document) => document.into_value(label, &mut warnings),
         Err(ReadError::Missing) => Value::Null,
         Err(error) => {
-            warnings.push(format!("Couldn’t read Arc’s {what}: {error}"));
+            warnings.push(format!("Couldn’t read {label}: {error}"));
             Value::Null
         }
     };
     let profiles = optional(
         open_dir(root, Path::new("User Data")).and_then(|dir| json(&dir, "Local State")),
-        "profile names",
+        "Arc’s profile names",
     );
-    let archive = optional(json(root, "StorableArchiveItems.json"), "archived tabs");
-    let (mut arc, bad_items) = parse_sidebar(&sidebar, &profiles["profile"]["info_cache"])?;
+    let archive = optional(
+        json(root, "StorableArchiveItems.json"),
+        "Arc’s archived tabs",
+    );
+    let (mut arc, bad_items, shared_items) =
+        parse_sidebar(&sidebar, &profiles["profile"]["info_cache"])?;
     let (archive, bad_archive) = parse_archive(&archive);
     arc.archive = archive;
     if bad_items > 0 {
         warnings.push(format!(
             "Skipped or repaired {bad_items} malformed Arc sidebar records."
+        ));
+    }
+    if shared_items > 0 {
+        warnings.push(format!(
+            "Kept {shared_items} shared Arc sidebar references at their first location."
         ));
     }
     if bad_archive > 0 {
@@ -84,7 +93,7 @@ fn array(value: &Value) -> &[Value] {
     value.as_array().map_or(&[], Vec::as_slice)
 }
 
-fn parse_sidebar(sidebar: &Value, names: &Value) -> Result<(ArcImport, usize), ReadError> {
+fn parse_sidebar(sidebar: &Value, names: &Value) -> Result<(ArcImport, usize, usize), ReadError> {
     let main = array(&sidebar["sidebar"]["containers"])
         .iter()
         .find(|c| c["spaces"].is_array() && c["items"].is_array())
@@ -110,19 +119,15 @@ fn parse_sidebar(sidebar: &Value, names: &Value) -> Result<(ArcImport, usize), R
             &raw["containerIDs"]
         };
         walker.bad_records += usize::from(!ids.is_null() && !ids.is_array());
-        let children = |key: &str| {
+        let container = |key: &str| {
             let ids = array(ids);
             ids.iter()
                 .position(|marker| marker.as_str() == Some(key) || marker.get(key).is_some())
                 .and_then(|at| ids.get(at + 1)?.as_str())
-                .and_then(|id| walker.items.get(id))
-                .map_or(&Value::Null, |item| &item["childrenIds"])
         };
-        let pinned_ids = children("pinned");
-        let today_ids = children("unpinned");
         let mut splits = Vec::new();
-        let pinned = walker.nodes(pinned_ids, &mut splits);
-        let today = tabs_in(&walker.nodes(today_ids, &mut splits))
+        let pinned = walker.container(container("pinned"), &mut splits);
+        let today = tabs_in(&walker.container(container("unpinned"), &mut splits))
             .cloned()
             .collect();
         let dir = raw["profile"]["custom"]["_0"]["directoryBasename"]
@@ -149,11 +154,9 @@ fn parse_sidebar(sidebar: &Value, names: &Value) -> Result<(ArcImport, usize), R
     let mut unique = HashSet::new();
     let mut favorites = Vec::new();
     for id in array(favorites_ids).iter().filter_map(Value::as_str) {
-        if let Some(item) = walker.items.get(id).copied() {
-            for tab in tabs_in(&walker.nodes(&item["childrenIds"], &mut Vec::new())) {
-                if unique.insert(tab.url.clone()) {
-                    favorites.push(tab.clone());
-                }
+        for tab in tabs_in(&walker.container(Some(id), &mut Vec::new())) {
+            if unique.insert(tab.url.clone()) {
+                favorites.push(tab.clone());
             }
         }
     }
@@ -165,14 +168,30 @@ fn parse_sidebar(sidebar: &Value, names: &Value) -> Result<(ArcImport, usize), R
             skipped: walker.skipped,
         },
         walker.bad_records,
+        walker.shared_items,
     ))
 }
 
 #[derive(Default)]
 struct Walker<'a> {
     items: HashMap<&'a str, &'a Value>,
+    owners: HashMap<&'a str, usize>,
+    walk: usize,
     skipped: IndexMap<String, usize>,
     bad_records: usize,
+    shared_items: usize,
+}
+
+enum Claim {
+    First,
+    SameWalk,
+    Shared,
+}
+
+#[derive(Default)]
+struct DirectTabs<'a> {
+    urls: Vec<&'a str>,
+    claimed_end: usize,
 }
 
 enum Action<'a> {
@@ -183,11 +202,20 @@ enum Action<'a> {
 }
 
 impl<'a> Walker<'a> {
-    fn nodes(&mut self, ids: &'a Value, splits: &mut Vec<Vec<String>>) -> Vec<Bookmark> {
+    fn container(&mut self, id: Option<&'a str>, splits: &mut Vec<Vec<String>>) -> Vec<Bookmark> {
+        let Some(id) = id else { return Vec::new() };
+        let Some(item) = self.items.get(id).copied() else {
+            return Vec::new();
+        };
+        self.walk += 1;
+        if !matches!(self.claim(id), Claim::First) {
+            return Vec::new();
+        }
+
         let mut tree = BookmarkTree::default();
-        let mut seen = HashSet::new();
+        let mut direct = vec![DirectTabs::default()];
         let mut lost = 0;
-        let mut stack = vec![self.children(ids)];
+        let mut stack = vec![self.children(&item["childrenIds"])];
         while let Some(action) = stack.pop() {
             match action {
                 Action::Children(mut ids) => {
@@ -200,16 +228,28 @@ impl<'a> Walker<'a> {
                     let Some(item) = self.items.get(id).copied() else {
                         continue;
                     };
-                    if !seen.insert(id) {
-                        continue;
+                    match self.claim(id) {
+                        Claim::First => {}
+                        Claim::SameWalk => continue,
+                        Claim::Shared => {
+                            lost += 1;
+                            continue;
+                        }
                     }
                     let data = &item["data"];
                     if truthy(&data["list"]) {
                         tree.open(text_or(&item["title"], "Untitled folder").into());
+                        direct.push(DirectTabs::default());
                         stack.push(Action::EndFolder);
                     } else if truthy(&data["tab"]) {
                         match tab(item) {
-                            Some(tab) => tree.push(Bookmark::Tab(tab)),
+                            Some((url, title)) => {
+                                direct.last_mut().expect("current list").urls.push(url);
+                                tree.push(Bookmark::Tab(SavedTab {
+                                    url: url.into(),
+                                    title: title.into(),
+                                }));
+                            }
                             None => {
                                 lost += 1;
                                 if data["tab"]["savedURL"].as_str().is_none_or(str::is_empty) {
@@ -221,7 +261,7 @@ impl<'a> Walker<'a> {
                         }
                     } else if truthy(&data["splitView"]) {
                         stack.push(Action::EndSplit {
-                            at: tree.current().len(),
+                            at: direct.last().expect("current list").urls.len(),
                             lost_before: lost,
                         });
                     } else {
@@ -241,20 +281,27 @@ impl<'a> Walker<'a> {
                     }
                     stack.push(self.children(&item["childrenIds"]));
                 }
-                Action::EndFolder => tree.close(true),
+                Action::EndFolder => {
+                    direct.pop();
+                    tree.close(true);
+                }
                 Action::EndSplit { at, lost_before } => {
+                    let list = direct.last_mut().expect("current list");
                     if lost > lost_before {
                         self.skip("partial split");
-                    } else {
-                        let urls: Vec<_> = tree.current()[at..]
-                            .iter()
-                            .filter_map(|node| match node {
-                                Bookmark::Tab(tab) => Some(tab.url.clone()),
-                                Bookmark::Folder { .. } => None,
-                            })
-                            .collect();
-                        if urls.len() > 1 {
-                            splits.push(urls);
+                    } else if list.urls.len() - at > 1 {
+                        // Nested splits finish inside-out. A direct tab can belong to
+                        // one retained split, so the total number of URL copies is linear.
+                        if list.claimed_end > at {
+                            self.skip("overlapping split");
+                        } else {
+                            splits.push(
+                                list.urls[at..]
+                                    .iter()
+                                    .map(|url| (*url).to_owned())
+                                    .collect(),
+                            );
+                            list.claimed_end = list.urls.len();
                         }
                     }
                 }
@@ -262,6 +309,22 @@ impl<'a> Walker<'a> {
             }
         }
         tree.finish()
+    }
+
+    fn claim(&mut self, id: &'a str) -> Claim {
+        use std::collections::hash_map::Entry;
+
+        match self.owners.entry(id) {
+            Entry::Vacant(entry) => {
+                entry.insert(self.walk);
+                Claim::First
+            }
+            Entry::Occupied(entry) if *entry.get() == self.walk => Claim::SameWalk,
+            Entry::Occupied(_) => {
+                self.shared_items += 1;
+                Claim::Shared
+            }
+        }
     }
 
     fn children(&mut self, ids: &'a Value) -> Action<'a> {
@@ -274,14 +337,11 @@ impl<'a> Walker<'a> {
     }
 }
 
-fn tab(item: &Value) -> Option<SavedTab> {
+fn tab(item: &Value) -> Option<(&str, &str)> {
     let data = &item["data"]["tab"];
     let url = data["savedURL"].as_str().filter(|url| web_scheme(url))?;
     let title = text_or(&item["title"], text_or(&data["savedTitle"], url));
-    Some(SavedTab {
-        url: url.into(),
-        title: title.into(),
-    })
+    Some((url, title))
 }
 
 fn parse_archive(archive: &Value) -> (Vec<ArchivedTab>, usize) {
@@ -307,10 +367,10 @@ fn parse_archive(archive: &Value) -> (Vec<ArchivedTab>, usize) {
             continue;
         }
         let item = &entry["sidebarItem"];
-        if let Some(tab) = tab(item) {
+        if let Some((url, title)) = tab(item) {
             output.push(ArchivedTab {
-                url: tab.url,
-                title: tab.title,
+                url: url.into(),
+                title: title.into(),
                 closed_at: rounded as i64,
             });
         } else if !item["data"]["tab"]["savedURL"].is_string() {

@@ -9,7 +9,7 @@ use crate::{Bookmark, ReadError, SavedTab};
 
 // The shipping macOS reader allows this much XML from plutil, including expansion of binary references.
 const MAX_PLIST_BYTES: u64 = 64 * 1024 * 1024;
-// Match the JSON parser's default nesting boundary when materializing a plist value tree.
+// Match serde_json's default nesting boundary when materializing a plist value tree.
 const MAX_COLLECTION_DEPTH: usize = 127;
 
 pub(crate) fn bookmarks(root: &Dir) -> Result<(Vec<Bookmark>, usize), ReadError> {

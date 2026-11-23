@@ -12,6 +12,9 @@ use serde_json::Value;
 
 use crate::ReadError;
 
+mod json;
+pub(crate) use json::{JsonRead, json};
+
 // Node's fs.readFile contract for the shipping profile reader.
 pub(crate) const MAX_TEXT_BYTES: u64 = i32::MAX as u64;
 
@@ -113,11 +116,6 @@ pub(crate) fn read_bytes(file: File, limit: u64) -> Result<Vec<u8>, ReadError> {
         return Err(ReadError::TooLarge);
     }
     Ok(data)
-}
-
-pub(crate) fn json(dir: &Dir, name: &str) -> Result<Value, ReadError> {
-    let text = read_text(file(dir, name)?)?;
-    serde_json::from_str(&repair_surrogates(&text)).map_err(|_| ReadError::InvalidJson)
 }
 
 fn escape_unit(bytes: &[u8]) -> Option<u16> {

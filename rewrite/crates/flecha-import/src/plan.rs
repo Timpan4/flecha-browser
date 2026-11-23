@@ -316,6 +316,7 @@ impl ImportPlan {
         let non_web = count("non-web tab");
         let no_address = count("tab without address");
         let partial = count("partial split");
+        let overlapping = count("overlapping split");
         if non_web > 0 {
             lines.push(format!(
                 "{} with an address other than a web page (such as arc:)",
@@ -331,7 +332,7 @@ impl ImportPlan {
         for (kind, count) in &arc.skipped {
             if !matches!(
                 kind.as_str(),
-                "non-web tab" | "tab without address" | "partial split"
+                "non-web tab" | "tab without address" | "partial split" | "overlapping split"
             ) {
                 lines.push(format!(
                     "{} of a kind Flecha doesn’t have (Arc calls it “{kind}”)",
@@ -349,6 +350,12 @@ impl ImportPlan {
             lines.push(format!(
                 "{} that lost a tab, kept as the tabs that came over",
                 plural(partial, "split view")
+            ));
+        }
+        if overlapping > 0 {
+            lines.push(format!(
+                "{} kept as tabs because they overlap another split",
+                plural(overlapping, "split view")
             ));
         }
         if archive_dropped > 0 {

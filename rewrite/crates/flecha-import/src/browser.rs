@@ -5,7 +5,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::arc::read_arc_dir;
-use crate::bookmarks::Tidy;
+use crate::bookmarks::{BookmarkTree, Tidy};
 use crate::input::{dirs, file_exists, js_string, json, open_dir, open_root, truthy};
 use crate::safari;
 use crate::sqlite::{Database, Snapshot};
@@ -353,7 +353,7 @@ fn profiles(
         }
     } else {
         let cache = match read_names.then(|| json(root, "Local State")) {
-            Some(Ok(state)) => state,
+            Some(Ok(state)) => state.into_value("browser profile names", warnings),
             None | Some(Err(ReadError::Missing)) => Value::Null,
             Some(Err(error)) => {
                 warn(warnings, browser, "browser profile names", error);
@@ -605,6 +605,7 @@ fn chromium_bookmarks(
     for file in &profile.bookmarks {
         match json(&profile.root, file) {
             Ok(document) => {
+                let document = document.into_value(file, warnings);
                 for (nodes, root) in roots.iter_mut().zip(["bookmark_bar", "other", "synced"]) {
                     nodes.extend(chromium_children(&document["roots"][root], &mut malformed));
                 }
@@ -631,15 +632,27 @@ fn chromium_bookmarks(
     (bar, malformed)
 }
 
-// The serde_json parser imposes its default nesting limit before this walk.
 fn chromium_children(root: &Value, malformed: &mut usize) -> Vec<Bookmark> {
-    let children = &root["children"];
-    let Some(children) = children.as_array() else {
-        *malformed += usize::from(!children.is_null());
-        return Vec::new();
-    };
-    let mut nodes = Vec::new();
-    for node in children {
+    fn children<'a>(node: &'a Value, malformed: &mut usize) -> std::slice::Iter<'a, Value> {
+        let children = &node["children"];
+        if let Some(children) = children.as_array() {
+            children.iter()
+        } else {
+            *malformed += usize::from(!children.is_null());
+            [].iter()
+        }
+    }
+
+    let mut tree = BookmarkTree::default();
+    let mut stack = vec![children(root, malformed)];
+    while let Some(items) = stack.last_mut() {
+        let Some(node) = items.next() else {
+            stack.pop();
+            if !stack.is_empty() {
+                tree.close(true);
+            }
+            continue;
+        };
         match node["type"].as_str() {
             Some("url") if node["url"].is_string() => {
                 let url = node["url"].as_str().expect("checked bookmark URL");
@@ -648,7 +661,7 @@ fn chromium_children(root: &Value, malformed: &mut usize) -> Vec<Bookmark> {
                 } else {
                     url.into()
                 };
-                nodes.push(Bookmark::Tab(SavedTab {
+                tree.push(Bookmark::Tab(SavedTab {
                     url: url.into(),
                     title,
                 }));
@@ -659,13 +672,11 @@ fn chromium_children(root: &Value, malformed: &mut usize) -> Vec<Bookmark> {
                 } else {
                     "Untitled folder".into()
                 };
-                nodes.push(Bookmark::Folder {
-                    name,
-                    children: chromium_children(node, malformed),
-                });
+                tree.open(name);
+                stack.push(children(node, malformed));
             }
             _ => *malformed += 1,
         }
     }
-    nodes
+    tree.finish()
 }

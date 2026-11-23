@@ -145,15 +145,16 @@ impl Snapshot {
             }
         }
         let mut output = Vec::new();
+        let mut expanded = HashSet::new();
         for (guid, name) in [
             ("toolbar_____", None),
             ("menu________", Some("Bookmarks Menu")),
             ("unfiled_____", Some("Other Bookmarks")),
             ("mobile______", Some("Mobile Bookmarks")),
         ] {
-            let bookmarks = roots
-                .get(guid)
-                .map_or_else(Vec::new, |id| firefox_tree(*id, &parents, &mut malformed));
+            let bookmarks = roots.get(guid).map_or_else(Vec::new, |id| {
+                firefox_tree(*id, &parents, &mut expanded, &mut malformed)
+            });
             if let Some(name) = name {
                 output.push(Bookmark::Folder {
                     name: name.into(),
@@ -278,13 +279,17 @@ fn firefox_record(row: &Row<'_>) -> rusqlite::Result<(i64, String, FirefoxBookma
 fn firefox_tree(
     id: i64,
     parents: &HashMap<i64, Vec<FirefoxBookmark>>,
+    expanded: &mut HashSet<i64>,
     malformed: &mut usize,
 ) -> Vec<Bookmark> {
+    if !expanded.insert(id) {
+        *malformed += 1;
+        return Vec::new();
+    }
     let children = |id| parents.get(&id).map_or(&[][..], Vec::as_slice).iter();
-    let mut seen = HashSet::from([id]);
-    let mut stack = vec![(children(id), None)];
+    let mut stack = vec![children(id)];
     let mut tree = BookmarkTree::default();
-    while let Some((rows, _)) = stack.last_mut() {
+    while let Some(rows) = stack.last_mut() {
         match rows.next() {
             Some(row) if row.kind == 1 => {
                 if let Some(url) = row.url.as_ref().filter(|url| !url.is_empty()) {
@@ -298,22 +303,21 @@ fn firefox_tree(
                 }
             }
             Some(row) if row.kind == 2 => {
-                if seen.insert(row.id) {
+                if expanded.insert(row.id) {
                     tree.open(
                         row.title
                             .clone()
                             .unwrap_or_else(|| "Untitled folder".into()),
                     );
-                    stack.push((children(row.id), Some(row.id)));
+                    stack.push(children(row.id));
                 } else {
                     *malformed += 1;
                 }
             }
             Some(_) => {}
             None => {
-                let (_, folder) = stack.pop().expect("an active Firefox bookmark list");
-                if let Some(id) = folder {
-                    seen.remove(&id);
+                stack.pop();
+                if !stack.is_empty() {
                     tree.close(true);
                 }
             }
