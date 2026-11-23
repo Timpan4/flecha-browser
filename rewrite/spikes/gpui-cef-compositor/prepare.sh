@@ -26,14 +26,19 @@ prepare_source() {
   fi
 }
 
-case "${1:-$(uname -s):$(uname -m)}" in
-  linux64|Linux:x86_64) platform=linux64; directory=cef_linux_x86_64 ;;
-  macosarm64|Darwin:arm64) platform=macosarm64; directory=cef_macos_aarch64 ;;
-  windows64|MINGW*:x86_64) platform=windows64; directory=cef_windows_x86_64 ;;
-  *) printf 'Specify linux64, macosarm64 or windows64\n' >&2; exit 2 ;;
-esac
+sources_only=false
+if [[ ${1:-} == --sources-only ]]; then
+  sources_only=true
+else
+  case "${1:-$(uname -s):$(uname -m)}" in
+    linux64|Linux:x86_64) platform=linux64; directory=cef_linux_x86_64 ;;
+    macosarm64|Darwin:arm64) platform=macosarm64; directory=cef_macos_aarch64 ;;
+    windows64|MINGW*:x86_64) platform=windows64; directory=cef_windows_x86_64 ;;
+    *) printf 'Specify linux64, macosarm64, windows64 or --sources-only\n' >&2; exit 2 ;;
+  esac
+fi
 
-mkdir -p "$sources/cef-beta"
+mkdir -p "$sources"
 if ! command -v flock >/dev/null; then
   printf 'prepare.sh requires flock to serialize staging.\n' >&2
   exit 1
@@ -51,7 +56,11 @@ temporary=$(mktemp -d "$sources/prepare.XXXXXX")
 
 prepare_source gpui zed
 prepare_source cef-rs cef-rs
+if [[ $sources_only == true ]]; then
+  exit 0
+fi
 
+mkdir -p "$sources/cef-beta"
 runtime_paths "$platform" "$directory"
 archive="$sources/cef-beta/$archive_name"
 

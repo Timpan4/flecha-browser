@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/flecha-surface", "spikes/cef-osr-signin", "spikes/gpui-cef-compositor"]
+members = ["crates/flecha-core", "crates/flecha-surface", "spikes/cef-osr-signin", "spikes/gpui-cef-compositor"]
 exclude = ["target/spike1-src/zed", "target/spike1-src/cef-rs"]
 
 [workspace.package]
