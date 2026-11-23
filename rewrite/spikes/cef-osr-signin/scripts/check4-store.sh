@@ -92,7 +92,7 @@ keyboard_install() {
 
 wid=$(app_window)
 if [[ $phase == install ]] && ! install; then
-    cell 4b 'not reached' "the app died in 4a; see the next run for 4b"
+    cell 4b 'not reached' "the app died in 4a, so 4b was not tried in this run (auto-checks.sh tries OSR's 4b again in content-osr)"
     [[ $APP_MODE != osr ]] || cell 4c 'n/a' "auto, Xvfb: Alloy OSR has no toolbar or other surface to open an extension popup"
     exit 0
 fi

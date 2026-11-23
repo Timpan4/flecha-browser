@@ -174,12 +174,12 @@ for mode in "${modes[@]}"; do
     run_case "print-$mode" "$mode" 7 check7-print.sh -- --url "$print_url"
     run_case "print-$mode-control" "$mode" 7 check7-print.sh CONTROL=1 -- --url "$input_url"
     if [[ $mode == flecha ]]; then
-        why='Flecha has no page probe (the spike'"'"'s --probe), which this step needs to find and press'
-        note 4a flecha 'not automated' "$why the store button"
+        why='Flecha has no page probe (the spike'"'"'s --probe), which this step needs to'
+        note 4a flecha 'not automated' "$why find and focus the store button"
         note 4b flecha 'not automated' "needs Dark Reader installed, and 4a is not automated here (REPORT says what was tried)"
         note 4c flecha 'not automated' "the popup opens from the toolbar's extension menu, Chrome's own UI"
-        note 5a flecha 'not automated' "$why the login fields"
-        note 5b flecha 'not automated' "$why the login fields' lengths"
+        note 5a flecha 'not automated' "$why focus the login fields and see the secure page"
+        note 5b flecha 'not automated' "$why read the login fields' lengths"
         continue
     fi
     run_case "store-$mode" "$mode" '4a 4b 4c' check4-store.sh -- --url "$store_url" --probe
