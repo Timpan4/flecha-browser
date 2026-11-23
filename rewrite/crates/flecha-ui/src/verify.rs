@@ -1,7 +1,7 @@
 use std::io::BufRead as _;
 
 use anyhow::{Context as _, Result, ensure};
-use flecha_cef::{BrowserEvent, Event, Owner};
+use flecha_cef::{BrowserEvent, Disposition, Event, Owner, Partition};
 use flecha_core::{SpaceId, TabId, WindowId};
 use futures::StreamExt as _;
 use gpui::App;
@@ -30,6 +30,7 @@ enum Command {
     Detach,
     Return,
     Close,
+    CloseWindow,
     Switch { space: SpaceId },
     NewSpace,
     Isolate,
@@ -58,6 +59,7 @@ impl Command {
             Self::Detach => Action::Detach,
             Self::Return => Action::Return,
             Self::Close => Action::Close,
+            Self::CloseWindow => Action::CloseWindow,
             Self::Switch { space } => Action::Switch(space),
             Self::NewSpace => Action::NewSpace,
             Self::Isolate => Action::Isolate,
@@ -126,11 +128,18 @@ fn snapshot(state: &Controller) -> Result<Value> {
                 Some(Owner::Tab(window)) => json!({ "kind": "tab", "window": window }),
                 Some(Owner::Peek(window)) => json!({ "kind": "peek", "window": window }),
                 Some(Owner::Flechinha(window)) => json!({ "kind": "flechinha", "window": window }),
+                Some(Owner::Popup(window)) => json!({ "kind": "popup", "window": window }),
+                None => Value::Null,
+            };
+            let partition = match state.engine.partition(id) {
+                Some(Partition::Shared) => json!("shared"),
+                Some(Partition::Isolated(space)) => json!(space),
                 None => Value::Null,
             };
             json!({
                 "tab": id,
                 "owner": owner,
+                "partition": partition,
                 "browser": state.engine.browser_id(id),
             })
         })
@@ -140,7 +149,9 @@ fn snapshot(state: &Controller) -> Result<Value> {
         "window": state.model.core.focused_window().id,
         "peeks": state.model.peeks.iter().map(|(window, page)| json!({ "window": window, "tab": page.id })).collect::<Vec<_>>(),
         "flechinhas": state.model.flechinhas.iter().map(|(window, page)| json!({ "window": window, "tab": page.id })).collect::<Vec<_>>(),
+        "popups": state.model.popups.iter().map(|(window, popup)| json!({ "window": window, "tab": popup.page.id, "opener": popup.opener })).collect::<Vec<_>>(),
         "browsers": browsers,
+        "liveBrowsers": state.engine.live_browsers(),
         "nativeWindows": state.windows.keys().collect::<Vec<_>>(),
     }))
 }
@@ -192,6 +203,16 @@ pub(super) fn ready() {
     emit(json!({ "type": "ready" }));
 }
 
+/// The shell asked the platform to bring this window to the front.
+pub(super) fn activated(window: &WindowId) {
+    emit(json!({ "type": "activated", "window": window }));
+}
+
+/// Every CEF browser has closed and the app is about to quit.
+pub(super) fn drained(live: usize) {
+    emit(json!({ "type": "drained", "live": live }));
+}
+
 pub(super) fn event(message: &BrowserEvent) {
     let tab = &message.key.tab;
     let mut value = match &message.event {
@@ -206,7 +227,20 @@ pub(super) fn event(message: &BrowserEvent) {
         Event::Address(address) => json!({ "type": "address", "tab": tab, "address": address }),
         Event::Title(title) => json!({ "type": "title", "tab": tab, "title": title }),
         Event::Paint => json!({ "type": "paint", "tab": tab }),
-        _ => return,
+        Event::Opened(opened) => json!({
+            "type": "opened",
+            "tab": tab,
+            "url": opened.url,
+            "disposition": match opened.disposition {
+                Disposition::ForegroundTab => "foreground_tab",
+                Disposition::BackgroundTab => "background_tab",
+                Disposition::Window => "window",
+                Disposition::Popup => "popup",
+            },
+            "size": opened.size,
+        }),
+        Event::ClosedByPage => json!({ "type": "closed_by_page", "tab": tab }),
+        Event::PaintFailed => return,
     };
     value["generation"] = json!(message.key.generation());
     emit(value);

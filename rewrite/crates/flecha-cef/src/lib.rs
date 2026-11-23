@@ -1,12 +1,13 @@
 mod callbacks;
 mod identity;
+mod popup;
 mod pump;
 mod runtime;
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 use anyhow::{Context as _, Result, ensure};
 use cef::{
@@ -18,9 +19,11 @@ use flecha_core::TabId;
 use gpui::{Bounds, Pixels};
 
 pub use callbacks::Frames;
-use callbacks::{Queue, Slot};
+use callbacks::{Queue, Slot, Stage};
 use identity::Generations;
 pub use identity::{BrowserKey, Owner, Partition};
+pub use popup::{Disposition, Opened};
+use popup::{Pending, Popups};
 pub use runtime::Runtime;
 use runtime::path_string;
 
@@ -34,7 +37,10 @@ pub enum Event {
     LoadFailed { url: String, code: i32 },
     Paint,
     PaintFailed,
-    OpenLink { url: String, foreground: bool },
+    /// CEF is creating this browser for a page. The engine already owns it.
+    Opened(Opened),
+    /// The page closed its browser (`window.close()`) or CEF abandoned creating it.
+    ClosedByPage,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -110,6 +116,7 @@ struct Session {
     partition: Partition,
     slot: Rc<Slot>,
     hidden: bool,
+    opener: Option<Weak<Slot>>,
 }
 
 struct PersistentContext {
@@ -125,18 +132,28 @@ pub struct Engine {
     browsers: BTreeMap<TabId, Session>,
     closing: BTreeSet<BrowserKey>,
     events: Queue,
+    popups: Rc<Popups>,
 }
 
 impl Engine {
-    pub fn new(profile: PathBuf) -> Self {
+    /// `mint` names the tabs of browsers that pages open.
+    pub fn new(profile: PathBuf, mint: fn() -> TabId) -> Self {
+        let generations = Generations::default();
+        let popups = Rc::new(Popups {
+            counter: generations.counter(),
+            mint,
+            pending: RefCell::new(Vec::new()),
+            live: Cell::new(0),
+        });
         Self {
             profile,
             contexts: BTreeMap::new(),
             contexts_changed: Rc::new(Cell::new(false)),
-            generations: Generations::default(),
+            generations,
             browsers: BTreeMap::new(),
             closing: BTreeSet::new(),
             events: Queue::default(),
+            popups,
         }
     }
 
@@ -172,15 +189,12 @@ impl Engine {
             return Ok(());
         };
         let key = self.generations.create(tab.clone());
-        let slot = Rc::new(Slot {
-            key: RefCell::new(key.clone()),
-            browser: RefCell::new(None),
-            viewport: Cell::new(viewport),
-            surface: RefCell::new(Frames::default()),
-            retired: Cell::new(false),
-            paint_pending: Cell::new(false),
-            events: self.events.clone(),
-        });
+        let slot = Rc::new(Slot::new(
+            key.clone(),
+            viewport,
+            self.events.clone(),
+            self.popups.clone(),
+        ));
         let mut client = callbacks::client(slot.clone());
         let info = WindowInfo {
             runtime_style: RuntimeStyle::ALLOY,
@@ -206,6 +220,7 @@ impl Engine {
                 owner,
                 partition,
                 hidden: false,
+                opener: None,
             },
         );
         let alloy = browser
@@ -357,32 +372,99 @@ impl Engine {
         let Some(session) = self.browsers.remove(tab) else {
             return;
         };
-        let slot = &session.slot;
+        self.shut(&session.slot);
+    }
+
+    fn shut(&mut self, slot: &Slot) {
         let key = slot.key.borrow().clone();
         self.generations.retire(&key);
         slot.retired.set(true);
-        let host = slot
-            .browser
-            .borrow()
-            .as_ref()
-            .and_then(|browser| browser.host());
-        if let Some(host) = host {
-            self.closing.insert(key);
-            host.close_browser(1);
+        match slot.stage.get() {
+            // CEF already destroyed it. Its queued ClosedByPage now has a retired key.
+            Stage::Closed => {}
+            // on_after_created closes it, or CEF reports the aborted creation.
+            Stage::Pending => {
+                self.closing.insert(key);
+            }
+            Stage::Live => {
+                self.closing.insert(key);
+                let host = slot
+                    .browser
+                    .borrow()
+                    .as_ref()
+                    .and_then(|browser| browser.host());
+                if let Some(host) = host {
+                    host.close_browser(1);
+                }
+            }
         }
     }
 
+    /// Registers the browsers CEF started creating for pages since the last call. A
+    /// popup whose opener has gone since is closed.
+    fn adopt_popups(&mut self) {
+        let pending = std::mem::take(&mut *self.popups.pending.borrow_mut());
+        for Pending { child, opener } in pending {
+            let source = opener.key.borrow().tab.clone();
+            let session = self
+                .browsers
+                .get(&source)
+                .filter(|session| Rc::ptr_eq(&session.slot, &opener));
+            let Some((owner, partition)) =
+                session.map(|session| (session.owner.clone(), session.partition.clone()))
+            else {
+                self.shut(&child);
+                continue;
+            };
+            let key = child.key.borrow().clone();
+            self.generations.register(&key);
+            self.browsers.insert(
+                key.tab,
+                Session {
+                    owner,
+                    // CEF creates a popup in its opener's request context.
+                    partition,
+                    slot: child,
+                    hidden: false,
+                    opener: Some(Rc::downgrade(&opener)),
+                },
+            );
+        }
+    }
+
+    /// The tab whose page opened this one, while that page is still open.
+    pub fn opener(&self, tab: &TabId) -> Option<TabId> {
+        let opener = self.browsers.get(tab)?.opener.as_ref()?.upgrade()?;
+        let source = opener.key.borrow().tab.clone();
+        self.browsers
+            .get(&source)
+            .filter(|session| Rc::ptr_eq(&session.slot, &opener))
+            .map(|_| source)
+    }
+
+    /// CEF browsers between `on_after_created` and `on_before_close`, counted by the
+    /// callbacks themselves.
+    pub fn live_browsers(&self) -> usize {
+        self.popups.live.get()
+    }
+
     pub fn close_all(&mut self) {
+        self.adopt_popups();
         while let Some(tab) = self.browsers.first_key_value().map(|(tab, _)| tab.clone()) {
             self.close(&tab);
         }
     }
 
+    /// CEF must call `on_before_close` for every browser before the app exits.
     pub fn is_drained(&self) -> bool {
-        self.browsers.is_empty() && self.closing.is_empty()
+        self.browsers.is_empty()
+            && self.closing.is_empty()
+            && self.popups.pending.borrow().is_empty()
+            && self.live_browsers() == 0
     }
 
     pub fn next_event(&mut self) -> Option<BrowserEvent> {
+        self.adopt_popups();
         loop {
             let message = self.events.borrow_mut().pop_front()?;
             if message.event == Event::Closed && self.closing.remove(&message.key) {
@@ -399,6 +481,10 @@ impl Engine {
                 && let Some(session) = self.browsers.get(&message.key.tab)
             {
                 session.slot.paint_pending.set(false);
+            }
+            if message.event == Event::ClosedByPage {
+                self.browsers.remove(&message.key.tab);
+                self.generations.retire(&message.key);
             }
             return Some(message);
         }
@@ -422,7 +508,7 @@ mod tests {
 
     #[test]
     fn rejects_every_callback_from_a_retired_generation() {
-        let mut engine = Engine::new(PathBuf::new());
+        let mut engine = Engine::new(PathBuf::new(), || TabId::new("popup"));
         let tab = TabId::new("replaced-tab");
         let retired = engine.generations.create(tab.clone());
         let current = engine.generations.create(tab.clone());
@@ -438,7 +524,12 @@ mod tests {
             Event::LoadFailed { .. } => Event::LoadFailed { url: url.into(), code: -106 },
             Event::Paint => Event::Paint,
             Event::PaintFailed => Event::PaintFailed,
-            Event::OpenLink { .. } => Event::OpenLink { url: url.into(), foreground: true },
+            Event::Opened(_) => Event::Opened(Opened {
+                url: url.into(),
+                disposition: Disposition::Popup,
+                size: Some((480, 360)),
+            }),
+            Event::ClosedByPage => Event::ClosedByPage,
         ] {
             engine.events.borrow_mut().push_back(BrowserEvent {
                 key: retired.clone(),

@@ -1,11 +1,12 @@
 use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
-use std::rc::Rc;
+use std::collections::{BTreeMap, VecDeque};
+use std::rc::{Rc, Weak};
 
 use cef::{rc::Rc as _, *};
 use flecha_surface::{Frame as SurfaceFrame, SurfaceTarget};
 use gpui::{Bounds, Pixels, point, px, size};
 
+use crate::popup::{self, Popups};
 use crate::{BrowserEvent, BrowserKey, Event, Viewport};
 
 pub(crate) type Queue = Rc<RefCell<VecDeque<BrowserEvent>>>;
@@ -23,6 +24,14 @@ wrap_request_context_handler! {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Stage {
+    /// CEF hasn't called `on_after_created` yet.
+    Pending,
+    Live,
+    Closed,
+}
+
 pub(crate) struct Slot {
     pub key: RefCell<BrowserKey>,
     pub browser: RefCell<Option<Browser>>,
@@ -31,9 +40,44 @@ pub(crate) struct Slot {
     pub retired: Cell<bool>,
     pub paint_pending: Cell<bool>,
     pub events: Queue,
+    pub popups: Rc<Popups>,
+    pub stage: Cell<Stage>,
+    /// Popups this browser has asked CEF for that CEF hasn't created yet, by popup ID.
+    pub opening: RefCell<BTreeMap<i32, Rc<Slot>>>,
+    /// For a popup still being created: its opener and its popup ID there.
+    pub origin: RefCell<Option<(Weak<Slot>, i32)>>,
 }
 
 impl Slot {
+    pub fn new(key: BrowserKey, viewport: Viewport, events: Queue, popups: Rc<Popups>) -> Self {
+        Self {
+            key: RefCell::new(key),
+            browser: RefCell::new(None),
+            viewport: Cell::new(viewport),
+            surface: RefCell::new(Frames::default()),
+            retired: Cell::new(false),
+            paint_pending: Cell::new(false),
+            events,
+            popups,
+            stage: Cell::new(Stage::Pending),
+            opening: RefCell::new(BTreeMap::new()),
+            origin: RefCell::new(None),
+        }
+    }
+
+    /// CEF destroyed this browser or abandoned creating it. The engine closed a retired
+    /// slot; anything else was the page (`window.close()`) or CEF.
+    pub fn closed(&self) {
+        if self.stage.replace(Stage::Closed) == Stage::Live {
+            self.popups.live.set(self.popups.live.get() - 1);
+        }
+        self.emit(if self.retired.get() {
+            Event::Closed
+        } else {
+            Event::ClosedByPage
+        });
+    }
+
     pub fn emit(&self, event: Event) {
         self.events.borrow_mut().push_back(BrowserEvent {
             key: self.key.borrow().clone(),
@@ -142,36 +186,42 @@ wrap_life_span_handler! {
     struct Life { slot: Rc<Slot> }
     impl LifeSpanHandler {
         fn on_after_created(&self, browser: Option<&mut Browser>) {
-            if let Some(browser) = browser {
-                self.slot.emit(Event::Created(browser.identifier()));
-                self.slot.browser.replace(Some(browser.clone()));
+            let Some(browser) = browser else { return };
+            let slot = &self.slot;
+            slot.stage.set(Stage::Live);
+            slot.popups.live.set(slot.popups.live.get() + 1);
+            let origin = slot.origin.take();
+            if let Some((opener, popup_id)) = origin
+                && let Some(opener) = opener.upgrade()
+            {
+                opener.opening.borrow_mut().remove(&popup_id);
+            }
+            slot.emit(Event::Created(browser.identifier()));
+            slot.browser.replace(Some(browser.clone()));
+            // The engine closed this popup while CEF was still creating it.
+            if slot.retired.get() && let Some(host) = browser.host() {
+                host.close_browser(1);
             }
         }
 
         fn on_before_close(&self, _browser: Option<&mut Browser>) {
             self.slot.browser.take();
-            self.slot.emit(Event::Closed);
+            self.slot.closed();
         }
 
         fn on_before_popup(
-            &self, _browser: Option<&mut Browser>, _frame: Option<&mut Frame>, _popup_id: i32,
+            &self, _browser: Option<&mut Browser>, _frame: Option<&mut Frame>, popup_id: i32,
             url: Option<&CefString>, _frame_name: Option<&CefString>, disposition: WindowOpenDisposition,
-            gesture: i32, _features: Option<&PopupFeatures>, _window: Option<&mut WindowInfo>,
-            _client: Option<&mut Option<Client>>, _settings: Option<&mut BrowserSettings>,
+            _gesture: i32, features: Option<&PopupFeatures>, window: Option<&mut WindowInfo>,
+            client: Option<&mut Option<Client>>, _settings: Option<&mut BrowserSettings>,
             _extra: Option<&mut Option<DictionaryValue>>, _no_javascript: Option<&mut i32>,
         ) -> i32 {
-            if gesture != 0
-                && matches!(disposition, WindowOpenDisposition::NEW_FOREGROUND_TAB | WindowOpenDisposition::NEW_BACKGROUND_TAB)
-                && let Some(url) = url
-            {
-                self.slot.emit(Event::OpenLink {
-                    url: url.to_string(),
-                    foreground: disposition == WindowOpenDisposition::NEW_FOREGROUND_TAB,
-                });
-            }
-            // Phase 1 routes user-initiated tab links through the shell. The
-            // product popup lifecycle is a separate rewrite phase.
-            1
+            let allowed = popup::before_popup(&self.slot, popup_id, url, disposition, features, window, client);
+            i32::from(!allowed)
+        }
+
+        fn on_before_popup_aborted(&self, _browser: Option<&mut Browser>, popup_id: i32) {
+            popup::aborted(&self.slot, popup_id);
         }
     }
 }

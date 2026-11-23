@@ -1,4 +1,6 @@
+use std::cell::Cell;
 use std::collections::BTreeMap;
+use std::rc::Rc;
 
 use flecha_core::{SpaceId, TabId, WindowId};
 
@@ -22,6 +24,7 @@ pub enum Owner {
     Tab(WindowId),
     Peek(WindowId),
     Flechinha(WindowId),
+    Popup(WindowId),
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -68,6 +71,18 @@ mod tests {
     }
 
     #[test]
+    fn a_reserved_popup_key_is_unique_and_accepted_once_registered() {
+        let mut generations = Generations::default();
+        let opener = generations.create(TabId::new("opener"));
+        let popup = generations.counter().reserve(TabId::new("popup"));
+        assert!(popup.generation > opener.generation);
+        assert!(!generations.accepts(&popup));
+        generations.register(&popup);
+        assert!(generations.accepts(&popup));
+        assert!(generations.create(TabId::new("next")).generation > popup.generation);
+    }
+
+    #[test]
     fn transfer_retires_the_old_tab_address_without_creating_a_generation() {
         let mut generations = Generations::default();
         let source = generations.create(TabId::new("today"));
@@ -79,21 +94,41 @@ mod tests {
     }
 }
 
+/// Hands out generations. CEF callbacks reserve a popup's key with it before the engine
+/// registers the popup, so the popup's first callbacks already carry its final key.
+#[derive(Clone, Default)]
+pub(crate) struct Counter(Rc<Cell<u64>>);
+
+impl Counter {
+    pub fn reserve(&self, tab: TabId) -> BrowserKey {
+        let last = self.0.get().checked_add(1).expect("browser generation overflow");
+        self.0.set(last);
+        BrowserKey {
+            tab,
+            generation: Generation(last),
+        }
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct Generations {
-    last: u64,
+    counter: Counter,
     current: BTreeMap<TabId, Generation>,
 }
 
 impl Generations {
+    pub fn counter(&self) -> Counter {
+        self.counter.clone()
+    }
+
     pub fn create(&mut self, tab: TabId) -> BrowserKey {
-        self.last = self
-            .last
-            .checked_add(1)
-            .expect("browser generation overflow");
-        let generation = Generation(self.last);
-        self.current.insert(tab.clone(), generation);
-        BrowserKey { tab, generation }
+        let key = self.counter.reserve(tab);
+        self.register(&key);
+        key
+    }
+
+    pub fn register(&mut self, key: &BrowserKey) {
+        self.current.insert(key.tab.clone(), key.generation);
     }
 
     pub fn current(&self, tab: &TabId) -> Option<BrowserKey> {

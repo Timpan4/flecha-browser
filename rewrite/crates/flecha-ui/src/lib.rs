@@ -1,4 +1,5 @@
 mod model;
+mod popup;
 mod verify;
 mod view;
 
@@ -10,7 +11,7 @@ use std::rc::Rc;
 use anyhow::{Context as _, Result, ensure};
 use flecha_cef::{Engine, Event, Owner, Runtime, Viewport};
 use flecha_core::{
-    Placement, SpaceId, TabId, WindowId,
+    SpaceId, TabId, WindowId,
     storage::{LoadedState, ReadyState},
     suggestions::pinnable_address,
 };
@@ -39,7 +40,7 @@ pub fn start(
     let initial = options.initial;
     let controller = Rc::new(RefCell::new(Controller {
         model,
-        engine: Engine::new(profile),
+        engine: Engine::new(profile, model::tab_id),
         store,
         snapshots: loaded,
         windows: BTreeMap::new(),
@@ -82,6 +83,9 @@ enum Action {
     Detach,
     Return,
     Close,
+    /// The window's close button: the window closes for good, or the app quits with
+    /// its last Flecha window (patches 0059 and 0062).
+    CloseWindow,
     Switch(SpaceId),
     NewSpace,
     Isolate,
@@ -201,7 +205,34 @@ impl Controller {
                 self.reconcile_partition(&returned);
                 self.front = Some(destination);
             }
+            Action::CloseWindow => {
+                if self.model.flechinhas.contains_key(window)
+                    || self.model.popups.contains_key(window)
+                {
+                    return self.act(window, Action::Close);
+                }
+                if self.model.core.windows().len() <= 1 {
+                    return self.act(window, Action::Quit);
+                }
+                if let Some(page) = self.model.peeks.remove(window) {
+                    self.engine.close(&page.id);
+                }
+                let shown = self
+                    .engine
+                    .ids()
+                    .filter(|id| self.engine.owner(id) == Some(&Owner::Tab(window.clone())))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let change = self.model.core.close_window(window, now());
+                for id in shown.iter().chain(&change.removed) {
+                    self.engine.close(id);
+                }
+            }
             Action::Close => {
+                if self.model.popups.contains_key(window) {
+                    self.close_popup(window);
+                    return Ok(());
+                }
                 if let Some(page) = self.model.flechinhas.remove(window) {
                     self.engine.close(&page.id);
                     return Ok(());
@@ -288,36 +319,6 @@ impl Controller {
         }
     }
 
-    fn follow_link(&mut self, source: &TabId, url: &str, foreground: bool) -> Result<()> {
-        let Some(url) = pinnable_address(url) else {
-            return Ok(());
-        };
-        let Some(owner) = self.engine.owner(source) else {
-            return Ok(());
-        };
-        let window = match owner {
-            Owner::Tab(window) | Owner::Peek(window) => window.clone(),
-            Owner::Flechinha(_) => self.model.core.focused_window().id.clone(),
-        };
-        let peek = foreground
-            && matches!(owner, Owner::Tab(_))
-            && self.model.core.settings.peek_pinned_links != Some(false)
-            && matches!(
-                self.model.core.locate(source),
-                Some(Placement::Pinned { .. } | Placement::Favorite)
-            );
-        if peek {
-            if let Some(old) = self.model.peek(window, url, Some(source))? {
-                self.engine.close(&old);
-            }
-        } else {
-            self.model.open(&window, url, foreground)?;
-            self.update_visibility();
-            self.save()?;
-        }
-        Ok(())
-    }
-
     fn pane(&mut self, owner: Owner, id: TabId, viewport: Viewport) -> Result<()> {
         if !self.ready || self.quitting {
             return Ok(());
@@ -387,8 +388,14 @@ impl Controller {
                 Event::PaintFailed => {
                     self.fail(anyhow::anyhow!("CEF could not copy the page frame"), cx)
                 }
-                Event::OpenLink { url, foreground } => {
-                    if let Err(error) = self.follow_link(id, &url, foreground) {
+                Event::Opened(opened) => {
+                    if let Err(error) = self.opened(id, opened) {
+                        self.fail(error, cx);
+                    }
+                    changed = true;
+                }
+                Event::ClosedByPage => {
+                    if let Err(error) = self.page_closed(id) {
                         self.fail(error, cx);
                     }
                     changed = true;
@@ -406,6 +413,9 @@ impl Controller {
             cx.refresh_windows();
         }
         if self.quitting && self.engine.is_drained() {
+            if self.verify {
+                verify::drained(self.engine.live_browsers());
+            }
             self.engine.release_contexts();
             cx.quit();
             return false;
@@ -431,15 +441,25 @@ fn dispatch(controller: &Shared, window: &WindowId, action: Action, cx: &mut App
     cx.refresh_windows();
 }
 
+#[derive(Clone, Copy)]
+enum Kind {
+    Main,
+    Flechinha,
+    Popup(Option<(i32, i32)>),
+}
+
 fn sync_windows(controller: &Shared, cx: &mut App) -> Result<()> {
     let (wanted, opened) = {
         let state = controller.borrow();
         let mut wanted = BTreeMap::new();
         for window in state.model.core.windows() {
-            wanted.insert(window.id.clone(), false);
+            wanted.insert(window.id.clone(), Kind::Main);
         }
         for id in state.model.flechinhas.keys() {
-            wanted.insert(id.clone(), true);
+            wanted.insert(id.clone(), Kind::Flechinha);
+        }
+        for (id, popup) in &state.model.popups {
+            wanted.insert(id.clone(), Kind::Popup(popup.size));
         }
         (wanted, state.windows.clone())
     };
@@ -449,14 +469,22 @@ fn sync_windows(controller: &Shared, cx: &mut App) -> Result<()> {
             let _ = handle.update(cx, |_, window, _| window.remove_window());
         }
     }
-    for (id, small) in wanted {
+    for (id, kind) in wanted {
         if opened.contains_key(&id) {
             continue;
         }
-        // Flechinha uses the shipping shell's 900 x 700 size. The main
-        // window uses GPUI's default size.
-        let bounds = small
-            .then(|| WindowBounds::Windowed(Bounds::centered(None, size(px(900.), px(700.)), cx)));
+        // Flechinha uses the shipping shell's 900 x 700 size. A popup's page gets
+        // the size it asked for, below its address bar. The main window and popups
+        // without a size use GPUI's default size.
+        let content = match kind {
+            Kind::Main | Kind::Popup(None) => None,
+            Kind::Flechinha => Some(size(px(900.), px(700.))),
+            Kind::Popup(Some((width, height))) => Some(size(
+                px(width as f32),
+                px(height as f32) + view::POPUP_BAR_HEIGHT,
+            )),
+        };
+        let bounds = content.map(|content| WindowBounds::Windowed(Bounds::centered(None, content, cx)));
         let handle = cx.open_window(
             WindowOptions {
                 window_bounds: bounds,
@@ -466,17 +494,17 @@ fn sync_windows(controller: &Shared, cx: &mut App) -> Result<()> {
                 let controller = controller.clone();
                 let id = id.clone();
                 move |window, cx| {
-                    window.set_window_title(if small { "Flechinha" } else { "Flecha" });
+                    window.set_window_title(match kind {
+                        Kind::Main => "Flecha",
+                        Kind::Flechinha => "Flechinha",
+                        // The Shell names it after its page.
+                        Kind::Popup(_) => "",
+                    });
                     window.on_window_should_close(cx, {
                         let controller = controller.clone();
                         let id = id.clone();
                         move |_, cx| {
-                            dispatch(
-                                &controller,
-                                &id,
-                                if small { Action::Close } else { Action::Quit },
-                                cx,
-                            );
+                            dispatch(&controller, &id, Action::CloseWindow, cx);
                             false
                         }
                     });
@@ -491,10 +519,13 @@ fn sync_windows(controller: &Shared, cx: &mut App) -> Result<()> {
         state
             .front
             .take()
-            .and_then(|id| state.windows.get(&id).copied())
+            .and_then(|id| Some((state.windows.get(&id).copied()?, id, state.verify)))
     };
-    if let Some(front) = front {
+    if let Some((front, id, verify)) = front {
         let _ = front.update(cx, |_, window, _| window.activate_window());
+        if verify {
+            verify::activated(&id);
+        }
     }
     Ok(())
 }

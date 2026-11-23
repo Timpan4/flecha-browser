@@ -44,13 +44,14 @@ static int click(Display *display, int x, int y)
            XTestFakeButtonEvent(display, 1, False, CurrentTime);
 }
 
-static int geometry(Display *display, const char *title)
+// The one viewable top-level window named `title`, or None.
+static Window named(Display *display, const char *title)
 {
     Window root = DefaultRootWindow(display);
     Window returned_root, parent, *children;
     unsigned int count;
     if (!XQueryTree(display, root, &returned_root, &parent, &children, &count))
-        return 0;
+        return None;
 
     Window match = None;
     for (unsigned int i = 0; i < count; i++) {
@@ -62,7 +63,7 @@ static int geometry(Display *display, const char *title)
             if (match != None) {
                 XFree(name);
                 XFree(children);
-                return 0;
+                return None;
             }
             match = children[i];
         }
@@ -71,6 +72,13 @@ static int geometry(Display *display, const char *title)
     }
     if (children != NULL)
         XFree(children);
+    return match;
+}
+
+static int geometry(Display *display, const char *title)
+{
+    Window root = DefaultRootWindow(display);
+    Window match = named(display, title);
     if (match == None)
         return 0;
 
@@ -152,6 +160,10 @@ int main(int argc, char **argv)
         ok = tap(display, XStringToKeysym(argv[2]));
     } else if (argc == 3 && strcmp(argv[1], "geometry") == 0) {
         ok = geometry(display, argv[2]);
+    } else if (argc == 3 && strcmp(argv[1], "focus") == 0) {
+        // What a window manager does when it activates a window: Xvfb has none.
+        Window window = named(display, argv[2]);
+        ok = window != None && XSetInputFocus(display, window, RevertToParent, CurrentTime);
     } else if (argc == 2 && strcmp(argv[1], "copy") == 0) {
         ok = press(display, XK_Control_L, True) && tap(display, XK_a) &&
              tap(display, XK_c) && press(display, XK_Control_L, False);

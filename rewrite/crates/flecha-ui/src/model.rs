@@ -10,6 +10,16 @@ pub struct Model {
     pub core: BrowserState,
     pub peeks: BTreeMap<WindowId, Transient>,
     pub flechinhas: BTreeMap<WindowId, Transient>,
+    pub popups: BTreeMap<WindowId, Popup>,
+}
+
+/// A scripted popup (`window.open` with features) in a window of its own, as Chromium
+/// keeps it for the TypeScript shell. It is never saved.
+pub struct Popup {
+    pub page: Transient,
+    /// The Flecha window focus returns to when the popup closes.
+    pub opener: WindowId,
+    pub size: Option<(i32, i32)>,
 }
 
 pub struct Transient {
@@ -31,6 +41,7 @@ impl Model {
             core: core.unwrap_or_else(|| BrowserState::new(space_id(), window_id())),
             peeks: BTreeMap::new(),
             flechinhas: BTreeMap::new(),
+            popups: BTreeMap::new(),
         }
     }
 
@@ -44,6 +55,9 @@ impl Model {
     }
 
     pub fn keyboard_pane(&self, window: &WindowId) -> Option<(Owner, &TabId)> {
+        if let Some(popup) = self.popups.get(window) {
+            return Some((Owner::Popup(window.clone()), &popup.page.id));
+        }
         if let Some(page) = self.flechinhas.get(window) {
             return Some((Owner::Flechinha(window.clone()), &page.id));
         }
@@ -62,17 +76,64 @@ impl Model {
         } else {
             self.active(window).cloned()
         };
+        self.open_page(id.clone(), window, url, after.as_ref(), activate)?;
+        Ok(id)
+    }
+
+    /// Adds a Today tab to the window's current Space, after `after` when it is there
+    /// and first otherwise.
+    pub fn open_page(
+        &mut self,
+        id: TabId,
+        window: &WindowId,
+        url: String,
+        after: Option<&TabId>,
+        activate: bool,
+    ) -> Result<()> {
         ensure!(
-            self.core.open_today(
-                id.clone(),
-                Tab::new(url, now()),
-                window,
-                after.as_ref(),
-                activate
-            ),
+            self.core
+                .open_today(id, Tab::new(url, now()), window, after, activate),
             "could not open tab"
         );
-        Ok(id)
+        Ok(())
+    }
+
+    /// A new Flecha window showing one new tab, in the focused window's Space.
+    pub fn open_window_page(&mut self, id: TabId, url: String) -> Result<WindowId> {
+        let window = window_id();
+        ensure!(
+            self.core.open_window(window.clone(), None),
+            "could not open window"
+        );
+        self.open_page(id, &window, url, None, true)?;
+        Ok(window)
+    }
+
+    pub fn open_popup(
+        &mut self,
+        id: TabId,
+        url: String,
+        opener: (&WindowId, &TabId),
+        partition: Partition,
+        size: Option<(i32, i32)>,
+    ) -> Result<WindowId> {
+        let (window, source) = opener;
+        let space = self.origin_space(window, Some(source))?.clone();
+        let popup = window_id();
+        self.popups.insert(
+            popup.clone(),
+            Popup {
+                page: Transient {
+                    id,
+                    tab: Tab::new(url, now()),
+                    space,
+                    partition,
+                },
+                opener: window.clone(),
+                size,
+            },
+        );
+        Ok(popup)
     }
 
     pub fn peek(
@@ -81,12 +142,23 @@ impl Model {
         url: String,
         source: Option<&TabId>,
     ) -> Result<Option<TabId>> {
+        self.peek_page(window, tab_id(), url, source)
+    }
+
+    /// Opens `id` in the window's Peek and returns the page it replaces.
+    pub fn peek_page(
+        &mut self,
+        window: WindowId,
+        id: TabId,
+        url: String,
+        source: Option<&TabId>,
+    ) -> Result<Option<TabId>> {
         let space = self.origin_space(&window, source)?.clone();
         let partition = source
             .and_then(|id| self.partition(id))
             .unwrap_or_else(|| self.space_partition(&space));
         let transient = Transient {
-            id: tab_id(),
+            id,
             tab: Tab::new(url, now()),
             space,
             partition,
@@ -183,6 +255,11 @@ impl Model {
                     .extract_if(.., |_, page| &page.space == space),
             )
             .map(|(_, page)| page.id)
+            .chain(
+                self.popups
+                    .extract_if(.., |_, popup| &popup.page.space == space)
+                    .map(|(_, popup)| popup.page.id),
+            )
             .collect()
     }
 
@@ -198,6 +275,7 @@ impl Model {
         self.flechinhas
             .values()
             .chain(self.peeks.values())
+            .chain(self.popups.values().map(|popup| &popup.page))
             .find(|page| &page.id == id)
     }
 
@@ -205,6 +283,7 @@ impl Model {
         self.flechinhas
             .values_mut()
             .chain(self.peeks.values_mut())
+            .chain(self.popups.values_mut().map(|popup| &mut popup.page))
             .find(|page| &page.id == id)
             .map(|page| (&mut page.tab, false))
             .or_else(|| self.core.tab_mut(id).map(|tab| (tab, true)))
@@ -227,6 +306,11 @@ impl Model {
                 .get(window)
                 .filter(|page| &page.id == id)
                 .map(|page| &page.tab),
+            Owner::Popup(window) => self
+                .popups
+                .get(window)
+                .filter(|popup| &popup.page.id == id)
+                .map(|popup| &popup.page.tab),
         }
     }
 }
