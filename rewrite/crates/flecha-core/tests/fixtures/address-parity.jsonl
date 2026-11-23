@@ -9,8 +9,8 @@
 {"input":"\u2028https://host.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
 {"input":"\u00a0https://host.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
 {"input":"\u3000https://host.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
-{"input":"\u017fhttps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=%C5%BFhttps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust regex case folding recognizes this scheme spelling.","url":"\u017fhttps://host.example/p?token=x"}}
-{"input":"\u212ahttps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=%E2%84%AAhttps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust regex case folding recognizes this scheme spelling.","url":"\u212ahttps://host.example/p?token=x"}}
+{"input":"\u017fhttps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=%C5%BFhttps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust keeps a non-ASCII scheme local, avoiding browser fixup.","url":"about:blank"}}
+{"input":"\u212ahttps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=%E2%84%AAhttps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust keeps a non-ASCII scheme local, avoiding browser fixup.","url":"about:blank"}}
 {"input":"\thttps://host.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
 {"input":"\nhttps://host.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
 {"input":" https://host.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
@@ -57,8 +57,8 @@
 {"input":"ht\u2028tps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=ht%E2%80%A8tps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
 {"input":"ht\u00a0tps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=ht%C2%A0tps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
 {"input":"ht\u3000tps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=ht%E3%80%80tps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
-{"input":"ht\u017ftps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=ht%C5%BFtps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust regex case folding recognizes this scheme spelling.","url":"ht\u017ftps://host.example/p?token=x"}}
-{"input":"ht\u212atps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=ht%E2%84%AAtps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust regex case folding recognizes this scheme spelling.","url":"ht\u212atps://host.example/p?token=x"}}
+{"input":"ht\u017ftps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=ht%C5%BFtps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust keeps a non-ASCII scheme local, avoiding browser fixup.","url":"about:blank"}}
+{"input":"ht\u212atps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=ht%E2%84%AAtps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust keeps a non-ASCII scheme local, avoiding browser fixup.","url":"about:blank"}}
 {"input":"ht\ttps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=ht%09tps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
 {"input":"ht\ntps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=ht%0Atps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
 {"input":"ht tps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=ht%20tps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
@@ -81,8 +81,8 @@
 {"input":"https\u2028://host.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
 {"input":"https\u00a0://host.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
 {"input":"https\u3000://host.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
-{"input":"https\u017f://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=https%C5%BF%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust regex case folding recognizes this scheme spelling.","url":"https\u017f://host.example/p?token=x"}}
-{"input":"https\u212a://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=https%E2%84%AA%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust regex case folding recognizes this scheme spelling.","url":"https\u212a://host.example/p?token=x"}}
+{"input":"https\u017f://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=https%C5%BF%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust keeps a non-ASCII scheme local, avoiding browser fixup.","url":"about:blank"}}
+{"input":"https\u212a://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=https%E2%84%AA%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust keeps a non-ASCII scheme local, avoiding browser fixup.","url":"about:blank"}}
 {"input":"https\t://host.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
 {"input":"https\n://host.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
 {"input":"https ://host.example/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
@@ -157,8 +157,8 @@
 {"input":"https://host.example\u212a/p?token=x","tsUrl":"https://host.example\u212a/p?token=x","tsSuggestable":false}
 {"input":"https://host.example\t/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
 {"input":"https://host.example\n/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
-{"input":"https://host.example /p?token=x","tsUrl":"https://host.example /p?token=x","tsSuggestable":false}
-{"input":"https://host.example\u000b/p?token=x","tsUrl":"https://host.example\u000b/p?token=x","tsSuggestable":false}
+{"input":"https://host.example /p?token=x","tsUrl":"https://host.example /p?token=x","tsSuggestable":false,"rust":{"reason":"Rust validates the complete URL, so whitespace inside the authority keeps this input local.","url":"about:blank"}}
+{"input":"https://host.example\u000b/p?token=x","tsUrl":"https://host.example\u000b/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust validates the complete URL, so whitespace inside the authority keeps this input local.","url":"about:blank"}}
 {"input":"https://host.example\u1680/p?token=x","tsUrl":"https://host.example\u1680/p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
 {"input":"https://host.example\u034f/p?token=x","tsUrl":"https://host.example\u034f/p?token=x","tsSuggestable":false}
 {"input":"https://host.example\u115f/p?token=x","tsUrl":"https://host.example\u115f/p?token=x","tsSuggestable":false}
@@ -441,8 +441,8 @@
 {"input":"localhost\u2028:3000/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
 {"input":"localhost\u00a0:3000/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
 {"input":"localhost\u3000:3000/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
-{"input":"localhost\u017f:3000/p?token=x","tsUrl":"https://www.google.com/search?q=localhost%C5%BF%3A3000%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust regex case folding flags this host with a port and path.","url":"about:blank"}}
-{"input":"localhost\u212a:3000/p?token=x","tsUrl":"https://www.google.com/search?q=localhost%E2%84%AA%3A3000%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust regex case folding flags this host with a port and path.","url":"about:blank"}}
+{"input":"localhost\u017f:3000/p?token=x","tsUrl":"https://www.google.com/search?q=localhost%C5%BF%3A3000%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust keeps this host with a port and path local after IDNA normalization.","url":"about:blank"}}
+{"input":"localhost\u212a:3000/p?token=x","tsUrl":"https://www.google.com/search?q=localhost%E2%84%AA%3A3000%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust keeps this host with a port and path local after IDNA normalization.","url":"about:blank"}}
 {"input":"localhost\t:3000/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
 {"input":"localhost\n:3000/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
 {"input":"localhost :3000/p?token=x","tsUrl":"about:blank","tsSuggestable":false}
@@ -465,8 +465,8 @@
 {"input":"\u2028localhost:3000/p?token=x","tsUrl":"http://localhost:3000/p?token=x","tsSuggestable":false}
 {"input":"\u00a0localhost:3000/p?token=x","tsUrl":"http://localhost:3000/p?token=x","tsSuggestable":false}
 {"input":"\u3000localhost:3000/p?token=x","tsUrl":"http://localhost:3000/p?token=x","tsSuggestable":false}
-{"input":"\u017flocalhost:3000/p?token=x","tsUrl":"https://www.google.com/search?q=%C5%BFlocalhost%3A3000%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust regex case folding flags this host with a port and path.","url":"about:blank"}}
-{"input":"\u212alocalhost:3000/p?token=x","tsUrl":"https://www.google.com/search?q=%E2%84%AAlocalhost%3A3000%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust regex case folding flags this host with a port and path.","url":"about:blank"}}
+{"input":"\u017flocalhost:3000/p?token=x","tsUrl":"https://www.google.com/search?q=%C5%BFlocalhost%3A3000%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust keeps this host with a port and path local after IDNA normalization.","url":"about:blank"}}
+{"input":"\u212alocalhost:3000/p?token=x","tsUrl":"https://www.google.com/search?q=%E2%84%AAlocalhost%3A3000%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust keeps this host with a port and path local after IDNA normalization.","url":"about:blank"}}
 {"input":"\tlocalhost:3000/p?token=x","tsUrl":"http://localhost:3000/p?token=x","tsSuggestable":false}
 {"input":"\nlocalhost:3000/p?token=x","tsUrl":"http://localhost:3000/p?token=x","tsSuggestable":false}
 {"input":" localhost:3000/p?token=x","tsUrl":"http://localhost:3000/p?token=x","tsSuggestable":false}
@@ -561,8 +561,8 @@
 {"input":"\u2028file:///home/u/secret","tsUrl":"file:///home/u/secret","tsSuggestable":false}
 {"input":"\u00a0file:///home/u/secret","tsUrl":"file:///home/u/secret","tsSuggestable":false}
 {"input":"\u3000file:///home/u/secret","tsUrl":"file:///home/u/secret","tsSuggestable":false}
-{"input":"\u017ffile:///home/u/secret","tsUrl":"https://www.google.com/search?q=%C5%BFfile%3A%2F%2F%2Fhome%2Fu%2Fsecret","tsSuggestable":false,"rust":{"reason":"Rust regex case folding recognizes this scheme spelling.","url":"\u017ffile:///home/u/secret"}}
-{"input":"\u212afile:///home/u/secret","tsUrl":"https://www.google.com/search?q=%E2%84%AAfile%3A%2F%2F%2Fhome%2Fu%2Fsecret","tsSuggestable":false,"rust":{"reason":"Rust regex case folding recognizes this scheme spelling.","url":"\u212afile:///home/u/secret"}}
+{"input":"\u017ffile:///home/u/secret","tsUrl":"https://www.google.com/search?q=%C5%BFfile%3A%2F%2F%2Fhome%2Fu%2Fsecret","tsSuggestable":false,"rust":{"reason":"Rust keeps a non-ASCII scheme local, avoiding browser fixup.","url":"about:blank"}}
+{"input":"\u212afile:///home/u/secret","tsUrl":"https://www.google.com/search?q=%E2%84%AAfile%3A%2F%2F%2Fhome%2Fu%2Fsecret","tsSuggestable":false,"rust":{"reason":"Rust keeps a non-ASCII scheme local, avoiding browser fixup.","url":"about:blank"}}
 {"input":"\tfile:///home/u/secret","tsUrl":"file:///home/u/secret","tsSuggestable":false}
 {"input":"\nfile:///home/u/secret","tsUrl":"file:///home/u/secret","tsSuggestable":false}
 {"input":" file:///home/u/secret","tsUrl":"file:///home/u/secret","tsSuggestable":false}
@@ -609,8 +609,8 @@
 {"input":"\u2028http://intranet/p?token=x","tsUrl":"http://intranet/p?token=x","tsSuggestable":false}
 {"input":"\u00a0http://intranet/p?token=x","tsUrl":"http://intranet/p?token=x","tsSuggestable":false}
 {"input":"\u3000http://intranet/p?token=x","tsUrl":"http://intranet/p?token=x","tsSuggestable":false}
-{"input":"\u017fhttp://intranet/p?token=x","tsUrl":"https://www.google.com/search?q=%C5%BFhttp%3A%2F%2Fintranet%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust regex case folding recognizes this scheme spelling.","url":"\u017fhttp://intranet/p?token=x"}}
-{"input":"\u212ahttp://intranet/p?token=x","tsUrl":"https://www.google.com/search?q=%E2%84%AAhttp%3A%2F%2Fintranet%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust regex case folding recognizes this scheme spelling.","url":"\u212ahttp://intranet/p?token=x"}}
+{"input":"\u017fhttp://intranet/p?token=x","tsUrl":"https://www.google.com/search?q=%C5%BFhttp%3A%2F%2Fintranet%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust keeps a non-ASCII scheme local, avoiding browser fixup.","url":"about:blank"}}
+{"input":"\u212ahttp://intranet/p?token=x","tsUrl":"https://www.google.com/search?q=%E2%84%AAhttp%3A%2F%2Fintranet%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust keeps a non-ASCII scheme local, avoiding browser fixup.","url":"about:blank"}}
 {"input":"\thttp://intranet/p?token=x","tsUrl":"http://intranet/p?token=x","tsSuggestable":false}
 {"input":"\nhttp://intranet/p?token=x","tsUrl":"http://intranet/p?token=x","tsSuggestable":false}
 {"input":" http://intranet/p?token=x","tsUrl":"http://intranet/p?token=x","tsSuggestable":false}
@@ -657,8 +657,8 @@
 {"input":"\u2028ftp://h.example/p?token=x","tsUrl":"ftp://h.example/p?token=x","tsSuggestable":false}
 {"input":"\u00a0ftp://h.example/p?token=x","tsUrl":"ftp://h.example/p?token=x","tsSuggestable":false}
 {"input":"\u3000ftp://h.example/p?token=x","tsUrl":"ftp://h.example/p?token=x","tsSuggestable":false}
-{"input":"\u017fftp://h.example/p?token=x","tsUrl":"https://www.google.com/search?q=%C5%BFftp%3A%2F%2Fh.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust regex case folding recognizes this scheme spelling.","url":"\u017fftp://h.example/p?token=x"}}
-{"input":"\u212aftp://h.example/p?token=x","tsUrl":"https://www.google.com/search?q=%E2%84%AAftp%3A%2F%2Fh.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust regex case folding recognizes this scheme spelling.","url":"\u212aftp://h.example/p?token=x"}}
+{"input":"\u017fftp://h.example/p?token=x","tsUrl":"https://www.google.com/search?q=%C5%BFftp%3A%2F%2Fh.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust keeps a non-ASCII scheme local, avoiding browser fixup.","url":"about:blank"}}
+{"input":"\u212aftp://h.example/p?token=x","tsUrl":"https://www.google.com/search?q=%E2%84%AAftp%3A%2F%2Fh.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust keeps a non-ASCII scheme local, avoiding browser fixup.","url":"about:blank"}}
 {"input":"\tftp://h.example/p?token=x","tsUrl":"ftp://h.example/p?token=x","tsSuggestable":false}
 {"input":"\nftp://h.example/p?token=x","tsUrl":"ftp://h.example/p?token=x","tsSuggestable":false}
 {"input":" ftp://h.example/p?token=x","tsUrl":"ftp://h.example/p?token=x","tsSuggestable":false}
@@ -705,8 +705,8 @@
 {"input":"\u2028\u2028https://host.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
 {"input":"\u00a0\u00a0https://host.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
 {"input":"\u3000\u3000https://host.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
-{"input":"\u017f\u017fhttps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=%C5%BF%C5%BFhttps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust regex case folding recognizes this scheme spelling.","url":"\u017f\u017fhttps://host.example/p?token=x"}}
-{"input":"\u212a\u212ahttps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=%E2%84%AA%E2%84%AAhttps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust regex case folding recognizes this scheme spelling.","url":"\u212a\u212ahttps://host.example/p?token=x"}}
+{"input":"\u017f\u017fhttps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=%C5%BF%C5%BFhttps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust keeps a non-ASCII scheme local, avoiding browser fixup.","url":"about:blank"}}
+{"input":"\u212a\u212ahttps://host.example/p?token=x","tsUrl":"https://www.google.com/search?q=%E2%84%AA%E2%84%AAhttps%3A%2F%2Fhost.example%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Rust keeps a non-ASCII scheme local, avoiding browser fixup.","url":"about:blank"}}
 {"input":"\t\thttps://host.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
 {"input":"\n\nhttps://host.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
 {"input":"  https://host.example/p?token=x","tsUrl":"https://host.example/p?token=x","tsSuggestable":false}
@@ -729,8 +729,8 @@
 {"input":"\u2028HTTPS://HOST.EXAMPLE/P?TOKEN=X","tsUrl":"HTTPS://HOST.EXAMPLE/P?TOKEN=X","tsSuggestable":false}
 {"input":"\u00a0HTTPS://HOST.EXAMPLE/P?TOKEN=X","tsUrl":"HTTPS://HOST.EXAMPLE/P?TOKEN=X","tsSuggestable":false}
 {"input":"\u3000HTTPS://HOST.EXAMPLE/P?TOKEN=X","tsUrl":"HTTPS://HOST.EXAMPLE/P?TOKEN=X","tsSuggestable":false}
-{"input":"\u017fHTTPS://HOST.EXAMPLE/P?TOKEN=X","tsUrl":"https://www.google.com/search?q=%C5%BFHTTPS%3A%2F%2FHOST.EXAMPLE%2FP%3FTOKEN%3DX","tsSuggestable":false,"rust":{"reason":"Rust regex case folding recognizes this scheme spelling.","url":"\u017fHTTPS://HOST.EXAMPLE/P?TOKEN=X"}}
-{"input":"\u212aHTTPS://HOST.EXAMPLE/P?TOKEN=X","tsUrl":"https://www.google.com/search?q=%E2%84%AAHTTPS%3A%2F%2FHOST.EXAMPLE%2FP%3FTOKEN%3DX","tsSuggestable":false,"rust":{"reason":"Rust regex case folding recognizes this scheme spelling.","url":"\u212aHTTPS://HOST.EXAMPLE/P?TOKEN=X"}}
+{"input":"\u017fHTTPS://HOST.EXAMPLE/P?TOKEN=X","tsUrl":"https://www.google.com/search?q=%C5%BFHTTPS%3A%2F%2FHOST.EXAMPLE%2FP%3FTOKEN%3DX","tsSuggestable":false,"rust":{"reason":"Rust keeps a non-ASCII scheme local, avoiding browser fixup.","url":"about:blank"}}
+{"input":"\u212aHTTPS://HOST.EXAMPLE/P?TOKEN=X","tsUrl":"https://www.google.com/search?q=%E2%84%AAHTTPS%3A%2F%2FHOST.EXAMPLE%2FP%3FTOKEN%3DX","tsSuggestable":false,"rust":{"reason":"Rust keeps a non-ASCII scheme local, avoiding browser fixup.","url":"about:blank"}}
 {"input":"\tHTTPS://HOST.EXAMPLE/P?TOKEN=X","tsUrl":"HTTPS://HOST.EXAMPLE/P?TOKEN=X","tsSuggestable":false}
 {"input":"\nHTTPS://HOST.EXAMPLE/P?TOKEN=X","tsUrl":"HTTPS://HOST.EXAMPLE/P?TOKEN=X","tsSuggestable":false}
 {"input":" HTTPS://HOST.EXAMPLE/P?TOKEN=X","tsUrl":"HTTPS://HOST.EXAMPLE/P?TOKEN=X","tsSuggestable":false}
@@ -1016,3 +1016,8 @@
 {"input":"https://","tsUrl":"https://","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
 {"input":"https:///p?token=x","tsUrl":"https:///p?token=x","tsSuggestable":false,"rust":{"reason":"Rust rejects an invalid or empty HTTP authority.","url":"about:blank"}}
 {"input":"ht\ttps:///p?token=x","tsUrl":"https://www.google.com/search?q=ht%09tps%3A%2F%2F%2Fp%3Ftoken%3Dx","tsSuggestable":false,"rust":{"reason":"Keep explicit addresses with obscured schemes local.","url":"about:blank"}}
+{"input":"example.com../p?token=x","tsUrl":"about:blank","tsSuggestable":false,"note":"Only one DNS root dot is ignored. The extra dot leaves the path local."}
+{"input":"localhost..","tsUrl":"https://www.google.com/search?q=localhost..","tsSuggestable":false,"note":"Only one DNS root dot is ignored. A host with no path can fall back to search."}
+{"input":"ftp://","tsUrl":"ftp://","tsSuggestable":false,"rust":{"reason":"Rust requires an authority host for this scheme.","url":"about:blank"}}
+{"input":"ws://","tsUrl":"ws://","tsSuggestable":false,"rust":{"reason":"Rust requires an authority host for this scheme.","url":"about:blank"}}
+{"input":"wss://","tsUrl":"wss://","tsSuggestable":false,"rust":{"reason":"Rust requires an authority host for this scheme.","url":"about:blank"}}

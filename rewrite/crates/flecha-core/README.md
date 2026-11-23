@@ -10,9 +10,9 @@ Once a build ships, changing the snapshot format requires a schema version bump.
 
 `storage::load` returns a startup handle. `LoadedState::ready` exposes repaired state and the current-slot writer when there are no pending writes. `LoadedState::apply_recovery` saves the damaged copy before restoring the current slot, stops on failure, and returns the ready state on success. Call `ReadyState::started` after startup succeeds. A newer current schema blocks recovery. A newer last-good copy stays available to a newer reader, and a damaged current value is still set aside. Repairs assign distinct IDs to duplicate Spaces and folders while retaining their contents. Version 2 window memberships keyed by a duplicate Space ID stay with the first Space. The application owns the storage path, atomic writes, and error reporting.
 
-The reader validates JSON syntax and skips unknown fields throughout the snapshot without materializing their nested values. Legacy pinned folder children are part of the schema, so serde_json's normal nesting limit still applies to those trees. An overdeep legacy tree triggers recovery that preserves the original snapshot. Version 3 writes flat pin records.
+The reader validates JSON syntax and skips unknown fields without materializing their nested values. Legacy pin migration walks the input iteratively. Folders deeper than the old JSON depth limit are flattened into their deepest retained ancestor, and every tab keeps its order. The number of flattened folders is exposed by `migrate_legacy_with_repairs` and in `ReadyState::repairs`. This keeps the existing depth boundary without adding a parser dependency. Version 3 writes flat pin records.
 
-Saved scalar values repair independently. Strings replace lone UTF-16 surrogates with U+FFFD, and out-of-range numbers fall back through the field's existing repair rules.
+Saved scalar values repair independently. Strings and object keys replace lone UTF-16 surrogates with U+FFFD. If repaired keys collide, the last entry wins. Out-of-range numbers fall back through the field's existing repair rules.
 
 `import_spaces` merges or appends parsed Spaces, folders, favorites, splits, and archive entries in one transaction. It preserves folder depth. Source readers can flatten their own input before calling it. Like the Arc reader, it accepts HTTP and HTTPS URLs, and reports rejected tab and archive entries.
 
@@ -39,6 +39,6 @@ GPUI owns command-bar ranking across sources, Peeks, shortcut registration, loca
 - GPUI must honor a matching local JWT decode row on Enter before calling the generic resolver, which can otherwise classify the token as a search.
 - Environment switches apply to HTTP and HTTPS pages. A blob URL stays on its original origin.
 - The command bar treats malformed explicit HTTP and HTTPS input as invalid so its path, query, and fragment stay local.
+- GitHub issue shortcuts require a complete repository segment and fall back to GitHub search for ambiguous paths.
 
 Regenerate the committed address parity fixture from the repository root with `bun rewrite/crates/flecha-core/scripts/generate-address-fixture.ts`. The script records Chromium's current outputs and preserves documented Rust divergences for review.
-- GitHub issue shortcuts require a complete repository segment and fall back to GitHub search for ambiguous paths.

@@ -374,8 +374,12 @@ fn address_part(word: &str, alone: bool) -> bool {
         "view-source",
         "webcal",
     ];
-    if let Some(matched) =
-        re!(r"(?i)^([a-z][a-z0-9+.-]*):([^", js_space_chars!(), r"]?)").captures(word)
+    if let Some(matched) = re!(
+        r"^((?i-u:[a-z][a-z0-9+.-]*)):([^",
+        js_space_chars!(),
+        r"]?)"
+    )
+    .captures(word)
         && (alone
             || !matched[2].is_empty()
             || SCHEMES.contains(&matched[1].to_ascii_lowercase().as_str()))
@@ -417,7 +421,7 @@ fn address_part(word: &str, alone: bool) -> bool {
 }
 
 fn is_host(word: &str) -> bool {
-    re!(r"(?i)[.\[。．｡]|localhost").is_match(word)
+    re!(r"[.\[。．｡]|(?i-u:localhost)").is_match(word)
         && Url::parse(&format!("http://{word}")).is_ok_and(|url| match url.host() {
             Some(Host::Domain(host)) => host.contains('.') || host == "localhost",
             Some(Host::Ipv4(_) | Host::Ipv6(_)) => true,
@@ -767,7 +771,7 @@ fn auto_label(target: &EnvironmentTarget) -> bool {
 }
 
 fn without_scheme(url: &str) -> &str {
-    re!(r"(?i)^[a-z]+://")
+    re!(r"(?i-u:^[a-z]+://)")
         .find(url)
         .map_or(url, |scheme| &url[scheme.end()..])
 }

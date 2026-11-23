@@ -329,18 +329,9 @@ fn last_good_is_promoted_only_after_startup() {
 }
 
 #[test]
-fn unreadable_and_too_deep_state_recovers_without_losing_the_input() {
-    let depth = 20_000;
-    let pinned = format!(
-        "{}{}",
-        r#"{"kind":"folder","id":"f","children":["#.repeat(depth),
-        "]}".repeat(depth)
-    );
-    let deep = json!(format!(
-        r#"{{"spaces":[{{"id":"s","pinned":[{pinned}]}}],"tabs":{{}}}}"#
-    ));
+fn unreadable_state_recovers_without_losing_the_input() {
     let fallback = json!(V2);
-    for damaged in [json!("{\"spaces\": ["), json!(42), deep] {
+    for damaged in [json!("{\"spaces\": ["), json!(42)] {
         let mut loaded = load(Some(&damaged), Some(&fallback)).unwrap();
         assert!(loaded.ready().is_none());
         assert_eq!(
@@ -364,6 +355,136 @@ fn unreadable_and_too_deep_state_recovers_without_losing_the_input() {
     let first = first.ready().unwrap();
     assert_eq!(first.recovered, None);
     assert!(first.state.is_none() && first.started().is_none());
+}
+
+#[test]
+fn deep_legacy_pin_repair_keeps_tabs_in_order_and_reports_flattening() {
+    use flecha_core::storage::migrate_legacy_with_repairs;
+    use std::fmt::Write;
+
+    for (depth, flattened) in [(62, 1), (200, 139), (500, 439), (20_000, 19_939)] {
+        let mut pinned = String::new();
+        let mut tabs = serde_json::Map::new();
+        let mut expected = Vec::new();
+        // The 20,000-level case checks that traversing the input is stack-safe.
+        // Shallower cases exercise tabs on both sides of every nested folder.
+        let siblings = depth <= 500;
+        for level in 0..depth {
+            write!(pinned, r#"{{"kind":"folder","id":"f{level}","children":["#).unwrap();
+            if siblings {
+                let id = format!("before{level}");
+                write!(pinned, r#"{{"kind":"tab","tabId":"{id}"}},"#).unwrap();
+                tabs.insert(id.clone(), json!({"url":"https://example.test/before"}));
+                expected.push(TabId::new(id));
+            }
+        }
+        pinned.push_str(r#"{"kind":"tab","tabId":"leaf"}"#);
+        tabs.insert("leaf".into(), json!({"url":"https://example.test/leaf"}));
+        expected.push(TabId::new("leaf"));
+        for level in (0..depth).rev() {
+            if siblings {
+                let id = format!("after{level}");
+                write!(pinned, r#",{{"kind":"tab","tabId":"{id}"}}"#).unwrap();
+                tabs.insert(id.clone(), json!({"url":"https://example.test/after"}));
+                expected.push(TabId::new(id));
+            }
+            pinned.push_str("]}");
+        }
+        let saved = format!(
+            r#"{{"version":2,"tabs":{tabs},"spaces":[{{"id":"s","pinned":[{pinned}]}}]}}"#,
+            tabs = Value::Object(tabs)
+        );
+        let decoded = migrate_legacy_with_repairs(&saved).unwrap();
+        assert_eq!(
+            decoded.repairs.flattened_legacy_folders, flattened,
+            "depth {depth}"
+        );
+        assert_eq!(
+            decoded.state.spaces()[0].pinned_tabs(),
+            expected.iter().collect::<Vec<_>>(),
+            "depth {depth}"
+        );
+        let mut nodes = decoded.state.spaces()[0].pinned.as_slice();
+        let mut retained = 0;
+        while let Some(PinnedNode::Folder { children, .. }) = nodes
+            .iter()
+            .find(|node| matches!(node, PinnedNode::Folder { .. }))
+        {
+            retained += 1;
+            nodes = children;
+        }
+        assert_eq!(retained, depth - flattened, "depth {depth}");
+        assert!(
+            nodes.iter().any(
+                |node| matches!(node, PinnedNode::Tab { tab_id } if tab_id.as_str() == "leaf")
+            )
+        );
+        assert_eq!(
+            decode(&encode(&decoded.state).unwrap()).unwrap(),
+            decoded.state
+        );
+        if depth == 62 {
+            let mut loaded = load(Some(&json!(saved)), None).unwrap();
+            let ready = loaded.ready().expect("repair must leave the state usable");
+            assert_eq!(ready.repairs, decoded.repairs);
+            assert_eq!(ready.recovered, None);
+            assert_eq!(ready.state.as_ref(), Some(&decoded.state));
+        }
+    }
+}
+
+#[test]
+fn snapshot_keys_repair_surrogates_without_dropping_tabs() {
+    let raw = r#"{
+      "version":2, "unknown\ud800":[],
+      "tabs":{
+        "t\ud83d":{"url":"https://example.test/kept","title":"Kept","unknown\ude01":[]},
+        "other":{"url":"https://example.test/other","history":{"index":0,
+          "entries":[{"url":"https://example.test/other","title":"Entry","unknown\udc00":0}]}}
+      },
+      "spaces":[{"id":"s\udc00"}],
+      "windows":[{"id":"w","activeSpaceId":"s\udc00","spaces":{
+        "s\udc00":{"today":["t\ud83d","other"],"activeTabId":"t\ud83d","unknown\ud83d":[]}
+      }}]
+    }"#;
+    let state = migrate_legacy(raw).unwrap();
+    let repaired = TabId::new("t�");
+    assert_eq!(state.tab(&repaired).unwrap().title, "Kept");
+    assert_eq!(
+        state.focused_window().visible_tabs(),
+        std::slice::from_ref(&repaired)
+    );
+    assert!(state.tab(&TabId::new("other")).unwrap().history.is_some());
+}
+
+#[test]
+fn last_key_wins_when_surrogate_repair_collides() {
+    let raw = r#"{
+      "tabs":{
+        "t\ud83d":{"url":"https://example.test/first"},
+        "t\ufffd":{"url":"https://example.test/second"},
+        "t\ude00":{"url":"https://example.test/last"}
+      },
+      "spaces":[{"id":"s\ufffd"}],
+      "windows":[{"id":"w","activeSpaceId":"s\ufffd","spaces":{
+        "s\ud800":{"today":[]},
+        "s\ud801":{"today":["t\ud83d"],"activeTabId":"t\ud83d"}
+      }}],
+      "sitePermissions":{"example.test":{"camera\ud83d":"allow","camera\ude00":"block"}}
+    }"#;
+    let state = decode(raw).unwrap();
+    let repaired = TabId::new("t�");
+    assert_eq!(
+        state.tab(&repaired).unwrap().url,
+        "https://example.test/last"
+    );
+    assert_eq!(state.focused_window().visible_tabs(), [repaired]);
+    let permissions = &state.settings.site_permissions.as_ref().unwrap()["example.test"];
+    assert_eq!(permissions.len(), 1);
+    assert_eq!(
+        permissions["camera�"],
+        flecha_core::PermissionDecision::Block
+    );
 }
 
 fn recovery_writes(loaded: &mut flecha_core::storage::LoadedState) -> Vec<(Slot, Value)> {

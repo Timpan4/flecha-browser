@@ -33,6 +33,8 @@ pub type EpochMillis = i64;
 pub const ARCHIVE_LIMIT: usize = 500;
 /// Chromium's TabRestoreServiceHelper::kMaxEntries, as used in store.ts.
 pub const CLOSED_WINDOW_LIMIT: usize = 25;
+// Chromium's tab manager caps folder names in UTF-16 units.
+const FOLDER_NAME_LIMIT: usize = 80;
 pub(crate) const DEFAULT_SPACE_COLOR: &str = "#cdd9f7";
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -1198,7 +1200,7 @@ impl BrowserState {
         let Some(list) = self.pinned_list_mut(space, parent) else {
             return false;
         };
-        let name = truncate_utf16(trim_input(name), 80);
+        let name = truncate_utf16(trim_input(name), FOLDER_NAME_LIMIT);
         list.push(PinnedNode::Folder {
             id,
             name: if name.is_empty() { "New Folder" } else { name }.into(),
@@ -1220,8 +1222,13 @@ impl BrowserState {
         else {
             return false;
         };
-        if let Some(name) = name.map(trim_input).filter(|name| !name.is_empty()) {
-            *saved_name = name.into();
+        if let Some(name) = name {
+            let prefix: Vec<u16> = name.encode_utf16().take(FOLDER_NAME_LIMIT).collect();
+            let name = String::from_utf16_lossy(&prefix);
+            let name = trim_input(&name);
+            if !name.is_empty() {
+                *saved_name = name.into();
+            }
         }
         if let Some(open) = open {
             *saved_open = open;

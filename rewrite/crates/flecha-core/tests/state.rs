@@ -33,6 +33,35 @@ fn switching_space_claims_its_previously_hidden_selection() {
 }
 
 #[test]
+fn editing_a_folder_caps_its_name_in_utf16_units() {
+    let space = SpaceId::new("s");
+    let mut state = BrowserState::new(space.clone(), WindowId::new("w"));
+    let folder = FolderId::new("f");
+    assert!(state.add_folder(folder.clone(), "Original", &space, None));
+    let at_limit = "😀".repeat(40);
+    let split_pair = "x".repeat(79);
+    for (input, expected) in [
+        (format!("{at_limit}abc"), at_limit),
+        (format!("     {}", "y".repeat(100)), "y".repeat(75)),
+        (format!("{split_pair}😀"), format!("{split_pair}�")),
+        (
+            "\u{feff}\u{85}Work\u{85}\u{feff}".into(),
+            "\u{85}Work\u{85}".into(),
+        ),
+    ] {
+        assert!(state.edit_folder(&folder, Some(&input), Some(false)));
+        assert!(
+            matches!(
+                &state.space(&space).unwrap().pinned[0],
+                flecha_core::PinnedNode::Folder { name, open, .. }
+                    if name == &expected && !open
+            ),
+            "{input:?} should become {expected:?}"
+        );
+    }
+}
+
+#[test]
 fn close_below_keeps_its_anchor() {
     use flecha_core::{CloseToday, PinnedKey};
     let (s, w) = (SpaceId::new("s"), WindowId::new("w"));

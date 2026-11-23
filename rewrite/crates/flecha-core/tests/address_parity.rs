@@ -1,6 +1,9 @@
 use flecha_core::SearchEngine;
 use flecha_core::suggestions::{InputResolution, resolve_input, suggestable};
 use serde::Deserialize;
+use url::Url;
+
+const CORPUS: &str = include_str!("fixtures/address-parity.jsonl");
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -20,7 +23,7 @@ struct Divergence {
 
 #[test]
 fn command_bar_matches_the_saved_chromium_corpus() {
-    for line in include_str!("fixtures/address-parity.jsonl").lines() {
+    for line in CORPUS.lines() {
         let case: AddressCase = serde_json::from_str(line).unwrap();
         if let Some(divergence) = &case.rust {
             assert!(
@@ -65,5 +68,35 @@ fn command_bar_matches_the_saved_chromium_corpus() {
             "suggestable({:?})",
             case.input
         );
+    }
+}
+
+#[test]
+fn navigation_targets_parse_without_changing_scheme() {
+    fn check(input: &str) {
+        let InputResolution::Navigate(target) = resolve_input(input, SearchEngine::Google) else {
+            return;
+        };
+        let parsed = Url::parse(&target).unwrap_or_else(|error| {
+            panic!("input {input:?} navigated to invalid {target:?}: {error}")
+        });
+        let (scheme, _) = target
+            .split_once(':')
+            .expect("navigation includes an explicit scheme");
+        assert!(
+            scheme.eq_ignore_ascii_case(parsed.scheme()),
+            "{input:?}: {target:?}"
+        );
+    }
+
+    for line in CORPUS.lines() {
+        check(&serde_json::from_str::<AddressCase>(line).unwrap().input);
+    }
+    // An independent JSONL corpus can be replayed alongside the committed fixture.
+    if let Some(path) = std::env::var_os("FLECHA_ADDRESS_EXTRA_CORPUS") {
+        let input_file = std::fs::read_to_string(path).unwrap();
+        for line in input_file.lines() {
+            check(&serde_json::from_str::<String>(line).unwrap());
+        }
     }
 }

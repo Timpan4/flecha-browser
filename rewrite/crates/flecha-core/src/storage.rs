@@ -8,6 +8,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, value::RawValue};
 
+mod legacy_pins;
 mod snapshot;
 
 use crate::input_text::trim_input;
@@ -65,11 +66,32 @@ pub fn encode(state: &BrowserState) -> serde_json::Result<String> {
 }
 
 pub fn decode(json: &str) -> Result<BrowserState, DecodeError> {
+    decode_with_repairs(json).map(|decoded| decoded.state)
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SnapshotRepairs {
+    /// Legacy folders flattened into the deepest retained ancestor.
+    pub flattened_legacy_folders: usize,
+}
+
+#[derive(Debug)]
+pub struct DecodedSnapshot {
+    pub state: BrowserState,
+    pub repairs: SnapshotRepairs,
+}
+
+pub fn decode_with_repairs(json: &str) -> Result<DecodedSnapshot, DecodeError> {
     decode_document(json, false)
 }
 
 /// Migrates the JSON state value from a copied Chromium profile or export.
 pub fn migrate_legacy(copy: &str) -> Result<BrowserState, DecodeError> {
+    migrate_legacy_with_repairs(copy).map(|decoded| decoded.state)
+}
+
+/// Migrates a Chromium profile copy and reports folder flattening to the caller.
+pub fn migrate_legacy_with_repairs(copy: &str) -> Result<DecodedSnapshot, DecodeError> {
     decode_document(copy, true)
 }
 
@@ -114,7 +136,9 @@ pub fn set_aside_before_import(state: &BrowserState) -> serde_json::Result<Backu
 }
 
 pub fn state_before_import(saved: Option<&Value>) -> Result<Option<BrowserState>, DecodeError> {
-    saved.map_or(Ok(None), readable)
+    saved
+        .map_or(Ok(None), readable)
+        .map(|decoded| decoded.map(|decoded| decoded.state))
 }
 
 /// Startup state whose current-slot writer is gated on recovery.
@@ -137,6 +161,7 @@ pub struct LoadedState {
 pub struct ReadyState {
     pub state: Option<BrowserState>,
     pub recovered: Option<Recovery>,
+    pub repairs: SnapshotRepairs,
     last_good_after_start: Option<BackupWrite>,
 }
 
@@ -189,6 +214,7 @@ pub fn load(saved: Option<&Value>, last_good: Option<&Value>) -> Result<LoadedSt
         ready: ReadyState {
             state: None,
             recovered: None,
+            repairs: SnapshotRepairs::default(),
             last_good_after_start: None,
         },
         damaged_copy: None,
@@ -197,15 +223,16 @@ pub fn load(saved: Option<&Value>, last_good: Option<&Value>) -> Result<LoadedSt
     let Some(saved) = saved else {
         return Ok(loaded);
     };
-    if let Some(state) = readable(saved)? {
-        let repaired = Value::String(encode(&state).map_err(DecodeError::Json)?);
+    if let Some(decoded) = readable(saved)? {
+        let repaired = Value::String(encode(&decoded.state).map_err(DecodeError::Json)?);
         if last_good != Some(&repaired) && !last_good.is_some_and(needs_newer_reader) {
             loaded.ready.last_good_after_start = Some(BackupWrite {
                 slot: Slot::LastGood,
                 value: repaired,
             });
         }
-        loaded.ready.state = Some(state);
+        loaded.ready.state = Some(decoded.state);
+        loaded.ready.repairs = decoded.repairs;
         return Ok(loaded);
     }
 
@@ -215,7 +242,8 @@ pub fn load(saved: Option<&Value>, last_good: Option<&Value>) -> Result<LoadedSt
     });
     match last_good.map_or(Ok(None), readable) {
         Ok(Some(fallback)) => {
-            loaded.ready.state = Some(fallback);
+            loaded.ready.state = Some(fallback.state);
+            loaded.ready.repairs = fallback.repairs;
             loaded.ready.recovered = Some(Recovery::LastGood);
             loaded.recovered_current = Some(BackupWrite {
                 slot: Slot::Current,
@@ -233,27 +261,29 @@ pub fn load(saved: Option<&Value>, last_good: Option<&Value>) -> Result<LoadedSt
     Ok(loaded)
 }
 
-fn readable(value: &Value) -> Result<Option<BrowserState>, DecodeError> {
-    match value.as_str().map(decode) {
+fn readable(value: &Value) -> Result<Option<DecodedSnapshot>, DecodeError> {
+    match value.as_str().map(decode_with_repairs) {
         Some(Ok(state)) => Ok(Some(state)),
         Some(Err(error @ DecodeError::UnsupportedVersion(_))) => Err(error),
         _ => Ok(None),
     }
 }
 
-fn decode_document(json: &str, legacy_only: bool) -> Result<BrowserState, DecodeError> {
-    let fields: RawRecord<'_> = serde_json::from_str(json).map_err(DecodeError::Json)?;
+fn decode_document(json: &str, legacy_only: bool) -> Result<DecodedSnapshot, DecodeError> {
+    let fields = snapshot::read_record(json).map_err(DecodeError::Json)?;
     if let Some(version) = fields.get("version") {
         check_version(version, legacy_only)?;
     }
     let tabs = fields.get("tabs").ok_or(DecodeError::InvalidShape)?;
-    let tabs: BTreeMap<String, &RawValue> =
-        serde_json::from_str(tabs.get()).map_err(|_| DecodeError::InvalidShape)?;
+    let tabs = snapshot::read_record(tabs.get()).map_err(|_| DecodeError::InvalidShape)?;
     let tabs = tabs
         .into_iter()
         .filter_map(|(id, tab)| Some((TabId::new(id), repair_tab(tab)?)))
         .collect();
-    repair(snapshot::project(&fields)?, tabs).ok_or(DecodeError::InvalidShape)
+    let mut repairs = SnapshotRepairs::default();
+    let state =
+        repair(snapshot::project(&fields, &mut repairs)?, tabs).ok_or(DecodeError::InvalidShape)?;
+    Ok(DecodedSnapshot { state, repairs })
 }
 
 fn check_version(version: &RawValue, legacy_only: bool) -> Result<(), DecodeError> {
@@ -326,7 +356,7 @@ fn sign_and_digits(text: &str) -> (bool, &str) {
 fn needs_newer_reader(value: &Value) -> bool {
     let fields: Option<BTreeMap<String, &RawValue>> = value
         .as_str()
-        .and_then(|json| serde_json::from_str(json).ok());
+        .and_then(|json| snapshot::read_record(json).ok());
     fields
         .and_then(|fields| fields.get("version").copied())
         .is_some_and(|version| {
@@ -460,7 +490,7 @@ fn raw_field<T: DeserializeOwned>(raw: &RawRecord<'_>, key: &str) -> Option<T> {
 fn repair_tab(raw: &RawValue) -> Option<Tab> {
     // Read only whitelisted fields. RawValue skips unknown nested data without
     // building a recursive tree or hitting the Value deserializer's depth limit.
-    let raw: RawRecord<'_> = serde_json::from_str(raw.get()).ok()?;
+    let raw = snapshot::read_record(raw.get()).ok()?;
     let mut tab = Tab::new(raw_field::<String>(&raw, "url")?, 0);
     if let Some(title) = raw_field(&raw, "title") {
         tab.title = title;
@@ -482,12 +512,13 @@ fn repair_tab(raw: &RawValue) -> Option<Tab> {
 }
 
 fn repair_history(raw: &RawValue) -> Option<crate::TabHistory> {
-    let saved: RawRecord<'_> = serde_json::from_str(raw.get()).ok()?;
+    let saved = snapshot::read_record(raw.get()).ok()?;
     let index = raw_field(&saved, "index")?;
-    let entries: Vec<RawRecord<'_>> = serde_json::from_str(saved.get("entries")?.get()).ok()?;
+    let entries: Vec<&RawValue> = serde_json::from_str(saved.get("entries")?.get()).ok()?;
     let entries = entries
         .into_iter()
         .map(|entry| {
+            let entry = snapshot::read_record(entry.get()).ok()?;
             if entry
                 .get("pageState")
                 .is_some_and(|value| !value.get().starts_with('"'))
@@ -516,28 +547,14 @@ fn repair_space(
         color: field(raw, "color").unwrap_or_else(|| DEFAULT_SPACE_COLOR.into()),
         isolated: field(raw, "isolated").unwrap_or_default(),
         pinned_collapsed: field(raw, "pinnedCollapsed").unwrap_or_default(),
-        pinned: if let Some(nested) = raw.get("pinned").filter(|value| value.is_array()) {
-            repair_pins(Some(nested), folders, claim)
-        } else {
-            repair_flat_pins(raw.get("pinnedFlat"), folders, claim)
-        },
+        pinned: repair_flat_pins(
+            raw.get("pinned")
+                .filter(|value| value.is_array())
+                .or_else(|| raw.get("pinnedFlat")),
+            folders,
+            claim,
+        ),
     }
-}
-
-fn repair_pins(
-    raw: Option<&Value>,
-    folders: &mut RecoveredIds<'_>,
-    claim: &mut impl FnMut(&Value) -> Option<TabId>,
-) -> Vec<PinnedNode> {
-    list(raw)
-        .filter_map(|value| {
-            let mut node = repair_pin(value, folders, claim)?;
-            if let PinnedNode::Folder { children, .. } = &mut node {
-                *children = repair_pins(value.get("children"), folders, claim);
-            }
-            Some(node)
-        })
-        .collect()
 }
 
 fn repair_flat_pins(
@@ -617,7 +634,6 @@ fn collect_folder_ids<'a>(raw: Option<&'a Value>, ids: &mut BTreeSet<&'a str>) {
             && let Some(id) = node.get("id").and_then(Value::as_str)
         {
             ids.insert(id);
-            collect_folder_ids(node.get("children"), ids);
         }
     }
 }

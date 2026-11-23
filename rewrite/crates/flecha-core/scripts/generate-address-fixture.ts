@@ -1,6 +1,7 @@
 
 import { suggestable } from '../../../../chromium/shell/lib/suggest';
 import { resolveInput } from '../../../../chromium/shell/lib/url';
+import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 
 const divergenceSchema = z.strictObject({ reason: z.string().min(1), url: z.string().optional(), suggestable: z.boolean().optional() });
@@ -9,6 +10,7 @@ const addressCaseSchema = z.strictObject({
   input: z.string(),
   tsUrl: z.string(),
   tsSuggestable: z.boolean(),
+  note: z.string().min(1).optional(),
   rust: divergenceSchema.optional(),
 });
 
@@ -33,6 +35,11 @@ const templates = [
 
 const inputs = new Set<string>();
 
+const notes = new Map([
+  ['example.com../p?token=x', 'Only one DNS root dot is ignored. The extra dot leaves the path local.'],
+  ['localhost..', 'Only one DNS root dot is ignored. A host with no path can fall back to search.'],
+]);
+
 for (const t of templates) for (const c of chars) inputs.add(t.replaceAll('{c}', c));
 
 for (const t of templates) inputs.add(t.replaceAll('{c}', ''));
@@ -54,22 +61,32 @@ for (const input of [
   'ht\ttps:///p?token=x',
 ]) inputs.add(input);
 
-const fixture = Bun.file(new URL('../tests/fixtures/address-parity.jsonl', import.meta.url));
+for (const input of [...notes.keys(), 'ftp://', 'ws://', 'wss://']) inputs.add(input);
+
+const fixturePath = fileURLToPath(new URL('../tests/fixtures/address-parity.jsonl', import.meta.url));
+const fixture = Bun.file(fixturePath);
 const divergences = new Map<string, Divergence>();
 
 if (await fixture.exists()) {
-  for (const line of (await fixture.text()).split('\n').filter(Boolean)) {
-    const prior = addressCaseSchema.parse(JSON.parse(line));
+  for (const [index, line] of (await fixture.text()).split('\n').entries()) {
+    if (!line) continue;
 
-    if (prior.rust) divergences.set(prior.input, prior.rust);
+    try {
+      const prior = addressCaseSchema.parse(JSON.parse(line));
+
+      if (prior.rust) divergences.set(prior.input, prior.rust);
+    } catch (cause) {
+      throw new Error(`${fixturePath}:${index + 1}: invalid address fixture row`, { cause });
+    }
   }
 }
 
 const rows = Array.from(inputs, (input): AddressCase => {
   const rust = divergences.get(input);
+  const note = notes.get(input);
   divergences.delete(input);
 
-  return { input, tsUrl: resolveInput(input, 'google'), tsSuggestable: suggestable(input), ...(rust && { rust }) };
+  return { input, tsUrl: resolveInput(input, 'google'), tsSuggestable: suggestable(input), ...(note && { note }), ...(rust && { rust }) };
 });
 
 if (divergences.size) throw new Error('A documented Rust divergence is missing from the corpus');

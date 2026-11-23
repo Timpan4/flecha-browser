@@ -2,7 +2,7 @@ use serde::Deserialize;
 use serde::de::{DeserializeSeed, Error, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Value, value::RawValue};
 
-use super::{DecodeError, RawRecord};
+use super::{DecodeError, RawRecord, SnapshotRepairs, legacy_pins};
 
 #[derive(Clone, Copy)]
 enum Shape {
@@ -100,21 +100,33 @@ const SNAPSHOT_FIELDS: &[(&str, Shape)] = &[
     ("sitePermissions", Dictionary(&Dictionary(&Scalar))),
 ];
 
-pub(super) fn project(fields: &RawRecord<'_>) -> Result<Map<String, Value>, DecodeError> {
+pub(super) fn project(
+    fields: &RawRecord<'_>,
+    repairs: &mut SnapshotRepairs,
+) -> Result<Map<String, Value>, DecodeError> {
     // IgnoredAny scans unknown subtrees without materializing them.
     SNAPSHOT_FIELDS
         .iter()
         .filter_map(|&(key, shape)| Some((key, shape, fields.get(key)?)))
-        .map(|(key, shape, raw)| Ok((key.into(), shape.project(raw).map_err(DecodeError::Json)?)))
+        .map(|(key, shape, raw)| {
+            let field = Projection { shape, repairs };
+            Ok((key.into(), field.project(raw).map_err(DecodeError::Json)?))
+        })
         .collect()
 }
 
-impl Shape {
+struct Projection<'a> {
+    shape: Shape,
+    repairs: &'a mut SnapshotRepairs,
+}
+
+impl Projection<'_> {
     fn project(self, raw: &RawValue) -> serde_json::Result<Value> {
-        match (self, raw.get().as_bytes().first()) {
+        match (self.shape, raw.get().as_bytes().first()) {
             (Scalar, _) => Ok(scalar(raw)),
-            // The enclosing spaces array and Space record count toward JSON depth.
-            (LegacyPins, _) => legacy_pins(raw, 2),
+            (LegacyPins, _) => {
+                legacy_pins::project(raw, &mut self.repairs.flattened_legacy_folders)
+            }
             (Array(_), Some(b'[')) | (Record(_) | Dictionary(_), Some(b'{')) => {
                 let mut deserializer = serde_json::Deserializer::from_str(raw.get());
                 serde::Deserializer::deserialize_any(&mut deserializer, self)
@@ -126,7 +138,7 @@ impl Shape {
     }
 }
 
-impl<'de> DeserializeSeed<'de> for Shape {
+impl<'de> DeserializeSeed<'de> for Projection<'_> {
     type Value = Value;
 
     fn deserialize<D: serde::Deserializer<'de>>(self, deserializer: D) -> Result<Value, D::Error> {
@@ -136,89 +148,71 @@ impl<'de> DeserializeSeed<'de> for Shape {
 }
 
 pub(super) fn scalar(raw: &RawValue) -> Value {
+    scalar_text(raw.get())
+}
+
+pub(super) fn scalar_text(raw: &str) -> Value {
     // Preserve the wrong container type for the repair checks. In particular, a
     // malformed shortcut must not turn into null, which means an explicit unbind.
-    match raw.get().as_bytes().first() {
+    match raw.as_bytes().first() {
         Some(b'{') => Value::Object(Map::new()),
         Some(b'[') => Value::Array(Vec::new()),
-        Some(b'"') => serde_json::from_str::<String>(raw.get())
+        Some(b'"') => serde_json::from_str::<String>(raw)
             .or_else(|_| lossy_string(raw))
             .map_or_else(|_| Value::Object(Map::new()), Value::String),
-        _ => serde_json::from_str(raw.get()).unwrap_or_else(|_| Value::Object(Map::new())),
+        _ => serde_json::from_str(raw).unwrap_or_else(|_| Value::Object(Map::new())),
     }
 }
 
-fn lossy_string(raw: &RawValue) -> serde_json::Result<String> {
-    struct LossyString;
+#[derive(Eq, Ord, PartialEq, PartialOrd)]
+struct SavedKey(String);
 
-    impl Visitor<'_> for LossyString {
-        type Value = String;
-
-        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str("a JSON string")
-        }
-
-        fn visit_bytes<E>(self, bytes: &[u8]) -> Result<String, E> {
-            let mut bytes = bytes.to_vec();
-            // serde_json's byte reader decodes valid pairs and represents each lone
-            // UTF-16 surrogate as one WTF-8 triplet. Replace each triplet once.
-            for start in 0..bytes.len().saturating_sub(2) {
-                let triplet = &mut bytes[start..start + 3];
-                if matches!(triplet, [0xed, 0xa0..=0xbf, 0x80..=0xbf]) {
-                    triplet.copy_from_slice("\u{fffd}".as_bytes());
-                }
-            }
-            Ok(String::from_utf8_lossy(&bytes).into_owned())
-        }
+impl<'de> Deserialize<'de> for SavedKey {
+    fn deserialize<D: serde::Deserializer<'de>>(input: D) -> Result<Self, D::Error> {
+        input.deserialize_bytes(SavedString).map(Self)
     }
-
-    let mut deserializer = serde_json::Deserializer::from_str(raw.get());
-    serde::Deserializer::deserialize_bytes(&mut deserializer, LossyString)
 }
 
-fn legacy_pins<E: Error>(raw: &RawValue, parent_depth: usize) -> Result<Value, E> {
-    // Preserve serde_json's default recursion limit for the legacy nested format.
-    // RawValue defers the check so only real folder children are counted.
-    const JSON_RECURSION_LIMIT: usize = 128;
-    if !raw.get().starts_with('[') {
-        return Ok(Value::Null);
+struct SavedString;
+
+impl Visitor<'_> for SavedString {
+    type Value = String;
+
+    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("a JSON string")
     }
-    let array_depth = parent_depth + 1;
-    if array_depth >= JSON_RECURSION_LIMIT {
-        return Err(E::custom(
-            "legacy pin tree exceeds the JSON recursion limit",
-        ));
-    }
-    let nodes: Vec<&RawValue> = serde_json::from_str(raw.get()).map_err(E::custom)?;
-    let mut projected = Vec::new();
-    for node in nodes {
-        let Ok(record) = serde_json::from_str::<RawRecord<'_>>(node.get()) else {
-            continue;
-        };
-        let depth = array_depth + 1;
-        if depth >= JSON_RECURSION_LIMIT {
-            return Err(E::custom(
-                "legacy pin tree exceeds the JSON recursion limit",
-            ));
+
+    fn visit_bytes<E>(self, bytes: &[u8]) -> Result<String, E> {
+        if let Ok(text) = std::str::from_utf8(bytes) {
+            return Ok(text.into());
         }
-        let mut fields = Map::new();
-        for key in ["id", "kind", "tabId", "name", "open"] {
-            if let Some(value) = record.get(key) {
-                fields.insert(key.into(), scalar(value));
+        let mut bytes = bytes.to_vec();
+        // serde_json's byte reader decodes valid pairs and represents each lone
+        // UTF-16 surrogate as one WTF-8 triplet. Replace each triplet once.
+        for start in 0..bytes.len().saturating_sub(2) {
+            let triplet = &mut bytes[start..start + 3];
+            if matches!(triplet, [0xed, 0xa0..=0xbf, 0x80..=0xbf]) {
+                triplet.copy_from_slice("\u{fffd}".as_bytes());
             }
         }
-        if fields.get("kind").and_then(Value::as_str) == Some("folder")
-            && fields.get("id").is_some_and(Value::is_string)
-            && let Some(children) = record.get("children")
-        {
-            fields.insert("children".into(), legacy_pins::<E>(children, depth)?);
-        }
-        projected.push(Value::Object(fields));
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
     }
-    Ok(Value::Array(projected))
 }
 
-impl<'de> Visitor<'de> for Shape {
+pub(super) fn lossy_string(json: &str) -> serde_json::Result<String> {
+    let mut deserializer = serde_json::Deserializer::from_str(json);
+    serde::Deserializer::deserialize_bytes(&mut deserializer, SavedString)
+}
+
+pub(super) fn read_record(json: &str) -> serde_json::Result<RawRecord<'_>> {
+    let fields: std::collections::BTreeMap<SavedKey, &RawValue> = serde_json::from_str(json)?;
+    Ok(fields
+        .into_iter()
+        .map(|(SavedKey(key), value)| (key, value))
+        .collect())
+}
+
+impl<'de> Visitor<'de> for Projection<'_> {
     type Value = Value;
 
     fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -227,8 +221,8 @@ impl<'de> Visitor<'de> for Shape {
 
     fn visit_map<A: MapAccess<'de>>(self, mut input: A) -> Result<Value, A::Error> {
         let mut result = Map::new();
-        while let Some(key) = input.next_key::<String>()? {
-            let shape = match self {
+        while let Some(SavedKey(key)) = input.next_key()? {
+            let shape = match self.shape {
                 Dictionary(shape) => Some(*shape),
                 Record(fields) => fields
                     .iter()
@@ -236,7 +230,11 @@ impl<'de> Visitor<'de> for Shape {
                 _ => None,
             };
             if let Some(shape) = shape {
-                result.insert(key, input.next_value_seed(shape)?);
+                let value = input.next_value_seed(Projection {
+                    shape,
+                    repairs: self.repairs,
+                })?;
+                result.insert(key, value);
             } else {
                 input.next_value::<IgnoredAny>()?;
             }
@@ -246,8 +244,11 @@ impl<'de> Visitor<'de> for Shape {
 
     fn visit_seq<A: SeqAccess<'de>>(self, mut input: A) -> Result<Value, A::Error> {
         let mut result = Vec::new();
-        if let Array(shape) = self {
-            while let Some(value) = input.next_element_seed(*shape)? {
+        if let Array(shape) = self.shape {
+            while let Some(value) = input.next_element_seed(Projection {
+                shape: *shape,
+                repairs: self.repairs,
+            })? {
                 result.push(value);
             }
         } else {
