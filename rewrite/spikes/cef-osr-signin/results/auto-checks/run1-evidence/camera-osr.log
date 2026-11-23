@@ -1,0 +1,21 @@
+xvfb pid 3218953 display :1
+app pid 3218955
+CELL	6	osr	pass	auto, Xvfb, fake camera device: prompt: [permission 1] answered with allow 1; the page got one video track
+screenshot <scratch>/c3/screenshot.png
+-- app log
+[3218959:3218982:1123/194039.617369:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3218959:3218982:1123/194039.640477:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3218959:3218982:1123/194039.640496:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3218959:3218982:1123/194039.640504:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+commands: go <url> | back | forward | reload | print | pdf [path] | allow <id> | deny <id> | quit
+[browser] created id=1 open=1
+[3218959:3218982:1123/194039.674273:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3218959:3218982:1123/194039.674285:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3218959:3218959:1123/194039.675504:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.Properties.GetAll: object_path= /org/freedesktop/UPower/devices/DisplayDevice: unknown error type: 
+[console] INPUT storage loads 1 (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[load-end] file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html
+[console] INPUT focus camera (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT camera requested (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[permission 1] file:/// requests media access (camera; mask 0x2). Type `allow 1` or `deny 1` and press Enter.
+[console] INPUT camera granted 1 (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[3218959:3218959:1123/194040.438249:ERROR:content/common/zygote/zygote_communication_linux.cc:318] Failed to send GetTerminationStatus message to zygote: Broken pipe (32)

@@ -1,0 +1,77 @@
+xvfb pid 3491307 display :1
+app pid 3491309
+CELL	7	flecha	pass	auto, Xvfb, keyboard only: Ctrl+P opened the print preview; Return (Save) and a typed path in the Save File dialog wrote a PDF containing the page text
+screenshot <scratch>/c25/screenshot.png
+-- app log
+[load-end] flecha
+[3491317:3491334:1123/200651.825386:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3491317:3491334:1123/200651.856545:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3491317:3491334:1123/200651.856623:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3491317:3491334:1123/200651.856632:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3491317:3491317:1123/200651.873367:WARNING:chrome/browser/signin/account_consistency_mode_manager.cc:74] Desktop Identity Consistency cannot be enabled as no OAuth client ID and client secret have been configured.
+[3491317:3491317:1123/200651.910394:WARNING:ui/aura/window.cc:1514] StackChildLayerRelativeTo called with unmanaged layer(s). child=WebContentsViewAura child_managed=0 target=WebContentsViewAura target_managed=0
+[3491317:3491317:1123/200651.910414:WARNING:ui/aura/window.cc:1514] StackChildLayerRelativeTo called with unmanaged layer(s). child=WebContentsViewAura child_managed=0 target=WebContentsViewAura target_managed=0
+[3491317:3491317:1123/200651.914083:WARNING:device/bluetooth/dbus/bluez_dbus_manager.cc:209] Floss manager service not available, cannot set Floss enable/disable.
+[3491317:3491317:1123/200651.918164:WARNING:ui/aura/window.cc:1514] StackChildLayerRelativeTo called with unmanaged layer(s). child=WebContentsViewAura child_managed=0 target=WebContentsViewAura target_managed=0
+[3491317:3491317:1123/200651.918199:WARNING:ui/aura/window.cc:1514] StackChildLayerRelativeTo called with unmanaged layer(s). child=WebContentsViewAura child_managed=0 target=WebContentsViewAura target_managed=0
+[3491317:3491317:1123/200651.918210:WARNING:ui/aura/window.cc:1514] StackChildLayerRelativeTo called with unmanaged layer(s). child=WebContentsViewAura child_managed=0 target=WebContentsViewAura target_managed=0
+[3491317:3491334:1123/200651.925308:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3491317:3491334:1123/200651.925329:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3491317:3491317:1123/200651.929056:WARNING:dbus/property.cc:94] Failed to connect to PropertiesChangedsignal.
+[3491317:3491317:1123/200651.929069:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.Properties.GetAll: object_path= /org/freedesktop/UPower/devices/DisplayDevice: unknown error type: 
+[3491317:3491317:1123/200651.929071:WARNING:dbus/property.cc:174] GetAll request failed for: org.freedesktop.UPower.Device
+[3491317:3491317:1123/200651.938894:WARNING:ui/base/idle/idle_linux.cc:111] None of the known D-Bus ScreenSaver services could be used.
+[3491357:3491357:1123/200651.939181:WARNING:ui/gfx/linux/gbm_support_x11.cc:48] dri3 extension not supported.
+[3491626:3491626:1123/200652.079591:ERROR:printing/backend/print_backend_cups.cc:199] CUPS: Error getting default printer: Bad file descriptor
+[3491317:3491317:1123/200652.079721:ERROR:components/device_event_log/device_event_log_impl.cc:211] [20:06:52.079] Printer: local_printer_handler_default.cc:286 Failure getting default printer via service, result: kFailed
+invoking IsSupported() failed for remote volume monitor with dbus name org.gtk.vfs.UDisks2VolumeMonitor:: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.gtk.vfs.UDisks2VolumeMonitor was not provided by any .service files (g-dbus-error-quark, 2)
+
+(chrome:3491317): dconf-WARNING **: 20:06:52.667: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(chrome:3491317): dconf-WARNING **: 20:06:52.674: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(chrome:3491317): dconf-WARNING **: 20:06:52.691: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(chrome:3491317): dconf-WARNING **: 20:06:52.707: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(chrome:3491317): dconf-WARNING **: 20:06:52.724: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(chrome:3491317): dconf-WARNING **: 20:06:52.740: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(chrome:3491317): dconf-WARNING **: 20:06:52.756: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(chrome:3491317): dconf-WARNING **: 20:06:52.773: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(chrome:3491317): dconf-WARNING **: 20:06:52.789: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(chrome:3491317): dconf-WARNING **: 20:06:52.805: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(chrome:3491317): dconf-WARNING **: 20:06:52.822: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(chrome:3491317): dconf-WARNING **: 20:06:52.838: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(chrome:3491317): dconf-WARNING **: 20:06:52.855: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(chrome:3491317): dconf-WARNING **: 20:06:52.871: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(chrome:3491317): dconf-WARNING **: 20:06:52.886: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(chrome:3491317): dconf-WARNING **: 20:06:52.903: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(chrome:3491317): dconf-WARNING **: 20:06:52.919: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(chrome:3491317): dconf-WARNING **: 20:06:52.936: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(chrome:3491317): dconf-WARNING **: 20:06:52.952: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(chrome:3491317): dconf-WARNING **: 20:06:53.071: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(chrome:3491317): dconf-WARNING **: 20:06:54.087: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(chrome:3491317): dconf-WARNING **: 20:06:54.104: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(chrome:3491317): dconf-WARNING **: 20:06:54.121: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(chrome:3491317): dconf-WARNING **: 20:06:54.567: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(chrome:3491317): dconf-WARNING **: 20:06:54.567: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files

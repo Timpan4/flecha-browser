@@ -1,0 +1,32 @@
+xvfb pid 3284688 display :1
+app pid 3284691
+remote requests: 6; [blocked] lines: 0; go commands refused: 0
+remote: GET /fetch
+remote: GET /img
+remote: GET /redirected
+remote: GET /frame
+remote: GET /navigate
+remote: GET /navigate-redirected
+CELL	guard-control	chrome	pass	auto, Xvfb, no --fake-camera: all six requests reached 127.0.0.2, so the guarded run's 0 is the guard's doing
+screenshot <scratch>/c20/screenshot.png
+-- app log
+[3284695:3284719:1123/194822.504507:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3284695:3284719:1123/194822.544490:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3284695:3284719:1123/194822.544514:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3284695:3284719:1123/194822.544524:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[browser] created id=1 open=1
+[3284695:3284719:1123/194822.606069:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3284695:3284719:1123/194822.606085:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3284695:3284695:1123/194822.609900:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.Properties.GetAll: object_path= /org/freedesktop/UPower/devices/DisplayDevice: unknown error type: 
+[3284820:9:1123/194822.618841:ERROR:gpu/ipc/client/command_buffer_proxy_impl.cc:277] ContextResult::kTransientFailure: Failed to send GpuControl.CreateCommandBuffer.
+[console] INPUT storage loads 1 (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[load-end] file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html
+[console] INPUT keydown Control ControlLeft 17 ctrl true (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown l KeyL 76 ctrl true (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT window blur (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[load-end] http://127.0.0.1:44073
+Fontconfig error: Cannot load default config file: File not found
+[load-error] main_frame=true code=Errorcode(ERR_HTTP_RESPONSE_CODE_FAILURE) ERR_HTTP_RESPONSE_CODE_FAILURE http://127.0.0.2:45663
+[load-end] http://127.0.0.2:45663
+[load-error] main_frame=true code=Errorcode(ERR_HTTP_RESPONSE_CODE_FAILURE) ERR_HTTP_RESPONSE_CODE_FAILURE http://127.0.0.2:45663
+[load-end] http://127.0.0.2:45663

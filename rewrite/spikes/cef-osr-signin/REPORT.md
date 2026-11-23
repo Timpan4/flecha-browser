@@ -13,8 +13,9 @@ Plan: [docs/cef-gpui-rewrite-plan.md](../../../docs/cef-gpui-rewrite-plan.md), s
   - Chrome-mode tab handling.
 
   Results are in [Automated results](#automated-results).
-- The sign-in gate (checks 1 to 7) is **not run**. It needs the owner and a purpose-made Google account. The checklist is in [Manual checklist](#manual-checklist-for-the-owner).
-- Nothing in the automated results blocks the manual run. Both modes present the same identity to pages: `navigator.webdriver` false, CEF's default user agent, `Chromium` and `Not.A/Brand` brands with no `Google Chrome` brand. Both run fully sandboxed. The Web Store offers "Add to Chrome" in both modes, next to an "Install Chrome" button (see [Web Store](#web-store)).
+- Checks 0 and 4 to 7 of the sign-in gate now run automatically on Xvfb in both modes and in today's Flecha (`scripts/auto-checks.sh`, see [Checklist rows on Xvfb](#checklist-rows-on-xvfb)). In OSR, typing, the camera prompt, print and password fill pass. The Web Store install crashes the browser process or installs nothing, the content script did not run in the recorded runs, no password save is offered, and paste from the X clipboard fails. The Chrome-style control passes everything except the extension popup (4c), which needs Chrome's own toolbar.
+- Checks 1 to 3, Google sign-in, are **not run**. They need the owner and a purpose-made Google account. The shortened checklist is in [Manual checklist](#manual-checklist-for-the-owner).
+- Nothing in the automated results blocks the manual sign-in run. Both modes present the same identity to pages: `navigator.webdriver` false, CEF's default user agent, `Chromium` and `Not.A/Brand` brands with no `Google Chrome` brand. Both run fully sandboxed. The Web Store offers "Add to Chrome" in both modes, next to an "Install Chrome" button (see [Web Store](#web-store)).
 
 ## What the app is
 
@@ -204,8 +205,8 @@ The second verifier's probe, run with default flags against this clone's build (
 | `chrome://sandbox` | Namespace layer-1 sandbox, PID and network namespaces, seccomp-BPF with TSYNC: "You are adequately sandboxed." | same |
 | Self-check verdict (`pass`, exit status) | `true`, 0 | `true`, 0 |
 | /proc: renderer-type processes | seccomp mode 2, `NoNewPrivs` 1, own user, PID and network namespaces | same |
-| /proc: processes without seccomp | browser, network service (`--utility-sub-type=network.mojom.NetworkService`), zygote helpers; Chromium's normal Linux layout | same |
-| Forbidden switches in any process command line (`--remote-debugging-*`, `--enable-automation`, `--headless`, `--no-sandbox` and other sandbox-off switches, `--user-agent`, `--disable-web-security`, `--ignore-certificate-errors`, `--use-mock-keychain`, `--test-type`) | none; process scan complete, no read errors | same |
+| /proc: processes without seccomp | browser, network service (`--utility-sub-type=network.mojom.NetworkService`), zygote helpers; Chromium's normal Linux layout. One zygote runs as `--type=zygote --no-zygote-sandbox`: Chromium starts it that way for processes that run unsandboxed, so the audit accepts that switch on a `--type=zygote` process only | same |
+| Forbidden switches in any process command line (`--remote-debugging-*`, `--enable-automation`, `--headless`, `--no-sandbox`, `--disable-gpu-sandbox`, `--no-zygote-sandbox` and other sandbox-off switches, `--user-agent`, `--disable-web-security`, `--ignore-certificate-errors`, `--use-mock-keychain`, `--test-type`, fake media devices) | none; process scan complete, no read errors. Rerun on this branch's binary with the longer list: both modes pass | same |
 | Profile path with `#`, `%20` and a space | the page step loaded `…/pro%23file%20%2520/flecha-selfcheck.html` (the percent-encoded URL). The report shows it decoded, `…/pro#file %20/flecha-selfcheck.html`, because it contained a home path that redaction replaced | same |
 
 Switches on the browser process (from `chrome://version`, identical in both modes): `--lang=en-US --resources-dir-path=… --locales-dir-path=… --disable-signin-promo-on-avatar-pill-for-testing --disable-features=GlicActorUi,AutofillActorMode,LensOverlay,KillOnInvalidNavigationHeaders --ozone-platform=x11`. CEF adds them itself; the two `-dir-path` switches come from the app's `resources_dir_path` and `locales_dir_path` settings. None of them is visible to pages. Judging only by its name, `--disable-signin-promo-on-avatar-pill-for-testing` hides a sign-in promo on the profile avatar button; I did not check Chromium's source for what else it does.
@@ -222,11 +223,11 @@ Page: uBlock Origin Lite, `https://chromewebstore.google.com/detail/ublock-origi
 | `typeof chrome.webstorePrivate` | `object` | `object` |
 | `typeof chrome.management` | `object` | `object` |
 
-"Add to Chrome" first renders disabled and turns enabled once the page has finished its own checks. An earlier run that reported at first render saw it disabled; the self-check now waits for the enabled state. The "Install Chrome" button suggests the store does not take either mode for Google Chrome (no `Google Chrome` brand in `userAgentData`). Whether clicking "Add to Chrome" installs anything is check 4, for the owner. In OSR there is no extension toolbar, so even a successful install has no surface for the popup.
+"Add to Chrome" first renders disabled and turns enabled once the page has finished its own checks. An earlier run that reported at first render saw it disabled; the self-check now waits for the enabled state. The "Install Chrome" button suggests the store does not take either mode for Google Chrome (no `Google Chrome` brand in `userAgentData`). Clicking "Add to Chrome" is now automated with Dark Reader (check 4a in [Checklist rows on Xvfb](#checklist-rows-on-xvfb)): it installs in the Chrome-style control and crashes or installs nothing in OSR. In OSR there is no extension toolbar, so even a successful install has no surface for the popup.
 
 ### OSR input on Xvfb
 
-`scripts/input-actions.sh` drives `scripts/input-test.html` in an OSR window with xdotool and fails unless the page reports each expected event. Before typing into a field it clicks the field and waits for the page's `focus` event, so keys cannot go to the document. It ran 6 times in the fresh clone and passed 6 times ([per-run summary](evidence/input-runs.txt)). The page logs what it receives ([full log](evidence/osr-input-events.txt)):
+`scripts/input-actions.sh` drives `scripts/input-test.html` in an OSR window with xdotool and fails unless the page reports each expected event. Before typing into a field it clicks the field and waits for the page's `focus` event, so keys cannot go to the document. It ran 6 times in the fresh clone and passed 6 times ([per-run summary](evidence/input-runs.txt)). That was one sample: issue #94 measured 8 of 10, and on this branch's final binary it passed 8 of 9 (see the input finding under [Checklist rows on Xvfb](#checklist-rows-on-xvfb)). The page logs what it receives ([full log](evidence/osr-input-events.txt)):
 
 | Action | Page saw |
 |---|---|
@@ -248,7 +249,7 @@ Each row is one scripted run through `scripts/xvfb-isolated.sh` on `scripts/inpu
 |---|---|---|
 | OSR `window.open` popup | `osr-actions.sh` | A second OSR window opened and painted ([screenshot](evidence/osr-popup.png)); the popup page saw `window.opener` non-null; `window.close()` in the popup closed only the popup (open browsers 2, then 1) and the app kept running |
 | OSR notification permission | `osr-actions.sh` | `Notification.requestPermission()` printed `[permission 1] file:/// requests permission types 0x8000`; `allow 1` on stdin resolved it as `granted` (a `deny` makes the script fail) |
-| OSR camera permission | `osr-actions.sh` | `getUserMedia({video: true})` failed with `NotFoundError` and **no prompt**: Xvfb has no camera, and the request ends before any permission callback. The camera prompt path is untested (manual check 6) |
+| OSR camera permission | `osr-actions.sh` | `getUserMedia({video: true})` failed with `NotFoundError` and **no prompt**: Xvfb has no camera, and the request ends before any permission callback. With a fake camera the prompt path does run: see check 6 in [Checklist rows on Xvfb](#checklist-rows-on-xvfb) |
 | OSR AltGr on a Swedish layout | `osr-actions.sh` | With `setxkbmap se`, AltGr+2 then `åäö` gave the text field `@åäö` |
 | OSR Ctrl+A on French AZERTY | `osr-actions.sh` | With `setxkbmap fr`, the page saw `keydown a KeyQ 65 ctrl true` (VK_A from the layout, physical position Q, Ctrl held; a plain `a` would also be `KeyQ 65`, so the Ctrl flag is asserted too). Before the fix it saw `keydown q KeyQ 81`, so Ctrl+A acted as Ctrl+Q |
 | OSR `pdf <path>` | `osr-actions.sh` | `[pdf] ok=true`, file not empty |
@@ -264,6 +265,58 @@ Each row is one scripted run through `scripts/xvfb-isolated.sh` on `scripts/inpu
 
 The first run on each profile ended with `quit` (OSR) or by closing the last tab (Chrome); the second ended with a window close. Restart persistence of a Google sign-in is still manual check 1.
 
+### Checklist rows on Xvfb
+
+`scripts/auto-checks.sh` runs checklist checks 0 and 4 to 7 in Alloy OSR, the Chrome-style control and today's Flecha, and writes a table in the [Results](#results-fill-in-pass-fail-or-na-plus-a-short-note) shape with a build stamp. Checks 1 to 3 need a Google account and are never automated. Two runs on the same commit and binary (`7538752`, a clean tree; the commit after it adds only these results and this REPORT): [results/auto-checks/run1.md](results/auto-checks/run1.md) and [results/auto-checks/run2.md](results/auto-checks/run2.md), with each case's log in `results/auto-checks/run1-evidence/` and `run2-evidence/`. The two runs agree on every cell except the counts of key presses. Both exited 0: no control passed, every guard row passed, no row stayed unobserved, no process group survived and the scratch directory was removed.
+
+Over the branch's 9 full runs, every row had the same outcome in every run, with three exceptions. Once the OSR install installed nothing instead of crashing. Two harness races, fixed and described under Findings, failed the OSR guard's control once and Flecha's camera step once.
+
+```sh
+# From rewrite/, after Build and run. TMPDIR must be short: Chromium's singleton socket path
+# has to fit in 107 bytes (unix(7)), and xvfb-isolated.sh refuses a longer one.
+TMPDIR=$XDG_RUNTIME_DIR WAIT_SECS=30 XDOTOOL=/nix/store/…-xdotool-…/bin/xdotool XCLIP=/nix/store/…-xclip-…/bin/xclip \
+  bash spikes/cef-osr-signin/scripts/auto-checks.sh /tmp/spike0-auto.md osr chrome flecha
+```
+
+Every launch goes through `xvfb-isolated.sh` (its own Xvfb, a private session bus with activation off, a system bus address that points nowhere, scratch HOME, XDG, runtime and TMPDIR dirs, a scratch profile) and passes `--password-store=basic`. Each pass condition also runs as a negative control with its cause removed. The runner exits 1 if a control passes, a guard row does not pass, a row stays inconclusive, a process group it started is still alive, or its scratch directory remains.
+
+| Check | How it is observed | Negative control |
+|---|---|---|
+| 0, typing | `setxkbmap se` on the Xvfb display; xdotool clicks the field, waits for its `focus` event and types `@`, `åäö`, AltGr characters, `€` and a Shift capital; the page's `[console] INPUT text` line must match exactly | no click into the field, so the keys go to the document |
+| 0, paste | xclip owns the clipboard on the same Xvfb display; Ctrl+V; the text line must show typed plus pasted text | no clipboard owner |
+| 4a | `--probe` reports "Add to Chrome" present and enabled. OSR: a real click at the button's centre (the probe confirms a trusted click). Chrome and Flecha: Return on the focused button, then Tab and Return in the install dialog (keyboard only). Pass: Dark Reader is unpacked in the profile | the same page, nothing pressed |
+| 4b | `https://example.com/` loads (probe), its computed `html` or `body` background is dark, the Chrome-style window title is the page's, and an Xvfb screenshot of the page area has a mean grey below 128 | the same page on the control profile, which holds no Dark Reader |
+| 5a | the demo login is typed and submitted. Chrome and Flecha: Alt+Shift+A focuses the save bubble, Return saves. OSR has no save prompt or callback. Pass: the profile's `Login Data` (read with `sqlite3`, read-only) holds a login for the demo site | the same run without pressing Save |
+| 5b | on a profile holding the saved login, a real xdotool click on the page; the probe must see both fields non-empty | a profile with nothing saved |
+| 6 | the spike runs with `--fake-camera`; the page's camera button calls `getUserMedia`. OSR: the click prints a `[permission N]` prompt and `allow N` answers it. Chrome and Flecha: Tab and Space press the button, Tab and Return accept the bubble. Pass: one granted video track | the same script without `--fake-camera`: no device |
+| 7 | OSR: Ctrl+P prints `[print] start`, then `pdf` writes a PDF whose text (`pdftotext`) holds the page's phrase. Chrome and Flecha: Ctrl+P, Return on the preview's Save, the path typed into the Save File dialog; pass when that PDF holds the phrase | no Ctrl+P, on a page without the phrase |
+| `--fake-camera` guard | see below | the same script without `--fake-camera` must reach the fake remote origin six times |
+
+#### `--fake-camera` and `--probe`
+
+Xvfb has no camera, so check 6 needs Chromium's `--use-fake-device-for-media-stream`, which is refused after `--` like every other forbidden switch. The spike adds it only through its own `--fake-camera` option, and the binary then loads only `file://` and loopback (`127.0.0.1`, `localhost`, `[::1]`) URLs: the start URL (exit 2 otherwise), `go`, navigations, redirects, popups and every subresource (`LocalOnlyRequestHandler` in `src/common.rs`). `--fake-camera` together with `--self-check` or `--probe` is refused too. So the fake device cannot be combined with a sign-in page. `scripts/fake-camera-guard.sh` tests this in both modes against a second fixture server on `127.0.0.2`, standing in for a remote origin: a frame, an image, a fetch, a redirected fetch, a navigation and a redirected navigation must all be blocked, and in OSR `go https://accounts.google.com/` and `go https://mail.google.com/` must be refused before any request. The control run without the flag must reach `127.0.0.2` with all six. Unit tests in `src/cli.rs` and `src/common.rs` cover the CLI refusals and the URL rule; `auto-checks.sh` also checks the refusals under `env -i` with no display before any launch.
+
+Today's Flecha has no such rule in its binary. `scripts/flecha-launch.sh` refuses a non-local start URL with `--fake-camera`, but pages can still navigate on their own. The Flecha runs open only `scripts/input-test.html` on a scratch profile with no account.
+
+`--probe` injects a fixed script into the checklist's fixed pages (consent, the Dark Reader store page, example.com, the herokuapp login and secure pages) and prints `[probe] {json}` reports. A report carries only booleans, numbers and short strings from a small alphabet, behind a per-run nonce (`src/probe.rs`, with a test), so it can never print page text or field values. The only input it gives is focus, and "Reject all" on Google's consent page.
+
+#### Findings
+
+- **The OSR Web Store install crashes the browser process.** Clicking "Add to Chrome" in OSR crashed the app with SIGSEGV in 11 of 13 attempts on this branch (8 of the 9 full runner runs, one store-only rerun, 2 of 3 attempts during development). The other 2 attempts did not crash but installed nothing within 30 seconds; in the one from a full run the probe saw the trusted click. No attempt installed Dark Reader. The stack (from systemd-coredump): `ui::PropertyHandler::GetPropertyInternal` ← `ChromeConstrainedWindowViewsClient::GetModalDialogHost` ← `AlloyConstrainedWindowViewsClient::GetModalDialogHost` ← `constrained_window::CreateBrowserModalDialogViews` ← `ShowExtensionInstallDialogImpl` ← `ExtensionInstallPrompt::ShowConfirmation` ← `WebstorePrivateBeginInstallWithManifest3Function::ShowInstallDialog`. Alloy has no browser window to host the install dialog, and the lookup dereferences a missing window. A GPUI shell would need its own install confirmation (for example through `CefExtensionHandler` or a custom `webstorePrivate` flow), or extensions are installed outside OSR.
+- **The Dark Reader content script in OSR is unreliable.** On a copy of the Chrome-style profile with Dark Reader installed, example.com turned dark in 1 of 5 OSR runs before these recorded runs; in the other 4 it stayed light, and a reload did not help. `chrome://extensions` is refused in OSR. In all 9 full runner runs (the `content-osr` case) it stayed light: 1 dark result in 14 OSR runs. The Chrome-style control turned example.com dark in all 9.
+- **Password fill works in OSR; save is not offered.** On a copy of the profile where Chrome mode saved the demo login, OSR filled both fields after a real click. OSR shows no save prompt and gives no callback, and the OSR save run left 0 logins in `Login Data`.
+- **Paste from the X clipboard fails in OSR on Xvfb.** With xclip owning the clipboard on the same display, Ctrl+V inserted nothing, and xclip never received a selection request, so Chromium never asked the X server for the clipboard. Chrome mode pasted the same text. Check 0 on the real desktop is the first paste test that counts.
+- **Input pass rate (issue #94).** On the final binary, `input-actions.sh` passed 8 of 9 runs. The failing run lost one keystroke in the password field: the page counted 8 of the 9 characters of `pa$$ wörd`. The click and the focus wait worked. The password field does not log key presses, so which key was lost is unknown; the text field's `ö` arrives through a keycode xdotool remaps for the duration of the key press, a known source of lost keys under xdotool. The REPORT's earlier "6 of 6" was one sample; #94's "8 of 10" and this "8 of 9" are the honest rate. `check0-input.sh` types on a real Swedish keymap, where `åäö` and AltGr characters have their own keys, so no remap is involved: its typing step passed in all 9 full runs in each of the three columns (27 of 27). Paste passed 9 of 9 in Chrome-style and Flecha and 0 of 9 in OSR.
+- **Chromium starts its own unsandboxed zygote with `--no-zygote-sandbox`.** Chromium's Linux zygote layout includes one zygote launched as `--type=zygote --no-zygote-sandbox` (for processes that run without the sandbox, such as the GPU process). With `no-zygote-sandbox` in the forbidden list, the self-check flagged that process. The self-check now accepts `--no-zygote-sandbox` only on a `--type=zygote` process (`forbidden_in_process` in `src/selfcheck.rs`, with a test); the CLI still refuses it after `--`.
+- **A control caught a harness race.** In one full run before the recorded ones, the OSR guard's control failed: the unguarded top-level navigation to `127.0.0.2/navigate` ended with `ERR_ABORTED`, because the script sent the next `go` before the first navigation had settled. The runner exited 1, as it should. The script now starts the second navigation only after the first one settled; after the fix the guard and its control passed 3 of 3 times in both modes. In a later pair of full runs, Flecha's camera step failed once: of the eight Tabs meant to reach the camera button, one never reached the page, so Space pressed the notification button. The step now presses Tab until the page reports focus on the camera button; after that, check 6 and its control behaved as expected 3 of 3 times in all three modes.
+- **URLs typed with `go` no longer reach CEF's warnings (issue #94).** CEF logged a URL it could not parse in full (`Invalid URL: …`), and a `filesystem:` URL made Chromium's storage code log the whole URI to `chrome_debug.log`. `go` and `--url` now go through `check_typed_url` in `src/common.rs` first: only `http`, `https`, `file`, `about`, `chrome` and `data` URLs that CEF parses are passed on, and a refusal names only the scheme or origin.
+- **Flecha reference.** Flecha 158.0.8127.2 (`~/.local/opt/flecha-current`, only read) runs isolated through `scripts/flecha-launch.sh` (never the `flecha` launcher, a scratch profile, a copy of the install's `shell/`). Checks 0, 6 and 7 are automated. 4a, 4b, 5a and 5b are not: Flecha has no `--probe`, its first-run tour covers the page, and a copied profile did not carry Dark Reader over. They stay manual.
+
+#### Isolation disclosures
+
+- Before this branch, Chromium wrote its `org.chromium.Chromium.*` singleton directories into the host's `/tmp` during harness runs, because the harness did not set `TMPDIR`. `xvfb-isolated.sh` now gives every run its own TMPDIR. There are 183 such directories in `/tmp` from earlier runs that cannot be attributed to one run or agent; they were left in place.
+- Each OSR store crash left a core dump in systemd-coredump. The stack above came from `coredumpctl info` for that crashed process; `journalctl --user` was read for the same crash. No privileged or system-bus command, no `sudo`, and no `cargo` inside `target/spike1-src/zed` was run.
+
 ### Isolation note
 
 The first OSR self-check ran under a plain `dbus-run-session`. D-Bus activation on that private bus started a keyring helper that printed `GNOME_KEYRING_CONTROL=/run/user/1000/keyring`, the owner's keyring control directory, and started portal and gvfs services. So that run may have reached the owner's running `gnome-keyring-daemon` through its control socket. The run's logs show no secret request and no unlock prompt, but logs alone cannot rule out that the helper talked to the daemon. Every later run used `scripts/session-bus.conf` (no service directories, so nothing is activated) and a scratch `XDG_RUNTIME_DIR`, and printed no keyring, portal or gvfs lines.
@@ -272,52 +325,46 @@ Until the third review round the harness left `DBUS_SYSTEM_BUS_ADDRESS` unset, s
 
 ## Manual checklist for the owner
 
-Use a Google account made for this test. Enter its password and MFA code yourself. The app logs no keystrokes or form contents. For web pages the terminal shows load events, popups and permission requests with each URL reduced to its origin (or to just its scheme, such as `data:` or `mailto:`), and no console output (see [Console output and logs](#console-output-and-logs)). Rules for the whole run:
+`scripts/auto-checks.sh` now runs every checklist step that needs no person (see [Checklist rows on Xvfb](#checklist-rows-on-xvfb)). What is left needs you, your real display and a Google account made for this test:
 
-- **Never type a real password or MFA code into `input-test.html`** (check 0). It is a local test page whose console output the terminal shows. Its password field reports only a length, but use made-up text there anyway.
-- **Take no screenshots that show the account's name, address or picture**, and do not paste account identifiers into this report. Describe what you saw instead.
-- **Do not use `--log-console`** during checks 1 to 7.
-- **Decide on the password store first** (see [Keyring or basic password store](#keyring-or-basic-password-store-an-owner-choice-for-checks-1-and-5)) and note your choice in the results table.
+- checks 1 to 3, Google sign-in, in both modes and in today's Flecha;
+- check 0 on your real keyboard, input method and display (OSR only);
+- check 4c in Chrome mode, the extension popup, which opens from Chrome's own toolbar;
+- checks 4a, 4b, 5a and 5b in today's Flecha, which the runner cannot drive (no probe, and its first-run tour covers the page).
 
-Use a fresh `--profile` per mode, for example `$HOME/flecha-spike0/osr` and `$HOME/flecha-spike0/chrome`. Start both through `run.sh` with `env -u WAYLAND_DISPLAY`, as in [Build and run](#build-and-run). Run every check in both modes. Run the same checks in today's Flecha as the reference column.
+Rules for the whole run:
 
-The links below were checked on 2026-11-23 (HTTP 200; the herokuapp page shows the `tomsmith` / `SuperSecretPassword!` demo login). Any similar page works if one has moved.
+- Enter the account's password and MFA code yourself. The app logs no keystrokes or form contents. The terminal shows load events, popups and permission requests with each URL reduced to its origin (see [Console output and logs](#console-output-and-logs)).
+- **Never type a real password or MFA code into `input-test.html`** (check 0). Its console output reaches the terminal.
+- **Take no screenshots that show the account's name, address or picture**, and do not paste account identifiers into this report.
+- **Do not use `--log-console`** during checks 1 to 3.
+- **Decide on the password store first** (see [Keyring or basic password store](#keyring-or-basic-password-store-an-owner-choice-for-checks-1-and-5)) and note it below. The automated rows always used `--password-store=basic`.
 
-0. **Pre-flight: typing on your real display (OSR only).** Xvfb tested keys from xdotool, not your keyboard and input method.
-   1. Start OSR mode with `--url file://$PWD/spikes/cef-osr-signin/scripts/input-test.html` and a scratch `--profile`. Type only made-up text on this page.
-   2. In the first text field type `@`, `åäö`, a few AltGr characters from your layout (for example `{[]}\` and `€`), and a capital letter with Shift. Click into the field right after the page appears, and again right after switching back from the terminal, and note whether either click was lost.
-   3. Copy some text from another app and paste it into the field with Ctrl+V.
-   4. Pass: the terminal's `[console] INPUT text "…"` lines show exactly what you typed and pasted. If any character is wrong or missing, stop: the sign-in checks would fail for input reasons, not for Alloy reasons.
-   5. Also record, without making it a pass condition, whether Ctrl+C in the field and Ctrl+V in another app works (listed below as not implemented).
+From `rewrite/`, after [Build and run](#build-and-run):
 
-1. **Gmail sign-in with MFA, then restart.**
-   1. Start the mode with `--url https://accounts.google.com/`.
-   2. Sign in, complete MFA, open `https://mail.google.com/` and confirm the inbox loads.
-   3. Close the window (OSR: or type `quit`). Wait for the process to exit.
-   4. Start again with the same `--profile` and `--url https://mail.google.com/`.
-   5. Pass: the inbox loads without a sign-in prompt. If Google shows "This browser or app may not be secure" or similar, record the exact wording.
-   6. **If this fails in OSR mode, stop and return to the plan owner** (plan rule).
+```sh
+s=spikes/cef-osr-signin
+# Check 0 (OSR, made-up text only)
+env -u WAYLAND_DISPLAY $s/run.sh --mode osr --profile "$HOME/flecha-spike0/input" --url "file://$PWD/$s/scripts/input-test.html"
+# Checks 1 to 3, one fresh profile per mode; add -- --password-store=basic if you chose it
+env -u WAYLAND_DISPLAY $s/run.sh --mode osr --profile "$HOME/flecha-spike0/osr" --url https://accounts.google.com/
+env -u WAYLAND_DISPLAY $s/run.sh --mode chrome --profile "$HOME/flecha-spike0/chrome" --url https://accounts.google.com/
+# Check 4c (Chrome mode, its own profile)
+env -u WAYLAND_DISPLAY $s/run.sh --mode chrome --profile "$HOME/flecha-spike0/store" --url https://chromewebstore.google.com/detail/dark-reader/eimadpbcbfnmbkopoojfekhnkhdbieeh
+```
+
+Delete `$HOME/flecha-spike0` afterwards.
+
+0. **Typing on your real display (OSR only).** In the first text field of `input-test.html` type `@`, `åäö`, a few AltGr characters (`{[]}\`, `€`) and a Shift capital. Click into the field right after the page appears, and again after switching back from the terminal; note whether a click was lost. Paste text copied from another app with Ctrl+V. Pass: the terminal's `[console] INPUT text "…"` lines show exactly what you typed and pasted. On Xvfb paste failed (see [Checklist rows on Xvfb](#checklist-rows-on-xvfb)), so this is the first paste test on a real desktop. If any character is wrong or missing, stop: the sign-in checks would fail for input reasons.
+1. **Gmail sign-in with MFA, then restart.** Sign in, complete MFA, open `https://mail.google.com/`. Close the window (OSR: or type `quit`) and wait for the exit. Start again with the same `--profile` and `--url https://mail.google.com/`. Pass: the inbox loads without a sign-in prompt. If Google shows "This browser or app may not be secure" or similar, record the wording. **If this fails in OSR mode, stop and return to the plan owner** (plan rule).
 2. **Sign out and back in.** In Gmail, sign out from the account menu, then sign in again with MFA. Pass: the inbox loads.
-3. **"Sign in with Google" on a third-party site.** Use a site you already trust that offers "Sign in with Google". Note whether it opened a popup window or redirected. Pass: you end up signed in on that site. OSR: a popup opens as a second window; it must close itself and the first window must be signed in.
-4. **Web Store install, content script and popup.** Open `https://chromewebstore.google.com/detail/dark-reader/eimadpbcbfnmbkopoojfekhnkhdbieeh` (Dark Reader: a content script that recolours pages, and a toolbar popup).
-   1. If a consent page appears, choose "Reject all".
-   2. Record whether "Add to Chrome" is enabled. Click it and accept the install dialog.
-   3. Open `https://example.com/`. Pass (content script): the page turns dark.
-   4. Pass (popup): open the extension's popup. Chrome mode: puzzle-piece icon in the toolbar, then Dark Reader. OSR mode has no toolbar, so record "no surface to open a popup" unless something appears.
-5. **Save a password and fill it back.** This needs no real credentials: `https://the-internet.herokuapp.com/login` is a public demo with user `tomsmith` and password `SuperSecretPassword!`.
-   1. Log in there. Pass (save): the browser offers to save the password, and you save it.
-   2. Log out, reload the login page. Pass (fill): the fields fill in, or a click in the username field offers the saved login.
-6. **Camera permission through a host prompt.** Open `https://permission.site/` and click "Camera".
-   - Chrome mode: Chrome's permission bubble appears. Allow it.
-   - OSR mode: the terminal prints `[permission N] https://permission.site requests media access (camera; …)`. Type `allow N`.
-   - Pass: the site reports camera access granted. The machine needs a camera. Without one, OSR mode prints no prompt at all (seen on Xvfb: `NotFoundError`); record "no camera".
-7. **Print.** On any page press Ctrl+P.
-   - Chrome mode: pass if the print preview opens.
-   - OSR mode: the spike has no print dialog. Ctrl+P should print `[print] start` in the terminal, and Chromium then reports that no printer is available, because the app's print handler supplies no printer settings. Record what you see. Then type `pdf` and check that `<profile>/flecha-spike-print.pdf` contains the page. The plan expects "Use `Print` or a GPUI preview over `PrintToPDF`".
+3. **"Sign in with Google" on a third-party site** you already trust. Note whether it opened a popup or redirected. Pass: you end up signed in there. OSR: the popup opens as a second window; it must close itself and the first window must be signed in.
+4. **4c, Chrome mode only.** Click "Add to Chrome" and accept the dialog (or reuse the profile after 4a), then open the puzzle-piece icon in the toolbar and choose Dark Reader. Pass: the popup opens.
+5. **Flecha reference, 4a, 4b, 5a, 5b.** In today's Flecha with a new profile: install Dark Reader from the store link above and open `https://example.com/` (pass: the page is dark); log in at `https://the-internet.herokuapp.com/login` with the public demo login `tomsmith` / `SuperSecretPassword!` (pass: Flecha offers to save it), log out, reload (pass: the fields fill or a click offers the login).
 
 ### Results (fill in; pass, fail or n/a, plus a short note)
 
-Password store used (default keyring or `--password-store=basic`): ______
+Password store used for checks 1 to 3 (default keyring or `--password-store=basic`): ______
 
 | # | Check | Alloy OSR | Chrome-style control | Flecha (reference) |
 |---|---|---|---|---|
@@ -325,24 +372,26 @@ Password store used (default keyring or `--password-store=basic`): ______
 | 1 | Gmail sign-in with MFA, survives restart | | | |
 | 2 | Sign out and back in | | | |
 | 3 | Third-party "Sign in with Google" | | | |
-| 4a | Web Store: "Add to Chrome" enabled and install completes | | | |
-| 4b | Extension content script runs | | | |
-| 4c | Extension popup opens | | | |
-| 5a | Password save offered | | | |
-| 5b | Saved password fills | | | |
-| 6 | Camera permission through a host prompt | | | |
-| 7 | Print | | | |
+| 4a | Web Store: install completes | automated | automated | |
+| 4b | Extension content script runs | automated | automated | |
+| 4c | Extension popup opens | automated (no surface) | | |
+| 5a | Password save offered | automated | automated | |
+| 5b | Saved password fills | automated | automated | |
+| 6 | Camera permission through a host prompt | automated | automated | automated |
+| 7 | Print | automated | automated | automated |
+
+"automated" cells are in [Checklist rows on Xvfb](#checklist-rows-on-xvfb).
 
 ## What I could not verify
 
-- **Google sign-in, Web Store installs, password save and fill, camera, print preview.** All need a person, an account or hardware. None were attempted. No account was signed in to.
-- **The camera prompt in OSR mode.** Xvfb has no camera, so the request failed before any permission callback. The notification prompt shows the terminal prompt path works, but the media path (`OnRequestMediaAccessPermission`) never ran.
-- **Chrome-mode permission bubbles and print preview.** Not scripted; they are Chrome's own UI. Manual checks 6 and 7.
-- **Clipboard and the owner's real keyboard.** Paste was not tested. AltGr was tested only with xdotool on an Xvfb Swedish layout. Pre-flight check 0 covers both.
+- **Google sign-in.** Checks 1 to 3 need a person and an account. None were attempted. No account was signed in to.
+- **A real camera.** Check 6 ran with Chromium's fake capture device (`--fake-camera`), so the prompt path ran in both modes, but no real camera driver or device picker was involved.
+- **The Chrome-mode extension popup (4c)** and **Flecha's 4a, 4b, 5a and 5b.** They need Chrome's own toolbar, or a page probe Flecha does not have. Manual.
+- **Paste and the owner's real keyboard.** AltGr, `åäö` and paste were tested with xdotool and xclip on an Xvfb Swedish layout. Paste failed in OSR there. Check 0 on the real desktop covers both.
 - **Native Wayland.** Every run used Xvfb (X11). The native-Wayland command in [Build and run](#build-and-run) was checked only to the point of CEF selecting its Wayland platform; no compositor was run.
 - **HiDPI.** Xvfb runs at scale 1. The OSR code passes the window scale to CEF (`GetScreenInfo`) and converts mouse coordinates, but no scale other than 1 was tested.
 - **OSR features this spike does not implement:** IME composition, context menus, drag and drop, JavaScript `alert`/`confirm`/`beforeunload` dialogs, file pickers, clipboard to other apps, DevTools, an address bar. If a sign-in page depends on one of these, the failure belongs to this spike, not to Alloy. Note it.
-- **A lost first click in OSR.** Sometimes a click sent right after the page's first `load-end` reaches nothing. It happened in one early scripted run. The second independent verifier saw it in 1 of 4 input runs: the click on the text field was lost and the typed keys went to the document. The first verifier did not see it in 3 of 3. The cause is unknown; it may be harness timing (the click arriving before the window is ready for input) or a real OSR focus problem. The input script now waits for the field's `focus` event before typing, so a lost click fails the run instead of typing into the wrong place. With that wait, 6 of 6 input runs passed (see [Automated results](#automated-results)). Check 0 asks the owner to watch for it.
+- **A lost first click in OSR.** Sometimes a click sent right after the page's first `load-end` reaches nothing. It happened in one early scripted run. The second independent verifier saw it in 1 of 4 input runs: the click on the text field was lost and the typed keys went to the document. The first verifier did not see it in 3 of 3. The cause is unknown; it may be harness timing (the click arriving before the window is ready for input) or a real OSR focus problem. The input script now waits for the field's `focus` event before typing, so a lost click fails the run instead of typing into the wrong place. With that wait, 6 of 6 input runs passed in the fresh clone and 8 of 9 on this branch; the one failure lost a keystroke, not the click (see [Checklist rows on Xvfb](#checklist-rows-on-xvfb)). Check 0 asks the owner to watch for it.
 - **The owner's login keyring.** Every automated run used a private D-Bus bus with no keyring, so the browser fell back to the basic store. The keyring path on the owner's session is untested; see the password-store choice in [Build and run](#build-and-run).
 - **Caps Lock state in OSR.** winit 0.30 does not report lock-key state, so the Caps Lock flag is never sent to CEF. Typed text is unaffected (it comes from the layout), but a page reading `getModifierState('CapsLock')`, as some password fields do for a warning, sees it off.
 - **Keys with no US physical-key mapping in OSR.** Text from them is inserted correctly through `CHAR` events, but the page's `keydown` sees `key` as a NUL character and `keyCode` 0 (seen with xdotool's remapped `ö`, [log](evidence/osr-input-events.txt)). A real Swedish layout maps `ö` to a physical key, so this is expected to matter only for unusual layouts.

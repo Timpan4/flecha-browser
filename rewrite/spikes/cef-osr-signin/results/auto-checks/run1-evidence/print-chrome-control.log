@@ -1,0 +1,77 @@
+xvfb pid 3276158 display :1
+app pid 3276160
+waited 30s for: the Save File dialog
+waited 30s for: a PDF with the page text
+CELL	7	chrome	fail	auto, Xvfb, keyboard only: no PDF with the page text after Ctrl+P, Return and the Save File dialog
+screenshot <scratch>/c16/screenshot.png
+-- app log
+[3276164:3276187:1123/194607.244943:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3276164:3276187:1123/194607.285033:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3276164:3276187:1123/194607.285064:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3276164:3276187:1123/194607.285076:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[browser] created id=1 open=1
+[3276164:3276187:1123/194607.364100:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3276164:3276187:1123/194607.364116:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3276164:3276164:1123/194607.368733:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.Properties.GetAll: object_path= /org/freedesktop/UPower/devices/DisplayDevice: unknown error type: 
+[3276292:9:1123/194607.374968:ERROR:gpu/ipc/client/command_buffer_proxy_impl.cc:277] ContextResult::kTransientFailure: Failed to send GpuControl.CreateCommandBuffer.
+[console] INPUT storage loads 1 (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[load-end] file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Enter Enter 13 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)

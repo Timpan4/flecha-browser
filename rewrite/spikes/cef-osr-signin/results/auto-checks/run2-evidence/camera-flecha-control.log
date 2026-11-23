@@ -1,0 +1,47 @@
+xvfb pid 3483431 display :1
+app pid 3483433
+waited 30s for: a granted camera
+CELL	6	flecha	fail	auto, Xvfb, keyboard only, no camera device: Tab to the button, Space; no prompt took focus; page result: camera error NotFoundError
+screenshot <scratch>/c24/screenshot.png
+-- app log
+[load-end] flecha
+[3483441:3483458:1123/200547.286176:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3483441:3483458:1123/200547.316427:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3483441:3483458:1123/200547.316452:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3483441:3483458:1123/200547.316459:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3483441:3483441:1123/200547.333422:WARNING:chrome/browser/signin/account_consistency_mode_manager.cc:74] Desktop Identity Consistency cannot be enabled as no OAuth client ID and client secret have been configured.
+[3483441:3483441:1123/200547.368903:WARNING:ui/aura/window.cc:1514] StackChildLayerRelativeTo called with unmanaged layer(s). child=WebContentsViewAura child_managed=0 target=WebContentsViewAura target_managed=0
+[3483441:3483441:1123/200547.368923:WARNING:ui/aura/window.cc:1514] StackChildLayerRelativeTo called with unmanaged layer(s). child=WebContentsViewAura child_managed=0 target=WebContentsViewAura target_managed=0
+[3483441:3483441:1123/200547.372857:WARNING:device/bluetooth/dbus/bluez_dbus_manager.cc:209] Floss manager service not available, cannot set Floss enable/disable.
+[3483441:3483441:1123/200547.376600:WARNING:ui/aura/window.cc:1514] StackChildLayerRelativeTo called with unmanaged layer(s). child=WebContentsViewAura child_managed=0 target=WebContentsViewAura target_managed=0
+[3483441:3483441:1123/200547.376639:WARNING:ui/aura/window.cc:1514] StackChildLayerRelativeTo called with unmanaged layer(s). child=WebContentsViewAura child_managed=0 target=WebContentsViewAura target_managed=0
+[3483441:3483441:1123/200547.376650:WARNING:ui/aura/window.cc:1514] StackChildLayerRelativeTo called with unmanaged layer(s). child=WebContentsViewAura child_managed=0 target=WebContentsViewAura target_managed=0
+[3483441:3483458:1123/200547.382819:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3483441:3483458:1123/200547.382837:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3483441:3483441:1123/200547.385464:WARNING:dbus/property.cc:94] Failed to connect to PropertiesChangedsignal.
+[3483441:3483441:1123/200547.385478:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.Properties.GetAll: object_path= /org/freedesktop/UPower/devices/DisplayDevice: unknown error type: 
+[3483441:3483441:1123/200547.385481:WARNING:dbus/property.cc:174] GetAll request failed for: org.freedesktop.UPower.Device
+[3483481:3483481:1123/200547.394633:WARNING:ui/gfx/linux/gbm_support_x11.cc:48] dri3 extension not supported.
+[3483441:3483441:1123/200547.394709:WARNING:ui/base/idle/idle_linux.cc:111] None of the known D-Bus ScreenSaver services could be used.
+[console] INPUT storage loads 1 (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[3483567:5:1123/200547.402582:ERROR:cc/raster/one_copy_raster_buffer_provider.cc:285] Creation of StagingBuffer's SharedImage failed.
+[3483567:12:1123/200547.402582:ERROR:cc/raster/one_copy_raster_buffer_provider.cc:285] Creation of StagingBuffer's SharedImage failed.
+[3483567:14:1123/200547.402597:ERROR:cc/raster/one_copy_raster_buffer_provider.cc:285] Creation of StagingBuffer's SharedImage failed.
+[3483567:8:1123/200547.402598:ERROR:cc/raster/one_copy_raster_buffer_provider.cc:285] Creation of StagingBuffer's SharedImage failed.
+[console] INPUT keydown Tab Tab 9 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT focus text (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+Hash Manager Error : 1
+[console] INPUT keydown Tab Tab 9 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT focus password (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT focus area (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Tab Tab 9 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Tab Tab 9 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Tab Tab 9 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Tab Tab 9 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown Tab Tab 9 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT focus camera (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown   Space 32 ctrl false (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT camera requested (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[3483441:3483441:1123/200551.618233:WARNING:chrome/browser/media/prefs/capture_device_ranking.h:256] Can't initialize the value of media.video_input.user_preference_ranking because media.default_video_capture_Device isn't registered or is empty
+[console] INPUT camera error NotFoundError (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] [VoiceTyping:Background] 1795460810970: Background initialized. (chrome-extension://kbglekiebdohdafflpmiejhbfdmjdbbe/background_compiled.js:34)

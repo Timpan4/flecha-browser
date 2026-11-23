@@ -1,0 +1,69 @@
+xvfb pid 3274816 display :1
+app pid 3274818
+CELL	7	chrome	pass	auto, Xvfb, keyboard only: Ctrl+P opened the print preview; Return (Save) and a typed path in the Save File dialog wrote a PDF containing the page text
+screenshot <scratch>/c15/screenshot.png
+-- app log
+[3274822:3274845:1123/194603.900993:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3274822:3274845:1123/194603.939875:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3274822:3274845:1123/194603.939937:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3274822:3274845:1123/194603.939962:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[browser] created id=1 open=1
+[3274822:3274845:1123/194604.009006:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3274822:3274845:1123/194604.009042:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3274822:3274822:1123/194604.012654:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.Properties.GetAll: object_path= /org/freedesktop/UPower/devices/DisplayDevice: unknown error type: 
+[load-end] file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/print-test.html
+[3275021:3275021:1123/194604.126959:ERROR:printing/backend/print_backend_cups.cc:199] CUPS: Error getting default printer: Bad file descriptor
+[3274822:3274822:1123/194604.127058:ERROR:components/device_event_log/device_event_log_impl.cc:211] [19:46:04.127] Printer: local_printer_handler_default.cc:286 Failure getting default printer via service, result: kFailed
+[3274822:3274822:1123/194604.140250:ERROR:cef/libcef/browser/printing/print_dialog_linux.cc:217] No associated browser in GetPdfPaperSize; using default printing implementation.
+[3274822:3274822:1123/194604.140275:ERROR:cef/libcef/browser/printing/print_dialog_linux.cc:217] No associated browser in GetPdfPaperSize; using default printing implementation.
+invoking IsSupported() failed for remote volume monitor with dbus name org.gtk.vfs.UDisks2VolumeMonitor:: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.gtk.vfs.UDisks2VolumeMonitor was not provided by any .service files (g-dbus-error-quark, 2)
+
+(cef-osr-signin:3274822): dconf-WARNING **: 19:46:04.761: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(cef-osr-signin:3274822): dconf-WARNING **: 19:46:04.769: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(cef-osr-signin:3274822): dconf-WARNING **: 19:46:04.785: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(cef-osr-signin:3274822): dconf-WARNING **: 19:46:04.801: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(cef-osr-signin:3274822): dconf-WARNING **: 19:46:04.818: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(cef-osr-signin:3274822): dconf-WARNING **: 19:46:04.834: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(cef-osr-signin:3274822): dconf-WARNING **: 19:46:04.851: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(cef-osr-signin:3274822): dconf-WARNING **: 19:46:04.867: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(cef-osr-signin:3274822): dconf-WARNING **: 19:46:04.884: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(cef-osr-signin:3274822): dconf-WARNING **: 19:46:04.901: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(cef-osr-signin:3274822): dconf-WARNING **: 19:46:04.918: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(cef-osr-signin:3274822): dconf-WARNING **: 19:46:04.935: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(cef-osr-signin:3274822): dconf-WARNING **: 19:46:04.951: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(cef-osr-signin:3274822): dconf-WARNING **: 19:46:04.969: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(cef-osr-signin:3274822): dconf-WARNING **: 19:46:04.983: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(cef-osr-signin:3274822): dconf-WARNING **: 19:46:04.999: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(cef-osr-signin:3274822): dconf-WARNING **: 19:46:05.016: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(cef-osr-signin:3274822): dconf-WARNING **: 19:46:05.032: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(cef-osr-signin:3274822): dconf-WARNING **: 19:46:05.151: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(cef-osr-signin:3274822): dconf-WARNING **: 19:46:06.151: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(cef-osr-signin:3274822): dconf-WARNING **: 19:46:06.168: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(cef-osr-signin:3274822): dconf-WARNING **: 19:46:06.185: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(cef-osr-signin:3274822): dconf-WARNING **: 19:46:06.201: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(cef-osr-signin:3274822): dconf-WARNING **: 19:46:06.630: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files
+
+(cef-osr-signin:3274822): dconf-WARNING **: 19:46:06.630: failed to commit changes to dconf: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name ca.desrt.dconf was not provided by any .service files

@@ -1,0 +1,27 @@
+xvfb pid 3410364 display :1
+app pid 3410366
+waited 30s for: Dark Reader installed
+CELL	4a	osr	fail	auto, Xvfb, not signed in, probe: button add, enabled true; nothing pressed (control); no Dark Reader in the profile within 30s
+waited 30s for: a dark example.com
+WARNING: The convert command is deprecated in IMv7, use "magick" instead of "convert" or "magick convert"
+
+CELL	4b	osr	fail	auto, Xvfb screenshot, example.com loaded: yes; window title: Flecha spike: osr; page background grey level 238 of 255 (dark below 128); probe: body rgba(0, 0, 0, 0), html rgb(238, 238, 238)
+screenshot <scratch>/c8/screenshot.png
+-- app log
+[3410370:3410400:1123/195854.263275:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3410370:3410400:1123/195854.346739:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3410370:3410400:1123/195854.346761:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3410370:3410400:1123/195854.346771:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+commands: go <url> | back | forward | reload | print | pdf [path] | allow <id> | deny <id> | quit
+[browser] created id=1 open=1
+[3410370:3410400:1123/195854.520850:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3410370:3410400:1123/195854.520865:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3410370:3410370:1123/195854.524817:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.Properties.GetAll: object_path= /org/freedesktop/UPower/devices/DisplayDevice: unknown error type: 
+[load-end] https://consent.google.com
+[probe] {"page":"consent","rejected":true}
+[load-end] https://chromewebstore.google.com
+[probe] {"activated":false,"button":"add","enabled":false,"focused":false,"page":"store","page_focus":true,"x":1087,"y":154}
+[probe] {"activated":false,"button":"add","enabled":true,"focused":true,"page":"store","page_focus":true,"x":623,"y":282}
+[load-end] https://example.com
+[probe] {"body":"rgba(0, 0, 0, 0)","html":"rgb(238, 238, 238)","page":"example"}
+[3410370:3410370:1123/195956.164674:ERROR:content/common/zygote/zygote_communication_linux.cc:318] Failed to send GetTerminationStatus message to zygote: Broken pipe (32)

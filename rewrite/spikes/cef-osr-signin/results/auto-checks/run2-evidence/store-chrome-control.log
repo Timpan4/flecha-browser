@@ -1,0 +1,34 @@
+xvfb pid 3428082 display :1
+app pid 3428086
+waited 30s for: Dark Reader installed
+CELL	4a	chrome	fail	auto, Xvfb, not signed in, probe: button add, enabled true; nothing pressed (control); no Dark Reader in the profile within 30s
+waited 30s for: a dark example.com
+WARNING: The convert command is deprecated in IMv7, use "magick" instead of "convert" or "magick convert"
+
+CELL	4b	chrome	fail	auto, Xvfb screenshot, example.com loaded: yes; window title: Example Domain - Chromium; page background grey level 238 of 255 (dark below 128); probe: body rgba(0, 0, 0, 0), html rgb(238, 238, 238)
+screenshot <scratch>/c18/screenshot.png
+-- app log
+[3428090:3428115:1123/200323.831936:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3428090:3428115:1123/200323.857131:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3428090:3428115:1123/200323.857158:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3428090:3428115:1123/200323.857188:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[browser] created id=1 open=1
+[3428090:3428115:1123/200323.912133:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3428090:3428115:1123/200323.912155:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3428090:3428090:1123/200323.915965:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.Properties.GetAll: object_path= /org/freedesktop/UPower/devices/DisplayDevice: unknown error type: 
+[3428216:9:1123/200323.922602:ERROR:gpu/ipc/client/command_buffer_proxy_impl.cc:277] ContextResult::kTransientFailure: Failed to send GpuControl.CreateCommandBuffer.
+[load-end] https://consent.google.com
+[probe] {"page":"consent","rejected":true}
+[load-end] https://chromewebstore.google.com
+[probe] {"activated":false,"button":"add","enabled":false,"focused":false,"page":"store","page_focus":true,"x":946,"y":154}
+[probe] {"activated":false,"button":"add","enabled":true,"focused":true,"page":"store","page_focus":true,"x":946,"y":282}
+[probe] {"activated":false,"button":"add","enabled":true,"focused":true,"page":"store","page_focus":false,"x":946,"y":282}
+[load-end] https://example.com
+[probe] {"body":"rgba(0, 0, 0, 0)","html":"rgba(0, 0, 0, 0)","page":"example"}
+[3428133:3428133:1123/200357.280195:ERROR:gpu/command_buffer/service/context_group.cc:140] ContextResult::kFatalFailure: WebGL1 blocklisted
+[3428133:3428133:1123/200357.280724:ERROR:gpu/command_buffer/service/context_group.cc:140] ContextResult::kFatalFailure: WebGL1 blocklisted
+[3428133:3428133:1123/200357.281333:ERROR:gpu/command_buffer/service/context_group.cc:148] ContextResult::kFatalFailure: WebGL2 blocklisted
+[3428133:3428133:1123/200357.281890:ERROR:gpu/command_buffer/service/context_group.cc:148] ContextResult::kFatalFailure: WebGL2 blocklisted
+[load-error] main_frame=false code=Errorcode(ERR_ABORTED) ERR_ABORTED about:
+[load-end] https://example.com
+[probe] {"body":"rgba(0, 0, 0, 0)","html":"rgb(238, 238, 238)","page":"example"}

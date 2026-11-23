@@ -1,0 +1,31 @@
+xvfb pid 3458053 display :1
+app pid 3458055
+remote requests: 0; [blocked] lines: 8; go commands refused: 0
+CELL	guard	chrome	pass	auto, Xvfb, --fake-camera: 0 requests reached 127.0.0.2 (frame, image, fetch, redirected fetch, navigation, redirected navigation all tried); 8 [blocked] lines; 0 go commands to Google sign-in origins refused
+screenshot <scratch>/c19/screenshot.png
+-- app log
+[3458059:3458083:1123/200426.608187:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3458059:3458083:1123/200426.633633:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3458059:3458083:1123/200426.633648:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3458059:3458083:1123/200426.633656:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[browser] created id=1 open=1
+[3458059:3458083:1123/200426.692250:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3458059:3458083:1123/200426.692265:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3458059:3458059:1123/200426.696333:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.Properties.GetAll: object_path= /org/freedesktop/UPower/devices/DisplayDevice: unknown error type: 
+[console] INPUT storage loads 1 (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[load-end] file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html
+[console] INPUT keydown Control ControlLeft 17 ctrl true (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT keydown l KeyL 76 ctrl true (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[console] INPUT window blur (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[blocked] navigation to http://127.0.0.2:44577 (--fake-camera)
+[blocked] request to http://127.0.0.2:44577 (--fake-camera)
+[load-error] main_frame=false code=Errorcode(ERR_ABORTED) ERR_ABORTED http://127.0.0.2:44577
+[blocked] request to http://127.0.0.2:44577 (--fake-camera)
+[blocked] redirect to http://127.0.0.2:44577 (--fake-camera)
+[load-end] http://127.0.0.1:33363
+[blocked] request to http://127.0.0.2:44577 (--fake-camera)
+[blocked] navigation to http://127.0.0.2:44577 (--fake-camera)
+[load-error] main_frame=true code=Errorcode(ERR_ABORTED) ERR_ABORTED http://127.0.0.2:44577
+[blocked] redirect to http://127.0.0.2:44577 (--fake-camera)
+[blocked] navigation to http://127.0.0.2:44577 (--fake-camera)
+[load-error] main_frame=true code=Errorcode(ERR_ABORTED) ERR_ABORTED http://127.0.0.2:44577

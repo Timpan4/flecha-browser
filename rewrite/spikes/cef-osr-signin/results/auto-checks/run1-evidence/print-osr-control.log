@@ -1,0 +1,19 @@
+xvfb pid 3227549 display :1
+app pid 3227563
+waited 30s for: [print] start
+CELL	7	osr	fail	auto, Xvfb: [print] start after Ctrl+P: no; PDF from the pdf command contains the page text: no
+screenshot <scratch>/c6/screenshot.png
+-- app log
+[3227570:3227614:1123/194112.784910:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3227570:3227614:1123/194112.809932:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3227570:3227614:1123/194112.809949:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3227570:3227614:1123/194112.809957:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+commands: go <url> | back | forward | reload | print | pdf [path] | allow <id> | deny <id> | quit
+[browser] created id=1 open=1
+[3227570:3227614:1123/194112.843848:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3227570:3227614:1123/194112.843864:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3227570:3227570:1123/194112.878256:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.Properties.GetAll: object_path= /org/freedesktop/UPower/devices/DisplayDevice: unknown error type: 
+[console] INPUT storage loads 1 (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[load-end] file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html
+[pdf] ok=true <scratch>/c6/print-check.pdf
+[3227570:3227570:1123/194142.333142:ERROR:content/common/zygote/zygote_communication_linux.cc:318] Failed to send GetTerminationStatus message to zygote: Broken pipe (32)
