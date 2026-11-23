@@ -241,8 +241,9 @@ impl PermissionManager {
     }
 
     /// Applies the user's answer to the prompt holding `request`. The answer covers only the
-    /// kinds the prompt asked about. Returns completions for the prompt's requests and for any
-    /// other queued request the answer decides.
+    /// kinds the prompt asked about that are still undecided, so a newer site-panel setting or
+    /// one-time answer made while the prompt waited is kept. Returns completions for the
+    /// prompt's requests and for any other queued request the answer decides.
     pub fn resolve_prompt(
         &mut self,
         request: RequestId,
@@ -251,6 +252,13 @@ impl PermissionManager {
         let (tab, prompt) = self
             .take_prompt(request)
             .ok_or(PermissionError::UnknownRequest)?;
+        let undecided: PermissionSet = prompt
+            .ask
+            .iter()
+            .filter(|&kind| {
+                self.decision(&prompt.partition, &tab, &prompt.origin, kind) == Decision::Ask
+            })
+            .collect();
         let (answer, saved) = match outcome {
             PromptOutcome::AllowOnce => (Some(Verdict::Allow), false),
             PromptOutcome::AllowAlways => (Some(Verdict::Allow), true),
@@ -260,12 +268,7 @@ impl PermissionManager {
         };
         match answer {
             Some(verdict) if saved => {
-                self.save_decision(
-                    &prompt.partition,
-                    &prompt.origin,
-                    prompt.ask,
-                    verdict.into(),
-                );
+                self.save_decision(&prompt.partition, &prompt.origin, undecided, verdict.into());
             }
             Some(verdict) => {
                 let decided = self
@@ -274,7 +277,7 @@ impl PermissionManager {
                     .or_default()
                     .entry(prompt.origin.clone())
                     .or_default();
-                for kind in prompt.ask.iter() {
+                for kind in undecided.iter() {
                     decided.insert(kind, verdict);
                 }
             }

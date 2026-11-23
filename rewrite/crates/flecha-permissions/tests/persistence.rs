@@ -1,4 +1,5 @@
 use std::fs;
+use std::path::Path;
 
 use flecha_permissions::{
     Decision, DecodeError, Evaluation, Origin, Partition, PermissionKind, PermissionManager,
@@ -7,6 +8,16 @@ use flecha_permissions::{
 
 fn origin(url: &str) -> Origin {
     Origin::parse(url).unwrap()
+}
+
+/// The directory's file names, sorted.
+fn entries(dir: &Path) -> Vec<String> {
+    let mut names: Vec<_> = fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    names.sort();
+    names
 }
 
 fn sample() -> PermissionManager {
@@ -108,11 +119,10 @@ fn snapshot_round_trips_through_the_file() {
         ),
         Evaluation::Prompt(_)
     ));
-    let leftovers: Vec<_> = fs::read_dir(dir.path())
-        .unwrap()
-        .map(|entry| entry.unwrap().file_name())
-        .collect();
-    assert_eq!(leftovers, ["permissions.json"]);
+    assert_eq!(
+        entries(dir.path()),
+        ["permissions.json", "permissions.json.lock"]
+    );
 }
 
 #[test]
@@ -135,7 +145,10 @@ fn newer_schema_is_left_untouched_and_cannot_be_overwritten() {
             other => panic!("expected a newer-schema refusal, got {other:?}"),
         }
         assert_eq!(fs::read_to_string(&path).unwrap(), newer);
-        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+        assert_eq!(
+            entries(dir.path()),
+            ["permissions.json", "permissions.json.lock"]
+        );
     }
 }
 
@@ -253,7 +266,10 @@ fn save_refuses_a_newer_file_written_after_open() {
         Err(SnapshotError::NewerSchema(found)) if found == "2"
     ));
     assert_eq!(fs::read_to_string(&path).unwrap(), newer);
-    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    assert_eq!(
+        entries(dir.path()),
+        ["permissions.json", "permissions.json.lock"]
+    );
 }
 
 #[test]
@@ -305,7 +321,7 @@ fn a_failed_save_removes_only_its_own_temp_file() {
     for other in &foreign {
         fs::write(other, "someone else's").unwrap();
     }
-    // A non-empty directory at the destination makes the final rename fail.
+    // A non-empty directory at the destination makes the save fail.
     fs::create_dir(&path).unwrap();
     fs::write(path.join("keep"), "kept").unwrap();
 
@@ -317,7 +333,15 @@ fn a_failed_save_removes_only_its_own_temp_file() {
         assert_eq!(fs::read_to_string(other).unwrap(), "someone else's");
     }
     assert_eq!(fs::read_to_string(path.join("keep")).unwrap(), "kept");
-    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), foreign.len() + 1);
+    assert_eq!(
+        entries(dir.path()),
+        [
+            ".permissions.json.abc123.tmp",
+            "permissions.json",
+            "permissions.json.1-2-0.tmp",
+            "permissions.json.lock"
+        ]
+    );
 }
 
 #[test]

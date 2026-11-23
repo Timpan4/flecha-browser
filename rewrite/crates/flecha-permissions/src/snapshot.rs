@@ -159,6 +159,9 @@ impl Snapshot {
 }
 
 /// The snapshot file. A handle exists only after a load that this build may overwrite.
+///
+/// `open` and `save` serialize on an exclusive lock of `<name>.lock` in the same directory. The
+/// lock file stays on disk; deleting it while a holder runs would let a second holder in.
 #[derive(Debug)]
 pub struct SnapshotFile {
     path: PathBuf,
@@ -209,6 +212,9 @@ impl SnapshotFile {
     /// `<name>.damaged`, replacing an older backup, and loads empty.
     pub fn open(path: impl Into<PathBuf>) -> Result<(Self, Loaded), SnapshotError> {
         let path = path.into();
+        // Held through the read and the move aside, so a file saved meanwhile is never taken
+        // for the damaged one.
+        let _lock = lock(&path)?;
         let bytes = read_if_present(&path)?;
         let mut loaded = Loaded {
             snapshot: Snapshot::default(),
@@ -245,9 +251,10 @@ impl SnapshotFile {
     /// the old or the new contents, never part of either.
     ///
     /// A newer build may have written the file since `open`, so its version is read again first
-    /// and a newer schema is refused. A writer that replaces the file between that read and the
-    /// rename is not detected.
+    /// and a newer schema is refused. The check and the rename run under the snapshot's lock,
+    /// so a writer that takes the same lock cannot slip in between.
     pub fn save(&self, snapshot: &Snapshot) -> Result<(), SnapshotError> {
+        let _lock = lock(&self.path)?;
         if let Some(bytes) = read_if_present(&self.path)?
             && let Some(found) = std::str::from_utf8(&bytes)
                 .ok()
@@ -277,6 +284,19 @@ impl SnapshotFile {
 fn sorted_object(entries: impl IntoIterator<Item = (String, Value)>) -> Value {
     let sorted: BTreeMap<_, _> = entries.into_iter().collect();
     Value::Object(sorted.into_iter().collect::<Map<_, _>>())
+}
+
+/// Takes the exclusive lock on `<name>.lock` beside the snapshot, waiting for any other holder.
+/// Every reader and writer of the snapshot takes it; it is released when the file drops.
+fn lock(path: &Path) -> io::Result<fs::File> {
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(sibling(path, "lock")?)?;
+    file.lock()?;
+    Ok(file)
 }
 
 fn read_if_present(path: &Path) -> io::Result<Option<Vec<u8>>> {

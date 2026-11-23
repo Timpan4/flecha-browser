@@ -497,3 +497,82 @@ fn an_answer_covers_only_the_kinds_the_prompt_showed() {
     assert_eq!(settings.decision(Microphone), Decision::Allow);
     assert_eq!(settings.decision(Camera), Decision::Ask);
 }
+
+#[test]
+fn block_always_keeps_a_newer_site_panel_allow() {
+    let mut manager = PermissionManager::new();
+    let tab = TabId::new("a");
+    let site = origin("https://meet.example");
+    let shared = Partition::Shared;
+    let id = prompt(manager.evaluate(&shared, &tab, &site, media()));
+    assert_eq!(manager.pending_prompt(&tab).unwrap().ask, media());
+
+    // The site panel allows the camera while the prompt for both kinds waits.
+    assert!(
+        manager
+            .set_setting(&shared, &site, Camera, Decision::Allow)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        manager.resolve_prompt(id, PromptOutcome::BlockAlways),
+        Ok(vec![done(id, Verdict::Block)])
+    );
+    let settings = manager.site_settings(&shared, &site);
+    assert_eq!(settings.decision(Camera), Decision::Allow);
+    assert_eq!(settings.decision(Microphone), Decision::Block);
+}
+
+#[test]
+fn block_once_keeps_a_newer_site_panel_allow() {
+    let mut manager = PermissionManager::new();
+    let tab = TabId::new("a");
+    let site = origin("https://meet.example");
+    let shared = Partition::Shared;
+    let id = prompt(manager.evaluate(&shared, &tab, &site, media()));
+    manager
+        .set_setting(&shared, &site, Camera, Decision::Allow)
+        .unwrap();
+
+    assert_eq!(
+        manager.resolve_prompt(id, PromptOutcome::BlockOnce),
+        Ok(vec![done(id, Verdict::Block)])
+    );
+    assert_eq!(
+        manager.evaluate(&shared, &tab, &site, Camera),
+        Evaluation::Resolved(Verdict::Allow)
+    );
+    assert_eq!(
+        manager.evaluate(&shared, &tab, &site, Microphone),
+        Evaluation::Resolved(Verdict::Block)
+    );
+    assert_eq!(
+        manager.site_settings(&shared, &site).decision(Microphone),
+        Decision::Ask
+    );
+}
+
+#[test]
+fn allow_always_after_a_panel_allow_saves_only_the_rest() {
+    let mut manager = PermissionManager::new();
+    let tab = TabId::new("a");
+    let site = origin("https://meet.example");
+    let shared = Partition::Shared;
+    let id = prompt(manager.evaluate(&shared, &tab, &site, media()));
+    manager
+        .set_setting(&shared, &site, Camera, Decision::Allow)
+        .unwrap();
+    manager.mark_saved();
+
+    assert_eq!(
+        manager.resolve_prompt(id, PromptOutcome::AllowAlways),
+        Ok(vec![done(id, Verdict::Allow)])
+    );
+    assert_eq!(
+        manager
+            .site_settings(&shared, &site)
+            .control(SiteControl::Media),
+        Some(Decision::Allow)
+    );
+    assert!(manager.is_dirty());
+}
