@@ -1,4 +1,4 @@
-patched a copy of 5cebba26a0722ed094d824dcc30a1ca81c2a6ef3 in /tmp/cef-gpui-pump-clippy-guard.6VuqYq
+patched a copy of 70e99af4bd0939b316c5e5b1de9da31558bfaac2 in /tmp/cef-gpui-pump-clippy-guard.2uGoDf
 error: use of a disallowed method `gpui::BackgroundExecutor::timer`
    --> spikes/cef-gpui-pump/src/bridge.rs:230:64
     |

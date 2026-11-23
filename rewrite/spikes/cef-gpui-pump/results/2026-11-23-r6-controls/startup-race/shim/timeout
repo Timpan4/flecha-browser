@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+echo $$ >"/home/timpan4/.t3/worktrees/flecha-browser/t3-3b42251b-74c4a1e059834541/rewrite/spikes/cef-gpui-pump/results/2026-11-23-r6-controls/startup-race/shim.pid"
+exec {fd}<> <(:)
+read -r -t "5" -u "$fd" || true
+exec "/usr/bin/timeout" "$@"

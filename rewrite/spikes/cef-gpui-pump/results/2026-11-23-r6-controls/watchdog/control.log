@@ -1,9 +1,10 @@
-stopped browser 619074 (process group 619069) at 14:24:01.824
-session tree under group leader 619069: 10 processes (tree-before-stop.txt)
-added process 619650 to group 619069; it ignores SIGTERM
-session processes outside group 619069: none
-runner exit 1 at 14:24:39.154
-SIGTERM-ignoring process 619650 alive after the runner: no
-processes left in group 619069: none
+stopped browser 771093 (process group 771088) at 14:47:22.133
+session tree under group leader 771088: 10 processes (tree-before-stop.txt)
+helper 771295 joined group 771088; it ignores SIGTERM
+helper 771296 runs in its own session with XDG_RUNTIME_DIR=/tmp/cef-gpui-pump-run.ystUgJ/runtime; it ignores SIGTERM
+session processes outside group 771088: none
+runner exit 1 at 14:47:59.640
+helpers alive after the runner: none
+processes left in group 771088: none
 recorded session processes still alive: none
-watchdog ended the hung run and its whole process group
+watchdog ended the hung run, its process group and its marked processes

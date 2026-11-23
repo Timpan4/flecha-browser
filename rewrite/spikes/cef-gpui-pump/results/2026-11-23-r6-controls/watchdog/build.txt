@@ -1,10 +1,13 @@
-head 5cebba26a0722ed094d824dcc30a1ca81c2a6ef3
+head 70e99af4bd0939b316c5e5b1de9da31558bfaac2
 tracked changes in rewrite/:
  M rewrite/spikes/cef-gpui-pump/results/2026-11-23-r6-controls/watchdog/build.txt
  D rewrite/spikes/cef-gpui-pump/results/2026-11-23-r6-controls/watchdog/cef-archive.json
  D rewrite/spikes/cef-gpui-pump/results/2026-11-23-r6-controls/watchdog/control.log
+ D rewrite/spikes/cef-gpui-pump/results/2026-11-23-r6-controls/watchdog/idle.leftover.txt
  D rewrite/spikes/cef-gpui-pump/results/2026-11-23-r6-controls/watchdog/idle.scratch-dirs.txt
  D rewrite/spikes/cef-gpui-pump/results/2026-11-23-r6-controls/watchdog/idle.stderr
  D rewrite/spikes/cef-gpui-pump/results/2026-11-23-r6-controls/watchdog/idle.watchdog.txt
+ D rewrite/spikes/cef-gpui-pump/results/2026-11-23-r6-controls/watchdog/resist.stderr
  M rewrite/spikes/cef-gpui-pump/results/2026-11-23-r6-controls/watchdog/run.log
+ D rewrite/spikes/cef-gpui-pump/results/2026-11-23-r6-controls/watchdog/tree-before-stop.txt
  D rewrite/spikes/cef-gpui-pump/results/2026-11-23-r6-controls/watchdog/xvfb.log

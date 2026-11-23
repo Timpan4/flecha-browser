@@ -1,0 +1,4 @@
+bundle /tmp/cef-gpui-pump-old-runner.YR2KpQ/rewrite/target/release/cef-gpui-pump-bundle/cef_binary_158.0.3+g8c29be2+chromium-158.0.8127.18_linux64_beta_minimal (CEF from /tmp/cef-gpui-pump-old-runner.YR2KpQ/rewrite/target/spike1-src/cef-runtime/cef_binary_158.0.3+g8c29be2+chromium-158.0.8127.18_linux64_beta_minimal/cef_linux_x86_64)
+bus listener ok: second bus used its own socket; /tmp/cef-gpui-pump-bus-check.35Eige/dbus-uBZmaczXyl unchanged and answering
+Xvfb pid 773697 on :1
+== idle (watchdog 38.000 s)
