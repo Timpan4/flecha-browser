@@ -1,0 +1,22 @@
+xvfb pid 3324572 display :1
+app pid 3324574
+waited 30s for: a dark example.com
+WARNING: The convert command is deprecated in IMv7, use "magick" instead of "convert" or "magick convert"
+
+CELL	4b	osr	fail	auto, Xvfb screenshot, on a copy of the Chrome-style profile with Dark Reader installed; example.com loaded: yes; window title: Flecha spike: osr; page background grey level 238 of 255 (dark below 128); probe: body rgba(0, 0, 0, 0), html rgb(238, 238, 238)
+screenshot <scratch>/c27/screenshot.png
+-- app log
+[3324578:3324601:1123/195146.048817:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3324578:3324601:1123/195146.074447:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3324578:3324601:1123/195146.074464:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3324578:3324601:1123/195146.074471:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+commands: go <url> | back | forward | reload | print | pdf [path] | allow <id> | deny <id> | quit
+[browser] created id=1 open=1
+[3324578:3324601:1123/195146.141749:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3324578:3324601:1123/195146.141765:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3324578:3324578:1123/195146.143700:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.Properties.GetAll: object_path= /org/freedesktop/UPower/devices/DisplayDevice: unknown error type: 
+[console] INPUT storage loads 1 (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[load-end] file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html
+[load-end] https://example.com
+[probe] {"body":"rgba(0, 0, 0, 0)","html":"rgb(238, 238, 238)","page":"example"}
+[3324578:3324578:1123/195216.573616:ERROR:content/common/zygote/zygote_communication_linux.cc:318] Failed to send GetTerminationStatus message to zygote: Broken pipe (32)

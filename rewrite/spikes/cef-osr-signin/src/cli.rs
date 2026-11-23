@@ -27,6 +27,11 @@ pub struct Options {
     pub log_console: bool,
     /// Arguments after `--`, passed to CEF unchanged.
     pub cef_args: Vec<String>,
+    /// `--fake-camera`: Chromium's fake capture device, for the camera prompt check on a host
+    /// without a camera. Only local pages may load while it is on; see `common::is_local_url`.
+    pub fake_camera: bool,
+    /// `--probe`: test-only page probes for the automated checklist; see `probe`.
+    pub probe: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -37,10 +42,11 @@ pub struct SelfCheckOptions {
 }
 
 /// Switches that make the browser differ from a shipping build: remote control, automation,
-/// sandbox off, a spoofed user agent, weakened web security, test mode. The self-check scans
-/// every process for them, and they are refused after `--`. `--type` is refused there too,
-/// because it would turn the browser process into a subprocess. Names are listed without a
-/// prefix; see `switch`.
+/// sandbox off, a spoofed user agent, weakened web security, test mode, fake media devices.
+/// The self-check scans every process for them, and they are refused after `--`. `--type` is
+/// refused there too, because it would turn the browser process into a subprocess. The fake
+/// capture device is reachable only through `--fake-camera`, which keeps every page local.
+/// Names are listed without a prefix; see `switch`.
 pub const FORBIDDEN_SWITCHES: &[&str] = &[
     "remote-debugging-port",
     "remote-debugging-pipe",
@@ -51,12 +57,21 @@ pub const FORBIDDEN_SWITCHES: &[&str] = &[
     "disable-setuid-sandbox",
     "disable-seccomp-filter-sandbox",
     "disable-namespace-sandbox",
+    "disable-gpu-sandbox",
+    "no-zygote-sandbox",
     "user-agent",
     "disable-web-security",
     "ignore-certificate-errors",
     "use-mock-keychain",
     "test-type",
+    FAKE_DEVICE_SWITCH,
+    "use-fake-ui-for-media-stream",
+    "use-file-for-fake-video-capture",
+    "use-file-for-fake-audio-capture",
 ];
+
+/// Chromium's fake capture device (media/base/media_switches.cc), added only by `--fake-camera`.
+pub const FAKE_DEVICE_SWITCH: &str = "use-fake-device-for-media-stream";
 
 /// A command-line switch as Chromium reads it on Linux (base/command_line.cc,
 /// `kSwitchPrefixes = {"--", "-"}`): the prefix is `--` or `-`, the name runs to the first `=`,
@@ -86,7 +101,9 @@ const DEFAULT_URL: &str = "https://www.google.com/";
 pub const USAGE: &str = "\
 usage: cef-osr-signin --mode <osr|chrome> --profile <absolute dir> [--url <url>] [--log-console]
                       [--self-check --self-check-timeout-secs <secs> [--report <file>]]
-                      [-- <extra CEF switches>]";
+                      [--fake-camera] [--probe] [-- <extra CEF switches>]
+  --fake-camera  Chromium's fake camera; only file:// and loopback pages may load
+  --probe        test-only page probes for scripts/auto-checks.sh";
 
 pub fn parse(args: &[String]) -> Result<Options, String> {
     let mut mode = None;
@@ -97,6 +114,8 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
     let mut timeout_secs = None;
     let mut report = None;
     let mut cef_args = Vec::new();
+    let mut fake_camera = false;
+    let mut probe = false;
 
     let mut it = args.iter().skip(1);
     while let Some(arg) = it.next() {
@@ -132,6 +151,8 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
             "--url" => url = Some(value("--url")?),
             "--self-check" => self_check = flag("--self-check")?,
             "--log-console" => log_console = flag("--log-console")?,
+            "--fake-camera" => fake_camera = flag("--fake-camera")?,
+            "--probe" => probe = flag("--probe")?,
             "--self-check-timeout-secs" => {
                 let v = value("--self-check-timeout-secs")?;
                 let secs: i64 = v
@@ -173,13 +194,32 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
         }
         None
     };
+    let url = url.unwrap_or_else(|| DEFAULT_URL.to_string());
+    if fake_camera {
+        // The fake device must never meet a sign-in page: every page stays local, and the
+        // modes that load remote pages by design are refused with it.
+        if self_check.is_some() || probe {
+            return Err("--fake-camera cannot be combined with --self-check or --probe".into());
+        }
+        if !crate::common::is_local_url(&url) {
+            return Err(format!(
+                "--fake-camera needs a local --url (file:// or loopback), not {}",
+                crate::common::display_url(&url)
+            ));
+        }
+    }
+    if probe && self_check.is_some() {
+        return Err("--probe cannot be combined with --self-check".into());
+    }
     Ok(Options {
         mode,
         profile,
-        url: url.unwrap_or_else(|| DEFAULT_URL.to_string()),
+        url,
         self_check,
         log_console,
         cef_args,
+        fake_camera,
+        probe,
     })
 }
 
@@ -204,6 +244,11 @@ mod tests {
             "-remote-debugging-port=0",
             "--type=renderer",
             "-type=renderer",
+            "--disable-gpu-sandbox",
+            "-no-zygote-sandbox",
+            "--use-fake-device-for-media-stream",
+            "-use-fake-ui-for-media-stream",
+            "--use-file-for-fake-video-capture=/tmp/x.y4m",
         ] {
             assert!(parse(&args(&["--", bad])).is_err(), "{bad}");
         }
@@ -240,6 +285,50 @@ mod tests {
             .is_err()
         );
         assert!(parse(&args(&["--log-console"])).unwrap().log_console);
+    }
+
+    #[test]
+    fn fake_camera_refuses_google_and_every_other_remote_start() {
+        for url in [
+            "https://accounts.google.com/",
+            "https://mail.google.com/mail/u/0/",
+            "https://myaccount.google.com/",
+            "https://accounts.youtube.com/",
+            "https://example.com/",
+            "http://127.0.0.1@accounts.google.com/",
+            "http://accounts.google.com\\@127.0.0.1/",
+            "http://127.0.0.1.nip.io/",
+            "chrome-extension://abc/",
+        ] {
+            assert!(
+                parse(&args(&["--fake-camera", "--url", url])).is_err(),
+                "{url}"
+            );
+        }
+        // Without --url the start page is google.com.
+        assert!(parse(&args(&["--fake-camera"])).is_err());
+        for url in [
+            "file:///tmp/camera.html",
+            "http://127.0.0.1:8080/camera",
+            "http://localhost/camera",
+            "http://[::1]:9/camera",
+        ] {
+            let o = parse(&args(&["--fake-camera", "--url", url])).unwrap();
+            assert!(o.fake_camera, "{url}");
+        }
+        let local = ["--fake-camera", "--url", "file:///tmp/c.html"];
+        assert!(parse(&args(&[&local[..], &["--probe"]].concat())).is_err());
+        assert!(
+            parse(&args(
+                &[
+                    &local[..],
+                    &["--self-check", "--self-check-timeout-secs", "1"]
+                ]
+                .concat()
+            ))
+            .is_err()
+        );
+        assert!(parse(&args(&[&local[..], &["--fake-camera=1"]].concat())).is_err());
     }
 
     #[test]

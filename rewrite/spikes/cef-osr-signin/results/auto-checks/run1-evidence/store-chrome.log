@@ -1,0 +1,29 @@
+xvfb pid 3278363 display :1
+app pid 3278365
+CELL	4a	chrome	pass	auto, Xvfb, not signed in, probe: button add, enabled true; Return on the focused button (1 presses), install dialog took focus 1 times, Tab and Return on it; Dark Reader unpacked in the profile
+WARNING: The convert command is deprecated in IMv7, use "magick" instead of "convert" or "magick convert"
+
+CELL	4b	chrome	pass	auto, Xvfb screenshot, example.com loaded: yes; window title: Example Domain - Chromium; page background grey level 26 of 255 (dark below 128); probe: body rgb(24, 26, 27), html rgb(24, 26, 27)
+CELL	4c	chrome	not automated	the popup opens from the toolbar's extension menu, Chrome's own UI
+screenshot <scratch>/c17/screenshot.png
+-- app log
+[3278369:3278392:1123/194707.592501:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3278369:3278392:1123/194707.631562:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3278369:3278392:1123/194707.631586:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3278369:3278392:1123/194707.631597:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[browser] created id=1 open=1
+[3278369:3278392:1123/194707.713042:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3278369:3278392:1123/194707.713071:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3278369:3278369:1123/194707.718034:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.Properties.GetAll: object_path= /org/freedesktop/UPower/devices/DisplayDevice: unknown error type: 
+[load-end] https://consent.google.com
+[probe] {"page":"consent","rejected":true}
+[load-end] https://chromewebstore.google.com
+[probe] {"activated":false,"button":"add","enabled":false,"focused":false,"page":"store","page_focus":true,"x":1087,"y":154}
+[probe] {"activated":false,"button":"add","enabled":true,"focused":true,"page":"store","page_focus":true,"x":1087,"y":282}
+[probe] {"activated":true,"button":"none","page":"store","page_focus":false}
+[probe] {"activated":true,"button":"none","page":"store","page_focus":true}
+[browser] created id=2 open=2
+[load-end] https://darkreader.org
+[probe] {"activated":true,"button":"remove","enabled":true,"focused":false,"page":"store","page_focus":false,"x":1065,"y":282}
+[load-end] https://example.com
+[probe] {"body":"rgb(24, 26, 27)","html":"rgb(24, 26, 27)","page":"example"}

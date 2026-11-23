@@ -1,0 +1,27 @@
+xvfb pid 3278890 display :1
+app pid 3278892
+waited 30s for: Dark Reader installed
+CELL	4a	chrome	fail	auto, Xvfb, not signed in, probe: button add, enabled true; nothing pressed (control); no Dark Reader in the profile within 30s
+waited 30s for: a dark example.com
+WARNING: The convert command is deprecated in IMv7, use "magick" instead of "convert" or "magick convert"
+
+CELL	4b	chrome	fail	auto, Xvfb screenshot, example.com loaded: yes; window title: Example Domain - Chromium; page background grey level 238 of 255 (dark below 128); probe: body rgba(0, 0, 0, 0), html rgb(238, 238, 238)
+screenshot <scratch>/c18/screenshot.png
+-- app log
+[3278896:3278919:1123/194713.783346:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3278896:3278919:1123/194713.818447:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3278896:3278919:1123/194713.818466:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3278896:3278919:1123/194713.818475:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[browser] created id=1 open=1
+[3278896:3278919:1123/194713.876645:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3278896:3278919:1123/194713.876662:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3278896:3278896:1123/194713.880338:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.Properties.GetAll: object_path= /org/freedesktop/UPower/devices/DisplayDevice: unknown error type: 
+[3279025:9:1123/194713.887701:ERROR:gpu/ipc/client/command_buffer_proxy_impl.cc:277] ContextResult::kTransientFailure: Failed to send GpuControl.CreateCommandBuffer.
+[load-end] https://consent.google.com
+[probe] {"page":"consent","rejected":true}
+[load-end] https://chromewebstore.google.com
+[probe] {"activated":false,"button":"add","enabled":false,"focused":false,"page":"store","page_focus":true,"x":1087,"y":154}
+[probe] {"activated":false,"button":"add","enabled":true,"focused":true,"page":"store","page_focus":true,"x":1087,"y":282}
+[probe] {"activated":false,"button":"add","enabled":true,"focused":true,"page":"store","page_focus":false,"x":1087,"y":282}
+[load-end] https://example.com
+[probe] {"body":"rgba(0, 0, 0, 0)","html":"rgb(238, 238, 238)","page":"example"}

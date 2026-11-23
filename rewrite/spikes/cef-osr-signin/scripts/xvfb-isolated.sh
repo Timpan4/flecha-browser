@@ -5,7 +5,7 @@
 #
 # Isolation, for this script and everything it starts (Xvfb, the app, ACTIONS and any window
 # manager): no session bus address, a system bus address that points nowhere, no keyring or
-# desktop-session variables, scratch HOME, XDG and runtime dirs under <out-dir>, no
+# desktop-session variables, scratch HOME, XDG, runtime and temp (TMPDIR) dirs under <out-dir>, no
 # inherited LD_LIBRARY_PATH, WAYLAND_DISPLAY unset. The app gets a private D-Bus session bus
 # without service activation (session-bus.conf) and is started through run.sh, which loads the
 # runtime prepare.sh staged. Logs go to <out-dir>/stdout.log and stderr.log. The app's stdin
@@ -25,11 +25,21 @@ set -euo pipefail
 : "${WAIT_SECS:?set WAIT_SECS, the bound in seconds for each wait}"
 
 here=$(cd "$(dirname "$0")" && pwd)
-launcher=$here/../run.sh
+# LAUNCHER overrides the app launcher (auto-checks.sh uses flecha-launch.sh for the Flecha
+# reference column); it gets the same isolated environment and arguments.
+launcher=${LAUNCHER:-$here/../run.sh}
 out=$(mkdir -p "$1" && cd "$1" && pwd)
 shift
-mkdir -p "$out"/{home,xdg-config,xdg-cache,xdg-data,runtime}
-chmod 700 "$out/runtime"
+mkdir -p "$out"/{home,xdg-config,xdg-cache,xdg-data,runtime,tmp}
+chmod 700 "$out/runtime" "$out/tmp"
+# Chromium creates its process-singleton socket at
+# $TMPDIR/org.chromium.Chromium.XXXXXX/SingletonSocket, and a Unix socket path holds at most
+# 107 bytes (sun_path is 108 bytes with the NUL, unix(7)).
+singleton=$out/tmp/org.chromium.Chromium.XXXXXX/SingletonSocket
+if ((${#singleton} > 107)); then
+    echo "<out-dir> is too long for Chromium's singleton socket (${#singleton} of 107 bytes): $out" >&2
+    exit 2
+fi
 
 unset DBUS_SESSION_BUS_ADDRESS WAYLAND_DISPLAY LD_LIBRARY_PATH SSH_AUTH_SOCK \
     GNOME_KEYRING_CONTROL XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION KDE_FULL_SESSION
@@ -37,7 +47,7 @@ unset DBUS_SESSION_BUS_ADDRESS WAYLAND_DISPLAY LD_LIBRARY_PATH SSH_AUTH_SOCK \
 # not exist keeps every process off the host's system bus.
 export DBUS_SYSTEM_BUS_ADDRESS=unix:path=/nonexistent/flecha-spike-no-system-bus
 export HOME=$out/home XDG_RUNTIME_DIR=$out/runtime XDG_CONFIG_HOME=$out/xdg-config \
-    XDG_CACHE_HOME=$out/xdg-cache XDG_DATA_HOME=$out/xdg-data XDG_SESSION_TYPE=x11
+    XDG_CACHE_HOME=$out/xdg-cache XDG_DATA_HOME=$out/xdg-data XDG_SESSION_TYPE=x11 TMPDIR=$out/tmp
 
 display_fifo=$out/display.fifo
 cmd_fifo=$out/stdin.fifo

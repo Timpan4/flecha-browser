@@ -1,0 +1,32 @@
+xvfb pid 3267094 display :1
+app pid 3267096
+remote requests: 6; [blocked] lines: 0; go commands refused: 0
+remote: GET /frame
+remote: GET /fetch
+remote: GET /img
+remote: GET /redirected
+remote: GET /navigate
+remote: GET /navigate-redirected
+CELL	guard-control	osr	pass	auto, Xvfb, no --fake-camera: all six requests reached 127.0.0.2, so the guarded run's 0 is the guard's doing
+screenshot <scratch>/c10/screenshot.png
+-- app log
+[3267100:3267123:1123/194348.965396:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3267100:3267123:1123/194348.991387:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3267100:3267123:1123/194348.991415:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3267100:3267123:1123/194348.991452:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+commands: go <url> | back | forward | reload | print | pdf [path] | allow <id> | deny <id> | quit
+[browser] created id=1 open=1
+[3267100:3267123:1123/194349.026328:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3267100:3267123:1123/194349.026346:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3267100:3267100:1123/194349.060727:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.Properties.GetAll: object_path= /org/freedesktop/UPower/devices/DisplayDevice: unknown error type: 
+[console] INPUT storage loads 1 (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[load-end] file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html
+[load-end] http://127.0.0.1:39363
+Fontconfig error: Cannot load default config file: File not found
+[load-error] main_frame=true code=Errorcode(ERR_HTTP_RESPONSE_CODE_FAILURE) ERR_HTTP_RESPONSE_CODE_FAILURE http://127.0.0.2:40737
+[load-end] http://127.0.0.2:40737
+[load-error] main_frame=true code=Errorcode(ERR_HTTP_RESPONSE_CODE_FAILURE) ERR_HTTP_RESPONSE_CODE_FAILURE http://127.0.0.2:40737
+[load-end] http://127.0.0.2:40737
+[3267100:3267100:1123/194350.803232:ERROR:content/common/zygote/zygote_communication_linux.cc:318] Failed to send GetTerminationStatus message to zygote: Broken pipe (32)
+[3267100:3267100:1123/194350.803766:ERROR:content/common/zygote/zygote_communication_linux.cc:318] Failed to send GetTerminationStatus message to zygote: Broken pipe (32)
+[3267100:3267100:1123/194350.804437:ERROR:content/common/zygote/zygote_communication_linux.cc:318] Failed to send GetTerminationStatus message to zygote: Broken pipe (32)

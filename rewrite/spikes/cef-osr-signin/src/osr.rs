@@ -381,6 +381,10 @@ wrap_life_span_handler! {
             }
             let url = target_url.map(|u| u.to_string()).unwrap_or_default();
             eprintln!("[popup] {}", common::display_url(&url));
+            if common::FAKE_CAMERA.get().copied().unwrap_or(false) && !common::is_local_url(&url) {
+                eprintln!("[blocked] popup to {} (--fake-camera)", common::display_url(&url));
+                return 1;
+            }
             let view = View::new(size, scale, false);
             VIEWS.with_borrow_mut(|views| views.push(view.clone()));
             if let Some(info) = window_info {
@@ -653,6 +657,10 @@ wrap_client! {
         fn print_handler(&self) -> Option<PrintHandler> {
             Some(SpikePrintHandler::new())
         }
+
+        fn request_handler(&self) -> Option<RequestHandler> {
+            common::request_handler()
+        }
     }
 }
 
@@ -845,11 +853,14 @@ impl OsrApp {
         let browser = view.as_ref().and_then(|v| v.borrow().browser.clone());
         let host = browser.as_ref().and_then(|b| b.host());
         match (cmd, arg) {
-            ("go", Some(url)) => {
-                if let Some(frame) = browser.as_ref().and_then(|b| b.main_frame()) {
-                    frame.load_url(Some(&CefString::from(url)));
+            ("go", Some(url)) => match common::check_typed_url(url) {
+                Ok(()) => {
+                    if let Some(frame) = browser.as_ref().and_then(|b| b.main_frame()) {
+                        frame.load_url(Some(&CefString::from(url)));
+                    }
                 }
-            }
+                Err(why) => eprintln!("[go] refused: {why}"),
+            },
             ("back", _) => browser.iter().for_each(|b| b.go_back()),
             ("forward", _) => browser.iter().for_each(|b| b.go_forward()),
             ("reload", _) => browser.iter().for_each(|b| b.reload()),

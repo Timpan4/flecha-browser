@@ -108,6 +108,149 @@ pub fn display_url(url: &str) -> String {
     }
 }
 
+/// `--fake-camera`: the fake capture device is on, so only local pages may load.
+pub static FAKE_CAMERA: OnceLock<bool> = OnceLock::new();
+
+fn fake_camera() -> bool {
+    FAKE_CAMERA.get().copied().unwrap_or(false)
+}
+
+/// A page that needs no network and cannot be a sign-in page: `file:`, `data:`, `blob:` and
+/// `about:` URLs, and `http(s)`/`ws(s)` on `127.0.0.1`, `localhost` or `[::1]`. The host is
+/// read the way `display_url` reads it (WHATWG special-scheme rules, userinfo dropped), and
+/// anything unexpected is not local, so a wrong guess refuses a page rather than allowing one.
+pub fn is_local_url(url: &str) -> bool {
+    let shown = display_url(url);
+    let Some((scheme, rest)) = shown.split_once(':') else {
+        return false;
+    };
+    match scheme {
+        "file" | "data" | "blob" | "about" => true,
+        "http" | "https" | "ws" | "wss" => {
+            let authority = rest.trim_start_matches('/').to_ascii_lowercase();
+            let host = match authority.strip_prefix('[') {
+                Some(v6) => v6.split(']').next().map(|h| format!("[{h}]")),
+                None => authority.split(':').next().map(str::to_string),
+            };
+            matches!(host.as_deref(), Some("127.0.0.1" | "localhost" | "[::1]"))
+        }
+        _ => false,
+    }
+}
+
+/// Schemes `go` and `--url` accept.
+const TYPED_SCHEMES: &[&str] = &["http", "https", "file", "about", "chrome", "data"];
+
+/// Checks a URL typed with `go` or `--url` before it reaches CEF. CEF logs a URL it cannot
+/// parse in full (`Invalid URL: …`, url_util.cc), and loading a `filesystem:` URL makes
+/// Chromium's storage code log the whole URI to chrome_debug.log, so both are refused here
+/// and the refusal names only the scheme. Needs CEF to be initialized (`cef_parse_url`).
+pub fn check_typed_url(url: &str) -> Result<(), String> {
+    let scheme = url
+        .split_once(':')
+        .map(|(s, _)| s.to_ascii_lowercase())
+        .filter(|s| TYPED_SCHEMES.contains(&s.as_str()));
+    let Some(scheme) = scheme else {
+        return Err(format!(
+            "not a URL with one of the schemes {}",
+            TYPED_SCHEMES.join(", ")
+        ));
+    };
+    let mut parts = Urlparts::default();
+    if parse_url(Some(&CefString::from(url)), Some(&mut parts)) != 1 {
+        return Err(format!("not a valid {scheme}: URL"));
+    }
+    if fake_camera() && !is_local_url(url) {
+        return Err(format!(
+            "--fake-camera allows only local pages, not {}",
+            display_url(url)
+        ));
+    }
+    Ok(())
+}
+
+wrap_request_handler! {
+    struct LocalOnlyRequestHandler;
+
+    impl RequestHandler {
+        fn on_before_browse(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            request: Option<&mut Request>,
+            _user_gesture: ::std::os::raw::c_int,
+            _is_redirect: ::std::os::raw::c_int,
+        ) -> ::std::os::raw::c_int {
+            let url = request.map(|r| userfree_to_string(&r.url())).unwrap_or_default();
+            if is_local_url(&url) {
+                0
+            } else {
+                eprintln!("[blocked] navigation to {} (--fake-camera)", display_url(&url));
+                1
+            }
+        }
+
+        fn resource_request_handler(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            _request: Option<&mut Request>,
+            _is_navigation: ::std::os::raw::c_int,
+            _is_download: ::std::os::raw::c_int,
+            _request_initiator: Option<&CefString>,
+            _disable_default_handling: Option<&mut ::std::os::raw::c_int>,
+        ) -> Option<ResourceRequestHandler> {
+            Some(LocalOnlyResourceRequestHandler::new())
+        }
+    }
+}
+
+wrap_resource_request_handler! {
+    struct LocalOnlyResourceRequestHandler;
+
+    impl ResourceRequestHandler {
+        fn on_before_resource_load(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            request: Option<&mut Request>,
+            _callback: Option<&mut Callback>,
+        ) -> ReturnValue {
+            let url = request.map(|r| userfree_to_string(&r.url())).unwrap_or_default();
+            if is_local_url(&url) {
+                ReturnValue::CONTINUE
+            } else {
+                eprintln!("[blocked] request to {} (--fake-camera)", display_url(&url));
+                ReturnValue::CANCEL
+            }
+        }
+
+        fn on_resource_redirect(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut Frame>,
+            _request: Option<&mut Request>,
+            _response: Option<&mut Response>,
+            new_url: Option<&mut CefString>,
+        ) {
+            if let Some(new_url) = new_url {
+                let target = new_url.to_string();
+                if !is_local_url(&target) {
+                    eprintln!("[blocked] redirect to {} (--fake-camera)", display_url(&target));
+                    *new_url = CefString::from("data:,");
+                }
+            }
+        }
+    }
+}
+
+/// The request handler for every browser: with `--fake-camera`, one that cancels every
+/// navigation, subresource request and redirect that is not local; otherwise none, so the
+/// default path is unchanged.
+pub fn request_handler() -> Option<RequestHandler> {
+    fake_camera().then(LocalOnlyRequestHandler::new)
+}
+
 /// The WHATWG URL standard's special schemes: `\` counts as `/` and the authority is read
 /// however many slashes follow the scheme.
 const SPECIAL_SCHEMES: &[&str] = &["http", "https", "ws", "wss", "ftp", "file"];
@@ -222,7 +365,8 @@ wrap_display_handler! {
             let browser = browser.map(|b| b.clone());
             let message = message.map(|m| m.to_string()).unwrap_or_default();
             let source = source.map(|s| s.to_string()).unwrap_or_default();
-            if !selfcheck::on_console_message(browser.as_ref(), &message)
+            if !crate::probe::on_console_message(&message)
+                && !selfcheck::on_console_message(browser.as_ref(), &message)
                 && relay_console(browser.as_ref(), &source)
             {
                 eprintln!("[console] {message} ({}:{line})", display_url(&source));
@@ -263,6 +407,7 @@ wrap_load_handler! {
             if let (Some(browser), Some(frame)) = (browser, frame)
                 && frame.is_main() != 0 {
                     eprintln!("[load-end] {}", display_url(&userfree_to_string(&frame.url())));
+                    crate::probe::on_main_frame_load_end(frame);
                     selfcheck::on_main_frame_load_end(browser, frame);
                 }
         }
@@ -305,7 +450,41 @@ pub fn userfree_to_string(value: &CefStringUserfree) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::display_url;
+    use super::{display_url, is_local_url};
+
+    #[test]
+    fn only_file_opaque_and_loopback_urls_are_local() {
+        for url in [
+            "file:///tmp/camera.html",
+            "data:text/html,x",
+            "blob:http://127.0.0.1:9/uuid",
+            "about:blank",
+            "http://127.0.0.1:8080/x",
+            "https://LOCALHOST/x",
+            "ws://[::1]:9/x",
+            "http:\\\\127.0.0.1\\x",
+        ] {
+            assert!(is_local_url(url), "{url}");
+        }
+        for url in [
+            "https://accounts.google.com/",
+            "https://mail.google.com/",
+            "https://accounts.youtube.com/",
+            "http://127.0.0.1@accounts.google.com/",
+            "http://accounts.google.com\\@127.0.0.1/",
+            "http://127.0.0.1.nip.io/",
+            "http://0x7f.1/",
+            "http://%31%32%37.0.0.1/",
+            "chrome://newtab/",
+            "chrome-extension://abc/",
+            "filesystem:http://127.0.0.1/temporary/x",
+            "javascript:void(0)",
+            "",
+            "not a url",
+        ] {
+            assert!(!is_local_url(url), "{url}");
+        }
+    }
 
     #[test]
     fn display_url_keeps_no_payload_path_query_or_userinfo() {

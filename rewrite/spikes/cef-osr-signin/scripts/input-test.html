@@ -40,7 +40,7 @@
       document.getElementById(id).addEventListener('input', e => log(id, JSON.stringify(e.target.value)));
     }
     // The action scripts wait for focus before typing, so keys never go to the document.
-    for (const id of ['text', 'password', 'area']) {
+    for (const id of ['text', 'password', 'area', 'camera']) {
       document.getElementById(id).addEventListener('focus', () => log('focus', id));
     }
     document.getElementById('password').addEventListener('input', e => {
@@ -58,6 +58,7 @@
       Notification.requestPermission().then(r => log('notification', r));
     });
     document.getElementById('camera').addEventListener('click', () => {
+      log('camera requested');
       navigator.mediaDevices.getUserMedia({ video: true })
         .then(s => { log('camera granted', s.getVideoTracks().length); s.getTracks().forEach(t => t.stop()); })
         .catch(e => log('camera error', e.name));
@@ -66,5 +67,7 @@
       if (e.target.type !== 'password') log('keydown', e.key, e.code, e.keyCode, 'ctrl', e.ctrlKey);
     });
     addEventListener('scroll', () => log('scroll', Math.round(scrollY)));
+    // A browser prompt that takes keyboard focus (Chrome's permission bubble) blurs the page.
+    addEventListener('blur', () => log('window blur'));
   }
 </script>

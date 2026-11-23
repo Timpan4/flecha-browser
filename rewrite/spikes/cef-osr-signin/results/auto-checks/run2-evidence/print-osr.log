@@ -1,0 +1,18 @@
+xvfb pid 3394080 display :1
+app pid 3394095
+CELL	7	osr	pass	auto, Xvfb: Ctrl+P logged [print] start (the spike has no print dialog or preview); the pdf command wrote a PDF containing the page text
+screenshot <scratch>/c5/screenshot.png
+-- app log
+[3394101:3394165:1123/195717.981575:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3394101:3394165:1123/195718.037859:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3394101:3394165:1123/195718.037883:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3394101:3394165:1123/195718.037894:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+commands: go <url> | back | forward | reload | print | pdf [path] | allow <id> | deny <id> | quit
+[browser] created id=1 open=1
+[3394101:3394165:1123/195718.129550:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3394101:3394165:1123/195718.129575:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3394101:3394101:1123/195718.134991:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.Properties.GetAll: object_path= /org/freedesktop/UPower/devices/DisplayDevice: unknown error type: 
+[load-end] file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/print-test.html
+[print] start
+[3394101:3394101:1123/195718.299224:ERROR:components/device_event_log/device_event_log_impl.cc:211] [19:57:18.299] Printer: print_error_dialog.cc:63 The selected printer is not available or not installed correctly. Check your printer or try selecting another printer.
+[pdf] ok=true <scratch>/c5/print-check.pdf

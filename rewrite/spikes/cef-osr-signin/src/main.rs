@@ -13,6 +13,7 @@ mod cli;
 mod common;
 mod keys;
 mod osr;
+mod probe;
 mod runtime;
 mod selfcheck;
 
@@ -133,6 +134,12 @@ fn main() -> ExitCode {
     common::LOG_CONSOLE
         .set(options.log_console)
         .expect("log_console set once");
+    common::FAKE_CAMERA
+        .set(options.fake_camera)
+        .expect("fake_camera set once");
+    if options.probe {
+        probe::enable();
+    }
 
     let runtime = match runtime::check() {
         Ok(runtime) => runtime,
@@ -163,6 +170,10 @@ fn main() -> ExitCode {
     // CEF sees only argv[0] and what follows `--`, never this program's own flags.
     let mut cef_args = vec![args[0].clone()];
     cef_args.extend(options.cef_args.iter().cloned());
+    if options.fake_camera {
+        // The only way to the fake device: `--` refuses this switch (cli::FORBIDDEN_SWITCHES).
+        cef_args.push(format!("--{}", cli::FAKE_DEVICE_SWITCH));
+    }
     let argv = Argv::new(&cef_args);
     if execute_process(
         Some(&argv.main_args),
@@ -208,6 +219,13 @@ fn main() -> ExitCode {
     {
         eprintln!("cef initialize failed");
         return ExitCode::FAILURE;
+    }
+    if options.self_check.is_none()
+        && let Err(why) = common::check_typed_url(&start_url)
+    {
+        eprintln!("--url refused: {why}");
+        shutdown();
+        return ExitCode::from(2);
     }
 
     match event_loop {

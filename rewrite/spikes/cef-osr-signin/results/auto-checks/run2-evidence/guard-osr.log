@@ -1,0 +1,31 @@
+xvfb pid 3414825 display :1
+app pid 3414827
+remote requests: 0; [blocked] lines: 7; go commands refused: 2
+CELL	guard	osr	pass	auto, Xvfb, --fake-camera: 0 requests reached 127.0.0.2 (frame, image, fetch, redirected fetch, navigation, redirected navigation all tried); 7 [blocked] lines; 2 go commands to Google sign-in origins refused
+screenshot <scratch>/c9/screenshot.png
+-- app log
+[3414831:3414854:1123/195956.665263:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3414831:3414854:1123/195956.690620:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3414831:3414854:1123/195956.690636:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3414831:3414854:1123/195956.690643:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+commands: go <url> | back | forward | reload | print | pdf [path] | allow <id> | deny <id> | quit
+[browser] created id=1 open=1
+[3414831:3414854:1123/195956.723845:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3414831:3414854:1123/195956.723870:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent/flecha-spike-no-system-bus: No such file or directory
+[3414831:3414831:1123/195956.758187:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.Properties.GetAll: object_path= /org/freedesktop/UPower/devices/DisplayDevice: unknown error type: 
+[console] INPUT storage loads 1 (file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html:25)
+[load-end] file://~/.t3/worktrees/flecha-browser/t3-b27fdf4c-b461b197f50d3f33/rewrite/spikes/cef-osr-signin/scripts/input-test.html
+[blocked] navigation to http://127.0.0.2:35117 (--fake-camera)
+[load-error] main_frame=false code=Errorcode(ERR_ABORTED) ERR_ABORTED http://127.0.0.2:35117
+[blocked] request to http://127.0.0.2:35117 (--fake-camera)
+[blocked] request to http://127.0.0.2:35117 (--fake-camera)
+[blocked] redirect to http://127.0.0.2:35117 (--fake-camera)
+[load-end] http://127.0.0.1:46263
+[blocked] request to http://127.0.0.2:35117 (--fake-camera)
+[go] refused: --fake-camera allows only local pages, not http://127.0.0.2:35117
+[blocked] redirect to http://127.0.0.2:35117 (--fake-camera)
+[blocked] navigation to http://127.0.0.2:35117 (--fake-camera)
+[load-error] main_frame=true code=Errorcode(ERR_ABORTED) ERR_ABORTED http://127.0.0.2:35117
+[go] refused: --fake-camera allows only local pages, not https://accounts.google.com
+[go] refused: --fake-camera allows only local pages, not https://mail.google.com
+[3414831:3414831:1123/195958.020626:ERROR:content/common/zygote/zygote_communication_linux.cc:318] Failed to send GetTerminationStatus message to zygote: Broken pipe (32)

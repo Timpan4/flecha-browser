@@ -442,7 +442,7 @@ fn finish() {
         .flat_map(|p| {
             p.cmdline
                 .iter()
-                .filter(|a| cli::is_forbidden(a))
+                .filter(|a| forbidden_in_process(&p.cmdline, a))
                 .filter_map(|a| redact_switch(a))
                 .map(|switch| json!({ "pid": p.pid, "switch": switch }))
         })
@@ -582,6 +582,16 @@ fn redact_switch(arg: &str) -> Option<String> {
         Some(v) if SHOWN_SWITCH_VALUES.contains(&name) && safe(v) => format!("--{name}={v}"),
         Some(_) => format!("--{name}=<redacted>"),
     })
+}
+
+/// Whether `arg` in a running process's command line is a finding. Chromium starts its
+/// unsandboxed zygote itself as `--type=zygote --no-zygote-sandbox` (the processes it forks set
+/// up their own sandbox), so that switch is expected there and nowhere else; `--` refuses it
+/// from the owner like every other switch in `cli::FORBIDDEN_SWITCHES`.
+fn forbidden_in_process(cmdline: &[String], arg: &str) -> bool {
+    let own_zygote_switch = cli::switch(arg).is_some_and(|(name, _)| name == "no-zygote-sandbox")
+        && cmdline.iter().any(|a| a == "--type=zygote");
+    cli::is_forbidden(arg) && !own_zygote_switch
 }
 
 /// A command line as the report shows it, from the process's argv (/proc/<pid>/cmdline, so
@@ -877,6 +887,21 @@ const WEBSTORE_COLLECT: &str = r#"() => {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_chromiums_own_zygote_may_run_without_the_zygote_sandbox() {
+        let argv = |args: &[&str]| args.iter().map(|a| a.to_string()).collect::<Vec<_>>();
+        let zygote = argv(&["/bin/spike", "--type=zygote", "--no-zygote-sandbox"]);
+        assert!(!forbidden_in_process(&zygote, "--no-zygote-sandbox"));
+        let renderer = argv(&["/bin/spike", "--type=renderer", "--no-zygote-sandbox"]);
+        assert!(forbidden_in_process(&renderer, "--no-zygote-sandbox"));
+        let browser = argv(&["/bin/spike", "--mode", "osr", "-no-zygote-sandbox"]);
+        assert!(forbidden_in_process(&browser, "-no-zygote-sandbox"));
+        let zygote_off = argv(&["/bin/spike", "--type=zygote", "--no-sandbox"]);
+        assert!(forbidden_in_process(&zygote_off, "--no-sandbox"));
+        let gpu = argv(&["/bin/spike", "--type=gpu-process", "--disable-gpu-sandbox"]);
+        assert!(forbidden_in_process(&gpu, "--disable-gpu-sandbox"));
+    }
 
     #[test]
     fn switches_are_reported_by_name_whatever_the_prefix() {
