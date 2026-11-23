@@ -1,0 +1,400 @@
+{
+  "browsers": [
+    {
+      "id": 1,
+      "is_popup": false,
+      "runtime_style": "alloy",
+      "windowless": true
+    }
+  ],
+  "cef": {
+    "archive": {
+      "name": "cef_binary_158.0.3+g8c29be2+chromium-158.0.8127.18_linux64_beta_minimal.tar.bz2",
+      "sha1": "057a0b871bf26d26d654d999dba595b92fe0f067",
+      "type": "minimal"
+    },
+    "compiled_cef_version": "158.0.3+g8c29be2+chromium-158.0.8127.18",
+    "loaded_libcef": "…/fresh6/rewrite/target/cef-runtime/158.0.3/cef_linux_x86_64/libcef.so",
+    "pinned_cef_version": "158.0.3+g8c29be2+chromium-158.0.8127.18",
+    "pinned_channel": "beta",
+    "pinned_sha1": "057a0b871bf26d26d654d999dba595b92fe0f067",
+    "runtime_api_version": 15800,
+    "runtime_cef_commit": "8c29be240971eebee960ac92114d3efccb5780ff"
+  },
+  "failures": [],
+  "forbidden_switches_found": [],
+  "mode": "osr",
+  "pass": true,
+  "process_scan": {
+    "complete": true,
+    "errors": []
+  },
+  "processes": [
+    {
+      "name": "cef-osr-signin",
+      "namespaces": {
+        "net": "same as browser",
+        "pid": "same as browser",
+        "user": "same as browser"
+      },
+      "no_new_privs": "0",
+      "pid": 172630,
+      "seccomp": "0",
+      "switches": [
+        "--mode",
+        "--profile",
+        "--self-check",
+        "--self-check-timeout-secs",
+        "--report"
+      ],
+      "type": "browser"
+    },
+    {
+      "name": "cef-osr-signin",
+      "namespaces": {
+        "net": "same as browser",
+        "pid": "same as browser",
+        "user": "same as browser"
+      },
+      "no_new_privs": "1",
+      "pid": 172642,
+      "seccomp": "0",
+      "switches": [
+        "--type=zygote",
+        "--no-zygote-sandbox",
+        "--enable-crash-reporter=<redacted>",
+        "--change-stack-guard-on-fork=<redacted>",
+        "--user-data-dir=<redacted>",
+        "--locales-dir-path=<redacted>",
+        "--log-severity=<redacted>",
+        "--resources-dir-path=<redacted>"
+      ],
+      "type": "zygote"
+    },
+    {
+      "name": "cef-osr-signin",
+      "namespaces": {
+        "net": "separate",
+        "pid": "separate",
+        "user": "separate"
+      },
+      "no_new_privs": "1",
+      "pid": 172643,
+      "seccomp": "0",
+      "switches": [
+        "--type=zygote",
+        "--enable-crash-reporter=<redacted>",
+        "--change-stack-guard-on-fork=<redacted>",
+        "--user-data-dir=<redacted>",
+        "--locales-dir-path=<redacted>",
+        "--log-severity=<redacted>",
+        "--resources-dir-path=<redacted>"
+      ],
+      "type": "zygote"
+    },
+    {
+      "name": "cef-osr-signin",
+      "namespaces": {
+        "net": "separate",
+        "pid": "separate",
+        "user": "separate"
+      },
+      "no_new_privs": "1",
+      "pid": 172645,
+      "seccomp": "0",
+      "switches": [
+        "--type=zygote",
+        "--enable-crash-reporter=<redacted>",
+        "--change-stack-guard-on-fork=<redacted>",
+        "--user-data-dir=<redacted>",
+        "--locales-dir-path=<redacted>",
+        "--log-severity=<redacted>",
+        "--resources-dir-path=<redacted>"
+      ],
+      "type": "zygote"
+    },
+    {
+      "name": "cef-osr-signin",
+      "namespaces": {
+        "net": "same as browser",
+        "pid": "same as browser",
+        "user": "same as browser"
+      },
+      "no_new_privs": "1",
+      "pid": 172671,
+      "seccomp": "0",
+      "switches": [
+        "--type=zygote",
+        "--no-zygote-sandbox",
+        "--enable-crash-reporter=<redacted>",
+        "--change-stack-guard-on-fork=<redacted>",
+        "--user-data-dir=<redacted>",
+        "--locales-dir-path=<redacted>",
+        "--log-severity=<redacted>",
+        "--resources-dir-path=<redacted>"
+      ],
+      "type": "zygote"
+    },
+    {
+      "name": "cef-osr-signin",
+      "namespaces": {
+        "net": "same as browser",
+        "pid": "same as browser",
+        "user": "same as browser"
+      },
+      "no_new_privs": "1",
+      "pid": 172673,
+      "seccomp": "0",
+      "switches": [
+        "--type=utility",
+        "--utility-sub-type=network.mojom.NetworkService",
+        "--lang=en-GB",
+        "--service-sandbox-type=<redacted>",
+        "--enable-crash-reporter=<redacted>",
+        "--change-stack-guard-on-fork=<redacted>",
+        "--user-data-dir=<redacted>",
+        "--locales-dir-path=<redacted>",
+        "--log-severity=<redacted>",
+        "--resources-dir-path=<redacted>",
+        "--shared-files=<redacted>",
+        "--metrics-shmem-handle=<redacted>",
+        "--field-trial-handle=<redacted>",
+        "--disable-features=AutofillActorMode,GlicActorUi,KillOnInvalidNavigationHeaders,LensOverlay",
+        "--variations-seed-version",
+        "--pseudonymization-salt-handle=<redacted>",
+        "--trace-process-track-uuid=<redacted>"
+      ],
+      "type": "utility"
+    },
+    {
+      "name": "cef-osr-signin",
+      "namespaces": {
+        "net": "separate",
+        "pid": "separate",
+        "user": "separate"
+      },
+      "no_new_privs": "1",
+      "pid": 172687,
+      "seccomp": "2",
+      "switches": [
+        "--type=zygote",
+        "--enable-crash-reporter=<redacted>",
+        "--change-stack-guard-on-fork=<redacted>",
+        "--user-data-dir=<redacted>",
+        "--locales-dir-path=<redacted>",
+        "--log-severity=<redacted>",
+        "--resources-dir-path=<redacted>"
+      ],
+      "type": "zygote"
+    },
+    {
+      "name": "cef-osr-signin",
+      "namespaces": {
+        "net": "separate",
+        "pid": "separate",
+        "user": "separate"
+      },
+      "no_new_privs": "1",
+      "pid": 172815,
+      "seccomp": "2",
+      "switches": [
+        "--type=zygote",
+        "--enable-crash-reporter=<redacted>",
+        "--change-stack-guard-on-fork=<redacted>",
+        "--user-data-dir=<redacted>",
+        "--locales-dir-path=<redacted>",
+        "--log-severity=<redacted>",
+        "--resources-dir-path=<redacted>"
+      ],
+      "type": "zygote"
+    },
+    {
+      "name": "cef-osr-signin",
+      "namespaces": {
+        "net": "separate",
+        "pid": "separate",
+        "user": "separate"
+      },
+      "no_new_privs": "1",
+      "pid": 172826,
+      "seccomp": "2",
+      "switches": [
+        "--type=zygote",
+        "--enable-crash-reporter=<redacted>",
+        "--change-stack-guard-on-fork=<redacted>",
+        "--user-data-dir=<redacted>",
+        "--locales-dir-path=<redacted>",
+        "--log-severity=<redacted>",
+        "--resources-dir-path=<redacted>"
+      ],
+      "type": "zygote"
+    },
+    {
+      "name": "cef-osr-signin",
+      "namespaces": {
+        "net": "separate",
+        "pid": "separate",
+        "user": "separate"
+      },
+      "no_new_privs": "1",
+      "pid": 172838,
+      "seccomp": "2",
+      "switches": [
+        "--type=zygote",
+        "--enable-crash-reporter=<redacted>",
+        "--change-stack-guard-on-fork=<redacted>",
+        "--user-data-dir=<redacted>",
+        "--locales-dir-path=<redacted>",
+        "--log-severity=<redacted>",
+        "--resources-dir-path=<redacted>"
+      ],
+      "type": "zygote"
+    },
+    {
+      "name": "cef-osr-signin",
+      "namespaces": {
+        "net": "separate",
+        "pid": "separate",
+        "user": "separate"
+      },
+      "no_new_privs": "1",
+      "pid": 172854,
+      "seccomp": "2",
+      "switches": [
+        "--type=zygote",
+        "--enable-crash-reporter=<redacted>",
+        "--change-stack-guard-on-fork=<redacted>",
+        "--user-data-dir=<redacted>",
+        "--locales-dir-path=<redacted>",
+        "--log-severity=<redacted>",
+        "--resources-dir-path=<redacted>"
+      ],
+      "type": "zygote"
+    }
+  ],
+  "steps": {
+    "page": {
+      "brands": [
+        {
+          "brand": "Not.A/Brand",
+          "version": "24"
+        },
+        {
+          "brand": "Chromium",
+          "version": "158"
+        }
+      ],
+      "devicePixelRatio": 1,
+      "fullVersionList": [
+        {
+          "brand": "Not.A/Brand",
+          "version": "24.0.0.0"
+        },
+        {
+          "brand": "Chromium",
+          "version": "158.0.8127.18"
+        }
+      ],
+      "href": "file://…/fresh6-out/runs/sc-osr/pro#file %20/flecha-selfcheck.html",
+      "inner": [
+        800,
+        600
+      ],
+      "isSecureContext": true,
+      "languages": [
+        "en-GB",
+        "en-US",
+        "en"
+      ],
+      "pdfViewerEnabled": true,
+      "platform": "Linux",
+      "pluginCount": 5,
+      "reason": "ready",
+      "screen": {
+        "availHeight": 1024,
+        "availWidth": 1280,
+        "colorDepth": 24,
+        "height": 1024,
+        "width": 1280
+      },
+      "uaFullVersion": "158.0.8127.18",
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36",
+      "userAgentDataPresent": true,
+      "webdriver": false,
+      "windowChromeKeys": [
+        "loadTimes",
+        "csi",
+        "app"
+      ]
+    },
+    "sandbox": {
+      "href": "chrome://sandbox/",
+      "reason": "ready",
+      "text": "Sandbox Status\nLayer 1 Sandbox\tNamespace\nPID namespaces\tYes\nNetwork namespaces\tYes\nSeccomp-BPF sandbox\tYes\nSeccomp-BPF sandbox supports TSYNC\tYes\nPtrace Protection with Yama LSM (Broker)\tYes\nPtrace Protection with Yama LSM (Non-broker)\tNo\n\nYou are adequately sandboxed.",
+      "title": "Sandbox Status"
+    },
+    "version": {
+      "href": "chrome://version/",
+      "reason": "ready",
+      "text": "The Chromium Authors\nCopyright 2026 The Chromium Authors. All rights reserved.\nlicense | credits\nCEF\t158.0.3+g8c29be2+chromium-158.0.8127.18\nChromium\t158.0.8127.18 (Official Build) (x86_64) \nRevision\t6449d9f9a6a906edff724b7b220199b3fde4615c-refs/branch-heads/8127@{#845}\nOS\tLinux\nJavaScript\tV8 15.8.62.9\nUser agent\tMozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36\nCommand Line\t<omitted; see processes[].switches>\nExecutable Path\t<redacted>\nModule Path\t<redacted>\nUser Data Path [*]\t<redacted>\nProfile Path [*]\t<redacted>\nVariations source\tcommand line or about flags\nCommand-line variations\teyJkaXNhYmxlLWZlYXR1cmVzIjoiQXV0b2ZpbGxBY3Rvck1vZGUsR2xpY0Fj...\t\nActive variations\tf4f00e05-ca7d8d80\n9481ce98-3d47f4f4\n2a426c03-3d47f4f4\n70678518-dee66fa8\nbe338734-dee66fa8\n5f9907a9-dee66fa8\n8eeccb9a-dee66fa8\n2b465683-dee66fa8\n52fc7926-dee66fa8\nbc9b361d-dee66fa8\na41a7188-dee66fa8\nff71bfdc-dee66fa8\n251fc742-dee66fa8\n2159dd0c-dee66fa8\n4330e9a4-dee66fa8\ne7cc79d5-dee66fa8\n4b935545-bb2d3403\n9a38bae3-6046c8a7\n2d1e43a3-3d47f4f4\n386dc267-3d47f4f4\n\t\n\n[*] In Chromium terminology, CefSettings.root_cache_path is the \"User Data Path\" and CefSettings.cache_path is the \"Profile Path\". Chromium's process singleton lock protects against multiple app instances writing to the same \"User Data Path\" directory. Implement CefBrowserProcessHandler:: OnAlreadyRunningAppRelaunch to handle the case of app relaunch with the same directory.",
+      "title": "About Version"
+    },
+    "webstore": {
+      "buttons": [
+        "Main menu",
+        "Go back",
+        "Close",
+        "Clear search",
+        "Search",
+        "More options menu",
+        "Google apps",
+        "Discover",
+        "Extensions",
+        "Themes",
+        "Install Chrome",
+        "Ratings are updated daily and may not reflect the most recent reviews.",
+        "Add to Chrome",
+        "Share",
+        "Previous slide",
+        "Item media 2 (screenshot) for uBlock Origin Lite",
+        "Item media 3 (screenshot) for uBlock Origin Lite",
+        "Item media 1 (screenshot) for uBlock Origin Lite",
+        "Next slide",
+        "Preview slide 1 for uBlock Origin Lite",
+        "Preview slide 2 for uBlock Origin Lite",
+        "Preview slide 3 for uBlock Origin Lite",
+        "See more",
+        "Show more languages",
+        "Previous",
+        "keyboard_arrow_right"
+      ],
+      "chromeMentions": [
+        "chrome web store",
+        "Switch to Chrome to install extensions and themes",
+        "Install Chrome",
+        "Add to Chrome",
+        "About Chrome Web Store"
+      ],
+      "href": "https://chromewebstore.google.com/detail/ublock-origin-lite/ddkjiahejlhfcafbddmgiahcphecmpfh",
+      "installButtons": [
+        {
+          "disabled": false,
+          "label": "Install Chrome"
+        },
+        {
+          "disabled": false,
+          "label": "Add to Chrome"
+        }
+      ],
+      "management": "object",
+      "reason": "ready",
+      "title": "uBlock Origin Lite - Chrome Web Store",
+      "webstorePrivate": "object"
+    },
+    "webstore_notes": [
+      {
+        "consent": "clicked Reject all"
+      }
+    ]
+  }
+}

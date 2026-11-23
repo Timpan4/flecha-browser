@@ -1,0 +1,38 @@
+== osr mode, default flags
+click 1 -> [popup] data:|
+click 2 -> [popup] mailto:|[load-error] main_frame=true code=Errorcode(ERR_UNKNOWN_URL_SCHEME) ERR_UNKNOWN_URL_SCHEME mailto:|[load-end] mailto:|
+click 3 -> [popup] data:|
+click 4 -> [popup] http://127.0.0.1:46351|[load-end] http://127.0.0.1:46351|
+click 5 -> [popup] about:|
+click 6 -> [popup] blob:|[load-end] blob:|
+click 7 -> [popup] about:|[load-end] about:|
+click 8 -> [popup] data:|
+click 9 -> [popup] about:|
+popup lines so far: 9
+go #data:text/html,ZQXGODATA20# -> [load-end] data:|
+go #data://ZQXGOSLASH21,hi# -> [load-end] data:|
+go #http://ZQXGOUSER22:ZQXGOPASS22@127.0.0.1:46351/page?ZQXGOQ22#ZQXGOF22# -> [load-end] http://127.0.0.1:46351|
+go #about:blank?ZQXGOABOUT23# -> [load-end] about:|
+go #javascript:void('ZQXGOJS24')# -> 
+go #mailto:ZQXGOMAIL25@example.invalid# -> [load-error] main_frame=true code=Errorcode(ERR_UNKNOWN_URL_SCHEME) ERR_UNKNOWN_URL_SCHEME mailto:|[load-end] mailto:|
+go #http://127.0.0.1:1/ZQXERRPATH26?ZQXERRQ26# -> [load-error] main_frame=true code=Errorcode(ERR_UNSAFE_PORT) ERR_UNSAFE_PORT http://127.0.0.1:1|[load-end] http://127.0.0.1:1|[load-error] main_frame=true code=Errorcode(ERR_ABORTED) ERR_ABORTED http://127.0.0.1:1|
+go #javascript://ZQXGOJSSLASH27%0Avoid(0)# -> 
+go #data:\\ZQXBACKSLASH28,hi# -> [load-end] data:|
+go #https://ZQXHOST29.invalid/ZQXPATH29?ZQXQ29# -> [load-error] main_frame=true code=Errorcode(ERR_NAME_NOT_RESOLVED) ERR_NAME_NOT_RESOLVED https://zqxhost29.invalid|[load-end] https://zqxhost29.invalid|[load-error] main_frame=true code=Errorcode(ERR_ABORTED) ERR_ABORTED https://zqxhost29.invalid|
+ZQX tokens: stderr 0, stdout 0, chrome_debug.log 0
+case-insensitive:  3 zqxhost29;
+remote iframe ran (GET /ran-iframe): 1
+== chrome mode, default flags
+click 1 -> 
+click 2 -> 
+click 3 -> 
+click 4 -> 
+click 5 -> 
+click 6 -> 
+click 7 -> 
+click 8 -> 
+click 9 -> 
+popup lines so far: 0
+ZQX tokens: stderr 0, stdout 0, chrome_debug.log 0
+case-insensitive: 
+remote iframe ran (GET /ran-iframe): 1
