@@ -1,0 +1,4 @@
+d 700 dconf
+f 600 dconf/cosmic
+f 600 dconf/user
+f 644 session-bus.conf

@@ -1,21 +1,21 @@
 # Spike 2: CEF message pump in GPUI, and per-browser DevTools access
 
-Date: 2026-11-23. Pins from `rewrite/pins.toml`: CEF `158.0.3+g8c29be2+chromium-158.0.8127.18`, cef-rs `32d6bc55` (Timpan4/cef-rs), Zed/GPUI `f126950f`.
+Date: 2026-11-23. Pins from `rewrite/pins.toml`: CEF `158.0.3+g8c29be2+chromium-158.0.8127.18` (beta-channel minimal archive), cef-rs `32d6bc55` (Timpan4/cef-rs), Zed/GPUI `f126950f`. cef-rs and Zed are the sources Spike 1's `prepare.sh` stages and patches (see "Dependencies").
 
-Current results: `results/2026-11-23-r4/`, one run of `scripts/run-checks.sh` as committed (see "How it was run"). History, cited only where this report says so: `results/2026-11-23/` is the first round, before the review fixes. `results/2026-11-23-r3/` is the first fix round, which used a bus listener that could replace an existing socket (see "Isolation"); its `review-evidence/` holds the repro inputs and outputs.
+Current results: `results/2026-11-23-r4/`, one run of `scripts/run-checks.sh` as committed, on the head that merges Spike 1 (see "How it was run"). `build.txt` there names the commit and `cef-archive.json` the CEF archive. History, cited only where this report says so: `results/2026-11-23/` is the first round, before the review fixes. `results/2026-11-23-r3/` is the first fix round. It used a bus listener that could replace an existing socket (see "Isolation"), and the pre-merge build (see "Differences from r3"). Its `review-evidence/` holds the repro inputs and outputs.
 
 ## Verdict
 
 | Done check | Result |
 |---|---|
-| Pump runs only on CEF requests or CEF's documented periodic wake-up | Pass. 0 unexplained calls in @IDLE_CALLS@ calls over 30 s |
-| Static page: GPUI draws no frames | Pass, with one explained frame. GPUI drew 1 frame for CEF's one paint-holding repaint at @HOLD_MS@ ms after navigation, and nothing else (see "Pump and idle") |
-| Idle CPU (measurement only) | @IDLE_CPU@ % of one core for the whole process tree |
+| Pump runs only on CEF requests or CEF's documented periodic wake-up | Pass. 0 unexplained calls in 1066 calls over 30 s |
+| Static page: GPUI draws no frames | Pass, with one explained frame. GPUI drew 1 frame for CEF's one paint-holding repaint at 4099 ms after navigation, and nothing else (see "Pump and idle") |
+| Idle CPU (measurement only) | 0.63 % of one core for the whole process tree |
 | Page and GPUI animate together | Pass. Both frame counters advance |
-| `navigator.webdriver === false` during CDP calls | Pass. @CDP_CALLS@ calls in 30.0 s, @CDP_SAMPLES@ page samples, 0 true. A control run with `--enable-automation` fails |
+| `navigator.webdriver === false` during CDP calls | Pass. 540,555 calls in 30.0 s, 900 page samples, 0 true. A control run with `--enable-automation` fails |
 | CDP without a port or pipe | Pass. No `remote-debugging` switch, no listening TCP socket, every fd and socket table read |
 | DevTools close does not kill OSR renderers (CEF #4353) | Pass in 15 of 15 fresh processes. No workaround needed |
-| Clean shutdown | Pass. `CefShutdown()` returns in @SHUT_RANGE@ ms. Every child exited in all 19 runs |
+| Clean shutdown | Pass. `CefShutdown()` returns in 48 to 122 ms. Every child exited in all 19 runs |
 | Runs isolated from the desktop session | Pass in 19 of 19 runs. A control run with the first round's environment fails |
 
 ## What the spike is
@@ -31,16 +31,17 @@ Current results: `results/2026-11-23-r4/`, one run of `scripts/run-checks.sh` as
 
 ```sh
 cd rewrite
+bash spikes/gpui-cef-compositor/prepare.sh linux64
+CARGO_NET_GIT_FETCH_WITH_CLI=true flock "$XDG_RUNTIME_DIR/flecha-rewrite-build.lock" \
+  bash ~/.claude/skills/hosts/scripts/agent-build run cargo build --locked --release -j 14 -p cef-gpui-pump
 flock "$XDG_RUNTIME_DIR/flecha-rewrite-build.lock" \
-  bash ~/.claude/skills/hosts/scripts/agent-build run cargo build --release -j 14 -p cef-gpui-pump
-flock "$XDG_RUNTIME_DIR/flecha-rewrite-build.lock" \
-  bash ~/.claude/skills/hosts/scripts/agent-build run cargo test --release -j 14 -p cef-gpui-pump
+  bash ~/.claude/skills/hosts/scripts/agent-build run cargo test --locked --release -j 14 -p cef-gpui-pump
 cd spikes/cef-gpui-pump
 WARMUP_MS=3000 MEASURE_MS=30000 STEP_TIMEOUT_MS=20000 DEVTOOLS_CLOSE_MS="0 100 2000" DEVTOOLS_TRIALS=5 \
   scripts/run-checks.sh results/2026-11-23-r4
 ```
 
-The runner exits 0 only if every run passes. It ran as a transient `systemd-run --user` unit and printed `all runs passed` (`results/2026-11-23-r4/run.log`). The timing values are harness parameters, not product values. `STEP_TIMEOUT_MS` bounds each wait for CEF (Xvfb start, load, a CDP reply, DevTools open and close, browser close, child exit). The runner stages a bundle in `target/release/cef-gpui-pump-bundle` (see "Cargo 1.100 and cef-rs"). Every run writes a JSON report, its stderr, and a listing of its scratch runtime dir.
+The runner exits 0 only if every run passes. It ran as a transient `systemd-run --user` unit and printed `all runs passed` (`results/2026-11-23-r4/run.log`). The timing values are harness parameters, not product values. `STEP_TIMEOUT_MS` bounds each wait for CEF (Xvfb start, load, a CDP reply, DevTools open and close, browser close, child exit). The runner stages a bundle in `target/release/cef-gpui-pump-bundle/<archive name>` (see "Cargo 1.100 and cef-rs"). Every run writes a JSON report, its stderr, and a listing of its scratch runtime dir.
 
 Build: release profile. GPUI picked `NVIDIA GeForce RTX 5080 (Vulkan)` on Xvfb (`RUST_LOG=gpui_wgpu=info`, first-round smoke run), so GPUI was not on a software renderer. CEF itself used software OSR (`OnPaint`, no shared textures). Chromium switches: `--ozone-platform=x11 --password-store=basic`. The sandbox was on.
 
@@ -53,7 +54,7 @@ Each app run gets:
 - `dbus-run-session` with a config written from `scripts/isolated-session-bus.conf.in`: no service directories, so nothing is activated, and `<listen>unix:dir=SCRATCH</listen>`, so dbus-daemon creates a socket with a new random name in that run's scratch dir. The first fix round listened at `$XDG_RUNTIME_DIR/bus` (`unix:runtime=yes`). A test with two buses on one scratch dir showed that listener replacing an existing socket at its path and deleting it on exit, so pointed at the desktop's runtime dir it would remove `/run/user/1000/bus`. `scripts/check-bus-listener.sh` starts a second bus on the same dir while the first runs and requires the first socket to be the same file and still answering afterwards. The runner runs it before any app run. It passes with the new listener and fails with the old one ("second bus reused …/bus", "first bus socket … is gone").
 - `DBUS_SYSTEM_BUS_ADDRESS=unix:path=/nonexistent`.
 
-The app checks this itself. After the page loads and again before shutdown, `probe::forbidden_refs` lists every file the process tree has open or memory-mapped and every Unix socket peer (from `ss -xan`), and fails the run if any lies under the caller's `XDG_RUNTIME_DIR` (`/run/user/1000`) or `/run/dbus/system_bus_socket`. In r3 all 38 samples were clean, with every fd table and map readable. The limits: it samples twice, so a connection opened and closed between samples is missed, and sandboxed renderers live in their own network namespace, so their sockets (@NO_PEER@ per sample) get no peer path from `ss`. Their open and mapped files are still scanned.
+The app checks this itself. After the page loads and again before shutdown, `probe::forbidden_refs` lists every file the process tree has open or memory-mapped and every Unix socket peer (from `ss -xan`), and fails the run if any lies under the caller's `XDG_RUNTIME_DIR` (`/run/user/1000`) or `/run/dbus/system_bus_socket`. In r4 all 38 samples were clean, with every fd table and map readable and no `ss` error. The limits: it samples twice, so a connection opened and closed between samples is missed, and sandboxed renderers live in their own network namespace, so their sockets (13 to 22 per sample) get no peer path from `ss`. Their open and mapped files are still scanned.
 
 What used to reach the desktop session now lands in the scratch dir. Every run's listing shows `dconf/user` there (`*.runtime-dir.txt`).
 
@@ -71,19 +72,19 @@ Static page `pages/static.html`: text only, no animation, timers, focusable inpu
 
 | Measure | Value |
 |---|---|
-| Pump calls | @IDLE_CALLS@: @IDLE_PERIODIC@ periodic, @IDLE_IMM@ for immediate requests, 0 delayed, 0 rerun |
-| CEF requests | @IDLE_IMM@, all `delay_ms <= 0` |
+| Pump calls | 1066: 901 periodic, 165 for immediate requests, 0 delayed, 0 rerun |
+| CEF requests | 165, all `delay_ms <= 0` |
 | Unexplained calls | 0 (each periodic call came at least 33 ms after the previous call ended) |
-| Gap between calls | p50 @GAP50@ ms, p99 @GAP99@ ms, max @GAPMAX@ ms |
-| Time inside `CefDoMessageLoopWork` | @WORK_TOTAL@ ms total, p50 @WORK50@ ms, p99 @WORK99@ ms, max @WORKMAX@ ms |
-| CPU, whole tree | @IDLE_CPU@ % of one core (@IDLE_RUN_MS@ ms run time in 30 s) |
+| Gap between calls | p50 33.04 ms, p99 33.07 ms, max 43.06 ms |
+| Time inside `CefDoMessageLoopWork` | 87.9 ms total, p50 0.004 ms, p99 0.22 ms, max 10.003 ms |
+| CPU, whole tree | 0.63 % of one core (189 ms run time in 30 s) |
 | GPUI renders / OnPaint in the window | 1 / 1, the paint-holding repaint |
 
 CPU method: sum over the process tree of `/proc/PID/task/*/schedstat` run time, between snapshots at the window's edges. `utime + stime` ticks from `/proc/PID/stat` are in the report too.
 
 ### The one frame: paint holding
 
-The one paint is a full-view repaint (`[0, 0, 1024, 640]`) @HOLD_MS@ ms after navigation. The first round saw it in 4 of 4 runs with a 3 s warmup, 3995 to 4007 ms after the first paint, and never with a 6 s warmup.
+The one paint is a full-view repaint (`[0, 0, 1024, 640]`) 4099 ms after navigation. The first round saw it in 4 of 4 runs with a 3 s warmup, 3995 to 4007 ms after the first paint, and never with a 6 s warmup.
 
 It is Chromium's paint-holding timeout. In the local Chromium 158.0.8119.0 tree, `third_party/blink/common/widget/constants.cc:15` sets `kNewContentRenderingDelay = base::Seconds(4)`. `RenderWidgetHostImpl::InitializePaintHolding` starts it at navigation, and on expiry `ClearDisplayedGraphics` makes the renderer repaint once. The PR verifier confirmed the cause: a CDP `Input.dispatchMouseEvent` about 1.5 s after load moved the repaint to 1503 ms and removed the 4 s paint. That path is `content/browser/devtools/protocol/input_handler.cc:694`, which calls `ForceFirstFrameAfterNavigationTimeout()`.
 
@@ -91,7 +92,7 @@ The parent agent's decision for this fix round: the idle check passes with that 
 
 ### 10 ms calls: CEF's pump time slice
 
-The slowest `CefDoMessageLoopWork()` calls take 10.00 ms (@WORKMAX@ ms max in r4). That is CEF's external pump time slice. CEF 8c29be2 `libcef/browser/browser_message_loop.cc:107` creates `MessagePumpExternal(0.01f, handler)`, and its `Run()` (lines 29 to 49) keeps running work until the next task is more than `max_time_slice_` (10 ms) past the call's start. When a delayed task is due within 10 ms, the call waits for it. So one pump call can hold GPUI's main thread for up to 10 ms, which is most of a 16.7 ms frame at 60 Hz. Phase 1's frame budget has to allow for it.
+The slowest `CefDoMessageLoopWork()` calls take 10.00 ms (10.003 ms max in r4). That is CEF's external pump time slice. CEF 8c29be2 `libcef/browser/browser_message_loop.cc:107` creates `MessagePumpExternal(0.01f, handler)`, and its `Run()` (lines 29 to 49) keeps running work until the next task is more than `max_time_slice_` (10 ms) past the call's start. When a delayed task is due within 10 ms, the call waits for it. So one pump call can hold GPUI's main thread for up to 10 ms, which is most of a 16.7 ms frame at 60 Hz. Phase 1's frame budget has to allow for it.
 
 ### Why CEF never asks for delayed work
 
@@ -103,7 +104,10 @@ Page `pages/anim.html`: a CSS `@keyframes` box and a `requestAnimationFrame` cou
 
 | Run | GPUI animation | Page rAF/s | CSS time advanced | OnPaint/s | GPUI renders/s | GPUI animation steps | CPU, tree |
 |---|---|---|---|---|---|---|---|
-@ANIM_ROWS@
+| default | off | 30.05 | 30066 ms | 30.01 | 20.89 | 0 | 18.7 % |
+| default | on | 30.01 | 30033 ms | 30.01 | 20.89 | 627 | 19.2 % |
+| inactive throttle off | off | 30.01 | 30033 ms | 30.01 | 29.98 | 0 | 25.3 % |
+| inactive throttle off | on | 30.02 | 30033 ms | 29.98 | 62.43 | 1874 | 46.6 % |
 
 The page holds 30 frames/s in every case. `include/internal/cef_types.h` gives `windowless_frame_rate` "the default value is 30", and the spike does not change it. With default window options, GPUI draws about 21 frames/s. The window is never focused under Xvfb with no window manager, so GPUI's `inactive_frame_interval` (default 33.3 ms, "approximately 30 fps") applies. With `inactive_frame_interval: None` (`--pump-no-inactive-throttle`), GPUI shows every page frame, and draws more while its own animation runs. Its CPU numbers include those extra frames. On a focused window on a real session, the default throttle should not apply. That is unverified here.
 
@@ -112,11 +116,11 @@ The page holds 30 frames/s in every case. `include/internal/cef_types.h` gives `
 `results/2026-11-23-r4/cdp.json`:
 
 - List tabs: 1 tab, `Target.getTargetInfo` returned `type: page`, title `anim`, the file URL.
-- Evaluate: `Runtime.evaluate("navigator.webdriver")` back to back. The loop itself ran @CDP_LOOP_S@ s for a 30 s window: @CDP_CALLS@ calls, every reply `false`, no errors. Per-call latency: p50 @LAT50@ ms, p99 @LAT99@ ms, max @LATMAX@ ms. The page counted `navigator.webdriver` on every animation frame: @CDP_SAMPLES@ samples during the loop, 0 not `false`, and its rAF rate over the loop was @CDP_RAF@ frames/s.
-- Screenshot: `Page.captureScreenshot` returned a 1024 × 640 PNG (`cdp.png`) in @SHOT_MS@ ms.
-- Correction to the first round: its report quoted 30.13 s, which was measured after the screenshot and the `/proc` scans, not the loop alone. The PR verifier reported 47.3, 33.4 and 34.7 s from that same field, and 903, 817 and 818 page frames. Only the frame counts show the page slowing down, and this round did not reproduce it: the loop ran 30.000 s and 30.006 s in two full runs, at 30 page frames/s. The loop's length, per-call latency and page frame rate are now recorded separately, before the screenshot. In r3 the loop ended within one call of 30 s, and the page kept 30 frames/s.
+- Evaluate: `Runtime.evaluate("navigator.webdriver")` back to back. The loop itself ran 30.000 s for a 30 s window: 540,555 calls, every reply `false`, no errors. Per-call latency: p50 0.038 ms, p99 0.12 ms, max 26.4 ms. The page counted `navigator.webdriver` on every animation frame: 900 samples during the loop, 0 not `false`, and its rAF rate over the loop was 30.00 frames/s.
+- Screenshot: `Page.captureScreenshot` returned a 1024 × 640 PNG (`cdp.png`) in 109 ms.
+- Correction to the first round: its report quoted 30.13 s, which was measured after the screenshot and the `/proc` scans, not the loop alone. The PR verifier reported 47.3, 33.4 and 34.7 s from that same field, and 903, 817 and 818 page frames. Only the frame counts show the page slowing down. r3 and r4 did not reproduce it: their loops ran 30.006 s and 30.000 s, at 30 page frames/s. The loop's length, per-call latency and page frame rate are now recorded separately, before the screenshot.
 - Negative control (`results/2026-11-23/cdp-enable-automation/`, first-round build): the same check with `EXTRA_ARGS=--enable-automation`, 3 s warmup and a 5 s window. All 58,080 replies and all 153 page samples were `true`, and the run failed. The check detects `navigator.webdriver` turning on.
-- No port or pipe: no process in the tree has `remote-debugging` or `enable-automation` on its command line. No process in the tree has a listening TCP socket. The run now fails unless every fd table and socket table was read (`listening_sockets.complete`), and in r3 all were. The one listening socket is Chromium's ProcessSingleton Unix socket (`/tmp/org.chromium.Chromium.*/SingletonSocket`), which is not a DevTools endpoint.
+- No port or pipe: no process in the tree has `remote-debugging` or `enable-automation` on its command line. No process in the tree has a listening TCP socket. The run now fails unless every fd table and socket table was read (`listening_sockets.complete`), and in r4 all were. The one listening socket is Chromium's ProcessSingleton Unix socket (`/tmp/org.chromium.Chromium.*/SingletonSocket`), which is not a DevTools endpoint.
 
 ## DevTools and CEF #4353
 
@@ -126,15 +130,17 @@ Test: 2 windowless browsers on the animation page. Page 0 is inspected, page 1 i
 
 | Close delay | Close after `ShowDevTools` | `ShowDevTools` call | Pages' OnPaint/s after | Evaluate after | Renderer terminations |
 |---|---|---|---|---|---|
-@DT_ROWS@
+| 0 ms | 36 to 52 ms | 36 to 52 ms | 30, both pages | 2 and 2, all trials | 0 |
+| 100 ms | 100 to 108 ms | 36 to 44 ms | 30, both pages | 2 and 2, all trials | 0 |
+| 2000 ms | 2000 to 2005 ms | 36 to 60 ms | 30, both pages | 2 and 2, all trials | 0 |
 
-`ShowDevTools()` is synchronous: it returns after creating the DevTools browser, and that took up to @SHOW_MAX@ ms. A close requested sooner than that runs when the call returns, so the 0 ms and 100 ms delays land later than asked. The DevTools browser was `CEF_RUNTIME_STYLE_CHROME` in its own X11 window. The `/proc` scan while DevTools is open now runs only if a scan as long as the one timed just before fits before the close. @DT_SCAN_NOTE@
+`ShowDevTools()` is synchronous: it returns after creating the DevTools browser, and that took up to 60 ms. A close requested sooner than that runs when the call returns, so the 0 ms and 100 ms delays land later than asked. The DevTools browser was `CEF_RUNTIME_STYLE_CHROME` in its own X11 window. The `/proc` scan while DevTools is open now runs only if a scan as long as the one timed just before fits before the close. In r4 the scan was skipped in the 5 trials with a 0 ms delay and ran in the other 10. Each of those scans ended before the close was due: by 64 ms after `ShowDevTools` for the 100 ms delay, and by 87 ms for the 2000 ms delay. Those 10 closes still landed 0.04 to 8.0 ms late. The wait resumes on GPUI's main thread, where a single pump call can run for up to 10 ms, which likely accounts for that lateness.
 
 Result: #4353 does not reproduce on CEF 158.0.3, and no workaround is needed. The check was not run against a build without the fix (for example CEF 156), so its ability to catch the freeze is not shown here.
 
 ## Shutdown
 
-Each run closes every browser with `CloseBrowser(true)` and waits for every `OnBeforeClose`, which removes that browser's handle. Then it drops the observer registrations, quits GPUI, and calls `CefShutdown()`. If any browser is still open when the wait times out, the app skips `CefShutdown()` (calling it with live browsers is not allowed), records why, and fails the run. `CefShutdown()` returned in @SHUT_RANGE@ ms. Right after it returns, some zygote processes are still alive. They exit when the browser process exits and closes their sockets. So after the app exits, the runner calls `cef-gpui-pump --pump-wait-gone=REPORT`. It waits on a pidfd for each child the app saw before shutdown, bounded by `STEP_TIMEOUT_MS`. A malformed child record, or a `/proc` or `pidfd_open` error other than "no such process", fails the check instead of counting as gone. In all 19 runs, every child had exited before that wait began.
+Each run closes every browser with `CloseBrowser(true)` and waits for every `OnBeforeClose`, which removes that browser's handle. Then it drops the observer registrations, quits GPUI, and calls `CefShutdown()`. If any browser is still open when the wait times out, the app skips `CefShutdown()` (calling it with live browsers is not allowed), records why, and fails the run. `CefShutdown()` returned in 48 to 122 ms. Right after it returns, some zygote processes are still alive. They exit when the browser process exits and closes their sockets. So after the app exits, the runner calls `cef-gpui-pump --pump-wait-gone=REPORT`. It waits on a pidfd for each child the app saw before shutdown, bounded by `STEP_TIMEOUT_MS`. A malformed child record, or a `/proc` or `pidfd_open` error other than "no such process", fails the check instead of counting as gone. In all 19 runs, every child had exited before that wait began.
 
 Process types come from `--type=`, but zygote-forked processes keep `--type=zygote` on this build. `probe::Proc::kind` labels them by tree shape. The sandboxed layout seen here is browser, then the sandboxed zygote (PID-namespace init), then the zygote worker, then one process per renderer, each in its own PID namespace.
 
@@ -150,7 +156,7 @@ Process types come from `--type=`, but zygote-forked processes keep `--type=zygo
 
 Each fix was checked by breaking it on purpose. Removing the reentrancy check fails the reentrancy test. Dropping the delayed path fails 2 tests. Letting a delayed request restart the 33 ms clock, as the first round's pump did, fails the stream test.
 
-The 2 tests in `src/lib.rs` guard this report: `report_has_no_template_tokens` fails if REPORT.md still holds a fill token, either `@NAME@` or the `966NAME966` shape that a broken fill left in commit 7375b80. Run against that commit's REPORT.md, it fails and lists all of them. A guard in `run-checks.sh` would run before the report is written, and the fill is not a committed step, so the check lives in the test suite.
+The 2 tests in `src/lib.rs` guard this report: `report_has_no_template_tokens` fails if REPORT.md still holds a fill token: an uppercase name wrapped in `@` signs, or one wrapped in the same digits on both sides, the shape a broken fill left in commit 7375b80 (`966` before and after each name). Run against that commit's REPORT.md, it fails and lists all of them. A guard in `run-checks.sh` would run before the report is written, and the fill is not a committed step, so the check lives in the test suite.
 
 ## Review findings
 
@@ -162,7 +168,7 @@ From the PR #93 verifier and 15 OpenCodeReview leads. "Reproduced" means shown o
 | Idle repaint cause | Confirmed by the verifier | Documented; idle passes with the paint-holding frame explained |
 | 10 ms pump calls unexplained | Confirmed in CEF source | Documented, with the frame-budget impact |
 | `requests_delayed` always 0 | Confirmed in Chromium source | Documented; unit tests cover the path |
-| CDP loop length and page rate misreported | Reported by the verifier; the slowdown did not reproduce here (30.0 s loops at 30 frames/s) | Loop length, per-call latency and page rAF rate recorded before the screenshot; report corrected |
+| CDP loop length and page rate misreported | Reported by the verifier; the slowdown did not reproduce in r3 or r4 (30.0 s loops at 30 frames/s) | Loop length, per-call latency and page rAF rate recorded before the screenshot; report corrected |
 | Reentrancy guard and delayed path untested | Yes, no caller could reach the guard | Unit tests in `src/schedule.rs`, shown to fail when each fix is removed |
 | `run-checks.sh`: Xvfb read can block forever | Yes: with an `Xvfb` that exits at once, the old script hung until killed at 20 s (`review-evidence/runner/`) | `read -t` bounded by `STEP_TIMEOUT_MS`; new script exits 1 after 3 s |
 | `run-checks.sh`: stale report reused after a crash | Yes: app exited 1 and the old script printed the previous report's `pass=true` (`review-evidence/runner/`) | Report and PNG removed before each run |
@@ -181,17 +187,29 @@ From the PR #93 verifier and 15 OpenCodeReview leads. "Reproduced" means shown o
 
 ## Cargo 1.100 and cef-rs
 
-Cargo 1.100's default build-dir layout puts `OUT_DIR` at `target/release/build/cef-dll-sys/<hash>/out`. cef-dll-sys copies CEF's runtime files to the third parent of that, `target/release/build`, not next to the binary (tauri-apps/cef-rs#522, open). Workaround: `scripts/run-checks.sh` builds `target/release/cef-gpui-pump-bundle` from the binary and the CEF distribution in cef-dll-sys's `OUT_DIR`, whose `archive.json` must name the pinned version. The binary has `RPATH=$ORIGIN` (`build.rs`).
+Cargo 1.100's default build-dir layout keeps cef-rs's copy of CEF's runtime files out of the binary's directory (tauri-apps/cef-rs#522, open). Workaround: `scripts/run-checks.sh` sources Spike 1's `runtime-paths.sh`, checks the runtime that `prepare.sh` staged (its `archive.json` must match the `pins.toml` beta archive name and SHA-1, and `libcef.so` must be nonempty), and copies it with the binary into `target/release/cef-gpui-pump-bundle/<archive name>`. One bundle per archive keeps files from another CEF build out. The binary has `RPATH=$ORIGIN` (`build.rs`).
 
 The binary's test target is off (`test = false`), because it links libcef and could only start from the bundle. Tests live in the CEF-free library. Cargo then reports the binary's dependencies as unused during `cargo test`, so `unused_dependencies` is allowed for this package.
 
-The archive used is `cef_binary_158.0.3+g8c29be2+chromium-158.0.8127.18_linux64_minimal.tar.bz2`, SHA-1 `620b80a02dfe93ed7884a9eb1b265ff34f799024`. That is the stable-channel archive of the pinned commit (`pins.toml` `[cef.stable.sha1]`), as the plan's beta archive gap says.
+The archive used is `cef_binary_158.0.3+g8c29be2+chromium-158.0.8127.18_linux64_beta_minimal.tar.bz2`, SHA-1 `057a0b871bf26d26d654d999dba595b92fe0f067` (`pins.toml` `[cef.beta.sha1]`, checked by `prepare.sh`; `results/2026-11-23-r4/cef-archive.json`). The r3 and first-round runs used the stable-channel archive of the same commit, SHA-1 `620b80a02dfe93ed7884a9eb1b265ff34f799024`, which unpatched cef-rs downloads by default.
 
 ## Dependencies
 
-- cef-rs without `accelerated_osr`: its registry `wgpu = "30"` is optional and not in the graph. `Cargo.lock` has one wgpu, Zed's git rev `cddb2f5d`. No conflict for this spike.
-- `gpui_platform` needs `features = ["x11", "wayland"]`. Zed's workspace turns off `gpui_linux`'s default backends, and without the features `gpui_linux` builds with no display backend.
-- `rewrite/Cargo.toml` copies Zed's `[patch.crates-io]` entries for crates GPUI uses (`async-task`, `async-process`, `calloop`, `khronos-egl`). Zed's patches do not apply to git dependents.
+- One cef-rs source serves both spikes. `cef-dll-sys` declares `links = "cef_dll_wrapper"`, so Cargo allows only one copy of it in the workspace graph, and a separate git dependency on the same rev cannot sit next to Spike 1's path dependency. This spike takes `cef`, `gpui` and `gpui_platform` from `[workspace.dependencies]` in `rewrite/Cargo.toml`. Those point at `target/spike1-src/{cef-rs,zed}`, which `spikes/gpui-cef-compositor/prepare.sh` downloads at the `pins.toml` revs and patches. Each staged tree has a `.flecha-revision` stamp, and the patched `cef-dll-sys` build script fails unless both stamps equal the `pins.toml` repository and rev (cef-rs `Timpan4/cef-rs` `32d6bc55`, Zed `f126950f`). `Cargo.lock` has a single `cef-dll-sys` entry, a path package.
+- The cef-rs patch changes CEF discovery in `sys/build.rs`, adds a `FLECHA_CEF_MINIMAL_SHA1` constant, and edits `osr_texture_import`, which is behind `accelerated_osr` and not built here. The Zed patch touches `gpui_linux`'s X11 and Wayland windows and `gpui_wgpu`, which this spike runs on.
+- The workspace `cef` has no `accelerated_osr`, so cef-rs's optional registry `wgpu = "30"` is not in the graph. `Cargo.lock` has one wgpu, Zed's git rev `cddb2f5d`.
+- The workspace `gpui_platform` enables `font-kit`, `x11` and `wayland`; the last two turn on `gpui_linux`'s display backends. `gpui` has `default-features = false`. On Linux its default features add nothing this spike needs (`font-kit` and `wayland` are empty, `x11` only reaches the optional `scap`).
+- `[patch.crates-io]` in `rewrite/Cargo.toml` is main's: `calloop` at `zed-industries/calloop` `3759371f`, the same entry as Zed's `Cargo.toml` at `f126950f`. Zed at that rev also patches `async-task` (`smol-rs` `41fd3359`, a waker identity fix), `async-process` (`zed-industries` `0b6d6713`) and `khronos-egl` (`zed-industries` `42214b36`, no panic when a failed EGL call reports success). r3 applied those three, and this workspace does not: they resolve to crates.io `async-task 4.7.1`, `async-process 2.5.0` and `khronos-egl 6.0.0`. Adding them would replace entries in main's `Cargo.lock`, not only add this spike's.
+
+## Differences from r3
+
+r4 differs from r3 in more than the bus listener. Its build:
+
+- Uses Spike 1's patched cef-rs and Zed instead of unpatched git dependencies on the same revs.
+- Links and runs the beta archive instead of the stable archive of the same CEF commit.
+- Takes `async-task`, `async-process` and `khronos-egl` from crates.io instead of Zed's forks.
+
+Every pass condition held in both runs. Some figures moved. Idle pump calls went from 966 to 1,066: periodic calls stayed at 903 and 901, and immediate requests rose from 63 to 165. CDP evaluate calls in the 30 s loop went from 343,706 to 540,555, with p50 latency down from 0.062 to 0.038 ms. Without the inactive throttle and with GPUI animation on, GPUI renders went from 51 to 62 per second; the first round saw 30 or 62. There is one run per build, so this report does not attribute any shift to one of the three changes.
 
 ## Not verified
 
@@ -202,4 +220,3 @@ The archive used is `cef_binary_158.0.3+g8c29be2+chromium-158.0.8127.18_linux64_
 - Connections that open and close between the two isolation samples, and renderer sockets, which `ss` cannot resolve from the browser's network namespace.
 - That the #4353 check fails on a build without the fix.
 - Input, IME, resize and DPI changes. They are not in this spike's done check.
-- The plan's beta archive. The build used the stable archive of the same commit.
