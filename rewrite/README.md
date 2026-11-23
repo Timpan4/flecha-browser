@@ -55,12 +55,13 @@ Start every Phase 1 app through the launcher. Its Xvfb and headless Weston backe
 tools/isolated-run.sh x11 -- ./target/debug/flecha
 tools/verify-slice.sh
 tools/verify-slice.sh focus
+tools/verify-slice.sh popups
 tools/verify-negative-controls.sh
 ```
 
 The launcher needs a C compiler, bubblewrap, `ip`, `setpriv`, D-Bus and the selected compositor. The Xvfb verifier also needs Node, ImageMagick, and X11 and Xtst development headers. The launcher prints each scratch directory, removes it after a successful run, and retains it on failure. The watchdog uses the same default and `FLECHA_HARNESS_TIMEOUT_MS` override as the Chromium native harness. It signals the launcher by pidfd, so it also works without a delegated cgroup on CI. The kernel reaps the isolated PID namespace when its init exits.
 
-The verifier compares live tab ordering, selection and split sides with the shipping TypeScript replay. It checks GPUI pixels before and after restart, native X11 input, CEF lifecycle events, cookies, and inherited session variables. The launcher checks for filesystem sockets and rejects public name resolution before starting its private services. The negative controls include a swapped split, a blank restart, stale callbacks, and a Peek using the shared cookie jar. Build stamps and run output are in [results/phase1](results/phase1).
+The verifier compares live tab ordering, selection and split sides with the shipping TypeScript replay. It checks GPUI pixels before and after restart, native X11 input, CEF lifecycle events, cookies, and inherited session variables. The launcher checks for filesystem sockets and rejects public name resolution before starting its private services. The default run ends with the popup checks, which `popups` runs alone. CEF creates each browser a page opens, so `window.opener`, the referrer and the opener's cookie jar survive. The checks cover a `target=_blank` tab, a scripted popup window that messages its opener and closes itself, blocked popups without a user gesture, and closing windows with popups open. Each popup check runs on its own, so a run against an older build lists every check it fails. The negative controls include a swapped split, a blank restart, stale callbacks, and a Peek using the shared cookie jar. Build stamps and run output are in [results/phase1](results/phase1).
 
 Regenerate the shipping trace from the repository root with `node rewrite/tools/slice-ts-replay.mjs > rewrite/tools/slice-ts-replay.jsonl`.
 
