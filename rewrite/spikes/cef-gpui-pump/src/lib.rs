@@ -3,6 +3,8 @@
 
 pub mod idle;
 pub mod procfs;
+#[cfg(target_os = "linux")]
+pub mod proctree;
 pub mod schedule;
 #[cfg(target_os = "linux")]
 pub mod sweep;

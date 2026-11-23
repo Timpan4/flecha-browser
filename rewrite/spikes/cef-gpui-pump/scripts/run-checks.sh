@@ -161,6 +161,10 @@ cp -f "$cef_dir/archive.json" "$results/cef-archive.json"
 desktop_runtime=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
 system_bus_socket=/run/dbus/system_bus_socket
 real_home=${HOME:?}
+# The session's whole PATH: system dirs only, none under the caller's home.
+# dbus-run-session is resolved here, and finds dbus-daemon on that PATH.
+session_path=/usr/bin:/bin
+dbus_run_session=$(command -v dbus-run-session) || { echo "no dbus-run-session on PATH" >&2; exit 2; }
 allowed="$bundle:$pages:$results"
 
 # shellcheck source=sweep.sh
@@ -238,16 +242,19 @@ run_one() {
     # it signals the group, then sends SIGKILL after one more STEP_TIMEOUT_MS
     # if dbus-run-session is still running. It waits only for dbus-run-session,
     # so end_group (scripts/sweep.sh) removes whatever else is left, and fails
-    # the run if its inventory fails. XDG base dirs and cache
-    # overrides would point back into the real home.
+    # the run if its inventory fails.
+    #
+    # The session starts from an empty environment (`env -i`) plus what the
+    # runner sets itself, so nothing of the caller's session reaches CEF: no
+    # SSH_AUTH_SOCK, AT_SPI_BUS_ADDRESS, PULSE_SERVER, XAUTHORITY, Wayland or
+    # XDG base dir pointing into the real home or runtime dir. dbus-run-session
+    # adds the private bus address. XDG_RUNTIME_DIR is also the run's marker.
     timeout --kill-after="$(ms_to_s "$STEP_TIMEOUT_MS")" "$(ms_to_s "$watchdog")" \
-    env -u WAYLAND_DISPLAY -u WAYLAND_SOCKET -u DBUS_SESSION_BUS_ADDRESS \
-        -u XDG_CONFIG_HOME -u XDG_CACHE_HOME -u XDG_DATA_HOME -u XDG_STATE_HOME \
-        -u MESA_SHADER_CACHE_DIR -u __GL_SHADER_DISK_CACHE_PATH \
+    env -i PATH="$session_path" LANG=C.UTF-8 \
         DISPLAY="$display" XDG_SESSION_TYPE=x11 XDG_RUNTIME_DIR="$runtime" \
         HOME="$home" TMPDIR="$tmp" \
         DBUS_SYSTEM_BUS_ADDRESS=unix:path=/nonexistent \
-        dbus-run-session --config-file="$runtime/session-bus.conf" -- "$bin" \
+        "$dbus_run_session" --config-file="$runtime/session-bus.conf" -- "$bin" \
         --ozone-platform=x11 --password-store=basic \
         --pump-url="$url" --pump-out="$out" --pump-cache-dir="$cache" \
         --pump-warmup-ms="$WARMUP_MS" --pump-measure-ms="$MEASURE_MS" \

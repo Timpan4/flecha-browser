@@ -36,8 +36,9 @@ pub struct Run {
     pub lifecycle: mpsc::UnboundedReceiver<()>,
     pub context_ready: mpsc::UnboundedReceiver<()>,
     pub report: Report,
-    /// Descendant processes snapshotted just before closing browsers.
-    pub children_before_shutdown: Rc<RefCell<Vec<Proc>>>,
+    /// Descendant processes snapshotted just before closing browsers, with the
+    /// snapshot's discovery errors; `None` until it is taken.
+    pub children_before_shutdown: Rc<RefCell<Option<probe::Tree>>>,
     /// When page 0's `CreateBrowserSync` started its navigation.
     pub navigation_started: Option<Instant>,
     /// Idle scenario: the measured window, judged after the pump trace stops.
@@ -54,7 +55,8 @@ struct Snap {
     overwritten: u64,
     never_drawn: u64,
     paints: Vec<u64>,
-    tree: Vec<Proc>,
+    /// For CPU time only, a measurement no verdict uses.
+    tree: probe::Tree,
 }
 
 impl Run {
@@ -128,7 +130,7 @@ impl Run {
             "on_paint_frames_overwritten_before_upload_per_second": (b.overwritten - a.overwritten) as f64 / secs,
             "gpui_images_replaced_before_draw": b.never_drawn - a.never_drawn,
             "gpui_images_replaced_before_draw_per_second": (b.never_drawn - a.never_drawn) as f64 / secs,
-            "cpu": probe::cpu_delta(&a.tree, &b.tree, secs),
+            "cpu": probe::cpu_delta(&a.tree.procs, &b.tree.procs, secs),
         })
     }
 
@@ -488,7 +490,7 @@ impl Run {
             .saturating_sub(before["webdriver_samples"].as_u64().unwrap_or(0));
         let page_true = after["webdriver_true"].as_u64().unwrap_or(u64::MAX);
         let tree = probe::tree(probe::self_pid());
-        let switches = probe::devtools_switches(&tree);
+        let switches = probe::devtools_switches(&tree.procs);
         let sockets = probe::listening_sockets(&tree);
         let tcp_listeners = sockets["listening"]
             .as_array()
@@ -551,7 +553,7 @@ impl Run {
         self.put("cdp_events_received", json!(bridge.events_received()));
         self.put(
             "process_tree",
-            json!(tree.iter().map(Proc::summary).collect::<Vec<_>>()),
+            json!(tree.procs.iter().map(Proc::summary).collect::<Vec<_>>()),
         );
         self.put("devtools_switches_in_cmdlines", json!(switches));
         self.put("listening_sockets", sockets);
@@ -561,6 +563,7 @@ impl Run {
 
     fn renderers() -> Vec<Proc> {
         probe::tree(probe::self_pid())
+            .procs
             .into_iter()
             .filter(|p| matches!(p.kind().as_str(), "renderer" | "zygote-forked"))
             .collect()
@@ -618,7 +621,7 @@ impl Run {
         // as long as the one above ends before the close is due.
         let scan_start = Instant::now();
         let tree_open = (shown_at.elapsed() + scan_cost < self.cfg.devtools_close_after)
-            .then(|| probe::tree(probe::self_pid()));
+            .then(|| probe::tree(probe::self_pid()).procs);
         let tree_scan = scan_start.elapsed();
         let due =
             (shown_at + self.cfg.devtools_close_after).saturating_duration_since(Instant::now());
@@ -671,10 +674,9 @@ impl Run {
 
     async fn shutdown(&mut self, cx: &mut AsyncApp) -> Result<()> {
         let me = probe::self_pid();
-        *self.children_before_shutdown.borrow_mut() = probe::tree(me)
-            .into_iter()
-            .filter(|p| p.pid != me)
-            .collect();
+        let mut before = probe::tree(me);
+        before.procs.retain(|p| p.pid != me);
+        *self.children_before_shutdown.borrow_mut() = Some(before);
         let open: Vec<_> = self
             .hub
             .tracked

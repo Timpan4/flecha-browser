@@ -88,7 +88,7 @@ fn browser_main(args: cef::args::Args, mut app: cef::App) -> Result<bool> {
     }
 
     let report: scenario::Report = Default::default();
-    let children = Rc::new(RefCell::new(Vec::new()));
+    let children = Rc::new(RefCell::new(None));
     let gpui_started = Rc::new(Cell::new(false));
     {
         let report = report.clone();
@@ -123,16 +123,24 @@ fn browser_main(args: cef::args::Args, mut app: cef::App) -> Result<bool> {
         t.elapsed().as_secs_f64() * 1e3
     });
 
+    // An empty child list proves nothing unless both snapshots found every
+    // process; `--pump-wait-gone` fails the run on any discovery error.
+    let (before, mut discovery_errors) = match children.borrow_mut().take() {
+        Some(tree) => (tree.procs, tree.errors),
+        None => (Vec::new(), vec!["no snapshot before shutdown".to_string()]),
+    };
     // Zygotes exit when this process closes their sockets, so some are still
     // alive here; `--pump-wait-gone` checks them after exit.
-    let alive_now: Vec<Value> = children
-        .borrow()
+    let alive_now: Vec<Value> = before
         .iter()
         .filter(|p| probe::alive(p.pid, p.start_time))
         .map(probe::Proc::summary)
         .collect();
     let me = probe::self_pid();
-    let remaining: Vec<Value> = probe::tree(me)
+    let after = probe::tree(me);
+    discovery_errors.extend(after.errors);
+    let remaining: Vec<Value> = after
+        .procs
         .iter()
         .filter(|p| p.pid != me)
         .map(probe::Proc::summary)
@@ -163,7 +171,8 @@ fn browser_main(args: cef::args::Args, mut app: cef::App) -> Result<bool> {
             "cef_shutdown_called": shutdown_ms.is_some(),
             "cef_shutdown_skipped_reason": (!browsers_closed).then_some("browsers still open"),
             "cef_shutdown_ms": shutdown_ms,
-            "children_before_shutdown": children.borrow().iter().map(probe::Proc::summary).collect::<Vec<_>>(),
+            "children_before_shutdown": before.iter().map(probe::Proc::summary).collect::<Vec<_>>(),
+            "discovery_errors": discovery_errors,
             "children_alive_right_after_cef_shutdown": alive_now,
             "descendants_right_after_cef_shutdown": remaining,
         }),
@@ -272,8 +281,13 @@ fn wait_gone(path: &str) -> Result<bool> {
     }
     children.sort_unstable();
     children.dedup();
+    let discovery_errors = report["shutdown"]["discovery_errors"]
+        .as_array()
+        .context("report has no shutdown.discovery_errors")?
+        .len();
     let result = probe::wait_gone(&children, timeout);
-    let clean = result["clean"] == json!(true);
+    // With a discovery error, a child may be missing from both lists.
+    let clean = result["clean"] == json!(true) && discovery_errors == 0;
     let pass = report.get("scenario_pass") == Some(&json!(true)) && clean;
     report.insert("children_after_exit".into(), result);
     report.insert("shutdown_clean".into(), json!(clean));
@@ -288,7 +302,7 @@ fn start(
     pump_requests: mpsc::UnboundedReceiver<(std::time::Instant, i64)>,
     context_ready: mpsc::UnboundedReceiver<()>,
     report: scenario::Report,
-    children: Rc<RefCell<Vec<probe::Proc>>>,
+    children: Rc<RefCell<Option<probe::Tree>>>,
 ) -> Result<()> {
     // The pump starts first: CEF needs it to finish initializing.
     cx.spawn(async move |cx| pump::run(pump_requests, cx).await)

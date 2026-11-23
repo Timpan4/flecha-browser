@@ -2,6 +2,7 @@
 //! command lines and the sockets it listens on.
 
 use cef_gpui_pump::procfs::{maps_path, parse_ss_unix, read_fd_table};
+use cef_gpui_pump::proctree::{self, ProcStat};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -104,16 +105,11 @@ fn inner_pid(pid: i32) -> Option<i32> {
     line.split_whitespace().last()?.parse().ok()
 }
 
-fn read_proc(pid: i32) -> Option<Proc> {
-    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    // comm (field 2) may contain spaces and parentheses; fields resume after the last ')'.
-    let rest = &stat[stat.rfind(')')? + 2..];
-    let fields: Vec<&str> = rest.split(' ').collect();
-    // `rest` starts at field 3 (state), so field N is fields[N - 3].
-    let ppid = fields.get(1)?.parse().ok()?;
-    let utime = fields.get(11)?.parse().ok()?;
-    let stime = fields.get(12)?.parse().ok()?;
-    let start_time = fields.get(19)?.parse().ok()?;
+/// The details of a discovered process. The command line, run time and inner
+/// PID are measurements; a process that exits before they are read keeps
+/// empty ones (its `kind` is then "exiting").
+fn read_proc(s: ProcStat) -> Proc {
+    let pid = s.pid;
     let cmdline = fs::read(format!("/proc/{pid}/cmdline"))
         .map(|raw| {
             raw.split(|b| *b == 0)
@@ -122,65 +118,57 @@ fn read_proc(pid: i32) -> Option<Proc> {
                 .collect()
         })
         .unwrap_or_default();
-    Some(Proc {
+    Proc {
         pid,
-        ppid,
-        start_time,
-        utime,
-        stime,
+        ppid: s.ppid,
+        start_time: s.start_time,
+        utime: s.utime,
+        stime: s.stime,
         cmdline,
         run_ns: run_ns(pid),
         inner_pid: inner_pid(pid),
         parent_type: None,
         grandparent_type: None,
         parent_inner_pid: None,
-    })
-}
-
-fn all_procs() -> Vec<Proc> {
-    let Ok(entries) = fs::read_dir("/proc") else {
-        return Vec::new();
-    };
-    entries
-        .filter_map(|e| e.ok()?.file_name().to_str()?.parse::<i32>().ok())
-        .filter_map(read_proc)
-        .collect()
-}
-
-/// `root` and every process descended from it.
-pub fn tree(root: i32) -> Vec<Proc> {
-    let procs = all_procs();
-    let mut children: HashMap<i32, Vec<&Proc>> = HashMap::new();
-    for p in &procs {
-        children.entry(p.ppid).or_default().push(p);
     }
-    let mut out: Vec<Proc> = procs.iter().filter(|p| p.pid == root).cloned().collect();
-    let mut i = 0;
-    while i < out.len() {
-        let parent = &out[i];
-        let (parent_type, grandparent_type, parent_inner) = (
-            parent.switch_type(),
-            parent.parent_type.clone(),
-            parent.inner_pid,
-        );
-        // The root has no recorded parent; mark its children so `kind` can tell
-        // the root ("browser") from other processes with no --type.
-        let parent_type = parent_type.or_else(|| Some("browser".to_string()));
-        if let Some(kids) = children.get(&out[i].pid) {
-            let kids: Vec<Proc> = kids
-                .iter()
-                .map(|p| Proc {
-                    parent_type: parent_type.clone(),
-                    grandparent_type: grandparent_type.clone(),
-                    parent_inner_pid: parent_inner,
-                    ..(*p).clone()
-                })
-                .collect();
-            out.extend(kids);
+}
+
+/// `root` and every process descended from it, and every reason the snapshot
+/// is inconclusive (see `cef_gpui_pump::proctree`). Every verdict built on a
+/// snapshot fails unless `errors` is empty.
+pub struct Tree {
+    pub procs: Vec<Proc>,
+    pub errors: Vec<String>,
+}
+
+impl Tree {
+    pub fn complete(&self) -> bool {
+        self.errors.is_empty()
+    }
+}
+
+pub fn tree(root: i32) -> Tree {
+    let found = proctree::tree(proctree::list(Path::new("/proc")), root);
+    let mut procs: Vec<Proc> = Vec::with_capacity(found.stats.len());
+    let mut at: HashMap<i32, usize> = HashMap::new();
+    // proctree lists each process after its parent, the root first.
+    for s in found.stats {
+        let mut p = read_proc(s);
+        if let Some(&i) = at.get(&p.ppid) {
+            let parent = &procs[i];
+            // The root has no recorded parent; mark its children so `kind`
+            // can tell the root ("browser") from other processes with no --type.
+            p.parent_type = parent.switch_type().or_else(|| Some("browser".to_string()));
+            p.grandparent_type = parent.parent_type.clone();
+            p.parent_inner_pid = parent.inner_pid;
         }
-        i += 1;
+        at.insert(p.pid, procs.len());
+        procs.push(p);
     }
-    out
+    Tree {
+        procs,
+        errors: found.errors,
+    }
 }
 
 pub fn self_pid() -> i32 {
@@ -282,7 +270,8 @@ pub fn devtools_switches(procs: &[Proc]) -> Vec<Value> {
 ///
 /// Sandboxed children are not dumpable, so their fd tables can be unreadable.
 /// Those PIDs are returned in `unreadable` rather than silently skipped.
-pub fn listening_sockets(procs: &[Proc]) -> Value {
+pub fn listening_sockets(tree: &Tree) -> Value {
+    let procs = &tree.procs;
     let mut owner: HashMap<u64, i32> = HashMap::new();
     let mut unreadable = Vec::new();
     let mut fd_entry_errors = Vec::new();
@@ -354,9 +343,15 @@ pub fn listening_sockets(procs: &[Proc]) -> Value {
             }
         }
     }
-    // Zero listeners proves nothing unless every fd and socket table was read.
-    let complete = unreadable.is_empty() && fd_entry_errors.is_empty() && table_errors.is_empty();
+    // Zero listeners proves nothing unless every process was found and every
+    // fd and socket table was read.
+    let complete = tree.complete()
+        && unreadable.is_empty()
+        && fd_entry_errors.is_empty()
+        && table_errors.is_empty();
     json!({
+        "processes": procs.len(),
+        "discovery_errors": tree.errors,
         "listening": listening,
         "network_namespaces_read": namespaces.len(),
         "sockets_seen": owned.len(),
@@ -373,8 +368,9 @@ pub fn listening_sockets(procs: &[Proc]) -> Value {
 /// Socket peers come from `ss -x`, which lists the Unix sockets of this network
 /// namespace. Sandboxed renderers run in their own network namespace, so their
 /// sockets are counted in `sockets_without_peer_info` instead of resolved.
-pub fn forbidden_refs(procs: &[Proc], forbidden: &[String], allowed: &[String]) -> Value {
+pub fn forbidden_refs(tree: &Tree, forbidden: &[String], allowed: &[String]) -> Value {
     use cef_gpui_pump::path_under;
+    let procs = &tree.procs;
     let under = |path: &str| {
         forbidden.iter().any(|f| path_under(path, f))
             && !allowed.iter().any(|a| path_under(path, a))
@@ -448,7 +444,10 @@ pub fn forbidden_refs(procs: &[Proc], forbidden: &[String], allowed: &[String]) 
             }
         }
     }
-    let clean = open.is_empty()
+    // An inconclusive snapshot may have missed the very process that holds a
+    // forbidden path, so it is never clean.
+    let clean = tree.complete()
+        && open.is_empty()
         && mapped.is_empty()
         && peers.is_empty()
         && unreadable.is_empty()
@@ -458,6 +457,7 @@ pub fn forbidden_refs(procs: &[Proc], forbidden: &[String], allowed: &[String]) 
         "forbidden": forbidden,
         "allowed": allowed,
         "processes": procs.len(),
+        "discovery_errors": tree.errors,
         "open_files": open,
         "mapped_files": mapped,
         "unix_socket_peers": peers,
