@@ -98,22 +98,29 @@ impl Config {
             second_browser: opts.contains_key("second-browser"),
             no_inactive_throttle: opts.contains_key("no-inactive-throttle"),
             forbidden_paths: {
-                let paths = path_list(&get("forbid-paths")?);
+                let paths = path_list("forbid-paths", &get("forbid-paths")?)?;
                 if paths.is_empty() {
                     bail!("--pump-forbid-paths names no path");
                 }
                 paths
             },
-            allowed_paths: path_list(&get("allow-paths")?),
+            allowed_paths: path_list("allow-paths", &get("allow-paths")?)?,
         })
     }
 }
 
-/// A colon-separated list of absolute paths; empty entries are dropped.
-fn path_list(value: &str) -> Vec<String> {
+/// A colon-separated list of absolute paths; empty entries are dropped. A
+/// relative entry could never match the absolute paths the scan reads.
+fn path_list(option: &str, value: &str) -> Result<Vec<String>> {
     value
         .split(':')
         .filter(|p| !p.is_empty())
-        .map(str::to_string)
+        .map(|p| {
+            if p.starts_with('/') {
+                Ok(p.to_string())
+            } else {
+                bail!("--pump-{option} entry {p:?} is not an absolute path")
+            }
+        })
         .collect()
 }

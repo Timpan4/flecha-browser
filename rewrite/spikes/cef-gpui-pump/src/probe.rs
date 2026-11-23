@@ -1,9 +1,19 @@
 //! Linux `/proc` reads for the done checks: the process tree, its CPU time, its
 //! command lines and the sockets it listens on.
 
+use cef_gpui_pump::procfs::{maps_path, read_fd_table, ss_unix_row};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::path::Path;
+
+/// The inode of an fd target like `socket:[1234]`.
+fn socket_inode(target: &str) -> Option<u64> {
+    target
+        .strip_prefix("socket:[")
+        .and_then(|s| s.strip_suffix(']'))
+        .and_then(|s| s.parse().ok())
+}
 
 #[derive(Clone, Debug)]
 pub struct Proc {
@@ -275,21 +285,16 @@ pub fn devtools_switches(procs: &[Proc]) -> Vec<Value> {
 pub fn listening_sockets(procs: &[Proc]) -> Value {
     let mut owner: HashMap<u64, i32> = HashMap::new();
     let mut unreadable = Vec::new();
+    let mut fd_entry_errors = Vec::new();
     for p in procs {
-        let Ok(fds) = fs::read_dir(format!("/proc/{}/fd", p.pid)) else {
+        let Ok(table) = read_fd_table(Path::new(&format!("/proc/{}/fd", p.pid))) else {
             unreadable.push(p.summary());
             continue;
         };
-        for fd in fds.flatten() {
-            if let Ok(target) = fs::read_link(fd.path()) {
-                let target = target.to_string_lossy();
-                if let Some(inode) = target
-                    .strip_prefix("socket:[")
-                    .and_then(|s| s.strip_suffix(']'))
-                    && let Ok(inode) = inode.parse()
-                {
-                    owner.insert(inode, p.pid);
-                }
+        fd_entry_errors.extend(table.failures);
+        for target in &table.targets {
+            if let Some(inode) = socket_inode(target) {
+                owner.insert(inode, p.pid);
             }
         }
     }
@@ -349,13 +354,14 @@ pub fn listening_sockets(procs: &[Proc]) -> Value {
             }
         }
     }
-    // Zero listeners proves nothing unless every fd table and socket table was read.
-    let complete = unreadable.is_empty() && table_errors.is_empty();
+    // Zero listeners proves nothing unless every fd and socket table was read.
+    let complete = unreadable.is_empty() && fd_entry_errors.is_empty() && table_errors.is_empty();
     json!({
         "listening": listening,
         "network_namespaces_read": namespaces.len(),
         "sockets_seen": owned.len(),
         "unreadable_fd_tables": unreadable,
+        "fd_entry_errors": fd_entry_errors,
         "table_errors": table_errors,
         "complete": complete,
     })
@@ -378,20 +384,15 @@ pub fn forbidden_refs(procs: &[Proc], forbidden: &[String], allowed: &[String]) 
     let mut unreadable = Vec::new();
     let mut sockets: Vec<(u64, i32)> = Vec::new();
     for p in procs {
-        let Ok(fds) = fs::read_dir(format!("/proc/{}/fd", p.pid)) else {
+        let Ok(table) = read_fd_table(Path::new(&format!("/proc/{}/fd", p.pid))) else {
             unreadable.push(json!({ "pid": p.pid, "what": "fd" }));
             continue;
         };
-        for fd in fds.flatten() {
-            let Ok(target) = fs::read_link(fd.path()) else {
-                continue;
-            };
-            let target = target.to_string_lossy();
-            if let Some(inode) = target
-                .strip_prefix("socket:[")
-                .and_then(|s| s.strip_suffix(']'))
-                .and_then(|s| s.parse().ok())
-            {
+        for error in &table.failures {
+            unreadable.push(json!({ "pid": p.pid, "what": "fd entry", "error": error }));
+        }
+        for target in table.targets {
+            if let Some(inode) = socket_inode(&target) {
                 sockets.push((inode, p.pid));
             } else if under(&target) {
                 open.push(json!({ "pid": p.pid, "path": target }));
@@ -399,7 +400,7 @@ pub fn forbidden_refs(procs: &[Proc], forbidden: &[String], allowed: &[String]) 
         }
         match fs::read_to_string(format!("/proc/{}/maps", p.pid)) {
             Ok(maps) => {
-                for path in maps.lines().filter_map(|l| l.split_whitespace().nth(5)) {
+                for path in maps.lines().filter_map(maps_path) {
                     if under(path) {
                         mapped.push(json!({ "pid": p.pid, "path": path }));
                     }
@@ -422,14 +423,10 @@ pub fn forbidden_refs(procs: &[Proc], forbidden: &[String], allowed: &[String]) 
     };
     if let Ok(out) = &ss {
         for line in String::from_utf8_lossy(&out.stdout).lines().skip(1) {
-            let f: Vec<&str> = line.split_whitespace().collect();
-            if f.len() < 8 {
-                continue;
-            }
-            let (Ok(inode), Ok(peer_inode)) = (f[5].parse::<u64>(), f[7].parse::<u64>()) else {
+            let Some((address, inode, peer_inode)) = ss_unix_row(line) else {
                 continue;
             };
-            local.insert(inode, f[4].to_string());
+            local.insert(inode, address.to_string());
             if peer_inode != 0 {
                 peer.insert(inode, peer_inode);
             }

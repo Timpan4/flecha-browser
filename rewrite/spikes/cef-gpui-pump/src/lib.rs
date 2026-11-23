@@ -2,6 +2,7 @@
 //! run them without loading libcef.
 
 pub mod idle;
+pub mod procfs;
 pub mod schedule;
 
 /// Whether `path` is `dir` or lies below it, by whole path components.

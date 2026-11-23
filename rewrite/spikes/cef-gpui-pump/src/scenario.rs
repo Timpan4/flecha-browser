@@ -6,6 +6,7 @@ use crate::config::{Config, Scenario};
 use crate::engine::{self, Hub, Kind};
 use crate::probe::{self, Proc};
 use crate::pump;
+use crate::timers::Timers;
 use crate::view::{PageView, ViewStats};
 use anyhow::{Context as _, Result, bail};
 use cef::{ImplBrowser as _, ImplBrowserHost as _};
@@ -19,7 +20,15 @@ use std::time::{Duration, Instant};
 
 pub type Report = Rc<RefCell<Map<String, Value>>>;
 
+/// Milliseconds between two page counter samples, on the page's own clock
+/// (`performance.now()`), so page rates count only what the page did between them.
+fn page_interval_ms(a: &Value, b: &Value) -> Option<f64> {
+    Some(b["now"].as_f64()? - a["now"].as_f64()?).filter(|ms| *ms > 0.0)
+}
+
 pub struct Run {
+    /// The scenario's own GPUI timers (steps, sleeps, the timeout probe's bound).
+    pub timers: Timers,
     pub cfg: Config,
     pub hub: Rc<Hub>,
     pub stats: Rc<ViewStats>,
@@ -42,6 +51,8 @@ struct Snap {
     renders: u64,
     animation_steps: u64,
     uploads: u64,
+    overwritten: u64,
+    never_drawn: u64,
     paints: Vec<u64>,
     tree: Vec<Proc>,
 }
@@ -52,17 +63,12 @@ impl Run {
         self.report.borrow_mut().insert(key.to_string(), value);
     }
 
-    async fn sleep(&self, cx: &mut AsyncApp, d: Duration) {
-        cx.background_executor().timer(d).await;
+    async fn sleep(&self, d: Duration) {
+        self.timers.arm(d).await;
     }
 
     /// Waits until `pred` holds, re-checking after each lifecycle event, bounded by the step timeout.
-    async fn wait_for(
-        &mut self,
-        cx: &mut AsyncApp,
-        what: &str,
-        pred: impl Fn(&Hub) -> bool,
-    ) -> Result<Duration> {
+    async fn wait_for(&mut self, what: &str, pred: impl Fn(&Hub) -> bool) -> Result<Duration> {
         let start = Instant::now();
         let deadline = start + self.cfg.step_timeout;
         loop {
@@ -76,7 +82,7 @@ impl Run {
                     self.cfg.step_timeout
                 );
             }
-            let mut timer = cx.background_executor().timer(remaining).fuse();
+            let mut timer = self.timers.arm(remaining).fuse();
             futures::select_biased! {
                 _ = self.lifecycle.next() => {}
                 _ = timer => {}
@@ -92,6 +98,8 @@ impl Run {
             renders: self.stats.renders.get(),
             animation_steps: self.stats.animation_steps.get(),
             uploads: self.stats.frames_uploaded.get(),
+            overwritten: self.hub.frames_overwritten.get(),
+            never_drawn: self.stats.frames_never_drawn.get(),
             paints: (0..pages).map(|i| self.hub.paints(i)).collect(),
             tree: probe::tree(probe::self_pid()),
         }
@@ -113,6 +121,13 @@ impl Run {
             "gpui_animation_steps": b.animation_steps - a.animation_steps,
             "gpui_images_uploaded": b.uploads - a.uploads,
             "on_paint_by_page": paints,
+            // Page 0's OnPaint frames that never became a GPUI image, because the
+            // next OnPaint replaced them first, and images replaced before GPUI
+            // drew them. Measurements only: no verdict uses them.
+            "on_paint_frames_overwritten_before_upload": b.overwritten - a.overwritten,
+            "on_paint_frames_overwritten_before_upload_per_second": (b.overwritten - a.overwritten) as f64 / secs,
+            "gpui_images_replaced_before_draw": b.never_drawn - a.never_drawn,
+            "gpui_images_replaced_before_draw_per_second": (b.never_drawn - a.never_drawn) as f64 / secs,
             "cpu": probe::cpu_delta(&a.tree, &b.tree, secs),
         })
     }
@@ -155,7 +170,8 @@ impl Run {
                 "gpui_animation_steps": self.stats.animation_steps.get(),
                 "gpui_images_uploaded": self.stats.frames_uploaded.get(),
                 "gpui_images_dropped": self.stats.images_dropped.get(),
-                "gpui_frames_never_drawn": self.stats.frames_never_drawn.get(),
+                "gpui_images_replaced_before_draw": self.stats.frames_never_drawn.get(),
+                "on_paint_frames_overwritten_before_upload": self.hub.frames_overwritten.get(),
                 "on_paint_by_page": *self.hub.paints.borrow(),
             }),
         );
@@ -165,7 +181,7 @@ impl Run {
     async fn start_pages(&mut self, cx: &mut AsyncApp, count: usize) -> Result<Bridge> {
         let waited = Instant::now();
         let ready = self.context_ready.next();
-        let mut timer = cx.background_executor().timer(self.cfg.step_timeout).fuse();
+        let mut timer = self.timers.arm(self.cfg.step_timeout).fuse();
         futures::select_biased! {
             r = ready.fuse() => r.context("context channel closed")?,
             _ = timer => bail!("CEF context not initialized within {:?}", self.cfg.step_timeout),
@@ -182,7 +198,7 @@ impl Run {
                 .with_context(|| format!("CreateBrowserSync failed for page {index}"))?;
         }
         let load = self
-            .wait_for(cx, "page load", |hub| {
+            .wait_for("page load", |hub| {
                 let loaded = hub.loaded.borrow();
                 loaded.len() >= count && loaded.iter().all(|l| *l)
             })
@@ -207,14 +223,14 @@ impl Run {
         let bridge = self.start_pages(cx, pages).await?;
         // The pump is traced from page load to the end of every scenario, so a
         // late wake-up anywhere, not only in the idle window, fails the run.
-        let pump_timers_before = pump::timers_created();
+        let (pump_timers_before, _) = pump::timers();
         let traced_from = Instant::now();
         pump::start_trace();
         let result = match self.cfg.scenario {
-            Scenario::Idle => self.idle(cx).await,
+            Scenario::Idle => self.idle().await,
             Scenario::Animate => self.animate(cx, &bridge).await,
-            Scenario::Cdp => self.cdp(cx, &bridge).await,
-            Scenario::DevTools => self.devtools(cx, &bridge).await,
+            Scenario::Cdp => self.cdp(&bridge).await,
+            Scenario::DevTools => self.devtools(&bridge).await,
         };
         let trace = pump::stop_trace();
         let traced_seconds = traced_from.elapsed().as_secs_f64();
@@ -224,7 +240,8 @@ impl Run {
         let step_ms = self.cfg.step_timeout.as_secs_f64() * 1e3;
         let pump_pass =
             analysis["unexplained_calls"] == 0 && max_gap_ms.is_some_and(|gap| gap <= step_ms);
-        let pump_timers = pump::timers_created() - pump_timers_before;
+        let (pump_timers_now, pump_timers_max_outstanding) = pump::timers();
+        let pump_timers = pump_timers_now - pump_timers_before;
         self.put(
             "pump_trace",
             json!({
@@ -233,7 +250,10 @@ impl Run {
                 "max_gap_bound_ms": step_ms,
                 "pump_timers_created": pump_timers,
                 "pump_timers_per_second": pump_timers as f64 / traced_seconds,
+                "pump_timers_max_outstanding_since_start": pump_timers_max_outstanding,
                 "bridge_timers_created": bridge.timers().0,
+                "scenario_timers_created": self.timers.created(),
+                "scenario_timers_max_outstanding": self.timers.max_outstanding(),
                 "analysis": analysis,
             }),
         );
@@ -244,10 +264,10 @@ impl Run {
         result
     }
 
-    async fn idle(&mut self, cx: &mut AsyncApp) -> Result<()> {
-        self.sleep(cx, self.cfg.warmup).await;
+    async fn idle(&mut self) -> Result<()> {
+        self.sleep(self.cfg.warmup).await;
         let a = self.snap();
-        self.sleep(cx, self.cfg.measure).await;
+        self.sleep(self.cfg.measure).await;
         let b = self.snap();
         self.idle_window = Some((a.at, b.at));
         let delta = self.delta(&a, &b);
@@ -312,7 +332,7 @@ impl Run {
         bridge
             .evaluate(
                 tab,
-                "({ raf: window.__raf || 0, css_time: (document.getAnimations()[0] || {}).currentTime ?? null, \
+                "({ raf: window.__raf || 0, now: performance.now(), css_time: (document.getAnimations()[0] || {}).currentTime ?? null, \
                    webdriver_samples: window.__wd ? window.__wd.samples : null, \
                    webdriver_true: window.__wd ? window.__wd.trues : null, \
                    webdriver_now: navigator.webdriver })",
@@ -320,33 +340,34 @@ impl Run {
             .await
     }
 
-    async fn animate_phase(&mut self, cx: &mut AsyncApp, bridge: &Bridge) -> Result<Value> {
-        self.sleep(cx, self.cfg.warmup).await;
+    async fn animate_phase(&mut self, bridge: &Bridge) -> Result<Value> {
+        self.sleep(self.cfg.warmup).await;
         let page_a = self.page_counters(bridge).await?;
         let a = self.snap();
-        self.sleep(cx, self.cfg.measure).await;
+        self.sleep(self.cfg.measure).await;
         let b = self.snap();
         let page_b = self.page_counters(bridge).await?;
         let mut delta = self.delta(&a, &b);
-        let secs = delta["seconds"].as_f64().unwrap_or(1.0);
         let raf = page_b["raf"].as_f64().unwrap_or(0.0) - page_a["raf"].as_f64().unwrap_or(0.0);
+        let page_ms = page_interval_ms(&page_a, &page_b);
         let css = match (page_a["css_time"].as_f64(), page_b["css_time"].as_f64()) {
             (Some(x), Some(y)) => json!(y - x),
             _ => Value::Null,
         };
         delta["page_raf_frames"] = json!(raf);
-        delta["page_raf_per_second"] = json!(raf / secs);
+        delta["page_counter_interval_ms"] = json!(page_ms);
+        delta["page_raf_per_second"] = json!(page_ms.map(|ms| raf / ms * 1e3));
         delta["page_css_animation_ms_advanced"] = css;
         Ok(delta)
     }
 
     async fn animate(&mut self, cx: &mut AsyncApp, bridge: &Bridge) -> Result<()> {
-        let off = self.animate_phase(cx, bridge).await?;
+        let off = self.animate_phase(bridge).await?;
         self.window.update(cx, |view, _, cx| {
             view.gpui_animation = true;
             cx.notify();
         })?;
-        let on = self.animate_phase(cx, bridge).await?;
+        let on = self.animate_phase(bridge).await?;
         let advancing = |d: &Value| {
             d["page_raf_frames"].as_f64().unwrap_or(0.0) > 0.0
                 && d["page_css_animation_ms_advanced"].as_f64().unwrap_or(0.0) > 0.0
@@ -362,16 +383,18 @@ impl Run {
         Ok(())
     }
 
-    async fn cdp(&mut self, cx: &mut AsyncApp, bridge: &Bridge) -> Result<()> {
+    async fn cdp(&mut self, bridge: &Bridge) -> Result<()> {
         let tab = bridge.tab_ids()[0];
-        self.sleep(cx, self.cfg.warmup).await;
+        self.sleep(self.cfg.warmup).await;
         let tabs = bridge.list_tabs().await;
         self.put("cdp_list_tabs", json!(tabs));
 
         let before = self.page_counters(bridge).await?;
         let before_at = Instant::now();
         let step = self.cfg.step_timeout;
-        let executor = cx.background_executor().clone();
+        let paints_before = self.hub.paints(0);
+        let overwritten_before = self.hub.frames_overwritten.get();
+        let never_drawn_before = self.stats.frames_never_drawn.get();
         // Keep the DevTools session busy for the measured window and read
         // navigator.webdriver from both the call and the page's own rAF sampler.
         let start = Instant::now();
@@ -398,31 +421,41 @@ impl Run {
         };
         // Alongside the loop, one call that never gets a reply (a promise that
         // never settles) shows that the bridge's timeout fires under load. It
-        // must fail with the timeout within one more step timeout.
+        // must fail with the timeout within one more step timeout, measured,
+        // so a reply chosen after both futures were ready cannot count.
         let timeout_probe = async {
+            let deadline = step + step;
             let sent = Instant::now();
             let reply = bridge.evaluate(tab, "new Promise(() => {})").fuse();
-            let mut bound = executor.timer(step + step).fuse();
+            let mut bound = self.timers.arm(deadline).fuse();
             futures::pin_mut!(reply);
-            futures::select_biased! {
-                reply = reply => json!({
-                    "timed_out": reply.as_ref().err().is_some_and(|e| e.to_string().contains("no reply within")),
-                    "error": reply.as_ref().err().map(|e| format!("{e:#}")),
-                    "returned_after_ms": sent.elapsed().as_secs_f64() * 1e3,
-                    "late_ms": (sent.elapsed().as_secs_f64() - step.as_secs_f64()) * 1e3,
-                }),
-                _ = bound => json!({
-                    "timed_out": false,
-                    "error": "no result within two step timeouts",
-                    "returned_after_ms": sent.elapsed().as_secs_f64() * 1e3,
-                }),
-            }
+            let (timed_out, error) = futures::select_biased! {
+                reply = reply => (
+                    reply.as_ref().err().is_some_and(|e| e.to_string().contains("no reply within")),
+                    reply.as_ref().err().map(|e| format!("{e:#}")),
+                ),
+                _ = bound => (false, Some("no result within two step timeouts".to_string())),
+            };
+            let elapsed = sent.elapsed();
+            json!({
+                "timed_out": timed_out,
+                "within_deadline": elapsed <= deadline,
+                "pass": timed_out && elapsed <= deadline,
+                "error": error,
+                "returned_after_ms": elapsed.as_secs_f64() * 1e3,
+                "deadline_ms": deadline.as_secs_f64() * 1e3,
+                "late_ms": (elapsed.as_secs_f64() - step.as_secs_f64()) * 1e3,
+            })
         };
         let ((calls, true_replies, errors, mut latencies_ms, loop_time), timeout_probe) =
             futures::join!(flood, timeout_probe);
         let loop_seconds = loop_time.as_secs_f64();
         let after = self.page_counters(bridge).await?;
-        let page_seconds = before_at.elapsed().as_secs_f64();
+        let host_seconds = before_at.elapsed().as_secs_f64();
+        let page_ms = page_interval_ms(&before, &after);
+        let paints = self.hub.paints(0) - paints_before;
+        let overwritten = self.hub.frames_overwritten.get() - overwritten_before;
+        let never_drawn = self.stats.frames_never_drawn.get() - never_drawn_before;
         latencies_ms.sort_by(f64::total_cmp);
         let pct = |q: f64| {
             (!latencies_ms.is_empty())
@@ -474,7 +507,7 @@ impl Run {
         let pass = calls > 0
             && timely
             && bridge_max_outstanding <= 1
-            && timeout_probe["timed_out"] == true
+            && timeout_probe["pass"] == true
             && true_replies == 0
             && errors.is_empty()
             && samples > 0
@@ -497,8 +530,14 @@ impl Run {
                 "bridge_timers_created": bridge_timers,
                 "bridge_timers_max_outstanding": bridge_max_outstanding,
                 "page_raf_frames": raf,
-                "page_raf_per_second": raf / page_seconds,
-                "page_counter_seconds": page_seconds,
+                "page_raf_per_second": page_ms.map(|ms| raf / ms * 1e3),
+                "page_counter_interval_ms": page_ms,
+                "host_interval_seconds": host_seconds,
+                "on_paint_frames": paints,
+                "on_paint_per_second": paints as f64 / host_seconds,
+                "on_paint_frames_overwritten_before_upload": overwritten,
+                "on_paint_frames_overwritten_before_upload_per_second": overwritten as f64 / host_seconds,
+                "gpui_images_replaced_before_draw": never_drawn,
                 "webdriver_true_replies": true_replies,
                 "errors": errors.iter().take(10).collect::<Vec<_>>(),
                 "page_webdriver_samples_during_calls": samples,
@@ -527,9 +566,9 @@ impl Run {
             .collect()
     }
 
-    async fn page_health(&mut self, cx: &mut AsyncApp, bridge: &Bridge) -> Value {
+    async fn page_health(&mut self, bridge: &Bridge) -> Value {
         let a = self.snap();
-        self.sleep(cx, self.cfg.measure).await;
+        self.sleep(self.cfg.measure).await;
         let b = self.snap();
         let secs = (b.at - a.at).as_secs_f64();
         let mut pages = Vec::new();
@@ -548,9 +587,9 @@ impl Run {
         json!(pages)
     }
 
-    async fn devtools(&mut self, cx: &mut AsyncApp, bridge: &Bridge) -> Result<()> {
-        self.sleep(cx, self.cfg.warmup).await;
-        let health_before = self.page_health(cx, bridge).await;
+    async fn devtools(&mut self, bridge: &Bridge) -> Result<()> {
+        self.sleep(self.cfg.warmup).await;
+        let health_before = self.page_health(bridge).await;
         let scan_cost_start = Instant::now();
         let renderers_before = Self::renderers();
         // One full /proc scan, timed here so the scan while DevTools is open
@@ -564,7 +603,7 @@ impl Run {
             bail!("ShowDevTools: no host");
         }
         let show_call = shown_at.elapsed();
-        self.wait_for(cx, "DevTools OnAfterCreated", Hub::devtools_open)
+        self.wait_for("DevTools OnAfterCreated", Hub::devtools_open)
             .await?;
         let created = shown_at.elapsed();
         let devtools_style = {
@@ -583,14 +622,14 @@ impl Run {
         let tree_scan = scan_start.elapsed();
         let due =
             (shown_at + self.cfg.devtools_close_after).saturating_duration_since(Instant::now());
-        self.sleep(cx, due).await;
+        self.sleep(due).await;
         let close_at = shown_at.elapsed();
         inspected.host().context("host")?.close_dev_tools();
         let closed = self
-            .wait_for(cx, "DevTools OnBeforeClose", |h| !h.devtools_open())
+            .wait_for("DevTools OnBeforeClose", |h| !h.devtools_open())
             .await?;
-        self.sleep(cx, self.cfg.warmup).await;
-        let health_after = self.page_health(cx, bridge).await;
+        self.sleep(self.cfg.warmup).await;
+        let health_after = self.page_health(bridge).await;
         let renderers_after = Self::renderers();
 
         let gone: Vec<Value> = renderers_before
@@ -653,7 +692,7 @@ impl Run {
         // rest stay tracked and `browsers_closed` stays false, so main.rs
         // skips CefShutdown rather than calling it with live browsers.
         let waited = self
-            .wait_for(cx, "every OnBeforeClose", |h| h.open_count() == 0)
+            .wait_for("every OnBeforeClose", |h| h.open_count() == 0)
             .await;
         self.hub.frame.borrow_mut().take();
         self.window

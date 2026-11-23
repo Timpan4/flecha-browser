@@ -77,6 +77,9 @@ pub struct Hub {
     pub view_height: i32,
     pub scale_factor: Cell<f32>,
     pub frame: RefCell<Option<PaintedFrame>>,
+    /// `OnPaint` frames replaced in `frame` before the view took them, so
+    /// never uploaded to GPUI.
+    pub frames_overwritten: Cell<u64>,
     pub frame_tx: mpsc::UnboundedSender<()>,
     /// `OnPaint` calls per page index.
     pub paints: RefCell<Vec<u64>>,
@@ -233,11 +236,15 @@ wrap_render_handler! {
             // SAFETY: CEF passes a BGRA buffer of width * height * 4 bytes that
             // stays valid for the duration of this callback.
             let bgra = unsafe { std::slice::from_raw_parts(buffer, len) }.to_vec();
-            *self.hub.frame.borrow_mut() = Some(PaintedFrame {
+            let replaced = self.hub.frame.borrow_mut().replace(PaintedFrame {
                 width: width as u32,
                 height: height as u32,
                 bgra,
             });
+            if replaced.is_some() {
+                let n = &self.hub.frames_overwritten;
+                n.set(n.get() + 1);
+            }
             let _ = self.hub.frame_tx.unbounded_send(());
         }
     }

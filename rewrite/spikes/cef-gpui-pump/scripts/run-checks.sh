@@ -4,7 +4,8 @@
 # run, and a system bus address that points nowhere. Each app run checks that
 # its process tree holds nothing under the desktop session's runtime dir, the
 # system bus socket or the caller's home outside the bundle, pages and results
-# (`isolation_clean` in the report). Stops what it starts by PID.
+# (`isolation_clean` in the report). Stops what it starts by PID, and kills a
+# run's whole session when it outlives its watchdog (see `watchdog_ms`).
 # Exits nonzero if any run fails.
 #
 # Usage: scripts/run-checks.sh RESULTS_DIR [SCENARIO...]
@@ -105,10 +106,35 @@ exec {dfd}>&-
 display=:$display_number
 echo "Xvfb pid $xvfb_pid on $display"
 
+# The longest a run may take, from its own knobs: its measured windows (each a
+# warmup plus a measurement) plus one STEP_TIMEOUT_MS for every wait the app
+# bounds and every synchronous CEF call it cannot bound (CefInitialize,
+# CreateBrowserSync per page, ShowDevTools, CefShutdown). Counted from
+# src/scenario.rs and src/app.rs:
+#   every run: CefInitialize, context ready, CreateBrowserSync per page, page
+#     load, every OnBeforeClose, CefShutdown (5 + pages)
+#   idle: 1 window
+#   animate: 2 windows, 4 page counter reads
+#   cdp: 1 window, list tabs, 2 page counter reads, the loop's overrun bound
+#     and the timeout probe running beside it (2), the screenshot
+#   devtools (2 pages): 2 windows, 4 evaluates, ShowDevTools, its creation,
+#     its close, plus the close delay
+watchdog_ms() { # scenario [close_ms]
+    local w=$((WARMUP_MS + MEASURE_MS)) s=$STEP_TIMEOUT_MS
+    case $1 in
+        idle) echo $((w + 6 * s)) ;;
+        animate) echo $((2 * w + 10 * s)) ;;
+        cdp) echo $((w + 12 * s)) ;;
+        devtools) echo $((2 * w + 14 * s + $2)) ;;
+        *) echo "no watchdog for $1" >&2; return 1 ;;
+    esac
+}
+ms_to_s() { printf '%d.%03d' $(($1 / 1000)) $(($1 % 1000)); }
+
 failures=0
 run_one() {
-    local name=$1 url=$2
-    shift 2
+    local name=$1 url=$2 watchdog=$3
+    shift 3
     local out=$results/$name.json
     # A crash must not leave an older report to be read as this run's.
     rm -f -- "$out" "${out%.json}.png"
@@ -116,15 +142,21 @@ run_one() {
     # profile, XDG_RUNTIME_DIR, HOME and TMPDIR; never the owner's profiles,
     # session runtime dir, home or shared /tmp.
     local base cache runtime home tmp
-    base=$(mktemp -d -t cef-gpui-pump-run.XXXXXX)
+    # Under /tmp, not the caller's TMPDIR, so the path the bus config and its
+    # address embed holds only characters sed, XML and D-Bus take literally.
+    base=$(mktemp -d -p /tmp cef-gpui-pump-run.XXXXXX)
     scratch+=("$base")
+    [[ $base =~ ^/tmp/cef-gpui-pump-run\.[A-Za-z0-9]+$ ]] || { echo "unexpected scratch path $base" >&2; exit 1; }
     cache=$base/cache runtime=$base/runtime home=$base/home tmp=$base/tmp
     mkdir -m 700 -- "$cache" "$runtime" "$home" "$tmp"
     # The bus config names this run's scratch dir; dbus-daemon picks a new socket name in it.
     sed "s|__SCRATCH_RUNTIME_DIR__|$runtime|" "$here/scripts/isolated-session-bus.conf.in" >"$runtime/session-bus.conf"
-    echo "== $name"
+    echo "== $name (watchdog $(ms_to_s "$watchdog") s)"
     local status=0
-    # XDG base dirs and cache overrides would point back into the real home.
+    # timeout runs the session in its own process group and signals the whole
+    # group on expiry, then SIGKILL after one more STEP_TIMEOUT_MS. XDG base
+    # dirs and cache overrides would point back into the real home.
+    timeout --kill-after="$(ms_to_s "$STEP_TIMEOUT_MS")" "$(ms_to_s "$watchdog")" \
     env -u WAYLAND_DISPLAY -u WAYLAND_SOCKET -u DBUS_SESSION_BUS_ADDRESS \
         -u XDG_CONFIG_HOME -u XDG_CACHE_HOME -u XDG_DATA_HOME -u XDG_STATE_HOME \
         -u MESA_SHADER_CACHE_DIR -u __GL_SHADER_DISK_CACHE_PATH \
@@ -139,6 +171,11 @@ run_one() {
         --pump-forbid-paths="$desktop_runtime:$system_bus_socket:$real_home" \
         --pump-allow-paths="$allowed" \
         ${EXTRA_ARGS:-} "$@" >/dev/null 2>"$results/$name.stderr" || status=$?
+    local expired=
+    if (( status == 124 || status == 137 )); then
+        expired=yes
+        echo "watchdog expired after $(ms_to_s "$watchdog") s (exit $status); the session's process group was killed" | tee "$results/$name.watchdog.txt"
+    fi
     # What landed in the scratch dirs would otherwise have gone to the desktop
     # session's runtime dir, the owner's home or the shared /tmp.
     (cd "$base" && find runtime home tmp -mindepth 1 -printf '%y %m %p\n' | sort) >"$results/$name.scratch-dirs.txt"
@@ -146,7 +183,9 @@ run_one() {
     # every child the app saw before CefShutdown to exit (pidfd, bounded by
     # STEP_TIMEOUT_MS). This mode reads /proc only and never starts CEF.
     local verdict=fail
-    if [[ -f $out ]]; then
+    if [[ -n $expired ]]; then
+        echo "   exit=$status, killed by the watchdog"
+    elif [[ -f $out ]]; then
         env -i HOME="$home" TMPDIR="$tmp" PATH="$PATH" "$bin" --pump-wait-gone="$out" || true
         [[ $status -eq 0 && $(jq .pass "$out") == true ]] && verdict=pass
         echo "   exit=$status scenario_pass=$(jq .scenario_pass "$out") pump_pass=$(jq .pump_pass "$out") isolation_clean=$(jq .isolation_clean "$out") shutdown_clean=$(jq .shutdown_clean "$out") pass=$(jq .pass "$out")"
@@ -159,16 +198,17 @@ run_one() {
 
 for s in "${scenarios[@]}"; do
     case $s in
-        idle) run_one idle "file://$pages/static.html" --pump-scenario=idle ;;
-        animate) run_one animate "file://$pages/anim.html" --pump-scenario=animate ;;
-        cdp) run_one cdp "file://$pages/anim.html" --pump-scenario=cdp ;;
+        idle) run_one idle "file://$pages/static.html" "$(watchdog_ms idle)" --pump-scenario=idle ;;
+        animate) run_one animate "file://$pages/anim.html" "$(watchdog_ms animate)" --pump-scenario=animate ;;
+        cdp) run_one cdp "file://$pages/anim.html" "$(watchdog_ms cdp)" --pump-scenario=cdp ;;
         animate-unthrottled)
-            run_one animate-unthrottled "file://$pages/anim.html" --pump-scenario=animate --pump-no-inactive-throttle ;;
+            run_one animate-unthrottled "file://$pages/anim.html" "$(watchdog_ms animate)" \
+                --pump-scenario=animate --pump-no-inactive-throttle ;;
         devtools)
             : "${DEVTOOLS_CLOSE_MS:?}" "${DEVTOOLS_TRIALS:?}"
             for ms in $DEVTOOLS_CLOSE_MS; do
                 for i in $(seq 1 "$DEVTOOLS_TRIALS"); do
-                    run_one "devtools-${ms}ms-$i" "file://$pages/anim.html" --pump-scenario=devtools \
+                    run_one "devtools-${ms}ms-$i" "file://$pages/anim.html" "$(watchdog_ms devtools "$ms")" --pump-scenario=devtools \
                         --pump-devtools-close-ms="$ms" --pump-second-browser
                 done
             done ;;

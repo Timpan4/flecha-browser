@@ -8,17 +8,18 @@
 //! `gpui_linux/src/linux/dispatcher.rs`). A timer per call piled up about 15,000
 //! timers a second under a CDP loop, saturated that thread and stalled the CEF
 //! pump behind it. So calls carry a deadline, and one sweeper task holds at most
-//! one timer, set for the earliest deadline of a call in flight.
+//! one timer, set for the earliest deadline of a call in flight. The bridge's
+//! own `Timers` ledger shows that bound in every cdp report.
 
+use crate::timers::Timers;
 use anyhow::{Context as _, Result, anyhow, bail};
 use base64::Engine as _;
 use cef::*;
 use futures::channel::oneshot;
-use gpui::{AsyncApp, BackgroundExecutor, Task};
+use gpui::{AsyncApp, Task};
 use serde_json::{Value, json};
 use std::cell::{Cell, RefCell};
-use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::HashMap;
 use std::rc::Rc as StdRc;
 use std::time::{Duration, Instant};
 
@@ -90,40 +91,6 @@ wrap_dev_tools_message_observer! {
     }
 }
 
-/// The one place the bridge arms GPUI timers. A GPUI timer stays on the shared
-/// `Timer` thread until its deadline even when dropped, so it counts as
-/// outstanding until then. The sweeper never holds more than one.
-pub struct Timers {
-    executor: BackgroundExecutor,
-    deadlines: RefCell<BinaryHeap<Reverse<Instant>>>,
-    created: Cell<u64>,
-    max_outstanding: Cell<usize>,
-}
-
-impl Timers {
-    fn new(executor: BackgroundExecutor) -> Self {
-        Self {
-            executor,
-            deadlines: Default::default(),
-            created: Cell::new(0),
-            max_outstanding: Cell::new(0),
-        }
-    }
-
-    pub fn arm(&self, after: Duration) -> Task<()> {
-        let now = Instant::now();
-        let mut deadlines = self.deadlines.borrow_mut();
-        while deadlines.peek().is_some_and(|Reverse(at)| *at <= now) {
-            deadlines.pop();
-        }
-        deadlines.push(Reverse(now + after));
-        self.max_outstanding
-            .set(self.max_outstanding.get().max(deadlines.len()));
-        self.created.set(self.created.get() + 1);
-        self.executor.timer(after)
-    }
-}
-
 /// Fails every call whose deadline passed. Sleeps until the earliest deadline
 /// in flight, or until a call arrives when none is. Deadlines are the call
 /// time plus one fixed timeout, so a call made while the timer is set never
@@ -183,7 +150,7 @@ impl Bridge {
 
     /// GPUI timers the bridge armed, and the most that were outstanding at once.
     pub fn timers(&self) -> (u64, usize) {
-        (self.timers.created.get(), self.timers.max_outstanding.get())
+        (self.timers.created(), self.timers.max_outstanding())
     }
 
     pub fn attach(&self, browser: &Browser) -> Result<i32> {

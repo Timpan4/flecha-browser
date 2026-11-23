@@ -1,0 +1,9 @@
+# GPUI's Linux timers share one Timer thread and are not cancelled on drop, so
+# a timer per request starves the CEF pump (REPORT.md, "The CDP slowdown").
+# Every timer in this crate goes through `timers::Timers::arm`, which counts it.
+# The scheduler executors behind `scheduler_executor` expose the same timers.
+disallowed-methods = [
+    { path = "gpui::BackgroundExecutor::timer", reason = "arm timers through timers::Timers::arm" },
+    { path = "gpui::BackgroundExecutor::scheduler_executor", reason = "its timer bypasses timers::Timers::arm" },
+    { path = "gpui::ForegroundExecutor::scheduler_executor", reason = "its timer bypasses timers::Timers::arm" },
+]

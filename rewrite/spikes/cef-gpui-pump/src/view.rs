@@ -25,7 +25,8 @@ pub struct ViewStats {
     /// OnPaint frames turned into GPUI images.
     pub frames_uploaded: Cell<u64>,
     pub images_dropped: Cell<u64>,
-    /// OnPaint frames replaced before GPUI drew them.
+    /// GPUI images replaced before GPUI drew them. Paints overwritten before
+    /// upload are `Hub::frames_overwritten`.
     pub frames_never_drawn: Cell<u64>,
 }
 

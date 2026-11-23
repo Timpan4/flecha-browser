@@ -13,19 +13,20 @@
 //!   delayed work when the thread is not inside `DoWork`, so CEF's timers rely
 //!   on the periodic call.
 
+use crate::timers::Timers;
 use cef_gpui_pump::schedule::{Event, Guard, Reason, Scheduler};
 pub use cef_gpui_pump::schedule::{MAX_PUMP_INTERVAL, analyze, analyze_between};
 use futures::{FutureExt as _, StreamExt as _, channel::mpsc};
 use gpui::AsyncApp;
 use serde_json::{Value, json};
 use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 static SCHEDULE_TX: OnceLock<mpsc::UnboundedSender<(Instant, i64)>> = OnceLock::new();
 static REQUESTS_RECEIVED: AtomicU64 = AtomicU64::new(0);
-static TIMERS_CREATED: AtomicU64 = AtomicU64::new(0);
 
 /// Called from CEF's `OnScheduleMessagePumpWork` on any thread. Only marshals,
 /// with the time of the request.
@@ -47,6 +48,7 @@ thread_local! {
     static GUARD: Guard = Guard::default();
     static TRACE: RefCell<Option<Vec<Event>>> = const { RefCell::new(None) };
     static COUNTS: RefCell<Counts> = RefCell::new(Counts::default());
+    static TIMERS: RefCell<Option<Rc<Timers>>> = const { RefCell::new(None) };
 }
 
 #[derive(Clone, Copy, Default, Debug)]
@@ -76,9 +78,12 @@ pub fn requests_received_any_thread() -> u64 {
     REQUESTS_RECEIVED.load(Ordering::Relaxed)
 }
 
-/// GPUI timers the pump loop has created since start.
-pub fn timers_created() -> u64 {
-    TIMERS_CREATED.load(Ordering::Relaxed)
+/// GPUI timers the pump loop has armed since start, and the most outstanding at once.
+pub fn timers() -> (u64, usize) {
+    TIMERS.with_borrow(|t| {
+        t.as_ref()
+            .map_or((0, 0), |t| (t.created(), t.max_outstanding()))
+    })
 }
 
 /// Start recording every request and call until `stop_trace`.
@@ -157,7 +162,8 @@ fn yield_now() -> impl std::future::Future<Output = ()> {
 /// (`gpui/src/platform_scheduler.rs`, `gpui_linux/src/linux/dispatcher.rs`), so
 /// one timer per request would pile up under a stream of CEF requests.
 pub async fn run(mut requests: mpsc::UnboundedReceiver<(Instant, i64)>, cx: &mut AsyncApp) {
-    let executor = cx.background_executor().clone();
+    let timers = Rc::new(Timers::new(cx.background_executor().clone()));
+    TIMERS.with_borrow_mut(|t| *t = Some(timers.clone()));
     let mut scheduler = Scheduler::new(Instant::now());
     let mut armed: Option<(Instant, futures::future::Fuse<gpui::Task<()>>)> = None;
     loop {
@@ -173,8 +179,7 @@ pub async fn run(mut requests: mpsc::UnboundedReceiver<(Instant, i64)>, cx: &mut
         let now = Instant::now();
         if due > now {
             if armed.as_ref().is_none_or(|(at, _)| *at > due) {
-                TIMERS_CREATED.fetch_add(1, Ordering::Relaxed);
-                armed = Some((due, executor.timer(due - now).fuse()));
+                armed = Some((due, timers.arm(due - now).fuse()));
             }
             let (armed_at, mut timer) = armed.take().expect("armed above");
             futures::select_biased! {

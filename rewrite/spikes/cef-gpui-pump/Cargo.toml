@@ -10,7 +10,13 @@ publish.workspace = true
 # revs. cef-dll-sys declares `links = "cef_dll_wrapper"`, so the workspace can
 # hold only one cef-rs source. The workspace cef has no `accelerated_osr`: this
 # spike uploads software OnPaint frames.
+#
+# The app is Linux only (`/proc`, pidfds, X11); other targets build a stub
+# binary and the CEF-free library, which needs only serde_json.
 [dependencies]
+serde_json = "1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
 cef.workspace = true
 gpui.workspace = true
 gpui_platform.workspace = true
@@ -21,7 +27,6 @@ env_logger = "0.11"
 futures = "0.3"
 image = { version = "0.25", default-features = false }
 libc = "0.2"
-serde_json = "1"
 
 # The binary links libcef.so, which only the runner's bundle provides, so its
 # test target could not start. Tests live in the CEF-free library.

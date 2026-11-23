@@ -6,8 +6,11 @@
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
-dir=$(mktemp -d -t cef-gpui-pump-bus-check.XXXXXX)
+# Under /tmp, not the caller's TMPDIR, so the path the config and the bus
+# address embed holds only characters sed, XML and D-Bus take literally.
+dir=$(mktemp -d -p /tmp cef-gpui-pump-bus-check.XXXXXX)
 trap 'rm -rf -- "$dir"' EXIT
+[[ $dir =~ ^/tmp/cef-gpui-pump-bus-check\.[A-Za-z0-9]+$ ]] || { echo "unexpected scratch path $dir" >&2; exit 1; }
 sed "s|__SCRATCH_RUNTIME_DIR__|$dir|" "$here/isolated-session-bus.conf.in" >"$dir/session-bus.conf"
 
 # Runs inside the first bus's session.
