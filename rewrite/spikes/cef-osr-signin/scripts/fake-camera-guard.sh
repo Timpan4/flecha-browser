@@ -37,24 +37,29 @@ frame=no
 wait_until 'the frame settled' frame_settled && frame=yes
 
 m=$(mark)
-open_url "$REMOTE/navigate"
-open_url "$FIXTURE/to?$REMOTE/navigate-redirected"
-refused=0
-if [[ $GUARD == on && $APP_MODE == osr ]]; then
-    send 'go https://accounts.google.com/'
-    send 'go https://mail.google.com/'
-    wait_for '^\[go\] refused: .*mail\.google\.com' "$m" >/dev/null
-    refused=$(count '^\[go\] refused: .*(accounts|mail)\.google\.com' "$m")
-fi
 # Each navigation either reaches 127.0.0.2 or is blocked; wait for that rather than a time.
+# The second starts only after the first settled: a new navigation cancels one still pending,
+# and the cancelled one would then neither reach the remote nor be blocked.
 navigated() {
     local reached blocked
     reached=$(($(remote_got /navigate) + $(remote_got /navigate-redirected)))
     blocked=$(count '^(\[blocked\] (navigation|redirect) to|\[go\] refused: .*) http://127\.0\.0\.2' "$m")
-    ((reached + blocked >= 2))
+    ((reached + blocked >= $1))
 }
 navigations=no
-wait_until 'both navigations settled' navigated && navigations=yes
+open_url "$REMOTE/navigate"
+if wait_until 'the navigation settled' navigated 1; then
+    open_url "$FIXTURE/to?$REMOTE/navigate-redirected"
+    wait_until 'the redirected navigation settled' navigated 2 && navigations=yes
+fi
+refused=0
+if [[ $GUARD == on && $APP_MODE == osr ]]; then
+    m2=$(mark)
+    send 'go https://accounts.google.com/'
+    send 'go https://mail.google.com/'
+    wait_for '^\[go\] refused: .*mail\.google\.com' "$m2" >/dev/null
+    refused=$(count '^\[go\] refused: .*(accounts|mail)\.google\.com' "$m2")
+fi
 
 reached=$(remote_requests)
 blocked=$(count '^\[blocked\] ')
