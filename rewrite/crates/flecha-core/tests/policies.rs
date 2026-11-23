@@ -4,7 +4,7 @@ use flecha_core::TabId;
 fn invalid_keys_cannot_replace_defaults() {
     let platform = Platform::Linux;
     let mut bindings = Keybindings::new();
-    for key in ["F99", "Ctrl+Bogus"] {
+    for key in ["F99", "Ctrl+Bogus", "T"] {
         assert_eq!(
             set_binding(&mut bindings, "reload", BindingEdit::Set(key), platform),
             Err(BindingError::InvalidAccelerator)
@@ -31,7 +31,7 @@ fn shortcut_edits_displace_shadowed_defaults_too() {
 fn shortcut_conflicts_follow_chromium_modifier_and_key_normalization() {
     let platform = Platform::Linux;
     let bindings = Keybindings::from([("reload".into(), Some("control+1".into()))]);
-    assert_eq!(keys_for(&bindings, "reload", platform), None);
+    assert_eq!(keys_for(&bindings, "reload", platform), Some("CmdOrCtrl+R"));
     assert!(same_keys(
         " control + Ctrl + Return ",
         "CmdOrCtrl+Enter",
@@ -196,7 +196,8 @@ fn sleep_distinguishes_active_use_and_wall_clock() {
     let now = 10 * DISCARD_AFTER_WALL_CLOCK;
     let minute = 60_000;
     let tab = SleepTab {
-        last_active: now,
+        last_active: Some(now),
+        used_at: Some(0),
         ..SleepTab::default()
     };
     let frozen = SleepTab {
@@ -211,14 +212,14 @@ fn sleep_distinguishes_active_use_and_wall_clock() {
     );
     assert_eq!(sleep_state(frozen, now, DISCARD_AFTER, false), Discarded);
     let day_idle = SleepTab {
-        last_active: now - DISCARD_AFTER_WALL_CLOCK,
+        last_active: Some(now - DISCARD_AFTER_WALL_CLOCK),
         ..tab
     };
     assert_eq!(sleep_state(day_idle, now, 0, false), Discarded);
     assert_eq!(
         sleep_state(
             SleepTab {
-                last_active: day_idle.last_active + minute,
+                last_active: day_idle.last_active.map(|time| time + minute),
                 ..tab
             },
             now,
@@ -248,7 +249,8 @@ fn sleep_prioritizes_visibility_media_and_debounce() {
     use SleepState::{Alive, Discarded, Frozen};
     let now = 10 * DISCARD_AFTER_WALL_CLOCK;
     let tab = SleepTab {
-        last_active: now,
+        last_active: Some(now),
+        used_at: Some(0),
         ..SleepTab::default()
     };
     for url in [

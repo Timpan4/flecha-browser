@@ -209,7 +209,7 @@ fn custom_keys<'a>(bindings: &'a Keybindings, id: &str, platform: Platform) -> O
     bindings
         .get(id)
         .and_then(Option::as_deref)
-        .filter(|keys| parse_accelerator(keys, platform).is_some())
+        .filter(|keys| assignable_keys(keys, platform) && !is_reserved(keys, platform))
 }
 
 fn configured_keys<'a>(bindings: &'a Keybindings, id: &str, platform: Platform) -> Option<&'a str> {
@@ -217,6 +217,20 @@ fn configured_keys<'a>(bindings: &'a Keybindings, id: &str, platform: Platform) 
         Some(None) => None,
         _ => custom_keys(bindings, id, platform).or_else(|| default_keys(id, platform)),
     }
+}
+
+fn assignable_keys(keys: &str, platform: Platform) -> bool {
+    parse_accelerator(keys, platform).is_some_and(|accelerator| {
+        accelerator.modifiers != 0 || matches!(accelerator.key, Key::Function(_))
+    })
+}
+
+pub(crate) fn repair_saved_bindings(bindings: &mut Keybindings) {
+    // The platform changes the CmdOrCtrl bit, but never whether a key is assignable.
+    bindings.retain(|_, keys| {
+        keys.as_deref()
+            .is_none_or(|keys| assignable_keys(keys, Platform::Linux))
+    });
 }
 
 fn is_reserved(keys: &str, platform: Platform) -> bool {
@@ -267,9 +281,7 @@ pub fn set_binding(
             return Ok(Vec::new());
         }
         BindingEdit::Set(keys) => {
-            let accelerator =
-                parse_accelerator(keys, platform).ok_or(BindingError::InvalidAccelerator)?;
-            if accelerator.modifiers == 0 && !matches!(accelerator.key, Key::Function(_)) {
+            if !assignable_keys(keys, platform) {
                 return Err(BindingError::InvalidAccelerator);
             }
             Some(keys)

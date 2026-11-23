@@ -8,6 +8,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, value::RawValue};
 
+use crate::shortcuts::repair_saved_bindings;
 use crate::state::{DEFAULT_SPACE_COLOR, PinnedTree, compare_recency};
 use crate::{
     ArchivePolicy, ArchivedTab, BrowserState, ClosedWindow, Device, Environment, EnvironmentTarget,
@@ -107,12 +108,29 @@ pub fn state_before_import(saved: Option<&Value>) -> Result<Option<BrowserState>
 pub struct LoadedState {
     pub state: Option<BrowserState>,
     pub recovered: Option<Recovery>,
-    /// Apply in this order. A failed backup write does not invalidate the loaded state.
-    pub recovery_writes: Vec<BackupWrite>,
+    damaged_copy: Option<BackupWrite>,
+    recovered_current: Option<BackupWrite>,
     last_good_after_start: Option<BackupWrite>,
 }
 
 impl LoadedState {
+    /// Persist recovery writes. Return success from the writer only after the value is saved.
+    /// On failure, another call resumes at the failed write.
+    pub fn apply_recovery<E>(
+        &mut self,
+        mut write: impl FnMut(&BackupWrite) -> Result<(), E>,
+    ) -> Result<(), E> {
+        if let Some(damaged) = &self.damaged_copy {
+            write(damaged)?;
+            self.damaged_copy = None;
+        }
+        if let Some(current) = &self.recovered_current {
+            write(current)?;
+            self.recovered_current = None;
+        }
+        Ok(())
+    }
+
     /// Promote the repaired startup snapshot only after the application starts successfully.
     /// This is the original startup state, regardless of subsequent runtime edits.
     pub fn started(&mut self) -> Option<BackupWrite> {
@@ -126,7 +144,8 @@ pub fn load(saved: Option<&Value>, last_good: Option<&Value>) -> Result<LoadedSt
     let mut loaded = LoadedState {
         state: None,
         recovered: None,
-        recovery_writes: Vec::new(),
+        damaged_copy: None,
+        recovered_current: None,
         last_good_after_start: None,
     };
     let Some(saved) = saved else {
@@ -144,7 +163,7 @@ pub fn load(saved: Option<&Value>, last_good: Option<&Value>) -> Result<LoadedSt
         return Ok(loaded);
     }
 
-    loaded.recovery_writes.push(BackupWrite {
+    loaded.damaged_copy = Some(BackupWrite {
         slot: Slot::Damaged,
         value: saved.clone(),
     });
@@ -152,7 +171,7 @@ pub fn load(saved: Option<&Value>, last_good: Option<&Value>) -> Result<LoadedSt
         Ok(Some(fallback)) => {
             loaded.state = Some(fallback);
             loaded.recovered = Some(Recovery::LastGood);
-            loaded.recovery_writes.push(BackupWrite {
+            loaded.recovered_current = Some(BackupWrite {
                 slot: Slot::Current,
                 value: last_good
                     .expect("a fallback comes from the last-good copy")
@@ -185,8 +204,14 @@ fn decode_document(json: &str, legacy_only: bool) -> Result<BrowserState, Decode
         check_version(version, legacy_only)?;
     }
     let mut raw = Map::new();
+    let tabs = fields.get("tabs").ok_or(DecodeError::InvalidShape)?;
+    let tabs: BTreeMap<String, &RawValue> =
+        serde_json::from_str(tabs.get()).map_err(|_| DecodeError::InvalidShape)?;
+    let tabs = tabs
+        .into_iter()
+        .filter_map(|(id, tab)| Some((TabId::new(id), repair_tab(tab)?)))
+        .collect();
     for key in [
-        "tabs",
         "spaces",
         "activeSpaceId",
         "windows",
@@ -218,7 +243,7 @@ fn decode_document(json: &str, legacy_only: bool) -> Result<BrowserState, Decode
             );
         }
     }
-    repair(raw).ok_or(DecodeError::InvalidShape)
+    repair(raw, tabs).ok_or(DecodeError::InvalidShape)
 }
 
 fn check_version(version: &RawValue, legacy_only: bool) -> Result<(), DecodeError> {
@@ -302,13 +327,7 @@ fn needs_newer_reader(value: &Value) -> bool {
         })
 }
 
-fn repair(mut raw: Map<String, Value>) -> Option<BrowserState> {
-    let raw_tabs = raw.remove("tabs")?;
-    let tabs: BTreeMap<_, _> = raw_tabs
-        .as_object()?
-        .iter()
-        .filter_map(|(id, tab)| Some((TabId::new(id), repair_tab(tab)?)))
-        .collect();
+fn repair(mut raw: Map<String, Value>, tabs: BTreeMap<TabId, Tab>) -> Option<BrowserState> {
     let raw_spaces = raw.remove("spaces")?;
     let raw_spaces: Vec<_> = raw_spaces
         .as_array()?
@@ -422,34 +441,80 @@ fn repair(mut raw: Map<String, Value>) -> Option<BrowserState> {
     Some(state)
 }
 
-fn repair_tab(raw: &Value) -> Option<Tab> {
-    let mut tab = Tab::new(raw.get("url")?.as_str()?, 0);
-    if let Some(title) = raw.get("title").and_then(Value::as_str) {
-        tab.title = title.into();
+fn repair_tab(raw: &RawValue) -> Option<Tab> {
+    fn read<T: DeserializeOwned>(raw: &BTreeMap<String, &RawValue>, key: &str) -> Option<T> {
+        serde_json::from_str(raw.get(key)?.get()).ok()
     }
-    tab.last_active = raw
-        .get("lastActive")
-        .and_then(coerce_millis)
-        .unwrap_or_default();
-    tab.favicon = field(raw, "favicon");
-    tab.custom_title = field(raw, "customTitle");
-    tab.muted = field(raw, "muted");
-    tab.device = field(raw, "device");
-    tab.home_url = field(raw, "homeUrl");
-    tab.unseen = field(raw, "unseen").unwrap_or_default();
-    tab.agent = field(raw, "agent").unwrap_or_default();
-    tab.history = raw.get("history").and_then(|history| {
-        let entries = history.get("entries")?.as_array()?;
-        if entries
-            .iter()
-            .all(|entry| entry.get("pageState").is_none_or(Value::is_string))
-        {
-            serde_json::from_value(history.clone()).ok()
-        } else {
-            None
-        }
-    });
+    // Read only whitelisted fields. RawValue skips unknown nested data without
+    // building a recursive tree or hitting the Value deserializer's depth limit.
+    let raw: BTreeMap<String, &RawValue> = serde_json::from_str(raw.get()).ok()?;
+    let mut tab = Tab::new(read::<String>(&raw, "url")?, 0);
+    if let Some(title) = read(&raw, "title") {
+        tab.title = title;
+    }
+    tab.last_active = read(&raw, "lastActive").as_ref().and_then(coerce_millis);
+    tab.favicon = read(&raw, "favicon");
+    tab.custom_title = read(&raw, "customTitle");
+    tab.muted = read(&raw, "muted");
+    tab.device = read(&raw, "device");
+    tab.home_url = read(&raw, "homeUrl");
+    tab.unseen = read(&raw, "unseen").unwrap_or_default();
+    tab.agent = read(&raw, "agent").unwrap_or_default();
+    tab.history = raw
+        .get("history")
+        .and_then(|history| repair_history(history));
     Some(tab)
+}
+
+fn repair_history(raw: &RawValue) -> Option<crate::TabHistory> {
+    #[derive(serde::Deserialize)]
+    struct SavedHistory<'a> {
+        #[serde(borrow)]
+        entries: Vec<SavedEntry<'a>>,
+        index: f64,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct SavedEntry<'a> {
+        url: String,
+        title: String,
+        #[serde(
+            rename = "pageState",
+            default,
+            borrow,
+            deserialize_with = "saved_page_state"
+        )]
+        page_state: Option<&'a RawValue>,
+    }
+
+    fn saved_page_state<'de, D: serde::Deserializer<'de>>(
+        value: D,
+    ) -> Result<Option<&'de RawValue>, D::Error> {
+        serde::Deserialize::deserialize(value).map(Some)
+    }
+
+    let saved: SavedHistory<'_> = serde_json::from_str(raw.get()).ok()?;
+    let entries = saved
+        .entries
+        .into_iter()
+        .map(|entry| {
+            if entry
+                .page_state
+                .as_ref()
+                .is_some_and(|value| !value.get().starts_with('"'))
+            {
+                return None;
+            }
+            Some(crate::HistoryEntry {
+                url: entry.url,
+                title: entry.title,
+            })
+        })
+        .collect::<Option<_>>()?;
+    Some(crate::TabHistory {
+        entries,
+        index: saved.index,
+    })
 }
 
 fn repair_space(
@@ -679,6 +744,8 @@ fn repair_settings(raw: &mut Map<String, Value>) -> Settings {
         serde_json::from_value(raw.remove(key)?).ok()
     }
 
+    let mut keybindings = take(raw, "keybindings").unwrap_or_default();
+    repair_saved_bindings(&mut keybindings);
     Settings {
         sidebar_width: take::<f64>(raw, "sidebarWidth")
             .and_then(SidebarWidth::from_saved)
@@ -688,7 +755,7 @@ fn repair_settings(raw: &mut Map<String, Value>) -> Settings {
         archive_policy: take(raw, "archiveAfterHours")
             .and_then(ArchivePolicy::from_hours)
             .unwrap_or_default(),
-        keybindings: take(raw, "keybindings").unwrap_or_default(),
+        keybindings,
         environments: raw
             .remove("environments")
             .and_then(repair_environments)
@@ -763,8 +830,5 @@ fn coerce_millis(value: &Value) -> Option<f64> {
         }
         return text.parse::<f64>().ok().filter(|time| time.is_finite());
     }
-    value
-        .as_bool()
-        .map(|value| if value { 1.0 } else { 0.0 })
-        .or_else(|| value.as_f64())
+    value.as_f64().filter(|time| time.is_finite())
 }

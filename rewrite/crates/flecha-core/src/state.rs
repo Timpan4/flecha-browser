@@ -39,7 +39,8 @@ pub(crate) const DEFAULT_SPACE_COLOR: &str = "#cdd9f7";
 pub struct Tab {
     pub url: String,
     pub title: String,
-    pub last_active: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_active: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub favicon: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -62,7 +63,7 @@ impl Tab {
         Self {
             title: url.clone(),
             url,
-            last_active: now as f64,
+            last_active: Some(now as f64),
             favicon: None,
             custom_title: None,
             muted: None,
@@ -821,7 +822,7 @@ impl BrowserState {
         let Some(tab) = self.tabs.get_mut(id) else {
             return false;
         };
-        tab.last_active = now as f64;
+        tab.last_active = Some(now as f64);
         tab.unseen = false;
         true
     }
@@ -855,6 +856,7 @@ impl BrowserState {
             || self.locate(id).is_none()
             || is_mobile(&self.tabs, id)
             || !self.placement_exists(to)
+            || before.is_some_and(|key| !self.has_placement_key(to, key))
         {
             return TabChange::unchanged(false);
         }
@@ -1037,17 +1039,17 @@ impl BrowserState {
             .today
             .iter()
             .filter(|id| in_agent_folder(&self.tabs, ws, id) == agent);
-        let closed: Vec<_> = match which {
-            CloseToday::Below => siblings
-                .skip_while(|id| *id != tab)
-                .skip(1)
-                .cloned()
-                .collect(),
-            CloseToday::Others => siblings
-                .filter(|id| *id != tab && !kept_pair.is_some_and(|pair| pair.contains(id)))
-                .cloned()
-                .collect(),
-        };
+        let mut reached_anchor = which == CloseToday::Others;
+        let closed: Vec<_> = siblings
+            .filter(|id| {
+                if *id == tab {
+                    reached_anchor = true;
+                    return false;
+                }
+                reached_anchor && !kept_pair.is_some_and(|pair| pair.contains(id))
+            })
+            .cloned()
+            .collect();
         let mut removed = Vec::new();
         for id in closed {
             self.close_tab_recording(&id, now, |removed_id| removed.push(removed_id));
@@ -1063,21 +1065,20 @@ impl BrowserState {
         let cutoff = now as f64 - hours * 3_600_000.0;
         let mut removed = Vec::new();
         for win in &mut self.windows {
-            for (space, ws) in &mut win.spaces {
-                let visible_split = ws.split.as_ref().filter(|pair| {
-                    space == &win.active_space_id
-                        && ws
-                            .active_tab_id
-                            .as_ref()
-                            .is_some_and(|id| pair.contains(id))
+            for ws in win.spaces.values_mut() {
+                let selected_split = ws.split.as_ref().filter(|pair| {
+                    ws.active_tab_id
+                        .as_ref()
+                        .is_some_and(|id| pair.contains(id))
                 });
                 ws.today.retain(|id| {
                     let keep = ws.active_tab_id.as_ref() == Some(id)
-                        || visible_split.is_some_and(|pair| pair.contains(id))
+                        || selected_split.is_some_and(|pair| pair.contains(id))
                         || self
                             .tabs
                             .get(id)
-                            .is_none_or(|tab| tab.last_active >= cutoff);
+                            .and_then(|tab| tab.last_active)
+                            .is_none_or(|time| !time.is_finite() || time >= cutoff);
                     if !keep {
                         removed.push(id.clone());
                     }
@@ -1321,6 +1322,30 @@ impl BrowserState {
         }
     }
 
+    fn has_placement_key(&self, placement: Placement<'_>, key: PinnedKey<'_>) -> bool {
+        match (placement, key) {
+            (Placement::Favorite, PinnedKey::Tab(id)) => self.favorites.contains(id),
+            (Placement::Today { space, window }, PinnedKey::Tab(id)) => self
+                .window(window)
+                .and_then(|win| win.spaces.get(space))
+                .is_some_and(|ws| ws.today.contains(id)),
+            (Placement::Pinned { space, folder }, key) => {
+                let Some(space) = self.space(space) else {
+                    return false;
+                };
+                let nodes = match folder {
+                    None => &space.pinned,
+                    Some(id) => match find_folder(&space.pinned, id) {
+                        Some(PinnedNode::Folder { children, .. }) => children,
+                        _ => return false,
+                    },
+                };
+                nodes.iter().any(|node| node.key() == key)
+            }
+            _ => false,
+        }
+    }
+
     fn insert(&mut self, id: &TabId, to: Placement<'_>, before: Option<PinnedKey<'_>>) {
         let list = match to {
             Placement::Favorite => &mut self.favorites,
@@ -1470,8 +1495,15 @@ fn compare_activity(
     left: &TabId,
     right: &TabId,
 ) -> std::cmp::Ordering {
-    let active_at = |id| tabs.get(id).map_or(0.0, |tab| tab.last_active);
-    active_at(right).total_cmp(&active_at(left))
+    let active_at = |id| {
+        tabs.get(id)
+            .and_then(|tab| tab.last_active)
+            .filter(|time| time.is_finite())
+    };
+    match (active_at(left), active_at(right)) {
+        (Some(left), Some(right)) => right.total_cmp(&left),
+        (left, right) => right.is_some().cmp(&left.is_some()),
+    }
 }
 
 pub(crate) fn compare_recency(
@@ -1683,7 +1715,13 @@ fn release_visible(
             ws.today.retain(|tab| tab != other);
             tabs.remove(other);
             removed = Some(other.clone());
-            ws.active_tab_id = most_recent(tabs, &ws.today).cloned();
+            if ws
+                .active_tab_id
+                .as_ref()
+                .is_some_and(|active| active == id || active == other)
+            {
+                ws.active_tab_id = most_recent(tabs, &ws.today).cloned();
+            }
         } else if ws.active_tab_id.as_ref() == Some(id) {
             ws.active_tab_id = ws
                 .today
@@ -1703,6 +1741,10 @@ fn is_mobile(tabs: &BTreeMap<TabId, Tab>, id: &TabId) -> bool {
     tabs.get(id)
         .is_some_and(|tab| tab.device == Some(Device::Mobile))
 }
+
+#[cfg(test)]
+#[path = "state_fuzz.rs"]
+mod fuzz;
 
 fn end_split(ws: &mut WindowSpace, tabs: &mut BTreeMap<TabId, Tab>) -> Option<EndedSplit> {
     let [source, mirror] = ws.split.take()?;

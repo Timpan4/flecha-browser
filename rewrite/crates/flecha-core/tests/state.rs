@@ -5,6 +5,137 @@ use flecha_core::{
 };
 
 #[test]
+fn close_below_keeps_its_anchor() {
+    use flecha_core::{CloseToday, PinnedKey};
+    let (s, w) = (SpaceId::new("s"), WindowId::new("w"));
+    let mut state = BrowserState::new(s.clone(), w.clone());
+    let (d, m, t) = (TabId::new("d"), TabId::new("m"), TabId::new("t"));
+    assert!(state.open_today(d.clone(), Tab::new("https://e.org/d", 0), &w, None, true));
+    state.open_responsive(&w, m.clone(), 1).unwrap();
+    assert!(state.open_today(
+        t.clone(),
+        Tab::new("https://e.org/t", 0),
+        &w,
+        Some(&m),
+        false
+    ));
+    // Move the desktop below its mirror: [m, d, t].
+    let moved = state.place_tab(
+        &d,
+        Placement::Today {
+            space: &s,
+            window: &w,
+        },
+        Some(PinnedKey::Tab(&t)),
+    );
+    assert!(moved.result);
+    assert_eq!(
+        state.focused_window().spaces[&s].today,
+        [m.clone(), d.clone(), t.clone()]
+    );
+    assert!(state.activate(&m, &w, None).result.is_some());
+    let removed = state.close_today_tabs(&m, CloseToday::Below, 2);
+    assert_eq!(removed, [t]);
+    assert_eq!(state.focused_window().spaces[&s].today, [m, d]);
+}
+
+#[test]
+fn auto_archive_keeps_background_selection() {
+    let (s, w) = (SpaceId::new("s"), WindowId::new("w"));
+    let mut state = BrowserState::new(s.clone(), w.clone());
+    let (d, m) = (TabId::new("d"), TabId::new("m"));
+    assert!(state.open_today(d.clone(), Tab::new("https://e.org/d", 0), &w, None, true));
+    let day = 24 * 3_600_000;
+    state.open_responsive(&w, m.clone(), day).unwrap();
+    assert!(state.activate(&m, &w, Some(day)).result.is_some());
+    assert!(state.add_space(SpaceId::new("other")));
+    let _ = state.switch_space(&w, &SpaceId::new("other"));
+    let removed = state.archive_stale(day + 1);
+    assert!(removed.is_empty());
+    assert_eq!(state.window(&w).unwrap().spaces[&s].active_tab_id, Some(m));
+    assert!(state.tab(&d).is_some());
+}
+
+#[test]
+fn claim_keeps_unrelated_selection() {
+    let (s, a, b) = (SpaceId::new("s"), WindowId::new("a"), WindowId::new("b"));
+    let mut state = BrowserState::new(s.clone(), a.clone());
+    let p = TabId::new("p");
+    assert!(state.create_tab(
+        p.clone(),
+        Tab::new("https://e.org/p", 0),
+        Placement::Pinned {
+            space: &s,
+            folder: None
+        },
+        None
+    ));
+    assert!(state.activate(&p, &a, Some(1)).result.is_some());
+    let m = state.open_responsive(&a, TabId::new("m"), 2).unwrap();
+    let (q, y) = (TabId::new("q"), TabId::new("y"));
+    assert!(state.create_tab(
+        q.clone(),
+        Tab::new("https://e.org/q", 3),
+        Placement::Pinned {
+            space: &s,
+            folder: None
+        },
+        None,
+    ));
+    assert!(state.open_today(y, Tab::new("https://e.org/y", 9), &a, None, false));
+    assert!(state.activate(&q, &a, Some(4)).result.is_some());
+    let ws = &state.window(&a).unwrap().spaces[&s];
+    assert_eq!(ws.active_tab_id.as_ref(), Some(&q));
+    assert!(ws.split.is_some());
+    assert!(state.open_window(b.clone(), Some(&s)));
+    let change = state.activate(&p, &b, Some(10));
+    assert!(change.removed.contains(&m));
+    let ws = &state.window(&a).unwrap().spaces[&s];
+    assert_eq!(
+        ws.active_tab_id.as_ref(),
+        Some(&q),
+        "window A's selection changed"
+    );
+}
+
+#[test]
+fn stale_before_is_rejected() {
+    use flecha_core::PinnedKey;
+    let (s, w) = (SpaceId::new("s"), WindowId::new("w"));
+    let mut state = BrowserState::new(s.clone(), w.clone());
+    let (p, f, t) = (TabId::new("p"), TabId::new("f"), TabId::new("t"));
+    assert!(state.create_tab(
+        p.clone(),
+        Tab::new("https://e.org/p", 0),
+        Placement::Pinned {
+            space: &s,
+            folder: None
+        },
+        None
+    ));
+    assert!(state.create_tab(
+        f.clone(),
+        Tab::new("https://e.org/f", 0),
+        Placement::Favorite,
+        None
+    ));
+    assert!(state.open_today(t.clone(), Tab::new("https://e.org/t", 0), &w, None, true));
+    // `f` is a favorite, not in the pinned list: a stale anchor for this destination.
+    let snapshot = state.clone();
+    let change = state.place_tab(
+        &t,
+        Placement::Pinned {
+            space: &s,
+            folder: None,
+        },
+        Some(PinnedKey::Tab(&f)),
+    );
+    assert!(!change.result);
+    assert!(change.removed.is_empty());
+    assert_eq!(state, snapshot);
+}
+
+#[test]
 fn today_belongs_to_one_window_and_shared_tabs_have_one_visible_owner() {
     let home = SpaceId::new("home");
     let work = SpaceId::new("work");

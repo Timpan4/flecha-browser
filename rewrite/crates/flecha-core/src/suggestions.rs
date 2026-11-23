@@ -276,9 +276,9 @@ fn decode_component(word: &str) -> std::borrow::Cow<'_, str> {
 fn contains_jwt(text: &str) -> bool {
     // Check every dot-separated triple and every possible start of its header,
     // including tokens pasted immediately after letters, punctuation, or URL text.
-    let candidates = re!(r"[A-Za-z0-9_+/=-]+(?:\.[A-Za-z0-9_+/=-]*){2,}");
+    let candidates = re!(r"[A-Za-z0-9_+/=-]+(?:\s*\.\s*[A-Za-z0-9_+/=-]*){2,}");
     for candidate in candidates.find_iter(text) {
-        let mut parts = candidate.as_str().split('.');
+        let mut parts = candidate.as_str().split('.').map(str::trim);
         let (Some(mut header), Some(mut payload)) = (parts.next(), parts.next()) else {
             continue;
         };
@@ -532,6 +532,10 @@ fn jwt_parts(text: &str) -> Option<(&str, &str)> {
     (!signature.contains('.')).then_some((header, payload))
 }
 
+#[cfg(test)]
+#[path = "suggestion_fuzz.rs"]
+mod fuzz;
+
 fn decode_jwt_json(part: &str) -> Option<Value> {
     let part = part.trim_matches([' ', '\t', '\r', '\n', '\x0c']);
     serde_json::from_slice(&decode_base64(part)?).ok()
@@ -649,6 +653,9 @@ pub struct ActiveEnvironment {
 
 pub fn describe_environment(url: &str, environments: &[Environment]) -> Option<ActiveEnvironment> {
     let current = Url::parse(url).ok()?;
+    if !matches!(current.scheme(), "http" | "https") {
+        return None;
+    }
     let origin = current.origin().ascii_serialization();
     let (env, index) = environments.iter().find_map(|env| {
         Some((

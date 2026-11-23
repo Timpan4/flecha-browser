@@ -8,7 +8,8 @@ pub fn resolve_input(raw: &str, engine: SearchEngine) -> String {
     if let Some(address) = web_address(input) {
         return address;
     }
-    if input.is_empty() || rejected_address(input) {
+    let hostless_http = re!(r"(?i)^https?://(?::[0-9]+)?(?:[/\\?#]|$)").is_match(input);
+    if input.is_empty() || (!hostless_http && rejected_address(input)) {
         return "about:blank".into();
     }
     engine.search_url(input)
@@ -96,6 +97,17 @@ pub(super) fn address(raw: &str, allow_bare_host: bool) -> Option<String> {
     }
     if let Some(authority) = re!(r"(?i)^[a-z][a-z0-9+.-]*://[^/?#\\]*").find(input) {
         let authority = authority.as_str();
+        let (scheme, host) = authority.split_once("://")?;
+        let has_host = if scheme.eq_ignore_ascii_case("http")
+            || scheme.eq_ignore_ascii_case("https")
+        {
+            Url::parse(authority).is_ok_and(|url| url.has_host())
+        } else {
+            scheme.eq_ignore_ascii_case("file") || !host.replace(['\t', '\n', '\r'], "").is_empty()
+        };
+        if !has_host {
+            return None;
+        }
         return Some(format!(
             "{}{}",
             authority.replace(['\t', '\n', '\r'], ""),

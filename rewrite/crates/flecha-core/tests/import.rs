@@ -29,6 +29,42 @@ fn incoming_tab(id: &str, url: &str) -> ImportTab {
 }
 
 #[test]
+fn import_rejects_non_web_urls_and_counts_dropped_entries() {
+    let window = WindowId::new("w");
+    let mut state = BrowserState::new(SpaceId::new("s"), window.clone());
+    let mut space = incoming_space("work", "Work");
+    space.pinned = vec![ImportNode::Tab(incoming_tab(
+        "script",
+        "javascript:void(0)",
+    ))];
+    space.today = vec![
+        incoming_tab("local", "file:///example.txt"),
+        incoming_tab("web", "HTTPS://example.org"),
+    ];
+    let batch = ImportBatch {
+        spaces: vec![space],
+        favorites: vec![incoming_tab("empty", "https://")],
+        archive: vec![ArchivedTab {
+            url: "file:///archive.txt".into(),
+            title: "Local".into(),
+            closed_at: 1,
+        }],
+    };
+    let result = state
+        .import_spaces(&batch, ImportMode::Append, &window, 2)
+        .unwrap();
+    assert_eq!(result.tabs, 1);
+    assert_eq!(result.tabs_dropped, 3);
+    assert_eq!(result.archived, 0);
+    assert_eq!(result.archive_dropped, 1);
+    assert_eq!(
+        state.open_tabs().keys().copied().collect::<Vec<_>>(),
+        [&TabId::new("web")]
+    );
+    assert!(state.archive().is_empty());
+}
+
+#[test]
 fn import_replaces_only_a_pristine_space_and_keeps_a_before_copy() {
     let home = SpaceId::new("home");
     let window = WindowId::new("w");
@@ -528,9 +564,20 @@ fn deep_trait_batch() -> ImportBatch {
 #[test]
 fn import_batch_traits_support_the_verifiers_deep_tree() {
     let batch = deep_trait_batch();
-    let copy = batch.clone();
+    let mut copy = batch.clone();
     assert!(copy == batch);
     assert!(format!("{copy:?}").contains("\"Folder 0\""));
+    let mut node = &mut copy.spaces[0].pinned[0];
+    loop {
+        match node {
+            ImportNode::Folder { children, .. } => node = &mut children[0],
+            ImportNode::Tab(leaf) => {
+                leaf.title.push('!');
+                break;
+            }
+        }
+    }
+    assert!(copy != batch);
 }
 
 #[test]

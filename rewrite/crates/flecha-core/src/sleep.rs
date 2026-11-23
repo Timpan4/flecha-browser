@@ -24,8 +24,8 @@ pub enum SleepState {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SleepTab<'a> {
     pub url: Option<&'a str>,
-    pub last_active: EpochMillis,
-    pub used_at: EpochMillis,
+    pub last_active: Option<EpochMillis>,
+    pub used_at: Option<EpochMillis>,
     pub shown: bool,
     pub in_hidden_space: bool,
     pub media: bool,
@@ -70,14 +70,18 @@ pub fn sleep_state(
     {
         return tab.state;
     }
-    let idle = active_use.saturating_sub(tab.used_at);
-    if idle >= DISCARD_AFTER || now.saturating_sub(tab.last_active) >= DISCARD_AFTER_WALL_CLOCK {
+    let idle = tab.used_at.map(|time| active_use.saturating_sub(time));
+    if idle.is_some_and(|idle| idle >= DISCARD_AFTER)
+        || tab
+            .last_active
+            .is_some_and(|time| now.saturating_sub(time) >= DISCARD_AFTER_WALL_CLOCK)
+    {
         if protected {
             SleepState::Frozen
         } else {
             SleepState::Discarded
         }
-    } else if tab.in_hidden_space || idle >= FREEZE_AFTER {
+    } else if tab.in_hidden_space || idle.is_some_and(|idle| idle >= FREEZE_AFTER) {
         SleepState::Frozen
     } else {
         SleepState::Alive

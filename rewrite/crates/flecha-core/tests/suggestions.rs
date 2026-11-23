@@ -8,6 +8,15 @@ use flecha_core::{Environment, SearchEngine};
 use serde_json::{Value, json};
 
 #[test]
+fn explicit_http_addresses_without_hosts_resolve_as_searches() {
+    use flecha_core::suggestions::resolve_input;
+    let engine = SearchEngine::Google;
+    for input in ["https://", "https:///path", "http://:80/x"] {
+        assert_eq!(resolve_input(input, engine), engine.search_url(input));
+    }
+}
+
+#[test]
 fn parses_each_engine_response_and_filters_unsuitable_rows() {
     let google = r#"["githu",["github","https://github.com/","github copilot"],["","GitHub",""],[],{"google:suggesttype":["QUERY","NAVIGATION","QUERY"]}]"#;
     let calculator = r#"["1+1",["= 2","1+1 math"],["Calculator",""],[],{"google:suggesttype":["CALCULATOR","QUERY"]}]"#;
@@ -309,6 +318,7 @@ fn environment_switches_keep_the_location_and_follow_target_order() {
         targets: parse_targets(input),
     }];
     assert_eq!(format_targets(&environments[0].targets), input);
+    assert!(describe_environment("blob:https://flecha.dev/fixture", &environments).is_none());
     let tones: Vec<_> = environments[0]
         .targets
         .iter()

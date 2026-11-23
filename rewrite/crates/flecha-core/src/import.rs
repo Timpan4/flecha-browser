@@ -128,6 +128,7 @@ pub struct ImportOutcome {
     pub spaces: usize,
     pub merged: usize,
     pub tabs: usize,
+    pub tabs_dropped: usize,
     pub splits: usize,
     pub pairs: usize,
     pub archived: usize,
@@ -185,6 +186,10 @@ impl BrowserState {
             }
         }
         for tab in &batch.favorites {
+            if !importable_url(&tab.url) {
+                outcome.tabs_dropped += 1;
+                continue;
+            }
             if favorite_urls.insert(tab.url.clone()) {
                 insert_tab(&mut self.tabs, tab, true, now)?;
                 self.favorites.push(tab.id.clone());
@@ -272,10 +277,14 @@ impl BrowserState {
                 .find(|win| win.id == *window)
                 .expect("import destination window exists");
             let ws = win.spaces.entry(space.clone()).or_default();
-            for tab in incoming.today.iter().filter(|tab| !skip(tab)) {
-                insert_tab(&mut self.tabs, tab, false, now)?;
-                ws.today.push(tab.id.clone());
-                outcome.tabs += 1;
+            for tab in &incoming.today {
+                if !importable_url(&tab.url) {
+                    outcome.tabs_dropped += 1;
+                } else if !skip(tab) {
+                    insert_tab(&mut self.tabs, tab, false, now)?;
+                    ws.today.push(tab.id.clone());
+                    outcome.tabs += 1;
+                }
             }
             self.import_splits(window, space, &incoming.splits, &had, &mut outcome);
         }
@@ -387,6 +396,14 @@ fn name_key(name: &str) -> String {
     name.trim().to_lowercase()
 }
 
+fn importable_url(input: &str) -> bool {
+    // The Arc reader imports only web tabs and web archive entries.
+    input.split_once(':').is_some_and(|(scheme, _)| {
+        (scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https"))
+            && url::Url::parse(input).is_ok_and(|url| url.has_host())
+    })
+}
+
 fn insert_tab(
     tabs: &mut BTreeMap<TabId, Tab>,
     input: &ImportTab,
@@ -449,6 +466,9 @@ impl PinnedImport<'_> {
 
         while let Some(frame) = frames.last_mut() {
             match frame.incoming.next() {
+                Some(ImportNode::Tab(tab)) if !importable_url(&tab.url) => {
+                    self.outcome.tabs_dropped += 1;
+                }
                 Some(ImportNode::Tab(tab)) if !skip(tab) => {
                     insert_tab(self.tabs, tab, true, self.now)?;
                     frame.output.push(PinnedNode::Tab {
@@ -530,11 +550,15 @@ fn merge_archive(
         .collect();
     let mut combined: Vec<_> = archive.iter().map(|tab| (tab, false)).collect();
     combined.extend(incoming.iter().filter_map(|tab| {
+        if !importable_url(&tab.url) {
+            outcome.archive_dropped += 1;
+            return None;
+        }
         seen.insert((tab.closed_at, tab.url.as_str()))
             .then_some((tab, true))
     }));
     combined.sort_by_key(|(tab, _)| Reverse(tab.closed_at));
-    outcome.archive_dropped = combined.len().saturating_sub(ARCHIVE_LIMIT);
+    outcome.archive_dropped += combined.len().saturating_sub(ARCHIVE_LIMIT);
     let kept = combined.into_iter().take(ARCHIVE_LIMIT);
     let mut next = Vec::new();
     for (tab, imported) in kept {
