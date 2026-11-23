@@ -66,8 +66,10 @@ function browser(name) {
     const sent = events.length;
     child.stdin.write(JSON.stringify({ seq: request, op, ...detail }) + '\n');
     // Commands run one at a time, so a rejection after this write is this request's.
+
     const reply = await wait(`reply to ${op}`, event =>
       (event.type === 'reply' && event.seq === request) || event.type === 'invalid_request', sent);
+
     assert.notEqual(reply.type, 'invalid_request', `Flecha does not understand the ${op} request`);
     assert.equal(reply.error, undefined, reply.error);
 
@@ -451,6 +453,7 @@ async function isolateWithTransients(app, space) {
 async function clickElement(app, tab, selector, colors, label) {
   await app.present();
   await capture(label, colors);
+
   const marker = execFileSync('magick', [
     join(out, `${label}.png`), '-transparent', colors[1], '-alpha', 'extract', '-negate',
     '-trim', '-format', '%X %Y', 'info:',
@@ -485,6 +488,7 @@ async function openTab(app, path) {
 // against an older build shows every check it fails.
 async function popupChecks(app) {
   const failed = [];
+
   const check = async (name, run) => {
     try {
       await run();
@@ -512,10 +516,13 @@ async function blankLink(app) {
   const after = app.events.length;
 
   await clickElement(app, opener, '#blank', openerColors, 'blank-link');
+
   const { tab } = await app.wait('the target=_blank page load', event =>
     event.type === 'loaded' && event.url === base + '/cookie/check' && event.tab !== opener, after);
+
   const { title } = await app.wait('the new tab cookie result', event =>
     event.type === 'title' && event.tab === tab && ['Cookie present', 'Cookie absent', 'Shared cookie'].includes(event.title), after);
+
   const state = await app.command('snapshot');
 
   assert.equal(win(state).activeSpaceId, space, 'the link tab opened outside its Space');
@@ -537,6 +544,7 @@ async function openPopup(app, opener, label) {
   const hasOpener = site.probe('popup-opener');
 
   await clickElement(app, opener, '#scripted', openerColors, label);
+
   const returned = await app.wait('window.open to return', event =>
     event.type === 'title' && event.tab === opener && event.title.startsWith('after-popup:'), after);
 
@@ -599,6 +607,7 @@ async function blockedPopups(app) {
   const requested = site.requests.length;
   const after = app.events.length;
   const tab = active(await app.command('open', { url: base + '/opener?auto=1' })).activeTabId;
+
   const { title } = await app.wait('window.open without a gesture', event =>
     event.type === 'title' && event.tab === tab && event.title.startsWith('after-blocked:'), after);
 
