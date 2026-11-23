@@ -27,12 +27,16 @@ if [[ $control != 1 ]]; then
         xdo key Tab
     fi
     if ! wait_for '^\[console\] INPUT focus text ' "$m" >/dev/null 2>&1; then
-        # Counted, not hidden: issue #94's lost first click.
-        click_note='; the first click was lost, a second one landed'
-        m=$(mark)
-        xdo mousemove --window "$wid" 170 35 click 1
-        wait_for '^\[console\] INPUT focus text ' "$m" >/dev/null 2>&1 ||
-            click_note='; two clicks on the field were lost'
+        if [[ $APP_MODE == osr ]]; then
+            # Counted, not hidden: issue #94's lost first click.
+            click_note='; the first click was lost, a second one landed'
+            m=$(mark)
+            xdo mousemove --window "$wid" 170 35 click 1
+            wait_for '^\[console\] INPUT focus text ' "$m" >/dev/null 2>&1 ||
+                click_note='; two clicks on the field were lost'
+        else
+            click_note='; Tab did not focus the field'
+        fi
     fi
 fi
 

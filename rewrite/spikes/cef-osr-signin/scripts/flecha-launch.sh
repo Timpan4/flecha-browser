@@ -42,6 +42,14 @@ done
     echo 'flecha-launch.sh: --profile <absolute dir> is required' >&2
     exit 2
 }
+# The spike's binary limits --fake-camera to local pages; Flecha cannot, so this launcher
+# refuses any other start URL. Pages can still navigate on their own: the reference runs only
+# open scripts/input-test.html, and no profile here holds an account.
+if ((fake_camera)) &&
+    ! [[ $url == file://* || $url =~ ^https?://(127\.0\.0\.1|localhost|\[::1\])(:[0-9]+)?(/|$) ]]; then
+    echo "flecha-launch.sh: --fake-camera needs a file:// or loopback --url" >&2
+    exit 2
+fi
 mkdir -p "$profile"
 shell=$profile.shell
 rm -rf -- "$shell"

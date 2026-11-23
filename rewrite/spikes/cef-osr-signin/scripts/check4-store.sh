@@ -31,6 +31,10 @@ install() {
     if ((!control)) && [[ $button == add && $enabled == true ]]; then
         m=$(mark)
         if [[ $APP_MODE == osr ]]; then
+            # The button moves while the page lays out; take its centre from the latest report.
+            wait_until 'the focused store button' probe_has store 0 '"focused":true' || true
+            line=$(probe_last store)
+            m=$(mark)
             xdo mousemove --window "$wid" "$(json_field "$line" x)" "$(json_field "$line" y)" click 1
             local activated=no
             wait_until 'a trusted click on the button' probe_has store "$m" '"activated":true' &&
@@ -51,6 +55,8 @@ install() {
     elif ! alive; then
         cell 4a fail "auto, Xvfb, not signed in, $store; $how; the browser process died with no message on stderr (REPORT has the core dump's stack)"
         return 1
+    elif ((!control)) && [[ $APP_MODE == osr && $how == *'click: no)' ]]; then
+        cell 4a inconclusive "auto, Xvfb, not signed in, $store; $how; the click never reached the button, so the install was not tried"
     else
         cell 4a fail "auto, Xvfb, not signed in, $store; $how; no Dark Reader in the profile within ${WAIT_SECS}s"
     fi
@@ -86,8 +92,13 @@ keyboard_install() {
 
 wid=$(app_window)
 if [[ $phase == install ]] && ! install; then
-    cell 4b fail "not reached: the app died in 4a"
+    cell 4b 'not reached' "the app died in 4a; see the next run for 4b"
     [[ $APP_MODE != osr ]] || cell 4c 'n/a' "auto, Xvfb: Alloy OSR has no toolbar or other surface to open an extension popup"
+    exit 0
+fi
+
+if [[ $phase != install ]] && ! extension_installed; then
+    cell 4b inconclusive "the copied profile holds no Dark Reader, so the content script cannot run"
     exit 0
 fi
 
@@ -96,16 +107,25 @@ open_url https://example.com/
 shot=$OUT/example.png
 loaded=no
 wait_until 'example.com loaded' probe_has example "$m" && loaded=yes
+# Dark: example.com loaded (probe), its computed background is dark, the window shows it
+# (Chrome-style: the title of the active tab; OSR has one page per window), and the screenshot
+# of the page area is dark.
 dark_now() {
+    local colours
+    colours=$(probe_last example "$m")
+    [[ $loaded == yes ]] || return 1
+    colour_dark "$(json_field "$colours" html)" || colour_dark "$(json_field "$colours" body)" || return 1
+    [[ $APP_MODE == osr || $(xdo getwindowname "$wid") == 'Example Domain - '* ]] || return 1
     import -window root "$shot"
-    [[ $loaded == yes ]] && is_dark "$shot" "$wid"
+    is_dark "$shot" "$wid"
 }
 result=fail
 wait_until 'a dark example.com' dark_now && result=pass
 colours=$(probe_last example "$m")
 label=''
 [[ $phase == install ]] || label='on a copy of the Chrome-style profile with Dark Reader installed; '
-cell 4b "$result" "auto, Xvfb screenshot, ${label}example.com loaded: $loaded; page background grey level $(mean_grey "$shot" "$wid") of 255 (dark below 128); probe: body $(json_field "$colours" body), html $(json_field "$colours" html)"
+[[ -s $shot ]] || import -window root "$shot"
+cell 4b "$result" "auto, Xvfb screenshot, ${label}example.com loaded: $loaded; window title: $(xdo getwindowname "$wid"); page background grey level $(mean_grey "$shot" "$wid") of 255 (dark below 128); probe: body $(json_field "$colours" body), html $(json_field "$colours" html)"
 
 if ((control)) || [[ $phase != install ]]; then
     exit 0

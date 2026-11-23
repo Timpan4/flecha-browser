@@ -18,9 +18,10 @@
 # says "not run" or "inconclusive" for the rest.
 #
 # Each pass condition also runs as a negative control with its cause removed (CONTROL=1, or
-# without --fake-camera); the script exits 1 if any control passes, if a run ended before it
-# observed one of its rows, if any process group it
-# started is still alive afterwards, or if its scratch directory remains.
+# without --fake-camera); the script exits 1 if any control passes, if a guard row does not
+# pass, if a row stayed inconclusive (a run ended before observing it, or its precondition was
+# not met), if any process group it started is still alive afterwards, or if its scratch
+# directory remains.
 #
 # Needs: Xvfb, xdotool (XDOTOOL), xclip (XCLIP), setxkbmap, ImageMagick (import, convert),
 # pdftotext, sqlite3, node, dbus-run-session. WAIT_SECS bounds each wait in a check; it is a
@@ -124,23 +125,34 @@ run_case() {
     } | sed -e "s#$scratch#<scratch>#g" -e "s#$HOME#~#g" >"$evidence/$name.log"
 }
 
-# The fake-device guard in the binary, before CEF starts: no display, no bus, empty
-# environment. Each Google sign-in origin and any other remote URL must be refused (exit 2).
+# The fake-device guard before anything starts: no display, no bus, empty environment. The
+# spike's binary must refuse each Google sign-in origin and any other remote start URL with
+# --fake-camera (exit 2, before CEF starts), and so must flecha-launch.sh for Flecha.
 guard_cli() {
-    local url status out
+    local url status out who expect
     for url in https://accounts.google.com/ https://mail.google.com/ https://myaccount.google.com/ \
         https://accounts.youtube.com/ https://example.com/; do
-        status=0
-        out=$(env -i HOME="$scratch/cli-home" PATH=/usr/bin:/bin \
-            bash "$spike/run.sh" --mode osr --profile "$scratch/cli-profile" --fake-camera --url "$url" 2>&1) ||
-            status=$?
-        if [[ $status == 2 && $out == *'--fake-camera needs a local --url'* ]]; then
-            printf 'CELL\tguard-cli\tcli\tpass\t%s refused before CEF started (exit 2)\tguard-cli\n' "$url" >>"$cells"
-        else
-            printf 'CELL\tguard-cli\tcli\tfail\t%s: exit %s\tguard-cli\n' "$url" "$status" >>"$cells"
-        fi
+        for who in spike flecha; do
+            [[ $who == spike ]] || has_mode flecha || continue
+            status=0
+            if [[ $who == spike ]]; then
+                expect='--fake-camera needs a local --url'
+                out=$(env -i HOME="$scratch/cli-home" PATH=/usr/bin:/bin bash "$spike/run.sh" \
+                    --mode osr --profile "$scratch/cli-profile" --fake-camera --url "$url" 2>&1) ||
+                    status=$?
+            else
+                expect='--fake-camera needs a file:// or loopback --url'
+                out=$(env -i HOME="$scratch/cli-home" PATH=/usr/bin:/bin FLECHA_DIR="$FLECHA_DIR" \
+                    bash "$here/flecha-launch.sh" --profile "$scratch/cli-profile" --fake-camera --url "$url" 2>&1) ||
+                    status=$?
+            fi
+            if [[ $status == 2 && $out == *"$expect"* && ! -e $scratch/cli-profile ]]; then
+                printf 'CELL\tguard-cli\t%s\tpass\t%s refused before anything started (exit 2, no profile created)\tguard-cli\n' "$who" "$url" >>"$cells"
+            else
+                printf 'CELL\tguard-cli\t%s\tfail\t%s: exit %s\tguard-cli\n' "$who" "$url" "$status" >>"$cells"
+            fi
+        done
     done
-    [[ ! -e $scratch/cli-profile ]] || echo "unexpected: the refused runs created a profile" >&2
 }
 
 # note <row> <mode> <result> <note>: a cell no run observed, with the reason.
@@ -164,7 +176,7 @@ for mode in "${modes[@]}"; do
     if [[ $mode == flecha ]]; then
         why='Flecha has no page probe (the spike'"'"'s --probe), which this step needs to find and press'
         note 4a flecha 'not automated' "$why the store button"
-        note 4b flecha 'not automated' "needs Dark Reader installed (4a); a copy of the Chrome-style profile that had it no longer held it after Flecha opened it, and a fresh Flecha profile shows its first-run tour over the page"
+        note 4b flecha 'not automated' "needs Dark Reader installed, and 4a is not automated here (REPORT says what was tried)"
         note 4c flecha 'not automated' "the popup opens from the toolbar's extension menu, Chrome's own UI"
         note 5a flecha 'not automated' "$why the login fields"
         note 5b flecha 'not automated' "$why the login fields' lengths"
@@ -190,10 +202,12 @@ for mode in "${modes[@]}"; do
 done
 for mode in "${modes[@]}"; do
     [[ $mode != flecha ]] || continue
-    source=$mode
-    [[ $mode == osr && -n ${dir_of[password-save-chrome]:-} ]] && source=chrome
+    source=$mode note=''
+    if [[ $mode == osr && -n ${dir_of[password-save-chrome]:-} ]]; then
+        source=chrome note='a copy of the Chrome-style profile that saved it'
+    fi
     copy_profile "password-save-$source"
-    run_case "password-fill-$mode" "$mode" 5b check5-password.sh PHASE=fill -- --url "$login_url" --probe
+    run_case "password-fill-$mode" "$mode" 5b check5-password.sh PHASE=fill PROFILE_NOTE="$note" -- --url "$login_url" --probe
     run_case "password-fill-$mode-control" "$mode" 5b check5-password.sh PHASE=fill CONTROL=1 -- --url "$login_url" --probe
 done
 
@@ -283,13 +297,15 @@ bin=${FLECHA_SPIKE_BIN:-$rewrite/target/debug/cef-osr-signin}
 # reach 127.0.0.2, so its own pass is expected).
 bad_controls=$(awk -F'\t' '$6 ~ /-control$/ && $2 !~ /^guard/ && $4 == "pass"' "$cells" | grep -c '' || true)
 grep -c 'pass (WRONG)' "$results.tmp" >/dev/null && bad_controls=$((bad_controls + 1))
+# The guard rows (binary refusals, guarded runs and their controls) must all pass.
+guard_fails=$(awk -F'\t' '$2 ~ /^guard/ && $4 != "pass"' "$cells" | grep -c '' || true)
 # A row a run should have observed but did not (the run failed before it).
 unobserved=$(awk -F'\t' '$4 == "inconclusive"' "$cells" | grep -c '' || true)
 mkdir -p "$results.evidence"
 cp "$evidence"/*.log "$results.evidence/"
 mv "$results.tmp" "$results"
 echo "results: $results" >&2
-echo "controls that passed: $bad_controls; unobserved rows: $unobserved; leftover process groups: $leftovers" >&2
+echo "controls that passed: $bad_controls; guard rows not passing: $guard_fails; unobserved rows: $unobserved; leftover process groups: $leftovers" >&2
 trap - EXIT
 finish
 if [[ -e $scratch ]]; then
@@ -297,4 +313,4 @@ if [[ -e $scratch ]]; then
     exit 1
 fi
 echo "scratch directory removed" >&2
-((bad_controls == 0 && unobserved == 0 && leftovers == 0))
+((bad_controls == 0 && guard_fails == 0 && unobserved == 0 && leftovers == 0))

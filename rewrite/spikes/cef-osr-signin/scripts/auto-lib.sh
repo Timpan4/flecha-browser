@@ -93,6 +93,15 @@ mean_grey() {
 # page (white or #eee) is far above it, Dark Reader's default background (#181a1b) far below.
 is_dark() { (($(mean_grey "$1" "$2") < 128)); }
 
+# colour_dark <css colour>: an opaque rgb()/rgba() colour whose channel mean is below 128 (the
+# midpoint of the 8-bit range, as is_dark). A transparent colour is not dark.
+colour_dark() {
+    local -a c
+    [[ $1 =~ ^rgba?\(([0-9]+),\ ([0-9]+),\ ([0-9]+)(,\ ([0-9.]+))?\)$ ]] || return 1
+    c=("${BASH_REMATCH[@]:1:3}")
+    [[ ${BASH_REMATCH[5]:-1} != 0 ]] && (((c[0] + c[1] + c[2]) / 3 < 128))
+}
+
 # pdf_has_phrase <pdf>: the PDF exists and its text contains PRINT_PHRASE.
 pdf_has_phrase() {
     local text
