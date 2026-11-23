@@ -158,6 +158,10 @@ int main(int argc, char **argv)
         ok = x >= 0 && y >= 0 && click(display, x, y);
     } else if (argc == 3 && strcmp(argv[1], "key") == 0) {
         ok = tap(display, XStringToKeysym(argv[2]));
+    } else if (argc == 4 && strcmp(argv[1], "chord") == 0) {
+        KeySym modifier = XStringToKeysym(argv[2]);
+        ok = press(display, modifier, True) && tap(display, XStringToKeysym(argv[3])) &&
+             press(display, modifier, False);
     } else if (argc == 3 && strcmp(argv[1], "geometry") == 0) {
         ok = geometry(display, argv[2]);
     } else if (argc == 3 && strcmp(argv[1], "focus") == 0) {

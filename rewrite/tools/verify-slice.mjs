@@ -450,8 +450,8 @@ async function isolateWithTransients(app, space) {
 }
 
 // Clicks the element's centre with X11, which gives the page a user gesture.
-async function clickElement(app, tab, selector, colors, label) {
-  await app.present();
+async function clickElement(app, tab, selector, colors, label, window) {
+  await app.present(window);
   await capture(label, colors);
 
   const marker = execFileSync('magick', [
@@ -500,6 +500,7 @@ async function popupChecks(app) {
 
   await check('target=_blank', () => blankLink(app));
   await check('scripted popup', async () => scriptedPopup(app, await openTab(app, '/opener'), 'isolated'));
+  await check('Flechinha links and popups', () => flechinhaLinks(app));
   await check('popup without a gesture', () => blockedPopups(app));
   await check('close with a popup open', () => closeWithPopup(app));
   assert.deepEqual(failed, [], 'popup checks failed');
@@ -537,13 +538,15 @@ async function blankLink(app) {
   pass('a target=_blank click opened a foreground tab after its opener, in its Space and cookie jar, with its referrer');
 }
 
-async function openPopup(app, opener, label) {
-  await app.command('select', { tab: opener });
+// `flechinha` is the window of a Flechinha opener, which the sidebar can't select.
+async function openPopup(app, opener, label, flechinha) {
+  if (!flechinha) await app.command('select', { tab: opener });
+
   const after = app.events.length;
   const message = site.probe('popup-message');
   const hasOpener = site.probe('popup-opener');
 
-  await clickElement(app, opener, '#scripted', openerColors, label);
+  await clickElement(app, opener, '#scripted', openerColors, label, flechinha);
 
   const returned = await app.wait('window.open to return', event =>
     event.type === 'title' && event.tab === opener && event.title.startsWith('after-popup:'), after);
@@ -559,7 +562,7 @@ async function openPopup(app, opener, label) {
   const state = await app.command('snapshot');
   const popup = state.popups.find(entry => entry.tab === opened.tab);
 
-  assert.deepEqual(popup, { window: popup?.window, tab: opened.tab, opener: state.window });
+  assert.deepEqual(popup, { window: popup?.window, tab: opened.tab, opener: flechinha ?? state.window });
   assert(state.nativeWindows.includes(popup.window), 'GPUI did not open the popup window');
   engine(state, popup.tab, 'popup', popup.window);
   assert.equal(state.liveBrowsers, state.browsers.length, 'a CEF browser is alive outside the engine');
@@ -586,6 +589,9 @@ async function scriptedPopup(app, opener, cookie) {
   await app.present(popup.window);
   execFileSync(x11Driver, ['focus', 'Flecha fixture /popup']);
   await keyDelivery(app, { O: opener, P: popup.tab }, 'k', 'popup', 'P');
+  // A popup has no command bar for Ctrl+L to focus.
+  execFileSync(x11Driver, ['chord', 'Control_L', 'l']);
+  await keyDelivery(app, { O: opener, P: popup.tab }, 'm', 'popup after Ctrl+L', 'P');
 
   const closing = app.events.length;
   await app.command('script', { tab: popup.tab, source: 'window.close()' });
@@ -601,6 +607,34 @@ async function scriptedPopup(app, opener, cookie) {
   execFileSync(x11Driver, ['focus', 'Flecha']);
   await keyDelivery(app, { O: opener }, 'j', 'popup closed', 'O');
   pass('the popup closed itself, and focus and keys returned to its opener');
+}
+
+async function flechinhaLinks(app) {
+  // The main window shows this page once the opener leaves, not another opener.
+  await openTab(app, '/open');
+  await openTab(app, '/opener');
+  const [{ window: mini, tab: page }] = (await app.command('detach')).flechinhas;
+  const after = app.events.length;
+
+  await clickElement(app, page, '#blank', openerColors, 'flechinha-blank', mini);
+  const { tab } = await app.wait("a Flechinha link's tab load", event =>
+    event.type === 'loaded' && event.url === base + '/cookie/check' && event.tab !== page, after);
+  const state = await app.command('snapshot');
+
+  engine(state, tab, 'tab', state.window);
+  assert.equal(active(state).today[0], tab, "the Flechinha link tab is not first in the main window's Today");
+  assert.equal(active(state).activeTabId, tab, 'the Flechinha link tab is not in the foreground');
+  pass('a target=_blank link in a Flechinha opened a foreground tab in the main window, as patch 0023 does');
+
+  const popup = await openPopup(app, page, 'flechinha-popup', mini);
+  const closing = app.events.length;
+
+  await app.command('script', { tab: popup.tab, source: 'window.close()' });
+  await app.wait('the Flechinha popup to close itself', event =>
+    event.type === 'closed_by_page' && event.tab === popup.tab, closing);
+  await app.wait('focus to return to the Flechinha', event => event.type === 'activated' && event.window === mini, closing);
+  await app.command('close_window', { window: mini });
+  pass('a scripted popup from a Flechinha opened with its opener, closed itself and returned focus to the Flechinha');
 }
 
 async function blockedPopups(app) {
