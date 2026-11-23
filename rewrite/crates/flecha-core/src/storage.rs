@@ -1,5 +1,6 @@
 //! JSON snapshots and recovery decisions. The application owns reads, writes and startup.
 
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
@@ -90,7 +91,7 @@ pub enum Recovery {
     UnsupportedBackup,
 }
 
-/// Save this write before applying an import that replaces or merges the current state.
+/// Save this write before replacing the current state from a whole-state import.
 pub fn set_aside_before_import(state: &BrowserState) -> serde_json::Result<BackupWrite> {
     Ok(BackupWrite {
         slot: Slot::BeforeImport,
@@ -229,22 +230,62 @@ fn check_version(version: &RawValue, legacy_only: bool) -> Result<(), DecodeErro
     } else {
         raw
     };
-    match text.parse::<f64>() {
-        Ok(1.0 | 2.0) => Ok(()),
-        Ok(number) if number == SCHEMA_VERSION as f64 => {
-            if legacy_only {
-                Err(DecodeError::AlreadyMigrated)
-            } else {
-                Ok(())
-            }
-        }
-        Ok(number) if number > SCHEMA_VERSION as f64 => {
-            Err(DecodeError::UnsupportedVersion(text.into()))
-        }
-        // The Chromium decoder ignored version metadata, including nonnumeric tags.
-        Err(_) => Ok(()),
-        _ => Err(DecodeError::InvalidShape),
+    match compare_version(text, &SCHEMA_VERSION.to_string()) {
+        Some(Ordering::Greater) => Err(DecodeError::UnsupportedVersion(text.into())),
+        Some(Ordering::Equal) if legacy_only => Err(DecodeError::AlreadyMigrated),
+        // The Chromium decoder accepted older values and ignored nonnumeric tags.
+        _ => Ok(()),
     }
+}
+
+/// Compare the decimal spelling without rounding a newer schema to the current version.
+fn compare_version(text: &str, current: &str) -> Option<Ordering> {
+    let (mantissa, exp) = if let Some((mantissa, exp)) = text.split_once(['e', 'E']) {
+        let (negative, digits) = sign_and_digits(exp);
+        if digits.is_empty() || !digits.bytes().all(|digit| digit.is_ascii_digit()) {
+            return None;
+        }
+        // An exponent outside i128's range dominates any significand that fits in memory.
+        let exp = exp
+            .parse::<i128>()
+            .unwrap_or(if negative { i128::MIN } else { i128::MAX });
+        (mantissa, exp)
+    } else {
+        (text, 0)
+    };
+    let (negative, mantissa) = sign_and_digits(mantissa);
+    let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    let digits = whole.bytes().chain(fraction.bytes());
+    if mantissa.is_empty() || !digits.clone().all(|digit| digit.is_ascii_digit()) {
+        return None;
+    }
+    let zeroes = digits.clone().take_while(|&digit| digit == b'0').count();
+    if negative || zeroes == whole.len() + fraction.len() {
+        return Some(Ordering::Less);
+    }
+    let width = (whole.len() as i128 - zeroes as i128).saturating_add(exp);
+    if width != current.len() as i128 {
+        return Some(width.cmp(&(current.len() as i128)));
+    }
+    let mut digits = digits.skip(zeroes);
+    for expected in current.bytes() {
+        let digit = digits.next().unwrap_or(b'0');
+        if digit != expected {
+            return Some(digit.cmp(&expected));
+        }
+    }
+    Some(if digits.any(|digit| digit != b'0') {
+        Ordering::Greater
+    } else {
+        Ordering::Equal
+    })
+}
+
+fn sign_and_digits(text: &str) -> (bool, &str) {
+    (
+        text.starts_with('-'),
+        text.strip_prefix(['+', '-']).unwrap_or(text),
+    )
 }
 
 fn needs_newer_reader(value: &Value) -> bool {
@@ -274,7 +315,15 @@ fn repair(mut raw: Map<String, Value>) -> Option<BrowserState> {
         .iter()
         .filter_map(|space| Some((space.get("id")?.as_str()?, space)))
         .collect();
-    let mut ids = RecoveredIds::new("space", raw_spaces.iter().map(|(id, _)| *id).collect());
+    let mut referenced: BTreeSet<_> = raw_spaces.iter().map(|(id, _)| *id).collect();
+    referenced.extend(raw.get("activeSpaceId").and_then(Value::as_str));
+    for window in list(raw.get("windows")).chain(list(raw.get("closedWindows"))) {
+        referenced.extend(window.get("activeSpaceId").and_then(Value::as_str));
+        if let Some(spaces) = window.get("spaces").and_then(Value::as_object) {
+            referenced.extend(spaces.keys().map(String::as_str));
+        }
+    }
+    let mut ids = RecoveredIds::new("space", referenced);
     let raw_spaces: Vec<_> = raw_spaces
         .into_iter()
         .map(|(id, space)| (SpaceId::new(ids.claim(Some(id))), space))
@@ -342,7 +391,7 @@ fn repair(mut raw: Map<String, Value>) -> Option<BrowserState> {
         })
         .filter(|closed| !closed.window.spaces.is_empty())
         .collect();
-    let mut archive: Vec<_> = list(raw.get("archive"))
+    let archive = list(raw.get("archive"))
         .filter_map(|entry| {
             Some(ArchivedTab {
                 url: entry.get("url")?.as_str()?.into(),
@@ -351,7 +400,6 @@ fn repair(mut raw: Map<String, Value>) -> Option<BrowserState> {
             })
         })
         .collect();
-    archive.sort_by_key(|entry| std::cmp::Reverse(entry.closed_at));
     let sidebar_visible = raw
         .get("sidebarVisible")
         .and_then(Value::as_bool)

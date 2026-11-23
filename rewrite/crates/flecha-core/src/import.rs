@@ -9,6 +9,9 @@ use crate::{
     Tab, TabId, WindowId,
 };
 
+/// Bookmark folder depth kept by chromium/native-host/browserImport.ts.
+const MAX_FOLDER_DEPTH: usize = 8;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ImportMode {
     Merge,
@@ -68,13 +71,16 @@ pub struct ImportOutcome {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ImportError {
     UnknownWindow,
+    FolderDepth,
     DuplicateSpace(SpaceId),
     DuplicateFolder(FolderId),
     DuplicateTab(TabId),
 }
 
 impl BrowserState {
-    /// Merge or append a parsed import as one transaction. An invalid ID leaves the state intact.
+    /// Merge or append a parsed import as one transaction.
+    /// IDs are checked only for inserted entries. IDs on URL-filtered tabs and
+    /// name-merged Spaces or folders are ignored.
     pub fn import_spaces(
         &mut self,
         batch: &ImportBatch,
@@ -84,6 +90,9 @@ impl BrowserState {
     ) -> Result<ImportOutcome, ImportError> {
         if self.window(window).is_none() {
             return Err(ImportError::UnknownWindow);
+        }
+        for space in &batch.spaces {
+            validate_folder_depth(&space.pinned, 0)?;
         }
         let mut next = self.clone();
         let out = next.apply_import(batch, mode, window, now)?;
@@ -310,6 +319,18 @@ impl BrowserState {
             }
         }
     }
+}
+
+fn validate_folder_depth(nodes: &[ImportNode], depth: usize) -> Result<(), ImportError> {
+    for node in nodes {
+        if let ImportNode::Folder { children, .. } = node {
+            if depth == MAX_FOLDER_DEPTH {
+                return Err(ImportError::FolderDepth);
+            }
+            validate_folder_depth(children, depth + 1)?;
+        }
+    }
+    Ok(())
 }
 
 fn name_key(name: &str) -> String {

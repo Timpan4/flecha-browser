@@ -44,11 +44,45 @@ fn shortcut_conflicts_follow_chromium_modifier_and_key_normalization() {
 fn later_command_wins_when_saved_custom_keys_collide() {
     let bindings = Keybindings::from([
         ("reload".into(), Some("Ctrl+J".into())),
-        ("find".into(), Some("control+J".into())),
+        ("find".into(), Some("Ctrl+J".into())),
     ]);
     let platform = Platform::Linux;
     assert_eq!(keys_for(&bindings, "reload", platform), None);
-    assert_eq!(keys_for(&bindings, "find", platform), Some("control+J"));
+    assert_eq!(keys_for(&bindings, "find", platform), Some("Ctrl+J"));
+}
+
+#[test]
+fn shortcut_aliases_follow_native_raw_key_order() {
+    let linux = Platform::Linux;
+    let bindings = Keybindings::from([
+        ("reload".into(), Some("control+J".into())),
+        ("find".into(), Some("Ctrl+J".into())),
+    ]);
+    assert_eq!(keys_for(&bindings, "reload", linux), Some("control+J"));
+    assert_eq!(keys_for(&bindings, "find", linux), None);
+    let map = shortcut_map(&bindings, linux);
+    assert_eq!(map.get("control+J").map(String::as_str), Some("reload"));
+    assert!(!map.contains_key("Ctrl+J"));
+}
+
+#[test]
+fn shortcut_parser_matches_chromium_ascii_whitespace() {
+    let linux = Platform::Linux;
+    let mut bindings = Keybindings::new();
+    assert_eq!(
+        set_binding(
+            &mut bindings,
+            "reload",
+            BindingEdit::Set("Ctrl+\u{a0}T"),
+            linux
+        ),
+        Err(BindingError::InvalidAccelerator)
+    );
+    assert!(bindings.is_empty());
+    bindings.insert("reload".into(), Some("Ctrl+\u{a0}T".into()));
+    assert_eq!(keys_for(&bindings, "newTab", linux), Some("CmdOrCtrl+T"));
+    assert_eq!(keys_for(&bindings, "reload", linux), Some("CmdOrCtrl+R"));
+    assert!(same_keys("Ctrl+\u{b}T", "Control+T", linux));
 }
 use flecha_core::shortcuts::{
     BindingEdit, BindingError, Keybindings, Platform, display_keys, keys_for, same_keys,

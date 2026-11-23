@@ -184,8 +184,22 @@ fn decode_component(word: &str) -> std::borrow::Cow<'_, str> {
 }
 
 fn contains_jwt(text: &str) -> bool {
-    // Match inside pasted prose and punctuation, including unsigned tokens.
-    re!(r"eyJ[A-Za-z0-9_-]*={0,2}\.[A-Za-z0-9_-]+={0,2}\.[A-Za-z0-9_-]*").is_match(text)
+    // A dotted prefix can precede a pasted token. Check each triple of segments.
+    let candidates = re!(r"[A-Za-z0-9_-]+={0,2}(?:\.[A-Za-z0-9_-]*={0,2}){2,}");
+    for candidate in candidates.find_iter(text) {
+        let mut parts = candidate.as_str().split('.');
+        let (Some(mut header), Some(mut payload)) = (parts.next(), parts.next()) else {
+            continue;
+        };
+        for signature in parts {
+            if !payload.is_empty() && decode_jwt_json(header).is_some_and(|json| json.is_object()) {
+                return true;
+            }
+            header = payload;
+            payload = signature;
+        }
+    }
+    false
 }
 
 fn address_part(word: &str, alone: bool) -> bool {
@@ -388,28 +402,25 @@ fn github(arg: &str, current_url: Option<&str>) -> DeveloperSuggestion {
 }
 
 fn jwt_parts(text: &str) -> Option<(&str, &str)> {
-    let (header, rest) = text
-        .strip_prefix("eyJ")
-        .is_some()
-        .then(|| text.split_once('.'))??;
+    let (header, rest) = text.split_once('.')?;
     let (payload, signature) = rest.split_once('.')?;
     (!signature.contains('.')).then_some((header, payload))
 }
 
+fn decode_jwt_json(part: &str) -> Option<Value> {
+    let part = part.trim_matches([' ', '\t', '\r', '\n', '\x0c']);
+    let bytes = general_purpose::URL_SAFE_NO_PAD
+        .decode(part)
+        .or_else(|_| general_purpose::URL_SAFE.decode(part))
+        .ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
 fn decode_jwt(text: &str, now: EpochMillis) -> Option<DeveloperSuggestion> {
     let (header, payload) = jwt_parts(text)?;
-    let decode = |part: &str| {
-        let part = part.replace('-', "+").replace('_', "/");
-        let part = part.trim_matches([' ', '\t', '\r', '\n', '\x0c']);
-        let bytes = general_purpose::STANDARD_NO_PAD
-            .decode(part)
-            .or_else(|_| general_purpose::STANDARD.decode(part))
-            .ok()?;
-        serde_json::from_slice::<Value>(&bytes).ok()
-    };
-    let header = decode(header)?;
-    let payload = decode(payload)?;
-    if payload.is_null() {
+    let header = decode_jwt_json(header)?;
+    let payload = decode_jwt_json(payload)?;
+    if !header.is_object() || payload.is_null() {
         return None;
     }
     let mut facts = Vec::new();

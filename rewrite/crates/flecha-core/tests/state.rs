@@ -427,3 +427,131 @@ fn today_bulk_close_respects_agent_folder_and_shared_split_rows() {
     assert!(!state.in_agent_folder(&window, &agent_a));
     assert_eq!(state.clear_today(&window, 6), [ordinary, agent_a]);
 }
+
+#[test]
+fn ordinary_archive_order_survives_clock_rollback_and_restart() {
+    let window = WindowId::new("w");
+    let first = TabId::new("first");
+    let last = TabId::new("last");
+    let reopened = TabId::new("reopened");
+    let mut state = BrowserState::new(SpaceId::new("s"), window.clone());
+    for (id, url) in [
+        (&first, "https://example.org/a"),
+        (&last, "https://example.org/b"),
+    ] {
+        state.open_today(id.clone(), Tab::new(url, 0), &window, None, true);
+    }
+    state.close_tab(&first, 10_000);
+    state.close_tab(&last, 9_000);
+    let saved = encode(&state).unwrap();
+    for mut version in [state, decode(&saved).unwrap()] {
+        assert_eq!(
+            version.reopen_last(reopened.clone(), 9_100),
+            Some(Reopened::Tab(reopened.clone()))
+        );
+        assert_eq!(version.tab(&reopened).unwrap().url, "https://example.org/b");
+        assert_eq!(version.archive()[0].url, "https://example.org/a");
+    }
+}
+
+#[test]
+fn closing_other_today_tabs_keeps_the_selected_responsive_pair() {
+    let window = WindowId::new("w");
+    let desktop = TabId::new("desktop");
+    let mirror = TabId::new("mirror");
+    let other = TabId::new("other");
+    let mut state = BrowserState::new(SpaceId::new("s"), window.clone());
+    state.open_today(
+        other.clone(),
+        Tab::new("https://example.org/other", 0),
+        &window,
+        None,
+        false,
+    );
+    state.open_today(
+        desktop.clone(),
+        Tab::new("https://example.org", 0),
+        &window,
+        None,
+        true,
+    );
+    state.open_responsive(&window, mirror.clone(), 1).unwrap();
+    state.activate(&mirror, &window, None).unwrap();
+    assert_eq!(
+        state.close_today_tabs(&mirror, flecha_core::CloseToday::Others, 2),
+        [other]
+    );
+    assert_eq!(state.focused_window().visible_tabs(), [desktop, mirror]);
+    assert_eq!(state.archive().len(), 1);
+}
+
+#[test]
+fn moving_a_tab_before_the_folder_with_the_same_id_uses_the_folder_anchor() {
+    use flecha_core::{PinnedKey, PinnedNode};
+    let space = SpaceId::new("s");
+    let folder = FolderId::new("same");
+    let tab = TabId::new("same");
+    let next = TabId::new("next");
+    let mut state = BrowserState::new(space.clone(), WindowId::new("w"));
+    let root = Placement::Pinned {
+        space: &space,
+        folder: None,
+    };
+    assert!(state.add_folder(folder.clone(), "Folder", &space, None));
+    assert!(state.create_tab(tab.clone(), Tab::new("https://example.org", 0), root, None));
+    assert!(state.place_tab(&tab, root, Some(PinnedKey::Folder(&folder))));
+    assert!(state.create_tab(
+        next.clone(),
+        Tab::new("https://example.org/next", 1),
+        root,
+        Some(PinnedKey::Folder(&folder))
+    ));
+    let [first, second, third] = state.spaces()[0].pinned.as_slice() else {
+        panic!("expected two tabs and a folder")
+    };
+    assert!(matches!(first, PinnedNode::Tab { tab_id } if *tab_id == tab));
+    assert!(matches!(second, PinnedNode::Tab { tab_id } if *tab_id == next));
+    assert!(matches!(third, PinnedNode::Folder { id, .. } if *id == folder));
+}
+
+#[test]
+fn set_split_rejects_a_phone_mirror_and_replaces_responsive_with_regular() {
+    use flecha_core::SplitMode;
+    let space = SpaceId::new("s");
+    let window = WindowId::new("w");
+    let desktop = TabId::new("desktop");
+    let mirror = TabId::new("mirror");
+    let regular = TabId::new("regular");
+    let mut state = BrowserState::new(space.clone(), window.clone());
+    assert!(state.open_today(
+        regular.clone(),
+        Tab::new("https://example.org/regular", 0),
+        &window,
+        None,
+        true
+    ));
+    assert!(state.open_today(
+        desktop.clone(),
+        Tab::new("https://example.org/desktop", 0),
+        &window,
+        None,
+        true
+    ));
+    assert_eq!(
+        state.open_responsive(&window, mirror.clone(), 1),
+        Some(mirror.clone())
+    );
+    let prior = state.clone();
+    assert!(!state.set_split(&window, [desktop.clone(), mirror.clone()]));
+    assert_eq!(state, prior);
+    assert!(state.set_split(&window, [regular.clone(), desktop.clone()]));
+    let ws = &state.focused_window().spaces[&space];
+    assert_eq!(ws.split_mode, None);
+    assert!(!ws.today.contains(&mirror));
+    assert!(state.tab(&mirror).is_none() && state.archive().is_empty());
+    assert_eq!(state.focused_window().visible_tabs(), [regular, desktop]);
+    assert_eq!(
+        prior.focused_window().spaces[&space].split_mode,
+        Some(SplitMode::Responsive)
+    );
+}

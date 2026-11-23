@@ -189,8 +189,13 @@ pub fn keys_for<'a>(bindings: &'a Keybindings, id: &str, platform: Platform) -> 
             .is_some_and(|keys| same_keys(keys, configured, platform))
     };
     let conflict = if custom_keys(bindings, id, platform).is_some() {
-        // The native map inserts commands in declaration order, so the later one wins.
-        SHORTCUTS[index + 1..].iter().any(competing)
+        // The shell overwrites identical map keys in declaration order. Chromium then
+        // visits distinct keys in dictionary order and overwrites by parsed accelerator.
+        SHORTCUTS.iter().enumerate().any(|(other, command)| {
+            custom_keys(bindings, command.id, platform).is_some_and(|keys| {
+                (keys, other) > (configured, index) && same_keys(keys, configured, platform)
+            })
+        })
     } else {
         SHORTCUTS
             .iter()
@@ -316,7 +321,10 @@ struct Accelerator {
 
 /// Matches ParseFlechaAccelerator in Chromium patch 0016.
 fn parse_accelerator(text: &str, platform: Platform) -> Option<Accelerator> {
-    let mut parts: Vec<_> = text.split('+').map(str::trim).collect();
+    let mut parts: Vec<_> = text
+        .split('+')
+        .map(|part| part.trim_matches([' ', '\t', '\n', '\x0b', '\x0c', '\r']))
+        .collect();
     let tail = parts.pop()?;
     let tail = if tail.is_empty() && parts.last() == Some(&"") {
         parts.pop();

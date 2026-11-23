@@ -389,3 +389,21 @@ fn github_issue_lookup_never_uses_a_prefix_of_a_repository_name() {
         SuggestionAction::Open("https://github.com/search?q=42".into())
     );
 }
+
+#[test]
+fn padded_whitespace_in_jwt_header_still_keeps_prose_local() {
+    let header = URL_SAFE_NO_PAD.encode(br#"{ "alg": "HS256" }"#);
+    let payload = URL_SAFE_NO_PAD.encode(br#"{"sub":"synthetic"}"#);
+    let token = format!("{header}.{payload}.c2lnbmF0dXJl");
+    for input in [
+        format!("review {token} please"),
+        format!("see note.{token} please"),
+        format!("see ({header}%2E{payload}%2Ec2lnbmF0dXJl)"),
+    ] {
+        assert!(SearchEngine::Google.suggestion_url(&input).is_none());
+    }
+    assert!(matches!(
+        developer_suggestions(&token, None, &[], 0)[0].action,
+        SuggestionAction::Copy(_)
+    ));
+}

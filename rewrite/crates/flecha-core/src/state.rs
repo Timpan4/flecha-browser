@@ -577,9 +577,12 @@ impl BrowserState {
                 let dropped: Vec<_> = self.closed_windows.drain(CLOSED_WINDOW_LIMIT..).collect();
                 for old in dropped {
                     for id in old.window.spaces.into_values().flat_map(|ws| ws.today) {
-                        self.archive_removed(&id, old.closed_at);
+                        if let Some(entry) = self.take_archive_entry(&id, old.closed_at) {
+                            self.archive.push(entry);
+                        }
                     }
                 }
+                self.archive.truncate(ARCHIVE_LIMIT);
             }
         }
         true
@@ -946,6 +949,14 @@ impl BrowserState {
             .expect("Today placement has an open window")
             .spaces[space];
         let agent = in_agent_folder(&self.tabs, ws, tab);
+        let kept_source = match &ws.split {
+            Some([source, mirror])
+                if ws.split_mode == Some(SplitMode::Responsive) && mirror == tab =>
+            {
+                Some(source)
+            }
+            _ => None,
+        };
         let siblings = ws
             .today
             .iter()
@@ -956,7 +967,10 @@ impl BrowserState {
                 .skip(1)
                 .cloned()
                 .collect(),
-            CloseToday::Others => siblings.filter(|id| *id != tab).cloned().collect(),
+            CloseToday::Others => siblings
+                .filter(|id| *id != tab && Some(*id) != kept_source)
+                .cloned()
+                .collect(),
         };
         for id in &closed {
             self.close_tab(id, now);
@@ -1068,7 +1082,7 @@ impl BrowserState {
         if ratio.is_nan() {
             return false;
         }
-        // The divider range in store.ts and the native split view.
+        // The shell divider range in store.ts.
         ws.split_ratio = Some(ratio.clamp(0.2, 0.8));
         true
     }
@@ -1332,23 +1346,21 @@ impl BrowserState {
     }
 
     fn archive_removed(&mut self, id: &TabId, now: EpochMillis) -> bool {
-        let Some(tab) = self.tabs.remove(id) else {
+        let Some(entry) = self.take_archive_entry(id, now) else {
             return false;
         };
-        if tab.url == "about:blank" || tab.device == Some(Device::Mobile) {
-            return false;
-        }
-        let index = self.archive.partition_point(|entry| entry.closed_at > now);
-        self.archive.insert(
-            index,
-            ArchivedTab {
-                url: tab.url,
-                title: tab.title,
-                closed_at: now,
-            },
-        );
+        self.archive.insert(0, entry);
         self.archive.truncate(ARCHIVE_LIMIT);
         true
+    }
+
+    fn take_archive_entry(&mut self, id: &TabId, closed_at: EpochMillis) -> Option<ArchivedTab> {
+        let tab = self.tabs.remove(id)?;
+        (tab.url != "about:blank" && tab.device != Some(Device::Mobile)).then_some(ArchivedTab {
+            url: tab.url,
+            title: tab.title,
+            closed_at,
+        })
     }
 }
 

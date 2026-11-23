@@ -353,3 +353,47 @@ fn reopened_window_selects_a_space_that_retained_tabs() {
     assert_eq!(state.reopen_window(), Some(WindowId::new("closed")));
     assert_eq!(state.focused_window().visible_tabs(), [TabId::new("kept")]);
 }
+
+#[test]
+fn exact_schema_comparison_protects_current_and_last_good_copies() {
+    let future = json!(r#"{"version":3.0000000000000001,"spaces":[{"id":"s"}],"tabs":{}}"#);
+    assert!(matches!(
+        load(Some(&future), Some(&json!(V2))),
+        Err(DecodeError::UnsupportedVersion(_))
+    ));
+    let mut loaded = load(Some(&json!(V2)), Some(&future)).unwrap();
+    assert!(loaded.state.is_some());
+    assert!(loaded.started().is_none());
+    for equivalent in ["3.000", "30e-1", "0.0300e+2"] {
+        let same = format!(r#"{{"version":{equivalent},"spaces":[{{"id":"s"}}],"tabs":{{}}}}"#);
+        assert!(decode(&same).is_ok());
+        assert!(matches!(
+            migrate_legacy(&same),
+            Err(DecodeError::AlreadyMigrated)
+        ));
+    }
+}
+
+#[test]
+fn generated_space_ids_do_not_claim_stale_window_memberships() {
+    let raw = r#"{
+        "version":2, "spaces":[{"id":"s"},{"id":"s"}],
+        "tabs":{"open-stale":{"url":"a"},"closed-stale":{"url":"b"},"kept":{"url":"c"}},
+        "windows":[{"id":"open","activeSpaceId":"recovered-space-1","spaces":{
+          "recovered-space-2":{"today":["open-stale"],"activeTabId":"open-stale"}
+        }}],
+        "closedWindows":[{"id":"closed","closedAt":2,"activeSpaceId":"recovered-space-3","spaces":{
+          "recovered-space-4":{"today":["closed-stale"]},"s":{"today":["kept"]}
+        }}]
+    }"#;
+    let state = decode(raw).unwrap();
+    assert_eq!(state.focused_window().active_space_id, SpaceId::new("s"));
+    assert!(state.focused_window().spaces.is_empty());
+    let closed = &state.closed_windows()[0].window;
+    assert_eq!(closed.active_space_id, SpaceId::new("s"));
+    assert_eq!(closed.spaces.len(), 1);
+    assert!(state.open_tabs().is_empty());
+    for id in ["open-stale", "closed-stale"] {
+        assert!(state.tab(&TabId::new(id)).is_some());
+    }
+}

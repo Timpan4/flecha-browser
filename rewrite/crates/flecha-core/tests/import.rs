@@ -319,3 +319,153 @@ fn a_duplicate_id_rolls_back_the_entire_import() {
     );
     assert_eq!(state, before);
 }
+
+#[test]
+fn import_folder_depth_is_bounded_by_the_chromium_bookmark_import_limit() {
+    let window = WindowId::new("w");
+    let mut state = BrowserState::new(SpaceId::new("s"), window.clone());
+    let before = state.clone();
+    let mut incoming = incoming_space("copy", "Work");
+    let mut nodes = vec![ImportNode::Tab(incoming_tab("tab", "https://example.org/"))];
+    // browserImport.ts admits eight nested folders.
+    for level in 0..8 {
+        nodes = vec![ImportNode::Folder {
+            id: FolderId::new(format!("folder-{level}")),
+            name: "Folder".into(),
+            children: nodes,
+        }];
+    }
+    incoming.pinned = nodes;
+    let mut batch = ImportBatch {
+        spaces: vec![incoming],
+        ..ImportBatch::default()
+    };
+    assert!(
+        state
+            .clone()
+            .import_spaces(&batch, ImportMode::Append, &window, 0)
+            .is_ok()
+    );
+    let children = std::mem::take(&mut batch.spaces[0].pinned);
+    batch.spaces[0].pinned.push(ImportNode::Folder {
+        id: FolderId::new("extra"),
+        name: "Extra".into(),
+        children,
+    });
+    assert_eq!(
+        state.import_spaces(&batch, ImportMode::Append, &window, 0),
+        Err(ImportError::FolderDepth)
+    );
+    assert_eq!(state, before);
+}
+
+#[test]
+fn empty_recovered_windows_leave_no_stale_space_after_import() {
+    let saved = r##"{
+        "version":2,
+        "tabs":{},
+        "spaces":[{"id":"personal","name":"Personal","emoji":"🏠","color":"#cdd9f7"}],
+        "windows":[{"id":"open","activeSpaceId":"personal"}],
+        "closedWindows":[{"id":"closed","activeSpaceId":"personal","closedAt":1,"spaces":{"personal":{"today":[]}}}]
+    }"##;
+    let mut state = flecha_core::storage::decode(saved).unwrap();
+    let batch = ImportBatch {
+        spaces: vec![incoming_space("copy", "Work")],
+        ..ImportBatch::default()
+    };
+    state
+        .import_spaces(&batch, ImportMode::Append, &WindowId::new("open"), 2)
+        .unwrap();
+    assert!(state.space(&SpaceId::new("personal")).is_none());
+    assert!(state.reopen_window().is_none());
+}
+
+#[test]
+fn merge_ignores_ids_for_matched_spaces_folders_and_tabs() {
+    let existing = SpaceId::new("work");
+    let duplicate = SpaceId::new("another");
+    let window = WindowId::new("w");
+    let docs = FolderId::new("work-docs");
+    let duplicate_folder = FolderId::new("another-docs");
+    let known = TabId::new("known");
+    let url = "https://example.org/existing";
+    let mut state = BrowserState::new(existing.clone(), window.clone());
+    state.update_space(&existing, Some("Work"), None, None, None);
+    state.add_space(duplicate.clone());
+    state.add_folder(docs.clone(), "Docs", &existing, None);
+    state.add_folder(duplicate_folder.clone(), "Docs", &duplicate, None);
+    state.create_tab(
+        known.clone(),
+        Tab::new(url, 0),
+        Placement::Pinned {
+            space: &existing,
+            folder: Some(&docs),
+        },
+        None,
+    );
+    let new = incoming_tab("new", "https://example.org/new");
+    let mut draft = incoming_space(duplicate.as_str(), "Work");
+    draft.pinned = vec![ImportNode::Folder {
+        id: duplicate_folder,
+        name: "Docs".into(),
+        children: vec![
+            ImportNode::Tab(incoming_tab(known.as_str(), url)),
+            ImportNode::Tab(new.clone()),
+        ],
+    }];
+    let batch = ImportBatch {
+        spaces: vec![draft],
+        ..ImportBatch::default()
+    };
+    let out = state
+        .import_spaces(&batch, ImportMode::Merge, &window, 1)
+        .unwrap();
+    assert_eq!(
+        (out.merged, out.spaces, out.folders, out.tabs),
+        (1, 0, 0, 1)
+    );
+    assert_eq!(
+        state.space(&existing).unwrap().pinned_tabs(),
+        [&known, &new.id]
+    );
+}
+
+#[test]
+fn imported_split_prefers_new_unseen_tabs_over_an_existing_favorite() {
+    let window = WindowId::new("w");
+    let used = TabId::new("used");
+    let url = "https://example.org/shared";
+    let mut state = BrowserState::new(SpaceId::new("home"), window.clone());
+    state.create_tab(used.clone(), Tab::new(url, 0), Placement::Favorite, None);
+    state.activate(&used, &window, Some(1));
+    let left = incoming_tab("left", url);
+    let right = incoming_tab("right", "https://example.org/right");
+    let fav = incoming_tab("favorite", "https://example.org/favorite");
+    let mut incoming = incoming_space("copy", "Work");
+    incoming.today = vec![left.clone()];
+    incoming.pinned = vec![ImportNode::Tab(right.clone())];
+    incoming.splits = vec![vec![left.url.clone(), right.url.clone()]];
+    let space = incoming.id.clone();
+    let batch = ImportBatch {
+        spaces: vec![incoming],
+        favorites: vec![fav.clone()],
+        ..ImportBatch::default()
+    };
+    assert_eq!(
+        state
+            .import_spaces(&batch, ImportMode::Append, &window, 2)
+            .unwrap()
+            .splits,
+        1
+    );
+    let ws = &state.focused_window().spaces[&space];
+    assert_eq!(ws.split, Some([left.id.clone(), right.id.clone()]));
+    assert_eq!(ws.active_tab_id, None);
+    for id in [&left.id, &right.id, &fav.id] {
+        assert!(state.tab(id).unwrap().unseen);
+    }
+    assert_eq!(
+        state.by_recency([&left.id, &right.id, &fav.id, &used]),
+        [&used, &left.id, &right.id, &fav.id]
+    );
+}
