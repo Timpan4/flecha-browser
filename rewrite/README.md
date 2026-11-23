@@ -12,8 +12,9 @@ A unit adds its crate path to `members` in `Cargo.toml`.
 
 The compositor spike uses patched copies of the pinned Zed and cef-rs sources.
 From `rewrite/`, run `bash spikes/gpui-cef-compositor/prepare.sh` before resolving
-the workspace with Cargo. Stage the CEF runtime explicitly because Cargo can
-reuse build-script results without rerunning the script. Preparation uses
+the workspace with Cargo. The cef-rs build script only checks the staged
+runtime and links against it. It copies nothing, so the launchers load the
+runtime from `target/spike1-src/cef-runtime`. Preparation uses
 `flock` to serialize staging and verifies the pinned CEF beta archive. Never run
 `cargo`, `rustc`, `rustup` or Clippy inside `rewrite/target/spike1-src/zed`.
 The [spike report](spikes/gpui-cef-compositor/REPORT.md) describes the runtime
@@ -21,22 +22,69 @@ and the compositor checks.
 
 ## Building on the workstation
 
-The workstation runs one heavy build at a time. Use `~/.cargo/bin/cargo`
-because `cargo` on `PATH` can be a wrapper shim. Every `cargo build`, `cargo test`
-or `cargo run` that compiles CEF or GPUI waits for the shared lock and runs in the
-agent build slice:
+Use plain `cargo` from `PATH`. On the workstation it is the `mbx` shim, which
+shares compiled dependencies across worktrees and prunes its own storage. Run
+from `rewrite/`, with Cargo's target dir left at `rewrite/target`. Dev builds
+keep full debuginfo for workspace crates only. Third-party crates build without
+it (`[profile.dev.package."*"]` in `Cargo.toml`).
+
+Cargo resolves the whole workspace for every command, so a new worktree needs
+the staged sources first. Reflink them from the main checkout, then let
+`prepare.sh` check them against the pins and patches:
+
+```sh
+# From rewrite/ in the new worktree
+mkdir -p target/spike1-src
+cp -a --reflink=always ~/dev/flecha-browser/rewrite/target/spike1-src/{zed,cef-rs,cef-beta,cef-runtime} target/spike1-src/
+bash spikes/gpui-cef-compositor/prepare.sh --sources-only
+```
+
+If `prepare.sh` reports that a staged tree does not match the pins or patch,
+remove that copy from the new worktree's `target/spike1-src` and run
+`prepare.sh --sources-only` again. It downloads and patches a fresh copy.
+
+Crates with no CEF or GPUI dependency (`flecha-core`, `flecha-adblock`,
+`flecha-import`, `flecha-migrate` and `flecha-services`) build with crate-scoped
+commands and no build lock. Never use `--workspace` for them, because it
+compiles CEF and GPUI too:
+
+```sh
+cargo check --locked -p flecha-core
+cargo test --locked -p flecha-core
+cargo clippy --locked -p flecha-core --all-targets -- -D warnings
+```
+
+The workstation runs one heavy build at a time. Every command that compiles
+CEF or GPUI (`flecha`, `flecha-ui`, `flecha-cef`, `flecha-surface` and the
+spikes) waits for the shared lock and runs in the agent build slice:
 
 ```sh
 flock "$XDG_RUNTIME_DIR/flecha-rewrite-build.lock" \
-  bash ~/.claude/skills/hosts/scripts/agent-build run ~/.cargo/bin/cargo build --locked -j 14 -p flecha
+  bash ~/.claude/skills/hosts/scripts/agent-build run cargo build --locked -j 14 -p flecha
 ```
 
-Run it from `rewrite/`, with Cargo's target dir left at `rewrite/target`. If a build is killed for memory, check `free -g` before retrying.
+If a build is killed for memory, check `free -g` before retrying.
+
+## Desktop launch on Linux
+
+After preparing the pinned runtime and building `flecha`, run this from
+`rewrite/` in your desktop session.
+
+```sh
+tools/run-desktop.sh https://example.com
+```
+
+Use `--release` before the app arguments to select the release build, or
+`--print-command` to inspect the launch command without opening a window.
+The rewrite stores its profile in `$XDG_DATA_HOME/flecha-rewrite`, with
+`$HOME/.local/share/flecha-rewrite` as the fallback. Use `--profile DIR` or
+`FLECHA_PROFILE` to override it. Flecha rejects the shipping profile at
+`~/.config/flecha-browser` and paths inside it.
 
 ## Isolated CEF launches
 
-Run every CEF launch through an isolated launcher, including tamper and negative
-tests. Use Xvfb or headless Weston, a private session D-Bus with service
+Run every automated CEF launch through an isolated launcher, including tamper
+and negative tests. Use Xvfb or headless Weston, a private session D-Bus with service
 activation disabled, and scratch directories for `XDG_RUNTIME_DIR`, `HOME` and
 `TMPDIR`. Set `DBUS_SYSTEM_BUS_ADDRESS` to a nonexistent socket path. Never use
 the owner's desktop session, session bus or `/run/user/<uid>/bus`. Stop the
@@ -48,7 +96,7 @@ on the owner's desktop.
 
 ## Phase 1 on Linux
 
-Start every Phase 1 app through the launcher. Its Xvfb and headless Weston backends use a private display and a private, non-activating D-Bus session. Bubblewrap mounts only the system files and Flecha build files needed by the run. It gives the run private `/run` and `/var/run`, scratch XDG directories, loopback-only networking, and a files-only resolver with a localhost hosts file. The launcher clears the environment with `env -i` and gives CEF `--password-store=basic`. Keep test URLs on the fixture's loopback server.
+Use the isolated launcher for Phase 1 verification. The app requires its scratch paths for `--verify`. The Xvfb and headless Weston backends use a private display and a private, non-activating D-Bus session. Bubblewrap mounts only the system files and Flecha build files needed by the run. It gives the run private `/run` and `/var/run`, scratch XDG directories, loopback-only networking, and a files-only resolver with a localhost hosts file. The launcher clears the environment with `env -i` and gives CEF `--password-store=basic`. Keep test URLs on the fixture's loopback server.
 
 ```sh
 # From rewrite/

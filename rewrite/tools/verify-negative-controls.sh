@@ -13,7 +13,7 @@ printf 'Negative control logs: %s\n' "$logs"
 cp -a --reflink=auto Cargo.toml Cargo.lock clippy.toml .cargo app crates spikes "$shadow/"
 ln -s "$sources" "$shadow/target/spike1-src"
 launcher=(flock "${XDG_RUNTIME_DIR:?}/flecha-rewrite-build.lock" bash
-  "$HOME/.claude/skills/hosts/scripts/agent-build" run "$HOME/.cargo/bin/cargo")
+  "$HOME/.claude/skills/hosts/scripts/agent-build" run cargo)
 
 expect_failure() {
   local name=$1 expected=$2 status=0
