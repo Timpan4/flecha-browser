@@ -1,0 +1,20 @@
+copy of 6cadc2a980775cccc4e8dfe7924ad30bd67efe3b in /tmp/cef-gpui-pump-timer-guard.OEX8Vo
+== 1. unmodified tree
+   passed, no unresolved path
+== 2. mutants
+   gpui::FutureExt::with_timeout spikes/cef-gpui-pump/src/bridge.rs:230:21
+   gpui::BackgroundExecutor::timer spikes/cef-gpui-pump/src/timer_mutants.rs:14:17
+   gpui::BackgroundExecutor::scheduler_executor spikes/cef-gpui-pump/src/timer_mutants.rs:15:17
+   gpui::ForegroundExecutor::scheduler_executor spikes/cef-gpui-pump/src/timer_mutants.rs:16:20
+   gpui::SchedulerLocalExecutor::timer spikes/cef-gpui-pump/src/timer_mutants.rs:17:20
+   gpui::FutureExt::with_timeout spikes/cef-gpui-pump/src/timer_mutants.rs:18:37
+   gpui::PlatformDispatcher::dispatch_after spikes/cef-gpui-pump/src/timer_mutants.rs:22:16
+   gpui::Animation::with_max_fps spikes/cef-gpui-pump/src/timer_mutants.rs:26:45
+   gpui::Animation::max_fps spikes/cef-gpui-pump/src/timer_mutants.rs:28:7
+   gpui::StatefulInteractiveElement::tooltip spikes/cef-gpui-pump/src/timer_mutants.rs:32:28
+   gpui::StatefulInteractiveElement::hoverable_tooltip spikes/cef-gpui-pump/src/timer_mutants.rs:33:28
+   gpui::Interactivity::tooltip spikes/cef-gpui-pump/src/timer_mutants.rs:35:23
+   gpui::Interactivity::hoverable_tooltip spikes/cef-gpui-pump/src/timer_mutants.rs:36:23
+   gpui::App::prevent_idle_sleep spikes/cef-gpui-pump/src/timer_mutants.rs:40:17
+   rejected: mutant C at spikes/cef-gpui-pump/src/bridge.rs:230:21, and each of the 13 listed paths in timer_mutants.rs (Clippy exit 101)
+control exit 0

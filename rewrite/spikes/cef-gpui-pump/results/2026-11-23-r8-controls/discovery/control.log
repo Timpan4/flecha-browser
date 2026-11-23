@@ -1,0 +1,6 @@
+mutant D on a copy of c4c07131ef7cc3b87fc855543678fc59808f875b in /tmp/cef-gpui-pump-discovery.bip923
+dirty idle: runner exit 1; exit=2 scenario_pass=false pump_pass=true isolation_clean=false shutdown_clean=false pass=false
+{"isolation_clean":false,"shutdown_clean":false,"pass":false,"after_load":["/proc/1337115/stat: Too many open files (os error 24)","root 1337115 is not in the process listing"],"shutdown":["/proc/1337115/stat: Too many open files (os error 24)","root 1337115 is not in the process listing","/proc/1337115/stat: Too many open files (os error 24)","root 1337115 is not in the process listing"]}
+cdp: runner exit 1; exit=2 scenario_pass=false pump_pass=true isolation_clean=false shutdown_clean=false pass=false
+{"cdp_pass":false,"isolation_clean":false,"shutdown_clean":false,"pass":false,"listening_complete":false,"listening_discovery":["/proc/1337794/stat: Too many open files (os error 24)","root 1337794 is not in the process listing"]}
+mutant D fails the dirty idle run and the cdp run on discovery errors
