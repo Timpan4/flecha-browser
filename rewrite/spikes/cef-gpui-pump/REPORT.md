@@ -43,7 +43,7 @@ WARMUP_MS=3000 MEASURE_MS=30000 STEP_TIMEOUT_MS=20000 DEVTOOLS_CLOSE_MS="0 100 2
 
 The runner exits 0 only if every run passes. It ran as a transient `systemd-run --user` unit and printed `all runs passed` (`results/2026-11-23-r4/run.log`). The timing values are harness parameters, not product values. `STEP_TIMEOUT_MS` bounds each wait for CEF (Xvfb start, load, a CDP reply, DevTools open and close, browser close, child exit). The runner stages a bundle in `target/release/cef-gpui-pump-bundle/<archive name>` (see "Cargo 1.100 and cef-rs"). Every run writes a JSON report, its stderr, and a listing of its scratch runtime dir.
 
-Build: release profile. GPUI picked `NVIDIA GeForce RTX 5080 (Vulkan)` on Xvfb (`RUST_LOG=gpui_wgpu=info`, first-round smoke run), so GPUI was not on a software renderer. CEF itself used software OSR (`OnPaint`, no shared textures). Chromium switches: `--ozone-platform=x11 --password-store=basic`. The sandbox was on.
+Build: release profile. GPUI picked `NVIDIA GeForce RTX 5080 (Vulkan)` on Xvfb, so GPUI was not on a software renderer. Source: a 5 s idle run with `RUST_LOG=gpui_wgpu=info` on the r4 build (`results/2026-11-23-r4/adapter-smoke/`), which passed too. CEF itself used software OSR (`OnPaint`, no shared textures). Chromium switches: `--ozone-platform=x11 --password-store=basic`. The sandbox was on.
 
 ### Isolation
 
@@ -134,7 +134,7 @@ Test: 2 windowless browsers on the animation page. Page 0 is inspected, page 1 i
 | 100 ms | 100 to 108 ms | 36 to 44 ms | 30, both pages | 2 and 2, all trials | 0 |
 | 2000 ms | 2000 to 2005 ms | 36 to 60 ms | 30, both pages | 2 and 2, all trials | 0 |
 
-`ShowDevTools()` is synchronous: it returns after creating the DevTools browser, and that took up to 60 ms. A close requested sooner than that runs when the call returns, so the 0 ms and 100 ms delays land later than asked. The DevTools browser was `CEF_RUNTIME_STYLE_CHROME` in its own X11 window. The `/proc` scan while DevTools is open now runs only if a scan as long as the one timed just before fits before the close. In r4 the scan was skipped in the 5 trials with a 0 ms delay and ran in the other 10. Each of those scans ended before the close was due: by 64 ms after `ShowDevTools` for the 100 ms delay, and by 87 ms for the 2000 ms delay. Those 10 closes still landed 0.04 to 8.0 ms late. The wait resumes on GPUI's main thread, where a single pump call can run for up to 10 ms, which likely accounts for that lateness.
+`ShowDevTools()` is synchronous: it returns after creating the DevTools browser, and that took up to 60 ms in r4 (up to 624 ms in r3). A close requested sooner than that runs when the call returns, so in r4 the 0 ms delay landed 36 to 52 ms late. The DevTools browser was `CEF_RUNTIME_STYLE_CHROME` in its own X11 window. The `/proc` scan while DevTools is open now runs only if a scan as long as the one timed just before fits before the close. In r4 the scan was skipped in the 5 trials with a 0 ms delay and ran in the other 10. Each of those scans ended before the close was due: by 64 ms after `ShowDevTools` for the 100 ms delay, and by 87 ms for the 2000 ms delay. Those 10 closes still landed 0.04 to 8.0 ms late. The wait resumes on GPUI's main thread, where a single pump call can run for up to 10 ms, which likely accounts for that lateness.
 
 Result: #4353 does not reproduce on CEF 158.0.3, and no workaround is needed. The check was not run against a build without the fix (for example CEF 156), so its ability to catch the freeze is not shown here.
 
