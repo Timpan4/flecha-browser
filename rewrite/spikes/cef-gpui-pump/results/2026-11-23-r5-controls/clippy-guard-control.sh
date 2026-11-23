@@ -4,7 +4,8 @@
 # `direct-timer.patch` to a disposable copy of the committed tree
 # (`git archive HEAD`), never to the caller's checkout, and runs workspace
 # Clippy there with `-D warnings`, as CI does. Exits nonzero unless Clippy fails
-# on that call with `clippy::disallowed_methods`. The copy is deleted on exit.
+# with `clippy::disallowed_methods` on `gpui::BackgroundExecutor::timer` at the
+# mutant's own file, line and column. The copy is deleted on exit.
 #
 # Usage: clippy-guard-control.sh REWRITE_DIR
 #   REWRITE_DIR  the rewrite/ dir of a checkout whose target/spike1-src was
@@ -34,14 +35,22 @@ mkdir -p "$copy/rewrite/target"
 ln -s "$rewrite/target/spike1-src" "$copy/rewrite/target/spike1-src"
 (cd "$copy" && patch -p1 --forward --quiet <"$patch_file")
 echo "patched a copy of $head in $copy"
+# Where the mutant calls the timer: the span Clippy must report.
+mutant=spikes/cef-gpui-pump/src/bridge.rs
+at=$(awk '/NEGATIVE CONTROL/ { armed = 1 } armed && (c = index($0, "self.executor.timer(")) {
+        print NR ":" c + length("self.executor."); exit }' "$copy/rewrite/$mutant")
+[[ -n $at ]] || { echo "no mutant timer call in $mutant" >&2; exit 1; }
 
 status=0
 out=$(cd "$copy/rewrite" && CARGO_NET_GIT_FETCH_WITH_CLI=true flock "$lock" \
     bash "$build" run cargo clippy --locked -j 14 --workspace --all-targets -- -D warnings 2>&1) || status=$?
 grep -E -A6 '^error: use of a disallowed method' <<<"$out" || true
 (( status != 0 )) || { echo "Clippy passed the direct per-call timer" >&2; exit 1; }
-grep -c -E '^error: use of a disallowed method `gpui::BackgroundExecutor::timer`' <<<"$out" >/dev/null ||
-    { echo "$out" >&2; echo "Clippy failed, but not on the disallowed timer" >&2; exit 1; }
-grep -c -F 'spikes/cef-gpui-pump/src/bridge.rs' <<<"$out" >/dev/null ||
-    { echo "$out" >&2; echo "the disallowed call is not reported in bridge.rs" >&2; exit 1; }
-echo "Clippy rejects the direct per-call timer (exit $status)"
+# The diagnostic's header and its primary span, which rustc prints on the next
+# line, must name the timer and the mutant's position.
+awk -v span="--> $mutant:$at" '
+    prev ~ /^error: use of a disallowed method `gpui::BackgroundExecutor::timer`$/ && index($0, span) { found = 1 }
+    { prev = $0 }
+    END { exit !found }' <<<"$out" ||
+    { echo "$out" >&2; echo "Clippy did not reject the timer at $mutant:$at" >&2; exit 1; }
+echo "Clippy rejects the direct per-call timer at $mutant:$at (exit $status)"

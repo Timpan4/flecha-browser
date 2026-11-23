@@ -1,7 +1,7 @@
 //! The scripted checks. Each scenario runs as a GPUI foreground task, writes
 //! its results into the report, then closes every browser and quits GPUI.
 
-use crate::bridge::Bridge;
+use crate::bridge::{Bridge, CallTimeout};
 use crate::config::{Config, Scenario};
 use crate::engine::{self, Hub, Kind};
 use crate::probe::{self, Proc};
@@ -240,7 +240,7 @@ impl Run {
         let step_ms = self.cfg.step_timeout.as_secs_f64() * 1e3;
         let pump_pass =
             analysis["unexplained_calls"] == 0 && max_gap_ms.is_some_and(|gap| gap <= step_ms);
-        let (pump_timers_now, pump_timers_max_outstanding) = pump::timers();
+        let (pump_timers_now, pump_timer_deadlines_max_unexpired) = pump::timers();
         let pump_timers = pump_timers_now - pump_timers_before;
         self.put(
             "pump_trace",
@@ -250,10 +250,10 @@ impl Run {
                 "max_gap_bound_ms": step_ms,
                 "pump_timers_created": pump_timers,
                 "pump_timers_per_second": pump_timers as f64 / traced_seconds,
-                "pump_timers_max_outstanding_since_start": pump_timers_max_outstanding,
+                "pump_timer_deadlines_max_unexpired_since_start": pump_timer_deadlines_max_unexpired,
                 "bridge_timers_created": bridge.timers().0,
                 "scenario_timers_created": self.timers.created(),
-                "scenario_timers_max_outstanding": self.timers.max_outstanding(),
+                "scenario_timer_deadlines_max_unexpired": self.timers.max_unexpired_deadlines(),
                 "analysis": analysis,
             }),
         );
@@ -431,7 +431,7 @@ impl Run {
             futures::pin_mut!(reply);
             let (timed_out, error) = futures::select_biased! {
                 reply = reply => (
-                    reply.as_ref().err().is_some_and(|e| e.to_string().contains("no reply within")),
+                    reply.as_ref().err().is_some_and(|e| e.downcast_ref::<CallTimeout>().is_some()),
                     reply.as_ref().err().map(|e| format!("{e:#}")),
                 ),
                 _ = bound => (false, Some("no result within two step timeouts".to_string())),
@@ -503,10 +503,10 @@ impl Run {
         let timely = slowest_ms <= step_ms && loop_seconds * 1e3 <= loop_bound_ms;
         // The cause the latency bounds can miss: the stall is intermittent,
         // but timers piling up on GPUI's shared Timer thread are not.
-        let (bridge_timers, bridge_max_outstanding) = bridge.timers();
+        let (bridge_timers, bridge_deadlines_max_unexpired) = bridge.timers();
         let pass = calls > 0
             && timely
-            && bridge_max_outstanding <= 1
+            && bridge_deadlines_max_unexpired <= 1
             && timeout_probe["pass"] == true
             && true_replies == 0
             && errors.is_empty()
@@ -528,7 +528,7 @@ impl Run {
                 "call_latency_bound_ms": step_ms,
                 "timely": timely,
                 "bridge_timers_created": bridge_timers,
-                "bridge_timers_max_outstanding": bridge_max_outstanding,
+                "bridge_timer_deadlines_max_unexpired": bridge_deadlines_max_unexpired,
                 "page_raf_frames": raf,
                 "page_raf_per_second": page_ms.map(|ms| raf / ms * 1e3),
                 "page_counter_interval_ms": page_ms,

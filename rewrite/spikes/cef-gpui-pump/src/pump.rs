@@ -82,7 +82,7 @@ pub fn requests_received_any_thread() -> u64 {
 pub fn timers() -> (u64, usize) {
     TIMERS.with_borrow(|t| {
         t.as_ref()
-            .map_or((0, 0), |t| (t.created(), t.max_outstanding()))
+            .map_or((0, 0), |t| (t.created(), t.max_unexpired_deadlines()))
     })
 }
 

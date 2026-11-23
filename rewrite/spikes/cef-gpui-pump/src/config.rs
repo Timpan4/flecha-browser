@@ -112,15 +112,5 @@ impl Config {
 /// A colon-separated list of absolute paths; empty entries are dropped. A
 /// relative entry could never match the absolute paths the scan reads.
 fn path_list(option: &str, value: &str) -> Result<Vec<String>> {
-    value
-        .split(':')
-        .filter(|p| !p.is_empty())
-        .map(|p| {
-            if p.starts_with('/') {
-                Ok(p.to_string())
-            } else {
-                bail!("--pump-{option} entry {p:?} is not an absolute path")
-            }
-        })
-        .collect()
+    cef_gpui_pump::procfs::scan_roots(option, value).map_err(anyhow::Error::msg)
 }

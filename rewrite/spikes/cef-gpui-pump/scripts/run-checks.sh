@@ -4,8 +4,10 @@
 # run, and a system bus address that points nowhere. Each app run checks that
 # its process tree holds nothing under the desktop session's runtime dir, the
 # system bus socket or the caller's home outside the bundle, pages and results
-# (`isolation_clean` in the report). Stops what it starts by PID, and kills a
-# run's whole session when it outlives its watchdog (see `watchdog_ms`).
+# (`isolation_clean` in the report). Stops what it starts by PID, or by the
+# process group ID of a run's session: it kills that group when the run
+# outlives its watchdog (see `watchdog_ms`), when anything of the session
+# outlives it, and when the runner itself exits mid-run.
 # Exits nonzero if any run fails.
 #
 # Usage: scripts/run-checks.sh RESULTS_DIR [SCENARIO...]
@@ -27,6 +29,22 @@ scenarios=("$@")
 (( ${#scenarios[@]} )) || scenarios=(idle animate animate-unthrottled cdp devtools)
 
 : "${WARMUP_MS:?set WARMUP_MS}" "${MEASURE_MS:?set MEASURE_MS}" "${STEP_TIMEOUT_MS:?set STEP_TIMEOUT_MS}"
+# Bash arithmetic reads 0100 as octal and the app parses decimal, so take digits
+# only and use their decimal value: the watchdog then budgets what the app runs.
+decimal_ms() { # name value
+    [[ $2 =~ ^[0-9]+$ ]] || { echo "$1 must be a whole number of milliseconds, got '$2'" >&2; exit 2; }
+    echo $((10#$2))
+}
+WARMUP_MS=$(decimal_ms WARMUP_MS "$WARMUP_MS")
+MEASURE_MS=$(decimal_ms MEASURE_MS "$MEASURE_MS")
+STEP_TIMEOUT_MS=$(decimal_ms STEP_TIMEOUT_MS "$STEP_TIMEOUT_MS")
+# The app keeps the last value of a repeated flag, so a timing flag in
+# EXTRA_ARGS would run with durations the watchdog did not budget.
+case " ${EXTRA_ARGS:-} " in
+    *--pump-warmup-ms*|*--pump-measure-ms*|*--pump-step-timeout-ms*|*--pump-devtools-close-ms*)
+        echo "set timings through WARMUP_MS, MEASURE_MS, STEP_TIMEOUT_MS and DEVTOOLS_CLOSE_MS, not EXTRA_ARGS" >&2
+        exit 2 ;;
+esac
 
 here=$(cd "$(dirname "$0")/.." && pwd)
 profile_dir=$(cd "$here/../../target/release" && pwd)
@@ -76,11 +94,13 @@ real_home=${HOME:?}
 allowed="$bundle:$pages:$results"
 
 xvfb_pid=
+active_group=
 scratch=()
 # An EXIT trap's last status becomes the script's, so this keeps the status it
 # was called with.
 cleanup() {
     local status=$? d
+    if [[ -n $active_group ]]; then end_group "$active_group" >/dev/null || true; fi
     if [[ -n $xvfb_pid ]] && kill -0 "$xvfb_pid" 2>/dev/null; then
         kill "$xvfb_pid"
         wait "$xvfb_pid" 2>/dev/null || true
@@ -131,13 +151,33 @@ watchdog_ms() { # scenario [close_ms]
 }
 ms_to_s() { printf '%d.%03d' $(($1 / 1000)) $(($1 % 1000)); }
 
+# The members of process group $1, one `ps` line each.
+group_members() { ps -eo pid=,pgid=,stat=,args= | awk -v g="$1" '$2 == g'; }
+# Kills what is left of process group $1 by its group ID and waits until the
+# group is empty, bounded by STEP_TIMEOUT_MS. Prints the members it found.
+# Returns 0 if the group was already empty, 1 if it had members and they are
+# gone, 2 if any survived.
+end_group() {
+    local group=$1 left i
+    left=$(group_members "$group")
+    [[ -n $left ]] || return 0
+    printf '%s\n' "$left"
+    kill -KILL -- "-$group" 2>/dev/null || true
+    for ((i = 0; i < (STEP_TIMEOUT_MS + 99) / 100; i++)); do
+        [[ -n $(group_members "$group") ]] || return 1
+        sleep 0.1
+    done
+    group_members "$group" | sed 's/^/still alive: /'
+    return 2
+}
+
 failures=0
 run_one() {
     local name=$1 url=$2 watchdog=$3
     shift 3
     local out=$results/$name.json
-    # A crash must not leave an older report to be read as this run's.
-    rm -f -- "$out" "${out%.json}.png"
+    # A crash must not leave an older report or marker to be read as this run's.
+    rm -f -- "$out" "${out%.json}.png" "$results/$name.watchdog.txt" "$results/$name.leftover.txt"
     # One throwaway base per run (mktemp -d makes it mode 700) holds the CEF
     # profile, XDG_RUNTIME_DIR, HOME and TMPDIR; never the owner's profiles,
     # session runtime dir, home or shared /tmp.
@@ -152,10 +192,15 @@ run_one() {
     # The bus config names this run's scratch dir; dbus-daemon picks a new socket name in it.
     sed "s|__SCRATCH_RUNTIME_DIR__|$runtime|" "$here/scripts/isolated-session-bus.conf.in" >"$runtime/session-bus.conf"
     echo "== $name (watchdog $(ms_to_s "$watchdog") s)"
-    local status=0
-    # timeout runs the session in its own process group and signals the whole
-    # group on expiry, then SIGKILL after one more STEP_TIMEOUT_MS. XDG base
-    # dirs and cache overrides would point back into the real home.
+    local status=0 session
+    # timeout makes itself the leader of a new process group, so the group ID
+    # is its PID, and runs the session in that group: dbus-run-session, its
+    # dbus-daemon, the browser and every Chromium child
+    # (results/2026-11-23-r6-controls/watchdog/tree-before-stop.txt). On expiry
+    # it signals the group, then sends SIGKILL after one more STEP_TIMEOUT_MS
+    # if dbus-run-session is still running. It waits only for dbus-run-session,
+    # so end_group below removes whatever else is left. XDG base dirs and cache
+    # overrides would point back into the real home.
     timeout --kill-after="$(ms_to_s "$STEP_TIMEOUT_MS")" "$(ms_to_s "$watchdog")" \
     env -u WAYLAND_DISPLAY -u WAYLAND_SOCKET -u DBUS_SESSION_BUS_ADDRESS \
         -u XDG_CONFIG_HOME -u XDG_CACHE_HOME -u XDG_DATA_HOME -u XDG_STATE_HOME \
@@ -170,11 +215,15 @@ run_one() {
         --pump-step-timeout-ms="$STEP_TIMEOUT_MS" \
         --pump-forbid-paths="$desktop_runtime:$system_bus_socket:$real_home" \
         --pump-allow-paths="$allowed" \
-        ${EXTRA_ARGS:-} "$@" >/dev/null 2>"$results/$name.stderr" || status=$?
-    local expired=
+        ${EXTRA_ARGS:-} "$@" >/dev/null 2>"$results/$name.stderr" &
+    session=$!
+    active_group=$session
+    wait "$session" || status=$?
+    local expired='' left=0
     if (( status == 124 || status == 137 )); then
         expired=yes
-        echo "watchdog expired after $(ms_to_s "$watchdog") s (exit $status); the session's process group was killed" | tee "$results/$name.watchdog.txt"
+        end_group "$session" >"$results/$name.leftover.txt" || left=$?
+        echo "watchdog expired after $(ms_to_s "$watchdog") s (exit $status); killed process group $session" | tee "$results/$name.watchdog.txt"
     fi
     # What landed in the scratch dirs would otherwise have gone to the desktop
     # session's runtime dir, the owner's home or the shared /tmp.
@@ -192,6 +241,18 @@ run_one() {
     else
         echo "   exit=$status, no report written (see $name.stderr)"
     fi
+    # After the leak check, so a child slow to exit is reported as a leak
+    # rather than killed first: nothing of the session may outlive it.
+    if [[ -z $expired ]]; then
+        end_group "$session" >"$results/$name.leftover.txt" || left=$?
+        if (( left )); then
+            verdict=fail
+            echo "   session processes outlived the session; killed process group $session (see $name.leftover.txt)"
+        fi
+    fi
+    (( left != 2 )) || { verdict=fail; echo "   process group $session survived SIGKILL (see $name.leftover.txt)"; }
+    active_group=
+    [[ -s $results/$name.leftover.txt ]] || rm -f -- "$results/$name.leftover.txt"
     rm -rf -- "$base"
     [[ $verdict == pass ]] || failures=$((failures + 1))
 }
@@ -207,6 +268,7 @@ for s in "${scenarios[@]}"; do
         devtools)
             : "${DEVTOOLS_CLOSE_MS:?}" "${DEVTOOLS_TRIALS:?}"
             for ms in $DEVTOOLS_CLOSE_MS; do
+                ms=$(decimal_ms DEVTOOLS_CLOSE_MS "$ms")
                 for i in $(seq 1 "$DEVTOOLS_TRIALS"); do
                     run_one "devtools-${ms}ms-$i" "file://$pages/anim.html" "$(watchdog_ms devtools "$ms")" --pump-scenario=devtools \
                         --pump-devtools-close-ms="$ms" --pump-second-browser

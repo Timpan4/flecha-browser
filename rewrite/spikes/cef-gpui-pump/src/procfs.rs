@@ -36,6 +36,72 @@ pub fn ss_unix_row(line: &str) -> Option<(&str, u64, u64)> {
     Some((&line[start..end], inode, peer_inode))
 }
 
+/// `ss -xan` output: the rows that parsed, and every other non-blank line.
+#[derive(Debug, Default)]
+pub struct SsTable {
+    /// Local address, inode and peer inode of each row.
+    pub rows: Vec<(String, u64, u64)>,
+    pub rejected: Vec<String>,
+}
+
+/// Parses `ss -xan` output. The first line must be the header and every other
+/// non-blank line a row: a rejected row is a socket whose address the scan
+/// never checks, so the caller must treat any as an incomplete scan.
+pub fn parse_ss_unix(text: &str) -> SsTable {
+    let mut table = SsTable::default();
+    let mut lines = text.lines();
+    match lines.next() {
+        Some(header) if header.starts_with("Netid") => {}
+        Some(other) => table.rejected.push(other.to_string()),
+        None => table
+            .rejected
+            .push("(no output, not even a header)".to_string()),
+    }
+    for line in lines.filter(|l| !l.trim().is_empty()) {
+        match ss_unix_row(line) {
+            Some((address, inode, peer)) => table.rows.push((address.to_string(), inode, peer)),
+            None => table.rejected.push(line.to_string()),
+        }
+    }
+    table
+}
+
+/// Parses the `:`-separated scan roots of `--pump-{option}`. The scan compares
+/// the kernel's paths by whole components, so each entry must be absolute and
+/// in normal form: `/run//user/1000` or `/run/user/./1000` would never match.
+/// The kernel reports fd targets and mapped files with symlinks resolved, so an
+/// entry that exists is also added in its canonical form, and a symlink alias
+/// then matches what it points to. An entry that does not exist stays as given.
+pub fn scan_roots(option: &str, value: &str) -> Result<Vec<String>, String> {
+    let mut roots = Vec::new();
+    for p in value.split(':').filter(|p| !p.is_empty()) {
+        if !p.starts_with('/') {
+            return Err(format!(
+                "--pump-{option} entry {p:?} is not an absolute path"
+            ));
+        }
+        let normal = p == "/"
+            || (!p.ends_with('/')
+                && p[1..]
+                    .split('/')
+                    .all(|c| !c.is_empty() && c != "." && c != ".."));
+        if !normal {
+            return Err(format!(
+                "--pump-{option} entry {p:?} is not in normal form \
+                 (no empty, `.` or `..` components and no trailing `/`)"
+            ));
+        }
+        roots.push(p.to_string());
+        if let Ok(real) = std::fs::canonicalize(p) {
+            let real = real.to_string_lossy().into_owned();
+            if !roots.contains(&real) {
+                roots.push(real);
+            }
+        }
+    }
+    Ok(roots)
+}
+
 /// The targets of one `/proc/PID/fd` directory. Every entry that could not be
 /// listed or resolved is a failure, whatever the reason: a descriptor closed
 /// mid-scan and one the scan may not read look the same from here, and either
@@ -112,8 +178,71 @@ mod tests {
         );
     }
 
+    /// Review thread 4666314421: a row the parser rejects is reported, so the
+    /// scan can fail instead of leaving that socket unchecked.
+    #[test]
+    fn an_unparseable_ss_row_is_rejected_not_skipped() {
+        let text = "Netid State Recv-Q Send-Q Local Address:Port Peer Address:Port\n\
+                    u_str ESTAB 0 0 /run/user/1000/bus 17 * 18\n\
+                    \n\
+                    u_str ESTAB 0 0 /run/user/1000/bus 19 *\n";
+        let table = parse_ss_unix(text);
+        assert_eq!(table.rows, [("/run/user/1000/bus".to_string(), 17, 18)]);
+        assert_eq!(table.rejected, ["u_str ESTAB 0 0 /run/user/1000/bus 19 *"]);
+        let headless = parse_ss_unix("u_str ESTAB 0 0 * 17 * 18\n");
+        assert_eq!(headless.rejected.len(), 1, "a missing header is rejected");
+        assert_eq!(
+            parse_ss_unix("").rejected.len(),
+            1,
+            "empty output is rejected"
+        );
+    }
+
+    /// Review thread 4666314387: spellings the scan could never match are
+    /// rejected, naming the option.
+    #[test]
+    fn scan_roots_must_be_absolute_and_normal() {
+        for bad in [
+            "run/user/1000",
+            "/run//user/1000",
+            "/run/user/./1000",
+            "/run/user/../user/1000",
+            "/run/user/1000/",
+        ] {
+            let error = scan_roots("forbid-paths", bad).unwrap_err();
+            assert!(error.contains("--pump-forbid-paths"), "{bad}: {error}");
+        }
+        assert_eq!(
+            scan_roots("allow-paths", "/nonexistent-cef-gpui-pump/a::/").unwrap(),
+            ["/nonexistent-cef-gpui-pump/a", "/"]
+        );
+    }
+
+    /// Review thread 4666314387: a symlink alias also covers its target, the
+    /// path the kernel reports.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_scan_root_also_covers_its_target() {
+        let dir = std::fs::canonicalize(std::env::temp_dir())
+            .unwrap()
+            .join(format!(
+                "cef-gpui-pump-scan-roots-test-{}",
+                std::process::id()
+            ));
+        std::fs::create_dir_all(dir.join("real")).unwrap();
+        std::os::unix::fs::symlink(dir.join("real"), dir.join("alias")).unwrap();
+        let alias = dir.join("alias").to_string_lossy().into_owned();
+        let real = dir.join("real").to_string_lossy().into_owned();
+        let roots = scan_roots("forbid-paths", &alias);
+        std::fs::remove_dir_all(&dir).unwrap();
+        let roots = roots.unwrap();
+        assert_eq!(roots, [alias, real.clone()]);
+        assert!(roots.iter().any(|r| path_under(&format!("{real}/bus"), r)));
+    }
+
     /// Review thread probe.rs:284: an entry that cannot be resolved makes the
     /// table incomplete instead of being skipped.
+    #[cfg(unix)]
     #[test]
     fn an_unresolvable_fd_entry_makes_the_table_incomplete() {
         let dir = std::env::temp_dir().join(format!(

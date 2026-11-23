@@ -1,5 +1,5 @@
 diff --git a/rewrite/spikes/cef-gpui-pump/src/bridge.rs b/rewrite/spikes/cef-gpui-pump/src/bridge.rs
-index 6a1797b..8e49961 100644
+index b07fd8e..d74c370 100644
 --- a/rewrite/spikes/cef-gpui-pump/src/bridge.rs
 +++ b/rewrite/spikes/cef-gpui-pump/src/bridge.rs
 @@ -16,7 +16,7 @@ use anyhow::{Context as _, Result, anyhow, bail};
@@ -11,7 +11,7 @@ index 6a1797b..8e49961 100644
  use serde_json::{Value, json};
  use std::cell::{Cell, RefCell};
  use std::collections::HashMap;
-@@ -52,6 +52,7 @@ pub struct Bridge {
+@@ -68,6 +68,7 @@ pub struct Bridge {
      tabs: RefCell<Vec<Tab>>,
      timeout: Duration,
      _sweeper: Task<()>,
@@ -19,7 +19,7 @@ index 6a1797b..8e49961 100644
  }
  
  wrap_dev_tools_message_observer! {
-@@ -145,6 +146,7 @@ impl Bridge {
+@@ -161,6 +162,7 @@ impl Bridge {
              tabs: Default::default(),
              timeout,
              _sweeper: sweeper,
@@ -27,7 +27,7 @@ index 6a1797b..8e49961 100644
          }
      }
  
-@@ -207,7 +209,17 @@ impl Bridge {
+@@ -224,7 +226,17 @@ impl Bridge {
              self.pending.borrow_mut().remove(&id);
              bail!("SendDevToolsMessage rejected {method}");
          }
@@ -45,4 +45,4 @@ index 6a1797b..8e49961 100644
 +        match outcome {
              Ok(Ok(result)) => Ok(result),
              Ok(Err(Failure::Protocol(error))) => Err(anyhow!("{method} failed: {error}")),
-             Ok(Err(Failure::Timeout)) => {
+             Ok(Err(Failure::Timeout)) => Err(CallTimeout {

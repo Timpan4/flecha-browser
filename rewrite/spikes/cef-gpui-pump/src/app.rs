@@ -183,12 +183,13 @@ fn browser_main(args: cef::args::Args, mut app: cef::App) -> Result<bool> {
 fn wait_gone(path: &str) -> Result<bool> {
     let text = std::fs::read_to_string(path).with_context(|| format!("read {path}"))?;
     let mut report: serde_json::Map<String, Value> = serde_json::from_str(&text)?;
-    let timeout = std::time::Duration::from_secs_f64(
+    let timeout = std::time::Duration::try_from_secs_f64(
         report["step_timeout_ms"]
             .as_f64()
-            .context("report has no step_timeout_ms")?
+            .context("report has no numeric step_timeout_ms")?
             / 1e3,
-    );
+    )
+    .context("step_timeout_ms is out of range")?;
     // Every recorded child must parse, or the check could skip one and call it
     // clean. A process first seen during CefShutdown counts too.
     let mut children = Vec::new();

@@ -4,6 +4,7 @@
 //! One timer per request piles up there and delays every timer in the process,
 //! including the CEF pump's. `clippy.toml` disallows GPUI's timer methods
 //! everywhere else, so every timer goes through a ledger that counts it.
+//! That guard is the structural protection; the ledger's peak is an estimate.
 
 use gpui::{BackgroundExecutor, Task};
 use std::cell::{Cell, RefCell};
@@ -11,13 +12,15 @@ use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::time::{Duration, Instant};
 
-/// Counts the timers one component arms. A timer counts as outstanding until
-/// its deadline, dropped or not.
+/// Counts the timers one component arms, and estimates how many are queued at
+/// once from their nominal deadlines: a timer counts until its deadline,
+/// dropped or not. It does not see the Timer thread's queue, so a timer still
+/// queued after its deadline because that thread is behind is not counted.
 pub struct Timers {
     executor: BackgroundExecutor,
     deadlines: RefCell<BinaryHeap<Reverse<Instant>>>,
     created: Cell<u64>,
-    max_outstanding: Cell<usize>,
+    max_unexpired_deadlines: Cell<usize>,
 }
 
 impl Timers {
@@ -26,7 +29,7 @@ impl Timers {
             executor,
             deadlines: Default::default(),
             created: Cell::new(0),
-            max_outstanding: Cell::new(0),
+            max_unexpired_deadlines: Cell::new(0),
         }
     }
 
@@ -41,8 +44,8 @@ impl Timers {
             deadlines.pop();
         }
         deadlines.push(Reverse(now + after));
-        self.max_outstanding
-            .set(self.max_outstanding.get().max(deadlines.len()));
+        self.max_unexpired_deadlines
+            .set(self.max_unexpired_deadlines.get().max(deadlines.len()));
         self.created.set(self.created.get() + 1);
         timer
     }
@@ -51,7 +54,7 @@ impl Timers {
         self.created.get()
     }
 
-    pub fn max_outstanding(&self) -> usize {
-        self.max_outstanding.get()
+    pub fn max_unexpired_deadlines(&self) -> usize {
+        self.max_unexpired_deadlines.get()
     }
 }

@@ -23,6 +23,22 @@ use std::collections::HashMap;
 use std::rc::Rc as StdRc;
 use std::time::{Duration, Instant};
 
+/// A call that got no reply within the bridge's timeout. Callers check for it
+/// by type (`anyhow::Error::downcast_ref`), not by its message.
+#[derive(Debug)]
+pub struct CallTimeout {
+    pub method: String,
+    pub timeout: Duration,
+}
+
+impl std::fmt::Display for CallTimeout {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: no reply within {:?}", self.method, self.timeout)
+    }
+}
+
+impl std::error::Error for CallTimeout {}
+
 enum Failure {
     Protocol(Value),
     Timeout,
@@ -148,9 +164,10 @@ impl Bridge {
         }
     }
 
-    /// GPUI timers the bridge armed, and the most that were outstanding at once.
+    /// GPUI timers the bridge armed, and the most whose deadlines had not
+    /// passed at once (`Timers::max_unexpired_deadlines`).
     pub fn timers(&self) -> (u64, usize) {
-        (self.timers.created(), self.timers.max_outstanding())
+        (self.timers.created(), self.timers.max_unexpired_deadlines())
     }
 
     pub fn attach(&self, browser: &Browser) -> Result<i32> {
@@ -210,9 +227,11 @@ impl Bridge {
         match rx.await {
             Ok(Ok(result)) => Ok(result),
             Ok(Err(Failure::Protocol(error))) => Err(anyhow!("{method} failed: {error}")),
-            Ok(Err(Failure::Timeout)) => {
-                Err(anyhow!("{method}: no reply within {:?}", self.timeout))
+            Ok(Err(Failure::Timeout)) => Err(CallTimeout {
+                method: method.to_string(),
+                timeout: self.timeout,
             }
+            .into()),
             Err(_) => Err(anyhow!("{method}: bridge dropped the call")),
         }
     }

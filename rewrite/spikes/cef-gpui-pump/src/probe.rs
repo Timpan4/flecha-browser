@@ -1,7 +1,7 @@
 //! Linux `/proc` reads for the done checks: the process tree, its CPU time, its
 //! command lines and the sockets it listens on.
 
-use cef_gpui_pump::procfs::{maps_path, read_fd_table, ss_unix_row};
+use cef_gpui_pump::procfs::{maps_path, parse_ss_unix, read_fd_table};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -421,16 +421,17 @@ pub fn forbidden_refs(procs: &[Proc], forbidden: &[String], allowed: &[String]) 
         Ok(out) => Some(format!("ss exited with {}", out.status)),
         Err(e) => Some(format!("ss: {e}")),
     };
+    // A row the parser rejects is a socket the scan cannot check.
+    let mut unparsed_rows = Vec::new();
     if let Ok(out) = &ss {
-        for line in String::from_utf8_lossy(&out.stdout).lines().skip(1) {
-            let Some((address, inode, peer_inode)) = ss_unix_row(line) else {
-                continue;
-            };
-            local.insert(inode, address.to_string());
+        let table = parse_ss_unix(&String::from_utf8_lossy(&out.stdout));
+        for (address, inode, peer_inode) in table.rows {
+            local.insert(inode, address);
             if peer_inode != 0 {
                 peer.insert(inode, peer_inode);
             }
         }
+        unparsed_rows = table.rejected;
     }
     let mut peers = Vec::new();
     let mut without_info = 0usize;
@@ -451,7 +452,8 @@ pub fn forbidden_refs(procs: &[Proc], forbidden: &[String], allowed: &[String]) 
         && mapped.is_empty()
         && peers.is_empty()
         && unreadable.is_empty()
-        && ss_error.is_none();
+        && ss_error.is_none()
+        && unparsed_rows.is_empty();
     json!({
         "forbidden": forbidden,
         "allowed": allowed,
@@ -463,6 +465,7 @@ pub fn forbidden_refs(procs: &[Proc], forbidden: &[String], allowed: &[String]) 
         "sockets_without_peer_info": without_info,
         "unreadable": unreadable,
         "ss_error": ss_error,
+        "ss_unparsed_rows": unparsed_rows,
         "clean": clean,
     })
 }
