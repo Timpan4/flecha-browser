@@ -70,10 +70,23 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
           key: cargo-rewrite-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rewrite/Cargo.lock') }}
-      - name: Check the rewrite workspace lock
+      - name: Check staged sources and the rewrite workspace lock
         shell: bash
         run: |
+          check_zed_toolchain_absent() {
+            local file
+            for file in target/spike1-src/zed/rust-toolchain{,.toml}; do
+              if [[ -e $file || -L $file ]]; then
+                printf 'Unexpected staged Zed toolchain file: %s\n' "$file" >&2
+                return 1
+              fi
+            done
+          }
           bash spikes/gpui-cef-compositor/prepare.sh --sources-only
+          check_zed_toolchain_absent
+          touch target/spike1-src/zed/rust-toolchain{,.toml}
+          bash spikes/gpui-cef-compositor/prepare.sh --sources-only
+          check_zed_toolchain_absent
           time cargo +stable metadata --locked --format-version 1 > /dev/null
       - name: Check the core crate in isolation
         shell: bash
