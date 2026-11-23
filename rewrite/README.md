@@ -21,22 +21,37 @@ and the compositor checks.
 
 ## Building on the workstation
 
-The workstation runs one heavy build at a time. Use `~/.cargo/bin/cargo`
-because `cargo` on `PATH` can be a wrapper shim. Every `cargo build`, `cargo test`
-or `cargo run` that compiles CEF or GPUI waits for the shared lock and runs in the
-agent build slice:
+The workstation runs one heavy build at a time. Use `cargo` on `PATH` to share
+builds through the workstation's Cargo shim. Build commands that compile CEF or
+GPUI wait for the shared lock and run in the agent build slice.
 
 ```sh
 flock "$XDG_RUNTIME_DIR/flecha-rewrite-build.lock" \
-  bash ~/.claude/skills/hosts/scripts/agent-build run ~/.cargo/bin/cargo build --locked -j 14 -p flecha
+  bash ~/.claude/skills/hosts/scripts/agent-build run cargo build --locked -j 14 -p flecha
 ```
 
 Run it from `rewrite/`, with Cargo's target dir left at `rewrite/target`. If a build is killed for memory, check `free -g` before retrying.
 
+## Desktop launch on Linux
+
+After preparing the pinned runtime and building `flecha`, run this from
+`rewrite/` in your desktop session.
+
+```sh
+tools/run-desktop.sh https://example.com
+```
+
+Use `--release` before the app arguments to select the release build, or
+`--print-command` to inspect the launch command without opening a window.
+The rewrite stores its profile in `$XDG_DATA_HOME/flecha-rewrite`, with
+`$HOME/.local/share/flecha-rewrite` as the fallback. Use `--profile DIR` or
+`FLECHA_PROFILE` to override it. Flecha rejects the shipping profile at
+`~/.config/flecha-browser` and paths inside it.
+
 ## Isolated CEF launches
 
-Run every CEF launch through an isolated launcher, including tamper and negative
-tests. Use Xvfb or headless Weston, a private session D-Bus with service
+Run every automated CEF launch through an isolated launcher, including tamper
+and negative tests. Use Xvfb or headless Weston, a private session D-Bus with service
 activation disabled, and scratch directories for `XDG_RUNTIME_DIR`, `HOME` and
 `TMPDIR`. Set `DBUS_SYSTEM_BUS_ADDRESS` to a nonexistent socket path. Never use
 the owner's desktop session, session bus or `/run/user/<uid>/bus`. Stop the
@@ -48,7 +63,7 @@ on the owner's desktop.
 
 ## Phase 1 on Linux
 
-Start every Phase 1 app through the launcher. Its Xvfb and headless Weston backends use a private display and a private, non-activating D-Bus session. Bubblewrap mounts only the system files and Flecha build files needed by the run. It gives the run private `/run` and `/var/run`, scratch XDG directories, loopback-only networking, and a files-only resolver with a localhost hosts file. The launcher clears the environment with `env -i` and gives CEF `--password-store=basic`. Keep test URLs on the fixture's loopback server.
+Use the isolated launcher for Phase 1 verification. The app requires its scratch paths for `--verify`. The Xvfb and headless Weston backends use a private display and a private, non-activating D-Bus session. Bubblewrap mounts only the system files and Flecha build files needed by the run. It gives the run private `/run` and `/var/run`, scratch XDG directories, loopback-only networking, and a files-only resolver with a localhost hosts file. The launcher clears the environment with `env -i` and gives CEF `--password-store=basic`. Keep test URLs on the fixture's loopback server.
 
 ```sh
 # From rewrite/
