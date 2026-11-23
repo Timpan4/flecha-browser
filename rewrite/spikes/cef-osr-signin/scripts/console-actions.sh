@@ -19,3 +19,8 @@ echo "marker lines: $found"
 check test "$((found > 0 ? 1 : 0))" = "$EXPECT_MARKER"
 send 'quit'
 wait_exit
+# CEF's own log in the profile must not record page console output, with or without
+# --log-console (the app consumes every console message).
+logged=$(debug_log_marker_count)
+echo "marker lines in chrome_debug.log: $logged"
+check test "$logged" = 0

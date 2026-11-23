@@ -189,6 +189,13 @@ fn main() -> ExitCode {
         // The paks, ICU data and locales are next to the loaded libcef.so, not the binary.
         resources_dir_path: CefString::from(runtime.dir.to_string_lossy().as_ref()),
         locales_dir_path: CefString::from(runtime.dir.join("locales").to_string_lossy().as_ref()),
+        // Chromium logs page console messages that no handler consumed at INFO. Keep INFO and
+        // below out of chrome_debug.log unless the owner asked for console output.
+        log_severity: if options.log_console {
+            LogSeverity::DEFAULT
+        } else {
+            LogSeverity::WARNING
+        },
         ..Default::default()
     };
     let mut app = SpikeApp::new(start_url.clone());

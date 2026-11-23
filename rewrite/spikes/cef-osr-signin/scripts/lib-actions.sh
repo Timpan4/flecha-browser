@@ -69,6 +69,18 @@ wait_exit() {
     done
 }
 
+# debug_log_marker_count: the number of FLECHA_CONSOLE_MARKER lines in CEF's own log,
+# chrome_debug.log in the profile (PROFILE, default <out-dir>/profile). Call it after the app
+# exited. Fails if the log is missing, so a moved log cannot pass as a clean one.
+debug_log_marker_count() {
+    local log_file=${PROFILE:-$OUT/profile}/chrome_debug.log
+    if [[ ! -s $log_file ]]; then
+        echo "FAIL no CEF log at $log_file" >&2
+        return 1
+    fi
+    grep -ac 'FLECHA_CONSOLE_MARKER' "$log_file" || true
+}
+
 # start_fixture_server: serves scripts/fixture-server.mjs on loopback and sets FIXTURE to its
 # base URL. The server stops when the action script exits.
 start_fixture_server() {

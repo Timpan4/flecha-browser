@@ -80,3 +80,5 @@ wait_for '^\[console\] INPUT storage loads' "$m"
 check test "$(count 'FLECHA_CONSOLE_MARKER' "$m")" = 0
 send 'quit'
 wait_exit
+logged=$(debug_log_marker_count)
+check test "$logged" = 0

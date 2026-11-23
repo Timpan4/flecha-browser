@@ -86,6 +86,8 @@ spikes/cef-osr-signin/run.sh --mode osr --profile "$HOME/flecha-spike0/osr-wayla
 
 The terminal shows load events, popups and permission requests. Web pages appear in it only as origins (`https://accounts.google.com`), never full URLs, because paths and queries can carry OAuth codes or account identifiers. Page `console.log` output is relayed only while the browser's main frame is a local `file://` page (the spike's test fixtures). `--log-console` relays every page's console output; do not use it during the sign-in checks.
 
+CEF also keeps its own log, `chrome_debug.log` in the profile directory. By default Chromium writes every page console message that no handler consumed to it at INFO level, with the full source URL. The app consumes every console message (`on_console_message` returns true), and without `--log-console` it sets CEF's log severity to WARNING, so neither console output nor INFO lines reach that file. The action scripts check that the marker page's console line is absent from it in both modes.
+
 #### Keyring or basic password store (an owner choice for checks 1 and 5)
 
 Chromium picks a password store from the desktop environment and falls back to `basic` when that store is unavailable ([Chromium docs/linux/password_storage.md](https://chromium.googlesource.com/chromium/src/+/main/docs/linux/password_storage.md)). Choose before check 1 and use the same choice for every run on that profile:
@@ -130,6 +132,7 @@ Xvfb and the app run in their own process groups, and the harness stops those gr
 - `node`: `scripts/fixture-server.mjs` serves loopback pages (a page that logs a console marker and sets a cookie, and a plain page), so no check needs the network.
 - `WM` (only `persist-actions.sh`): an EWMH window manager binary. Xvfb has none, and closing a window the way a desktop does needs one. The runs used nixpkgs' openbox 3.6.1.
 - `EXPECT_MARKER` (only `console-actions.sh`): 0 for a default run, 1 with `--log-console`.
+- `PROFILE` (optional): the app's `--profile` directory. `osr-actions.sh`, `chrome-actions.sh` and `console-actions.sh` read `chrome_debug.log` there; the default is `<out-dir>/profile`.
 
 Example, from `rewrite/`:
 
@@ -225,10 +228,10 @@ Each row is one scripted run through `scripts/xvfb-isolated.sh` on `scripts/inpu
 | OSR Ctrl+A on French AZERTY | `osr-actions.sh` | With `setxkbmap fr`, the page saw `keydown a KeyQ 65` (VK_A from the layout, physical position Q). Before the fix it saw `keydown q KeyQ 81`, so Ctrl+A acted as Ctrl+Q |
 | OSR `pdf <path>` | `osr-actions.sh` | `[pdf] ok=true`, file not empty |
 | OSR `go <url>` | `osr-actions.sh` | `[load-end] http://127.0.0.1:<port>`, logged after the command |
-| OSR console relay, default | `osr-actions.sh`, `console-actions.sh` with `EXPECT_MARKER=0` | The loopback page logs `FLECHA_CONSOLE_MARKER`; 0 marker lines in stderr, while the later `file://` fixture's console lines were relayed |
-| OSR console relay, `--log-console` | `console-actions.sh` with `EXPECT_MARKER=1` | 1 marker line, `[console] FLECHA_CONSOLE_MARKER (http://127.0.0.1:<port>:1)`: the check can see the marker |
+| OSR console relay, default | `osr-actions.sh`, `console-actions.sh` with `EXPECT_MARKER=0` | The loopback page logs `FLECHA_CONSOLE_MARKER`; 0 marker lines in stderr, while the later `file://` fixture's console lines were relayed. 0 marker lines in the profile's `chrome_debug.log` |
+| OSR console relay, `--log-console` | `console-actions.sh` with `EXPECT_MARKER=1` | 1 marker line, `[console] FLECHA_CONSOLE_MARKER (http://127.0.0.1:<port>:1)`: the check can see the marker. 0 marker lines in `chrome_debug.log` |
 | OSR `quit` | `osr-actions.sh` | app exit status 0 |
-| Chrome: tab opened from Chrome's UI | `chrome-actions.sh` | Ctrl+T, then the loopback marker page through the omnibox: the new tab got the app's client (`[browser] created id=2 open=2`, `[load-end] http://127.0.0.1:<port>`) ([screenshot](evidence/chrome-two-tabs.png)); 0 marker lines |
+| Chrome: tab opened from Chrome's UI | `chrome-actions.sh` | Ctrl+T, then the loopback marker page through the omnibox: the new tab got the app's client (`[browser] created id=2 open=2`, `[load-end] http://127.0.0.1:<port>`) ([screenshot](evidence/chrome-two-tabs.png)); 0 marker lines in stderr and in `chrome_debug.log` |
 | Chrome: close the first tab | `chrome-actions.sh` | Ctrl+1, Ctrl+W: browser 1 closed, the app kept running with one tab |
 | Chrome: close the last tab | `chrome-actions.sh` | Ctrl+W: app exit status 0 |
 | Restart persistence, OSR | `osr-actions.sh` then `persist-actions.sh` | Second run on the same profile: localStorage load counter 3 (the first run loaded the page twice); `Default/Cookies` has the fixture's `flecha_fixture` cookie for `127.0.0.1`; closing the window through the window manager exited with status 0 |

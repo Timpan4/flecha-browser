@@ -150,7 +150,9 @@ wrap_display_handler! {
                 let source = source.map(|s| s.to_string()).unwrap_or_default();
                 eprintln!("[console] {message} ({}:{line})", display_url(&source));
             }
-            0
+            // Handled here in every case. Returning 0 lets CEF also write the message and its
+            // full source URL to chrome_debug.log in the profile.
+            1
         }
 
         fn on_cursor_change(

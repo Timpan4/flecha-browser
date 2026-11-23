@@ -40,3 +40,5 @@ xdo key ctrl+w
 wait_for '^\[browser\] closed id=[0-9]+ open=0' "$m"
 wait_exit
 check test "$(count 'FLECHA_CONSOLE_MARKER')" = 0
+logged=$(debug_log_marker_count)
+check test "$logged" = 0
