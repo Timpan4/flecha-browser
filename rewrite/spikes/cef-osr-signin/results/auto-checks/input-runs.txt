@@ -1,0 +1,9 @@
+scripts/input-actions.sh on this branch's final spike binary (sha256 1b67ea5e…, the binary in run1.md and run2.md), after the final input-test.html (commit 0370e19), Xvfb through xvfb-isolated.sh, WAIT_SECS=30:
+input run 1: 1 PASS, 0 FAIL, 3 focus events, print start 1
+input run 2: 1 PASS, 0 FAIL, 3 focus events, print start 1
+input run 3: 1 PASS, 0 FAIL, 3 focus events, print start 1
+input run 4: 1 PASS, 0 FAIL, 3 focus events, print start 1
+input run 5: 1 PASS, 0 FAIL, 3 focus events, print start 1
+input run 6: 1 PASS, 0 FAIL, 3 focus events, print start 1
+In the same session, before this file: 6 of 6 passed on the same binary before the input-test.html change, and 2 of 3 passed in a batch before the last self-check rebuild. Their logs were not kept. The failing run of that batch timed out waiting for "INPUT password length 9 scripted true"; the page had reported length 8.
+osr, osr-persist, chrome, chrome-persist, console0 and console1 passed once each in the same pass as the six runs above.
