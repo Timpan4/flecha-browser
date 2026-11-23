@@ -404,3 +404,59 @@ impl Engine {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    macro_rules! callback_samples {
+        ($($pattern:pat => $sample:expr),+ $(,)?) => {{
+            fn cover(event: &Event) {
+                match event { $($pattern => (),)+ }
+            }
+            let samples = [$($sample,)+];
+            samples.iter().for_each(cover);
+            samples
+        }};
+    }
+
+    #[test]
+    fn rejects_every_callback_from_a_retired_generation() {
+        let mut engine = Engine::new(PathBuf::new());
+        let tab = TabId::new("replaced-tab");
+        let retired = engine.generations.create(tab.clone());
+        let current = engine.generations.create(tab.clone());
+        engine.closing.insert(retired.clone());
+
+        let url = "https://example.test/old";
+        for event in callback_samples![
+            Event::Created(_) => Event::Created(1),
+            Event::Closed => Event::Closed,
+            Event::Address(_) => Event::Address(url.into()),
+            Event::Title(_) => Event::Title("Old document".into()),
+            Event::Loaded { .. } => Event::Loaded { url: url.into(), status: 200 },
+            Event::LoadFailed { .. } => Event::LoadFailed { url: url.into(), code: -106 },
+            Event::Paint => Event::Paint,
+            Event::PaintFailed => Event::PaintFailed,
+            Event::OpenLink { .. } => Event::OpenLink { url: url.into(), foreground: true },
+        ] {
+            engine.events.borrow_mut().push_back(BrowserEvent {
+                key: retired.clone(),
+                event: event.clone(),
+            });
+            assert_eq!(
+                engine.next_event(),
+                None,
+                "retired callback reached the shell: {event:?}"
+            );
+        }
+
+        assert!(engine.closing.is_empty());
+        let live = BrowserEvent {
+            key: current,
+            event: Event::Paint,
+        };
+        engine.events.borrow_mut().push_back(live.clone());
+        assert_eq!(engine.next_event(), Some(live));
+    }
+}

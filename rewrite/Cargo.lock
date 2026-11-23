@@ -1878,7 +1878,7 @@ dependencies = [
  "flecha-surface",
  "futures",
  "gpui",
- "sha2",
+ "sha2 0.10.9",
 ]
 
 [[package]]

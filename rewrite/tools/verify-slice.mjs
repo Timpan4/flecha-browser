@@ -10,6 +10,7 @@ import { fixture } from './fixture.mjs';
 import { checkProcessEnvironment } from './verify-process-env.mjs';
 
 const out = join(process.env.HOME, '..');
+const x11Driver = join(out, 'x11-input');
 const mode = process.argv[2] ?? 'slice';
 
 const shippingTrace = readFileSync(new URL('./slice-ts-replay.jsonl', import.meta.url), 'utf8')
@@ -95,7 +96,7 @@ function browser(name) {
   };
 }
 
-async function splitCapture(app, name) {
+async function splitCapture(app, name, snapshot) {
   await app.present();
   waitingFor = `${name} split capture`;
 
@@ -107,21 +108,92 @@ async function splitCapture(app, name) {
     assert(histogram.includes(color), `${name} did not paint both split pages (missing ${color})`);
   }
 
-  function horizontalBounds(color) {
-    const output = execFileSync('magick', [
-      path, '-transparent', color, '-alpha', 'extract', '-negate', '-trim',
-      '-format', '%X %w', 'info:',
-    ], { encoding: 'utf8' });
+  // Use solid fixture frames for a complete pixel mask. Keep the original
+  // capture for viewing the labelled pages.
+  const { split, splitRatio = 0.5 } = active(snapshot);
+  const colors = ['#01B7DD', '#F93520'];
 
-    const [start, width] = output.trim().split(' ').map(Number);
-    assert(Number.isFinite(start) && width > 0, `could not locate ${color} in ${name}`);
-
-    return { start, end: start + width };
+  for (const [index, tab] of split.entries()) {
+    const label = `${name}-solid-${index}`;
+    const settled = site.probe(label);
+    const after = app.events.length;
+    await app.command('script', {
+      tab,
+      source: `
+        document.documentElement.style.backgroundColor = '${colors[index]}';
+        document.body.style.visibility = 'hidden';
+        requestAnimationFrame(() => requestAnimationFrame(() => fetch('/probe/${label}?value=ready')));
+      `,
+    });
+    assert.equal(await settled, 'ready');
+    await app.wait('CEF paint of solid fixture', event => event.type === 'paint' && event.tab === tab, after);
   }
 
-  const left = horizontalBounds('#147A70');
-  const right = horizontalBounds('#703496');
-  assert(left.end <= right.start, `${name} put the fixture pages on the wrong split sides`);
+  await app.present();
+  waitingFor = `${name} pane geometry`;
+  const geometryPath = join(out, `${name}-geometry.png`);
+
+  const geometry = execFileSync(x11Driver, ['geometry', 'Flecha'], { encoding: 'utf8' })
+    .trim().split(' ').map(Number);
+
+  execFileSync('magick', ['import', '-window', 'root', geometryPath]);
+  assertPanePixels(geometryPath, geometry, splitRatio, colors, name);
+
+  for (const tab of split) {
+    await app.command('script', {
+      tab,
+      source: "document.documentElement.style.removeProperty('background-color'); document.body.style.removeProperty('visibility');",
+    });
+  }
+}
+
+function assertPanePixels(path, geometry, ratio, colors, name) {
+  const dimensions = execFileSync('magick', ['identify', '-format', '%w %h', path], { encoding: 'utf8' });
+  const [width, height] = dimensions.trim().split(' ').map(Number);
+  const bytes = width * height * 3; // ImageMagick's 8-bit RGB stream.
+  const pixels = execFileSync('magick', [path, '-alpha', 'off', '-depth', '8', 'rgb:-'], { maxBuffer: bytes });
+  assert.equal(pixels.length, bytes, 'split screenshot RGB size');
+
+  const pixel = (x, y) => pixels.readUIntBE((y * width + x) * 3, 3);
+  const [left, right] = colors.map(color => Number.parseInt(color.slice(1), 16));
+  const sidebar = 0x202a30;
+  // The sidebar's first row starts below the command bar. Its padding
+  // leaves this entire row solid, so both chrome edges come from the
+  // screenshot independently of the page layout.
+  const [windowX, windowY, windowWidth, windowHeight] = geometry;
+  const origin = Math.max(0, windowX);
+  const end = Math.min(width, windowX + windowWidth);
+  const bottom = Math.min(height, windowY + windowHeight);
+  let top = Math.max(0, windowY);
+
+  while (top < bottom && pixel(origin, top) !== sidebar) top++;
+  assert(top < bottom, `${name} pane geometry could not locate the sidebar`);
+
+  let edge = origin;
+
+  while (edge < end && pixel(edge, top) === sidebar) edge++;
+  assert(edge < end, `${name} pane geometry could not locate the page area`);
+
+  // The split has no gutters or borders. A fractional boundary can
+  // rasterize either way in the single column it crosses.
+  const boundary = edge + (windowX + windowWidth - edge) * ratio;
+  const leftEnd = Math.floor(boundary);
+  const rightStart = Math.ceil(boundary);
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const actual = pixel(x, y);
+      let matches = actual !== left && actual !== right;
+
+      if (y >= top && y < bottom && x >= edge && x < end) {
+        matches = x < leftEnd ? actual === left : x >= rightStart ? actual === right : actual === left || actual === right;
+      }
+
+      if (!matches) {
+        assert.fail(`${name} pane geometry: unexpected #${actual.toString(16)} at (${x}, ${y}) in ${width}×${height}, page starts at (${edge}, ${top}) and splits at ${boundary}`);
+      }
+    }
+  }
 }
 
 async function capture(name, colors, window = 'root') {
@@ -178,10 +250,9 @@ async function document(app, tab, label, prepare = '') {
 }
 
 async function nativeInput(app, tab) {
-  const driver = join(out, 'x11-input');
   execFileSync('cc', [
     '-std=c17', '-Wall', '-Wextra', '-Werror', 'spikes/gpui-cef-compositor/x11-input.c',
-    '-lX11', '-lXtst', '-o', driver,
+    '-lX11', '-lXtst', '-o', x11Driver,
   ]);
   const center = site.probe('input-center');
   const typed = site.probe('native-key');
@@ -205,8 +276,8 @@ async function nativeInput(app, tab) {
   });
   waitingFor = 'fixture input geometry';
   const [x, y] = JSON.parse(await center);
-  execFileSync(driver, ['click', Math.round(marker[0] + x), Math.round(marker[1] + y)]);
-  execFileSync(driver, ['key', 'x']);
+  execFileSync(x11Driver, ['click', Math.round(marker[0] + x), Math.round(marker[1] + y)]);
+  execFileSync(x11Driver, ['key', 'x']);
   waitingFor = 'X11 key delivery to the CEF page';
   assert.equal(await typed, 'x');
   pass('an X11 click and key passed through GPUI into the CEF input field');
@@ -270,7 +341,7 @@ try {
     compareShipping('split', split, names);
     await app.loaded(right, '/split');
     await app.wait('paint of the right split pane', event => event.type === 'paint' && event.tab === right);
-    await splitCapture(app, 'split');
+    await splitCapture(app, 'split', split);
     const running = await app.command('snapshot');
     engine(running, left, 'tab', main);
     engine(running, right, 'tab', main);
@@ -311,10 +382,21 @@ try {
     assert(!(await app.command('snapshot')).nativeWindows.includes(mini), 'GPUI closed the emptied Flechinha window');
     pass('moved the live document to Flechinha and back to the last active Flecha window');
 
+    const closeUrl = base + '/closed';
+    const closeTitle = 'Flecha fixture /closed';
+    assert(returned.core.archive.every(entry => entry.url !== closeUrl && entry.title !== closeTitle));
+    const beforeNavigation = app.events.length;
+    await app.command('script', { tab: moved, source: "location.assign('/closed')" });
+    await app.loaded(moved, '/closed', beforeNavigation);
+    await app.wait('unique title for closing tab', event =>
+      event.type === 'title' && event.tab === moved && event.title === closeTitle, beforeNavigation);
+
     const closed = await app.command('close');
     assert(!closed.core.tabs[moved]);
     assert.deepEqual(closed.core.archive.slice(1), returned.core.archive, 'closing did not add a fresh archive entry');
-    assert.equal(closed.core.archive[0].url, base + '/peek');
+    const entry = closed.core.archive[0];
+    assert.deepEqual([entry.url, entry.title], [closeUrl, closeTitle], 'new archive entry belongs to a different page');
+    assert(returned.core.archive.every(old => entry.closedAt > old.closedAt), 'new archive entry does not have a later close time');
     compareShipping('close', closed, names);
     await app.wait('CEF closure of returned tab', event => event.type === 'closed' && event.tab === moved);
     pass('closed the returned tab, added a new archive entry, and matched the shipping TS trace');
@@ -371,7 +453,7 @@ try {
 
     for (const tab of [left, right]) await restarted.wait('paint from the restored split', event =>
       event.type === 'paint' && event.tab === tab);
-    await splitCapture(restarted, 'restart-split');
+    await splitCapture(restarted, 'restart-split', restored);
     pass('restarted on the same scratch profile and captured both restored pages in their original panes');
 
     await restarted.command('switch', { space: isolated });

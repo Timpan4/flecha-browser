@@ -45,13 +45,14 @@ expect_failure runtime-socket 'Host runtime sockets are visible inside the launc
     });'
 
 binary="./target/${suite##*/}/rewrite/target/debug/flecha"
-for mutation in cookie stale stale-paint stale-title split-swap blank-restart close-archive peek-shared; do
+for mutation in cookie stale stale-paint stale-title split-swap blank-restart close-archive peek-shared pane-size pane-height archive-dup; do
   case "$mutation" in
     cookie|peek-shared) expected='cookie request used the wrong Space context' ;;
     stale|stale-paint|stale-title) expected='stale CEF generation reached the shell' ;;
-    split-swap) expected='split put the fixture pages on the wrong split sides' ;;
+    split-swap|pane-size|pane-height) expected='split pane geometry:' ;;
     blank-restart) expected='restart-split did not paint both split pages' ;;
     close-archive) expected='closing did not add a fresh archive entry' ;;
+    archive-dup) expected='new archive entry belongs to a different page' ;;
   esac
   (
     cd "$shadow"
@@ -62,6 +63,15 @@ for mutation in cookie stale stale-paint stale-title split-swap blank-restart cl
   ) || { cat "$logs/$mutation-build.log" >&2; exit 1; }
   expect_failure "$mutation" "$expected" tools/verify-slice.sh slice "$binary"
 done
+
+(
+  cd "$shadow"
+  cp -R "$rewrite/crates/." crates/
+  node "$rewrite/tools/mutate-slice.mjs" stale-openlink
+  expect_failure stale-openlink 'retired callback reached the shell' \
+    "${launcher[@]}" test --locked -p flecha-cef -j 14 --lib -- \
+    tests::rejects_every_callback_from_a_retired_generation --exact
+)
 
 (
   cd "$shadow"
