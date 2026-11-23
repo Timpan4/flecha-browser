@@ -17,7 +17,8 @@ use futures::channel::oneshot;
 use gpui::{AsyncApp, BackgroundExecutor, Task};
 use serde_json::{Value, json};
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap};
 use std::rc::Rc as StdRc;
 use std::time::{Duration, Instant};
 
@@ -46,7 +47,7 @@ pub struct Bridge {
     pending: Pending,
     wake: Wake,
     events: StdRc<Cell<u64>>,
-    timers: StdRc<Cell<u64>>,
+    timers: StdRc<Timers>,
     tabs: RefCell<Vec<Tab>>,
     timeout: Duration,
     _sweeper: Task<()>,
@@ -89,16 +90,45 @@ wrap_dev_tools_message_observer! {
     }
 }
 
+/// The one place the bridge arms GPUI timers. A GPUI timer stays on the shared
+/// `Timer` thread until its deadline even when dropped, so it counts as
+/// outstanding until then. The sweeper never holds more than one.
+pub struct Timers {
+    executor: BackgroundExecutor,
+    deadlines: RefCell<BinaryHeap<Reverse<Instant>>>,
+    created: Cell<u64>,
+    max_outstanding: Cell<usize>,
+}
+
+impl Timers {
+    fn new(executor: BackgroundExecutor) -> Self {
+        Self {
+            executor,
+            deadlines: Default::default(),
+            created: Cell::new(0),
+            max_outstanding: Cell::new(0),
+        }
+    }
+
+    pub fn arm(&self, after: Duration) -> Task<()> {
+        let now = Instant::now();
+        let mut deadlines = self.deadlines.borrow_mut();
+        while deadlines.peek().is_some_and(|Reverse(at)| *at <= now) {
+            deadlines.pop();
+        }
+        deadlines.push(Reverse(now + after));
+        self.max_outstanding
+            .set(self.max_outstanding.get().max(deadlines.len()));
+        self.created.set(self.created.get() + 1);
+        self.executor.timer(after)
+    }
+}
+
 /// Fails every call whose deadline passed. Sleeps until the earliest deadline
 /// in flight, or until a call arrives when none is. Deadlines are the call
 /// time plus one fixed timeout, so a call made while the timer is set never
 /// has an earlier deadline, and the sweeper sets about one timer per timeout.
-async fn sweep(
-    pending: Pending,
-    wake: Wake,
-    timers: StdRc<Cell<u64>>,
-    executor: BackgroundExecutor,
-) {
+async fn sweep(pending: Pending, wake: Wake, timers: StdRc<Timers>) {
     loop {
         let earliest = pending.borrow().values().map(|c| c.deadline).min();
         let Some(deadline) = earliest else {
@@ -111,8 +141,7 @@ async fn sweep(
         };
         let now = Instant::now();
         if deadline > now {
-            timers.set(timers.get() + 1);
-            executor.timer(deadline - now).await;
+            timers.arm(deadline - now).await;
         }
         let now = Instant::now();
         let expired: Vec<i32> = pending
@@ -135,11 +164,10 @@ impl Bridge {
     pub fn new(cx: &mut AsyncApp, timeout: Duration) -> Self {
         let pending: Pending = Default::default();
         let wake: Wake = Default::default();
-        let timers: StdRc<Cell<u64>> = Default::default();
-        let executor = cx.background_executor().clone();
+        let timers = StdRc::new(Timers::new(cx.background_executor().clone()));
         let sweeper = cx.spawn({
             let (pending, wake, timers) = (pending.clone(), wake.clone(), timers.clone());
-            async move |_| sweep(pending, wake, timers, executor).await
+            async move |_| sweep(pending, wake, timers).await
         });
         Self {
             next_id: Cell::new(1),
@@ -153,9 +181,9 @@ impl Bridge {
         }
     }
 
-    /// GPUI timers the timeout sweeper has created.
-    pub fn timeout_timers_created(&self) -> u64 {
-        self.timers.get()
+    /// GPUI timers the bridge armed, and the most that were outstanding at once.
+    pub fn timers(&self) -> (u64, usize) {
+        (self.timers.created.get(), self.timers.max_outstanding.get())
     }
 
     pub fn attach(&self, browser: &Browser) -> Result<i32> {

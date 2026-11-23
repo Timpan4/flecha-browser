@@ -233,7 +233,7 @@ impl Run {
                 "max_gap_bound_ms": step_ms,
                 "pump_timers_created": pump_timers,
                 "pump_timers_per_second": pump_timers as f64 / traced_seconds,
-                "bridge_timeout_timers_created": bridge.timeout_timers_created(),
+                "bridge_timers_created": bridge.timers().0,
                 "analysis": analysis,
             }),
         );
@@ -468,8 +468,12 @@ impl Run {
         let step_ms = step.as_secs_f64() * 1e3;
         let loop_bound_ms = (self.cfg.measure + step).as_secs_f64() * 1e3;
         let timely = slowest_ms <= step_ms && loop_seconds * 1e3 <= loop_bound_ms;
+        // The cause the latency bounds can miss: the stall is intermittent,
+        // but timers piling up on GPUI's shared Timer thread are not.
+        let (bridge_timers, bridge_max_outstanding) = bridge.timers();
         let pass = calls > 0
             && timely
+            && bridge_max_outstanding <= 1
             && timeout_probe["timed_out"] == true
             && true_replies == 0
             && errors.is_empty()
@@ -490,6 +494,8 @@ impl Run {
                 "call_latency_ms": latency,
                 "call_latency_bound_ms": step_ms,
                 "timely": timely,
+                "bridge_timers_created": bridge_timers,
+                "bridge_timers_max_outstanding": bridge_max_outstanding,
                 "page_raf_frames": raf,
                 "page_raf_per_second": raf / page_seconds,
                 "page_counter_seconds": page_seconds,
