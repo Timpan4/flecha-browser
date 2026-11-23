@@ -4,7 +4,15 @@ Plan: [docs/cef-gpui-rewrite-plan.md](../../../docs/cef-gpui-rewrite-plan.md), s
 
 ## Status
 
-- Built on the pins and self-checked in both modes on Xvfb. On Xvfb, OSR input, the `window.open` popup, a notification permission prompt, printing to PDF, the terminal commands, restart persistence, and Chrome-mode tab handling also passed. Results are in [Automated results](#automated-results).
+- Built on the pins against the **beta** CEF archive (SHA-1 checked) in a fresh clone, and self-checked in both modes on Xvfb. These also passed on Xvfb, every one as a failing assertion when wrong:
+  - OSR input, including Swedish AltGr and French AZERTY;
+  - the `window.open` popup and a notification permission prompt;
+  - printing to PDF and the terminal commands;
+  - console relay off for web pages;
+  - restart persistence;
+  - Chrome-mode tab handling.
+
+  Results are in [Automated results](#automated-results).
 - The sign-in gate (checks 1 to 7) is **not run**. It needs the owner and a purpose-made Google account. The checklist is in [Manual checklist](#manual-checklist-for-the-owner).
 - Nothing in the automated results blocks the manual run. Both modes present the same identity to pages: `navigator.webdriver` false, CEF's default user agent, `Chromium` and `Not.A/Brand` brands with no `Google Chrome` brand. Both run fully sandboxed. The Web Store offers "Add to Chrome" in both modes, next to an "Install Chrome" button (see [Web Store](#web-store)).
 
@@ -31,32 +39,61 @@ Both modes use the same settings except the windowing ones (`windowless_renderin
 | cef-rs | `Timpan4/cef-rs` rev `32d6bc55` | Built from that rev |
 | CEF version | `158.0.3+g8c29be2+chromium-158.0.8127.18` | `chrome://version`: `CEF 158.0.3+g8c29be2+chromium-158.0.8127.18`, `Chromium 158.0.8127.18 (Official Build)` |
 | CEF commit | `g8c29be2` | `cef_api_hash(…, 2)` at run time: `8c29be240971eebee960ac92114d3efccb5780ff` |
-| Archive | beta SHA-1 `057a0b87…`, stable SHA-1 `620b80a0…` | `cef_binary_158.0.3+g8c29be2+chromium-158.0.8127.18_linux64_minimal.tar.bz2`, SHA-1 `620b80a02dfe93ed7884a9eb1b265ff34f799024`: the **stable** archive of the same commit. This is the known gap in the plan's "Beta channel rule" (cef-rs picks the first index entry). |
+| Archive | beta SHA-1 `057a0b87…` | `cef_binary_158.0.3+g8c29be2+chromium-158.0.8127.18_linux64_beta_minimal.tar.bz2`, SHA-1 `057a0b871bf26d26d654d999dba595b92fe0f067`, checked by `prepare.sh` before staging and by the binary at start (`archive.json` next to the loaded `libcef.so`). The beta gap of the first round is closed for this spike. |
+| CEF API version | `CEF_API_VERSION_LAST` 15800 in the bindings | `cef_api_version()` at run time: 15800 (checked at start) |
 
 ## Build and run
 
-Run from `rewrite/`. Builds go through the shared lock (see [rewrite/README.md](../../README.md)):
+Run from `rewrite/`. Three steps:
 
 ```sh
+# 1. Download the pinned CEF archive, check its SHA-1 against rewrite/pins.toml, and stage it at
+#    target/cef-runtime/158.0.3/cef_linux_x86_64 (about 1.5 GB unpacked).
+bash spikes/cef-osr-signin/prepare.sh
+
+# 2. Build against the staged runtime, through the shared lock (see rewrite/README.md).
 flock "$XDG_RUNTIME_DIR/flecha-rewrite-build.lock" \
-  bash ~/.claude/skills/hosts/scripts/agent-build run cargo build -j 14 -p cef-osr-signin
+  bash ~/.claude/skills/hosts/scripts/agent-build run bash spikes/cef-osr-signin/build.sh -j 14
+
+# 3. Start through the launcher (examples below).
 ```
 
-The first build downloads the CEF archive (about 1.5 GB unpacked) and checks its SHA-1 against the CEF index.
+How the runtime is found:
+
+- `build.sh` checks the staged runtime, then runs `cargo build --locked -p cef-osr-signin` with `CEF_PATH` pointing at it. Without a valid `CEF_PATH`, cef-dll-sys at the pinned rev silently downloads its default archive (the stable one), so the check comes first.
+- The binary has no RUNPATH and nothing is copied next to it. `run.sh` checks the staged runtime and starts the binary with `LD_LIBRARY_PATH` set to it. Started any other way, the dynamic loader fails before `main` (`libcef.so: cannot open shared object file`).
+- At start, before any CEF call, `main` checks that the loaded runtime is the pinned one. It checks the API version (15800), the commit (`8c29be2`), the `archive.json` SHA-1 next to the loaded `libcef.so` (the `pins.toml` value, compiled in by `build.rs`), and the resource files. If any check fails, it exits with `wrong CEF runtime: …`. It points CEF's `resources_dir_path` and `locales_dir_path` at that directory.
 
 Run with a new, dedicated profile directory. Never point `--profile` at a real browser profile or at `.flecha-profile`.
 
 ```sh
-# Alloy OSR
-env -u WAYLAND_DISPLAY ./target/debug/cef-osr-signin --mode osr \
+# Alloy OSR, through XWayland (the tested path)
+env -u WAYLAND_DISPLAY spikes/cef-osr-signin/run.sh --mode osr \
   --profile "$HOME/flecha-spike0/osr" --url https://accounts.google.com/
 
-# Chrome-style control
-env -u WAYLAND_DISPLAY ./target/debug/cef-osr-signin --mode chrome \
+# Chrome-style control, through XWayland
+env -u WAYLAND_DISPLAY spikes/cef-osr-signin/run.sh --mode chrome \
   --profile "$HOME/flecha-spike0/chrome" --url https://accounts.google.com/
+
+# Native Wayland (untested; see below)
+spikes/cef-osr-signin/run.sh --mode osr --profile "$HOME/flecha-spike0/osr-wayland" \
+  --url https://accounts.google.com/ -- --ozone-platform=wayland
 ```
 
-`env -u WAYLAND_DISPLAY` makes winit and CEF both use X11 (XWayland on a Wayland desktop). That is the only path tested: every automated run was on Xvfb. Launching with `WAYLAND_DISPLAY` set has not been run.
+`env -u WAYLAND_DISPLAY` makes winit and CEF both use X11 (XWayland on a Wayland desktop). Every automated run was on Xvfb, so that is the tested path. For native Wayland, winit picks Wayland when `WAYLAND_DISPLAY` is set, and CEF needs `--ozone-platform=wayland`, because otherwise it adds `--ozone-platform=x11` itself. On Xvfb, with no compositor, that switch made CEF try the Wayland platform (`Failed to connect to Wayland display`). So the switch is honoured, but nothing ran on a Wayland compositor: the Xvfb-only rule ruled it out. Use a separate profile for it. If it fails, use the XWayland commands.
+
+#### Console output and logs
+
+The terminal shows load events, popups and permission requests. Web pages appear in it only as origins (`https://accounts.google.com`), never full URLs, because paths and queries can carry OAuth codes or account identifiers. Page `console.log` output is relayed only while the browser's main frame is a local `file://` page (the spike's test fixtures). `--log-console` relays every page's console output; do not use it during the sign-in checks.
+
+#### Keyring or basic password store (an owner choice for checks 1 and 5)
+
+Chromium picks a password store from the desktop environment and falls back to `basic` when that store is unavailable ([Chromium docs/linux/password_storage.md](https://chromium.googlesource.com/chromium/src/+/main/docs/linux/password_storage.md)). Choose before check 1 and use the same choice for every run on that profile:
+
+- **Default (your login keyring).** Closest to a shipping browser. The browser will likely store its key in your GNOME keyring (libsecret), adding an entry there and possibly showing an unlock prompt. You can delete that entry after the test.
+- **`-- --password-store=basic`.** Nothing touches your keyring. Passwords are stored without encryption ("Passwords stored in plain text are not encrypted", same doc) in the test profile, so delete the profile after the test. It tests less of the shipping path.
+
+Both switches are allowed after `--`; switches that change the browser's identity or security (the forbidden list under [Self-check](#self-check), and `--type`) are refused there.
 
 OSR mode has no address bar. Type commands in the terminal it was started from:
 
@@ -74,17 +111,25 @@ Close the window (or type `quit`) to exit. The app closes every browser and wait
 Self-check (prints one JSON report and exits):
 
 ```sh
-./target/debug/cef-osr-signin --mode osr --profile /tmp/spike0-check/osr \
+spikes/cef-osr-signin/run.sh --mode osr --profile /tmp/spike0-check/osr \
   --self-check --self-check-timeout-secs 30 --report /tmp/spike0-check/osr.json
 ```
 
-`--self-check-timeout-secs` is required. It bounds each step; 30 is the value used for the runs below, not a product limit.
+`--self-check-timeout-secs` is required. It bounds each step; 30 is the value used for the runs below, not a product limit. The report redacts command lines (switch names only, values kept for a short allowlist such as `--type` and `--lang`) and replaces home directories with `~`.
 
-To run anything on Xvfb with an isolated session (no D-Bus activation, scratch HOME, XDG and runtime dirs), use `spikes/cef-osr-signin/scripts/xvfb-isolated.sh <out-dir> <app args…>`. The app's stdin is the FIFO `<out-dir>/stdin.fifo`, so OSR commands can be sent to it. With `ACTIONS=<script>` the harness waits for the first page load, runs the script (with `DISPLAY`, `OUT`, `APP_PID` and `CMD` set), and returns the app's exit status if the script ended the app. The action scripts in `scripts/` need:
+To run anything on Xvfb with an isolated session, use `WAIT_SECS=<secs> spikes/cef-osr-signin/scripts/xvfb-isolated.sh <out-dir> <app args…>`. It gives everything it starts a scratch HOME, XDG and runtime dirs, no session bus address and no `WAYLAND_DISPLAY`. The app also gets a private D-Bus bus without service activation, and is started through `run.sh`. `WAIT_SECS` is required. It bounds Xvfb readiness, the first page load, every step of an action script, and the SIGTERM grace before SIGKILL. The runs used 30; it bounds a test run and is not a product limit. The app's stdin is the FIFO `<out-dir>/stdin.fifo`, so OSR commands can be sent to it. With `ACTIONS=<script>`, the harness:
+
+1. waits for the first page load;
+2. runs the script with `DISPLAY`, `OUT`, `APP_PID` and `CMD` set;
+3. fails if the script fails;
+4. returns the app's exit status if the script ended the app.
+
+Xvfb and the app run in their own process groups, and the harness stops those groups. The action scripts need:
 
 - `XDOTOOL`: path to xdotool. It is not installed on the workstation; the runs used nixpkgs' build (`nix --extra-experimental-features 'nix-command flakes' build nixpkgs#xdotool`).
-- `WAIT_SECS`: how long each step waits for its log line. The runs used 30. It bounds a test run and is not a product limit.
+- `node`: `scripts/fixture-server.mjs` serves loopback pages (a page that logs a console marker and sets a cookie, and a plain page), so no check needs the network.
 - `WM` (only `persist-actions.sh`): an EWMH window manager binary. Xvfb has none, and closing a window the way a desktop does needs one. The runs used nixpkgs' openbox 3.6.1.
+- `EXPECT_MARKER` (only `console-actions.sh`): 0 for a default run, 1 with `--log-console`.
 
 Example, from `rewrite/`:
 
@@ -97,12 +142,22 @@ ACTIONS=$PWD/spikes/cef-osr-signin/scripts/osr-actions.sh WAIT_SECS=30 XDOTOOL=/
 ### Workarounds in this spike
 
 - `rewrite/.cargo/config.toml` sets `net.git-fetch-with-cli = true`. Cargo's built-in git client failed to fetch the pinned commit on the workstation (`revision … not found`, through the user's `url.insteadOf` SSH rewrite). The git CLI fetches it.
-- `build.rs` copies the CEF runtime next to the binary. At the pinned rev, cef-dll-sys copies it to `OUT_DIR`'s third parent, which under Cargo 1.100's build-dir layout is `target/debug/build`, not `target/debug` ([tauri-apps/cef-rs#522](https://github.com/tauri-apps/cef-rs/pull/522), open). Without this, `libcef.so` and the `.pak` files are missing at run time. `cef-dll-sys` is a direct dependency only so `build.rs` receives `DEP_CEF_DLL_WRAPPER_CEF_DIR`. Remove both once the pin includes #522.
-- `build.rs` sets RUNPATH `$ORIGIN`, so no `LD_LIBRARY_PATH` is needed.
+- The CEF runtime is staged by `prepare.sh` instead of cef-dll-sys's build script. At the pinned rev, cef-dll-sys copies the runtime to `OUT_DIR`'s third parent. Under Cargo 1.100's build-dir layout that is `target/debug/build`, not `target/debug` ([tauri-apps/cef-rs#522](https://github.com/tauri-apps/cef-rs/pull/522), open). A build-script copy next to the binary also proved unreliable: a fresh build through the workstation's caching `cargo` left no `libcef.so` next to the binary. `prepare.sh` is adapted from Spike 1's, with the same pin parser and the same `CEF_PATH/<x.y.z>/cef_linux_x86_64` layout. Spike 1 sets `CEF_PATH` in the shared `rewrite/.cargo/config.toml` with `force = true`, pointing at its own staging directory; this spike sets it only in `build.sh`. If both merge, the forced value wins for every build in the workspace, so one shared prepare step should replace both.
 
 ## Automated results
 
-Run on 2026-11-23 on the workstation, on Xvfb only, through `scripts/xvfb-isolated.sh` (private D-Bus bus without service activation, scratch HOME, XDG and runtime dirs, fresh profile per run). Each run is one `--self-check` with `--self-check-timeout-secs 30`. The JSON reports are in [evidence/](evidence/).
+Run on 2026-11-23 on the workstation, in a fresh `git clone` of the branch, built with the [Build and run](#build-and-run) commands through the `cargo` on PATH. Everything ran on Xvfb only, through `scripts/xvfb-isolated.sh`, with a fresh profile per run (the second persistence run reuses the first run's profile) and `WAIT_SECS=30`. The self-checks used `--self-check-timeout-secs 30` and a profile path containing `#`, `%` and a space. The JSON reports and logs are in [evidence/](evidence/), with scratch paths shortened to `…`.
+
+### Runtime checks
+
+| Check | Result |
+|---|---|
+| `run.sh` before `prepare.sh` | exit 1: `No CEF runtime at …/target/cef-runtime/158.0.3/cef_linux_x86_64. Run spikes/cef-osr-signin/prepare.sh first.` |
+| `prepare.sh` | downloaded the beta archive, `sha1sum --check` passed, staged it |
+| `build.sh` through the lock, PATH `cargo` (the caching `mbx` shim) | exit 0; `readelf -d`: `NEEDED libcef.so`, no RUNPATH; no `libcef.so` or `.pak` in `target/debug` |
+| The binary started without `run.sh` | exit 127: `libcef.so: cannot open shared object file` (dynamic loader) |
+| `libcef.so` copied alone into a directory, `LD_LIBRARY_PATH` pointing there | exit 1: `wrong CEF runtime: cannot read …/archive.json` |
+| Self-check, both modes | loaded `target/cef-runtime/158.0.3/cef_linux_x86_64/libcef.so`, API version 15800, commit `8c29be24…`, archive `cef_binary_158.0.3+g8c29be2+chromium-158.0.8127.18_linux64_beta_minimal.tar.bz2`, SHA-1 `057a0b87…` |
 
 ### Self-check
 
@@ -120,13 +175,14 @@ Run on 2026-11-23 on the workstation, on Xvfb only, through `scripts/xvfb-isolat
 | `chrome://sandbox` | Namespace layer-1 sandbox, PID and network namespaces, seccomp-BPF with TSYNC: "You are adequately sandboxed." | same |
 | /proc: renderer-type processes | seccomp mode 2, `NoNewPrivs` 1, own user, PID and network namespaces | same |
 | /proc: processes without seccomp | browser, network service (`--utility-sub-type=network.mojom.NetworkService`), zygote helpers; Chromium's normal Linux layout | same |
-| Forbidden switches in any process command line (`--remote-debugging-*`, `--enable-automation`, `--headless`, `--no-sandbox` and other sandbox-off switches, `--user-agent`, `--disable-web-security`, `--ignore-certificate-errors`, `--use-mock-keychain`, `--test-type`) | none | none |
+| Forbidden switches in any process command line (`--remote-debugging-*`, `--enable-automation`, `--headless`, `--no-sandbox` and other sandbox-off switches, `--user-agent`, `--disable-web-security`, `--ignore-certificate-errors`, `--use-mock-keychain`, `--test-type`) | none; process scan complete, no read errors | same |
+| Profile path with `#`, `%20` and a space | the page step loaded `…/pro%23file%20%2520/flecha-selfcheck.html` | same |
 
-Switches CEF itself adds to the browser process (from `chrome://version`, identical in both modes): `--lang=en-US --disable-signin-promo-on-avatar-pill-for-testing --disable-features=GlicActorUi,AutofillActorMode,LensOverlay,KillOnInvalidNavigationHeaders --ozone-platform=x11`. None of them is visible to pages. Judging only by its name, `--disable-signin-promo-on-avatar-pill-for-testing` hides a sign-in promo on the profile avatar button; I did not check Chromium's source for what else it does.
+Switches on the browser process (from `chrome://version`, identical in both modes): `--lang=en-US --resources-dir-path=… --locales-dir-path=… --disable-signin-promo-on-avatar-pill-for-testing --disable-features=GlicActorUi,AutofillActorMode,LensOverlay,KillOnInvalidNavigationHeaders --ozone-platform=x11`. CEF adds them itself; the two `-dir-path` switches come from the app's `resources_dir_path` and `locales_dir_path` settings. None of them is visible to pages. Judging only by its name, `--disable-signin-promo-on-avatar-pill-for-testing` hides a sign-in promo on the profile avatar button; I did not check Chromium's source for what else it does.
 
 ### Web Store
 
-Page: uBlock Origin Lite, `https://chromewebstore.google.com/detail/ublock-origin-lite/ddkjiahejlhfcafbddmgiahcphecmpfh`. Nothing was clicked except "Reject all" on Google's consent page, which the store redirects to from a Swedish address (`consent.google.com/…&gl=SE`). Nothing was installed and no account was used.
+Page: uBlock Origin Lite, `https://chromewebstore.google.com/detail/ublock-origin-lite/ddkjiahejlhfcafbddmgiahcphecmpfh`. Nothing was clicked except "Reject all" on Google's consent page, which the store redirects to from a Swedish address (`consent.google.com`; the report records only that the click happened). Nothing was installed and no account was used.
 
 | Field | Alloy OSR | Chrome-style control |
 |---|---|---|
@@ -140,38 +196,41 @@ Page: uBlock Origin Lite, `https://chromewebstore.google.com/detail/ublock-origi
 
 ### OSR input on Xvfb
 
-`scripts/input-actions.sh` drives `scripts/input-test.html` in an OSR window with xdotool. xdotool is not installed on the workstation; the run used nixpkgs' build (`nix --extra-experimental-features 'nix-command flakes' shell nixpkgs#xdotool`, passed as `XDOTOOL=<path>`, run without the inherited `LD_LIBRARY_PATH`). The page logs what it receives ([full log](evidence/osr-input-events.txt)):
+`scripts/input-actions.sh` drives `scripts/input-test.html` in an OSR window with xdotool and fails unless the page reports each expected event. The page logs what it receives ([full log](evidence/osr-input-events.txt)):
 
 | Action | Page saw |
 |---|---|
 | Click a text field, type `Hello Wörld 123!` | value `Hello Wörld 123!` |
-| Click a password field, type `pa$$ wörd`, Enter | value `pa$$ wörd`, `keydown Enter` |
+| Click a password field, type the scripted test string `pa$$ wörd`, Enter | `password length 9 scripted true` (the page never logs a password value or the password field's key presses) |
 | Textarea: `line1`, Enter, `line2`, Ctrl+A, Backspace, `kept` | `line1\nline2`, then empty, then `kept` |
 | Double click a button | `click` detail 1, `click` detail 2, `dblclick` |
 | Click a `<select>`, Down, Enter | popup drawn over the page ([screenshot](evidence/osr-select-popup.png)), `change` to `two` |
-| Three wheel notches down | `scroll` events up to `scrollY` 240 |
-| Ctrl+P | no output, no crash, no visible dialog |
+| Three wheel notches down | `scroll` events with a positive `scrollY` |
+| Ctrl+P | no output, no visible dialog; the app is still running |
 
-Screenshots: [OSR page](evidence/osr-page.png), [Chrome-style control](evidence/chrome-page.png).
+Screenshots: [OSR page after the input run](evidence/osr-page.png), [Chrome-style control with two tabs](evidence/chrome-two-tabs.png).
 
 ### Behaviour checks on Xvfb
 
-Each row is one scripted run through `scripts/xvfb-isolated.sh` on `scripts/input-test.html`, with `WAIT_SECS=30`. Logs: [OSR](evidence/osr-actions.txt), [Chrome](evidence/chrome-actions.txt), [OSR restart](evidence/osr-persist.txt), [Chrome restart](evidence/chrome-persist.txt).
+Each row is one scripted run through `scripts/xvfb-isolated.sh` on `scripts/input-test.html`, with `WAIT_SECS=30`. Every row is an assertion: a wrong outcome fails the script and the run. The navigation and cookie checks use the loopback fixture server, not the network. Logs: [OSR](evidence/osr-actions.txt), [Chrome](evidence/chrome-actions.txt), [OSR restart](evidence/osr-persist.txt), [Chrome restart](evidence/chrome-persist.txt), [console default](evidence/console-default.txt), [console with `--log-console`](evidence/console-log-console.txt).
 
 | Check | Script | Result |
 |---|---|---|
 | OSR `window.open` popup | `osr-actions.sh` | A second OSR window opened and painted ([screenshot](evidence/osr-popup.png)); the popup page saw `window.opener` non-null; `window.close()` in the popup closed only the popup (open browsers 2, then 1) and the app kept running |
-| OSR notification permission | `osr-actions.sh` | `Notification.requestPermission()` printed `[permission 1] file:/// requests permission types 0x8000`; `allow 1` on stdin resolved it as `granted` |
+| OSR notification permission | `osr-actions.sh` | `Notification.requestPermission()` printed `[permission 1] file:/// requests permission types 0x8000`; `allow 1` on stdin resolved it as `granted` (a `deny` makes the script fail) |
 | OSR camera permission | `osr-actions.sh` | `getUserMedia({video: true})` failed with `NotFoundError` and **no prompt**: Xvfb has no camera, and the request ends before any permission callback. The camera prompt path is untested (manual check 6) |
 | OSR AltGr on a Swedish layout | `osr-actions.sh` | With `setxkbmap se`, AltGr+2 then `åäö` gave the text field `@åäö` |
-| OSR `pdf <path>` | `osr-actions.sh` | `[pdf] ok=true`; the file is a 4-page Letter PDF (`pdfinfo`) |
-| OSR `go <url>` | `osr-actions.sh` | `[load-end] https://www.google.com/` |
+| OSR Ctrl+A on French AZERTY | `osr-actions.sh` | With `setxkbmap fr`, the page saw `keydown a KeyQ 65` (VK_A from the layout, physical position Q). Before the fix it saw `keydown q KeyQ 81`, so Ctrl+A acted as Ctrl+Q |
+| OSR `pdf <path>` | `osr-actions.sh` | `[pdf] ok=true`, file not empty |
+| OSR `go <url>` | `osr-actions.sh` | `[load-end] http://127.0.0.1:<port>`, logged after the command |
+| OSR console relay, default | `osr-actions.sh`, `console-actions.sh` with `EXPECT_MARKER=0` | The loopback page logs `FLECHA_CONSOLE_MARKER`; 0 marker lines in stderr, while the later `file://` fixture's console lines were relayed |
+| OSR console relay, `--log-console` | `console-actions.sh` with `EXPECT_MARKER=1` | 1 marker line, `[console] FLECHA_CONSOLE_MARKER (http://127.0.0.1:<port>:1)`: the check can see the marker |
 | OSR `quit` | `osr-actions.sh` | app exit status 0 |
-| Chrome: tab opened from Chrome's UI | `chrome-actions.sh` | Ctrl+T, then typing a URL in the omnibox: the new tab got the app's client (`[browser] created id=2 open=2`, `[load-end] https://www.google.com/`) ([screenshot](evidence/chrome-two-tabs.png)) |
+| Chrome: tab opened from Chrome's UI | `chrome-actions.sh` | Ctrl+T, then the loopback marker page through the omnibox: the new tab got the app's client (`[browser] created id=2 open=2`, `[load-end] http://127.0.0.1:<port>`) ([screenshot](evidence/chrome-two-tabs.png)); 0 marker lines |
 | Chrome: close the first tab | `chrome-actions.sh` | Ctrl+1, Ctrl+W: browser 1 closed, the app kept running with one tab |
 | Chrome: close the last tab | `chrome-actions.sh` | Ctrl+W: app exit status 0 |
-| Restart persistence, OSR | `osr-actions.sh` then `persist-actions.sh` | Second run on the same profile: localStorage load counter 2 (first run: 1); `Default/Cookies` has `.google.com` cookies from the first run; closing the window through the window manager exited with status 0 |
-| Restart persistence, Chrome | `chrome-actions.sh` then `persist-actions.sh` | Same as OSR: counter 2, `.google.com` cookies present, window close exited with status 0 |
+| Restart persistence, OSR | `osr-actions.sh` then `persist-actions.sh` | Second run on the same profile: localStorage load counter 3 (the first run loaded the page twice); `Default/Cookies` has the fixture's `flecha_fixture` cookie for `127.0.0.1`; closing the window through the window manager exited with status 0 |
+| Restart persistence, Chrome | `chrome-actions.sh` then `persist-actions.sh` | Counter 2, fixture cookie present, window close exited with status 0 |
 
 The first run on each profile ended with `quit` (OSR) or by closing the last tab (Chrome); the second ended with a window close. Restart persistence of a Google sign-in is still manual check 1.
 
@@ -181,15 +240,20 @@ The first OSR self-check ran under a plain `dbus-run-session`. D-Bus activation 
 
 ## Manual checklist for the owner
 
-Use a Google account made for this test. Enter its password and MFA code yourself. Nothing in the app logs keystrokes or form contents; the terminal shows only page `console.log` output, load events and permission requests. Do not paste account identifiers into this report.
+Use a Google account made for this test. Enter its password and MFA code yourself. The app logs no keystrokes or form contents. For web pages the terminal shows only origins, load events, popups and permission requests, and no console output (see [Console output and logs](#console-output-and-logs)). Rules for the whole run:
 
-Use a fresh `--profile` per mode, for example `$HOME/flecha-spike0/osr` and `$HOME/flecha-spike0/chrome`. Start both with `env -u WAYLAND_DISPLAY` as in [Build and run](#build-and-run). Run every check in both modes. Run the same checks in today's Flecha as the reference column.
+- **Never type a real password or MFA code into `input-test.html`** (check 0). It is a local test page whose console output the terminal shows. Its password field reports only a length, but use made-up text there anyway.
+- **Take no screenshots that show the account's name, address or picture**, and do not paste account identifiers into this report. Describe what you saw instead.
+- **Do not use `--log-console`** during checks 1 to 7.
+- **Decide on the password store first** (see [Keyring or basic password store](#keyring-or-basic-password-store-an-owner-choice-for-checks-1-and-5)) and note your choice in the results table.
+
+Use a fresh `--profile` per mode, for example `$HOME/flecha-spike0/osr` and `$HOME/flecha-spike0/chrome`. Start both through `run.sh` with `env -u WAYLAND_DISPLAY`, as in [Build and run](#build-and-run). Run every check in both modes. Run the same checks in today's Flecha as the reference column.
 
 The links below were checked on 2026-11-23 (HTTP 200; the herokuapp page shows the `tomsmith` / `SuperSecretPassword!` demo login). Any similar page works if one has moved.
 
 0. **Pre-flight: typing on your real display (OSR only).** Xvfb tested keys from xdotool, not your keyboard and input method.
-   1. Start OSR mode with `--url file://$PWD/spikes/cef-osr-signin/scripts/input-test.html` and a scratch `--profile`.
-   2. In the first text field type `@`, `åäö`, a few AltGr characters from your layout (for example `{[]}\` and `€`), and a capital letter with Shift.
+   1. Start OSR mode with `--url file://$PWD/spikes/cef-osr-signin/scripts/input-test.html` and a scratch `--profile`. Type only made-up text on this page.
+   2. In the first text field type `@`, `åäö`, a few AltGr characters from your layout (for example `{[]}\` and `€`), and a capital letter with Shift. Click into the field right after the page appears, and again right after switching back from the terminal, and note whether either click was lost.
    3. Copy some text from another app and paste it into the field with Ctrl+V.
    4. Pass: the terminal's `[console] INPUT text "…"` lines show exactly what you typed and pasted. If any character is wrong or missing, stop: the sign-in checks would fail for input reasons, not for Alloy reasons.
    5. Also record, without making it a pass condition, whether Ctrl+C in the field and Ctrl+V in another app works (listed below as not implemented).
@@ -221,6 +285,8 @@ The links below were checked on 2026-11-23 (HTTP 200; the herokuapp page shows t
 
 ### Results (fill in; pass, fail or n/a, plus a short note)
 
+Password store used (default keyring or `--password-store=basic`): ______
+
 | # | Check | Alloy OSR | Chrome-style control | Flecha (reference) |
 |---|---|---|---|---|
 | 0 | Typing and paste on the real display | | n/a | n/a |
@@ -241,10 +307,10 @@ The links below were checked on 2026-11-23 (HTTP 200; the herokuapp page shows t
 - **The camera prompt in OSR mode.** Xvfb has no camera, so the request failed before any permission callback. The notification prompt shows the terminal prompt path works, but the media path (`OnRequestMediaAccessPermission`) never ran.
 - **Chrome-mode permission bubbles and print preview.** Not scripted; they are Chrome's own UI. Manual checks 6 and 7.
 - **Clipboard and the owner's real keyboard.** Paste was not tested. AltGr was tested only with xdotool on an Xvfb Swedish layout. Pre-flight check 0 covers both.
-- **Native Wayland.** Every run used Xvfb (X11). With `WAYLAND_DISPLAY` set on the owner's session, winit would pick Wayland for the OSR window, and CEF picks its own Ozone platform. Neither was run; the run commands unset `WAYLAND_DISPLAY`.
+- **Native Wayland.** Every run used Xvfb (X11). The native-Wayland command in [Build and run](#build-and-run) was checked only to the point of CEF selecting its Wayland platform; no compositor was run.
 - **HiDPI.** Xvfb runs at scale 1. The OSR code passes the window scale to CEF (`GetScreenInfo`) and converts mouse coordinates, but no scale other than 1 was tested.
 - **OSR features this spike does not implement:** IME composition, context menus, drag and drop, JavaScript `alert`/`confirm`/`beforeunload` dialogs, file pickers, clipboard to other apps, DevTools, an address bar. If a sign-in page depends on one of these, the failure belongs to this spike, not to Alloy. Note it.
-- **A lost first click in OSR.** In the first scripted run, a click sent right after the page's first `load-end` reached nothing (no click event on the page). After a 0.5 s pause it worked, in every later run. I did not find the cause. If a click right after a page load, or right after switching back from the terminal, does nothing, note it under check 0.
-- **The owner's login keyring.** Every automated run used a private D-Bus bus with no keyring, so CEF stored cookies and passwords without one. On the owner's desktop session, manual checks 1 and 5 will likely go through the login keyring (Chromium's Linux password and cookie encryption) and may add an entry to it.
+- **A lost first click in OSR.** In one early scripted run, a click sent right after the page's first `load-end` reached nothing. The independent verifier could not reproduce it: 3 of 3 first clicks registered with no pause. The cause is unknown and it may have been a harness timing artifact. Check 0 asks the owner to watch for it.
+- **The owner's login keyring.** Every automated run used a private D-Bus bus with no keyring, so the browser fell back to the basic store. The keyring path on the owner's session is untested; see the password-store choice in [Build and run](#build-and-run).
+- **Caps Lock state in OSR.** winit 0.30 does not report lock-key state, so the Caps Lock flag is never sent to CEF. Typed text is unaffected (it comes from the layout), but a page reading `getModifierState('CapsLock')`, as some password fields do for a warning, sees it off.
 - **Keys with no US physical-key mapping in OSR.** Text from them is inserted correctly through `CHAR` events, but the page's `keydown` sees `key` as a NUL character and `keyCode` 0 (seen with xdotool's remapped `ö`, [log](evidence/osr-input-events.txt)). A real Swedish layout maps `ö` to a physical key, so this is expected to matter only for unusual layouts.
-- **Beta archive.** The build uses the stable archive of the pinned commit, not the beta archive (pins.toml SHA-1 `057a0b87…`).

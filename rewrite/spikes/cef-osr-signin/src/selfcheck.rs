@@ -495,9 +495,8 @@ fn redact_version_text(text: &str) -> String {
                 shown.extend(redact_cmdline(&args));
                 format!("Command Line\t{}", shown.join(" "))
             }
-            Some((label @ ("Executable Path" | "Profile Path"), _)) => {
-                format!("{label}\t<redacted>")
-            }
+            // "Executable Path", "Module Path", "User Data Path [*]", "Profile Path [*]".
+            Some((label, _)) if label.contains(" Path") => format!("{label}\t<redacted>"),
             _ => line.to_string(),
         })
         .collect::<Vec<_>>()
