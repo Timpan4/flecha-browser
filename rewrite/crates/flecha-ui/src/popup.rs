@@ -2,7 +2,7 @@
 
 use anyhow::{Context as _, Result};
 use flecha_cef::{Disposition, Opened, Owner};
-use flecha_core::{Placement, TabId, WindowId};
+use flecha_core::{Placement, TabId, WindowId, suggestions::pinnable_address};
 
 use crate::Controller;
 use crate::model::{Model, now};
@@ -86,11 +86,10 @@ impl Controller {
             self.engine.close(child);
             return Ok(());
         };
-        let url = if opened.url.is_empty() {
-            "about:blank".to_owned()
-        } else {
-            opened.url
-        };
+        // The shell loads this address itself when it reopens the page in another
+        // cookie jar or restores it, so it takes only what the address bar would.
+        // CEF still takes the page wherever it asked.
+        let url = pinnable_address(&opened.url).unwrap_or_else(|| "about:blank".to_owned());
         let (owner, durable) = match place(&self.model, &owner, &opener, opened.disposition) {
             Place::Tab {
                 window,
@@ -182,6 +181,7 @@ impl Controller {
 mod tests {
     use super::*;
     use crate::model::{tab_id, window_id};
+    use flecha_cef::Partition;
 
     fn model() -> (Model, WindowId, TabId) {
         let mut model = Model::new(None);
@@ -246,6 +246,49 @@ mod tests {
             place(&model, &owner, &favorite, Disposition::ForegroundTab),
             Place::Tab { activate: true, .. }
         ));
+    }
+
+    #[test]
+    fn popups_from_transient_pages_keep_their_space() {
+        let (mut model, window, _) = model();
+        let space = model.core.focused_window().active_space_id.clone();
+        let peek = model
+            .peek(window.clone(), "https://example.test/peek".into(), None)
+            .unwrap();
+        assert!(peek.is_none());
+        let peek = model.peeks[&window].id.clone();
+        let tab = model
+            .open(&window, "https://example.test/tab".into(), true)
+            .unwrap();
+        let flechinha = model.detach(&window, &tab).unwrap();
+        let first = model
+            .open_popup(
+                tab_id(),
+                "https://example.test/first".into(),
+                (&flechinha.window, &flechinha.tab),
+                Partition::Shared,
+                None,
+            )
+            .unwrap();
+        let first_page = model.popups[&first].page.id.clone();
+        let openers = [
+            (window.clone(), peek),
+            (flechinha.window, flechinha.tab),
+            (first, first_page),
+        ];
+        for (opener_window, opener) in openers {
+            let popup = model
+                .open_popup(
+                    tab_id(),
+                    "https://example.test/popup".into(),
+                    (&opener_window, &opener),
+                    Partition::Shared,
+                    Some((480, 360)),
+                )
+                .unwrap();
+            assert_eq!(model.popups[&popup].page.space, space);
+            assert_eq!(model.popups[&popup].opener, opener_window);
+        }
     }
 
     #[test]

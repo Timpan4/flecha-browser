@@ -158,7 +158,10 @@ impl Shell {
                 "o" if self.state.borrow().model.peeks.contains_key(&self.id) => {
                     dispatch(&self.state, &self.id, Action::Promote, cx);
                 }
-                "l" | "t" => self.choose(Command::Open, window, cx),
+                // Only a Flecha window has a command bar.
+                "l" | "t" if self.state.borrow().model.core.window(&self.id).is_some() => {
+                    self.choose(Command::Open, window, cx);
+                }
                 "q" => dispatch(&self.state, &self.id, Action::Quit, cx),
                 "v" if self.focus.is_focused(window) => {
                     if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {

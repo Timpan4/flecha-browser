@@ -118,7 +118,11 @@ impl Model {
         size: Option<(i32, i32)>,
     ) -> Result<WindowId> {
         let (window, source) = opener;
-        let space = self.origin_space(window, Some(source))?.clone();
+        // A Peek's, Flechinha's or popup's page keeps the Space it came from.
+        let space = match self.transient(source) {
+            Some(page) => page.space.clone(),
+            None => self.origin_space(window, Some(source))?.clone(),
+        };
         let popup = window_id();
         self.popups.insert(
             popup.clone(),
