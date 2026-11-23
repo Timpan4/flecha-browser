@@ -81,6 +81,14 @@ fn a_cold_start_parses_and_saves_and_the_next_launch_deserializes_without_downlo
     let (second, _) = AdBlocker::new(true, &[]);
     let key = warm_start(&second, cache.path()).unwrap();
     assert!(ad_blocked(&second, "https://ads.example/a.js"));
+    // Page exceptions come back with the engine.
+    let on_trusted = Request {
+        url: "https://ads.example/a.js",
+        source_url: "https://trusted.example/",
+        top_level_url: "https://trusted.example/",
+        request_type: RequestType::Script,
+    };
+    assert!(!second.should_block(&on_trusted));
     let mut installed = Some(key);
     let report = update_once(
         &second,

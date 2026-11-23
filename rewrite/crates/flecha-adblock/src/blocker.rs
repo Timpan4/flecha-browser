@@ -10,10 +10,11 @@ use std::{
     sync::{Arc, PoisonError, RwLock},
 };
 
-use adblock::{Engine, request::Request as EngineRequest};
+use adblock::request::Request as EngineRequest;
 
 use crate::{
     cosmetic::{CosmeticFilters, is_injectable_selector},
+    engine::Filters,
     sites::SiteAllowList,
 };
 
@@ -74,7 +75,7 @@ pub struct Request<'a> {
 
 #[derive(Clone)]
 struct Snapshot {
-    engine: Option<Arc<Engine>>,
+    engine: Option<Arc<Filters>>,
     enabled: bool,
     allowed: SiteAllowList,
 }
@@ -110,7 +111,11 @@ impl AdBlocker {
         let mut current = self.current.write().unwrap_or_else(PoisonError::into_inner);
         let mut next = Snapshot::clone(&current);
         change(&mut next);
-        *current = Arc::new(next);
+        let previous = std::mem::replace(&mut *current, Arc::new(next));
+        drop(current);
+        // Freeing a replaced engine happens after the lock is released, so readers never wait
+        // on it.
+        drop(previous);
     }
 
     /// Settings' "Block ads and trackers".
@@ -125,9 +130,9 @@ impl AdBlocker {
         dropped
     }
 
-    pub(crate) fn install(&self, engine: Engine) {
-        let engine = Some(Arc::new(engine));
-        self.update(|snapshot| snapshot.engine = engine);
+    pub(crate) fn install(&self, filters: Filters) {
+        let filters = Some(Arc::new(filters));
+        self.update(|snapshot| snapshot.engine = filters);
     }
 
     pub fn has_engine(&self) -> bool {
@@ -138,7 +143,7 @@ impl AdBlocker {
     /// while matching.
     pub fn should_block(&self, request: &Request<'_>) -> bool {
         let snapshot = self.snapshot();
-        let Some(engine) = snapshot.engine.as_deref() else {
+        let Some(filters) = snapshot.engine.as_deref() else {
             return false;
         };
         if !snapshot.enabled
@@ -147,6 +152,18 @@ impl AdBlocker {
         {
             return false;
         }
+        // Pages and frames the lists exempt whole, as the shell's `allowAllRequests` rules for
+        // main and sub frames did: the frame itself and everything inside it.
+        let frame_exempt =
+            request.request_type == RequestType::SubFrame && filters.exempts_page(request.url);
+        if frame_exempt
+            || filters.exempts_page(request.top_level_url)
+            || (request.source_url != request.top_level_url
+                && filters.exempts_page(request.source_url))
+        {
+            return false;
+        }
+        let engine = filters.engine();
         let Ok(parsed) = EngineRequest::new(
             request.url,
             request.source_url,
@@ -163,13 +180,13 @@ impl AdBlocker {
     /// and the Chromium shell applied neither.
     pub fn cosmetic_filters(&self, page_url: &str) -> CosmeticFilters {
         let snapshot = self.snapshot();
-        let Some(engine) = snapshot.engine.as_deref() else {
+        let Some(filters) = snapshot.engine.as_deref() else {
             return CosmeticFilters::none();
         };
         if !snapshot.enabled || !snapshot.allowed.blocks_ads_on_page(page_url) {
             return CosmeticFilters::none();
         }
-        let resources = engine.url_cosmetic_resources(page_url);
+        let resources = filters.engine().url_cosmetic_resources(page_url);
         let mut hide_selectors: Vec<String> = resources
             .hide_selectors
             .into_iter()
@@ -194,13 +211,14 @@ impl AdBlocker {
         exceptions: &HashSet<String>,
     ) -> Vec<String> {
         let snapshot = self.snapshot();
-        let Some(engine) = snapshot.engine.as_deref() else {
+        let Some(filters) = snapshot.engine.as_deref() else {
             return Vec::new();
         };
         if !snapshot.enabled || !snapshot.allowed.blocks_ads_on_page(page_url) {
             return Vec::new();
         }
-        let mut selectors: Vec<String> = engine
+        let mut selectors: Vec<String> = filters
+            .engine()
             .hidden_class_id_selectors(classes, ids, exceptions)
             .into_iter()
             .filter(|selector| is_injectable_selector(selector))

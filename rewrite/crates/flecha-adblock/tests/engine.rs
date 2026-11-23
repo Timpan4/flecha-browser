@@ -137,6 +137,51 @@ fn a_page_itself_is_never_blocked() {
 }
 
 #[test]
+fn a_document_exception_exempts_the_page_and_frames_it_covers() {
+    let (blocker, _cache) = loaded(true, &[]);
+    let ad = |source: &str, top: &str, request_type, url| {
+        blocker.should_block(&Request {
+            url,
+            source_url: source,
+            top_level_url: top,
+            request_type,
+        })
+    };
+    use RequestType::*;
+    for page in ["https://trusted.example/", "https://www.trusted.example/a"] {
+        assert!(
+            !ad(page, page, Script, "https://ads.example/a.js"),
+            "{page}"
+        );
+        assert!(
+            !ad(page, page, Image, "https://metrics.example/p"),
+            "{page}"
+        );
+    }
+    // A frame the exception covers, and everything inside it.
+    let news = "https://news.example/";
+    assert!(!ad(news, news, SubFrame, "https://trusted.example/embed"));
+    assert!(!ad(
+        "https://trusted.example/embed",
+        news,
+        Script,
+        "https://ads.example/a.js"
+    ));
+    assert!(ad(news, news, Script, "https://ads.example/a.js"));
+    // `$document,subdocument`: the shell dropped it; adblock-rust syntax keeps the page exempt.
+    let checker = "https://checker.example/page.htm";
+    assert!(!ad(checker, checker, Script, "https://ads.example/a.js"));
+    // A plain exception lets its URL load but exempts nothing inside the page.
+    let allowed = "https://ads.example/allowed/page";
+    assert!(ad(
+        allowed,
+        allowed,
+        Script,
+        "https://metrics.example/collect"
+    ));
+}
+
+#[test]
 fn nothing_is_blocked_or_hidden_before_the_first_engine() {
     let (blocker, _) = AdBlocker::new(true, &[]);
     assert!(!blocker.has_engine());

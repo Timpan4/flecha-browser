@@ -9,6 +9,8 @@
 ||whole.example^$document
 /^https:\/\/regex\.example\/ad[0-9]+\.js/$script
 ||frames.example^$subdocument
+@@||trusted.example^$document
+@@||checker.example/page.htm$document,subdocument
 ##.ad-banner
 ##[data-ad="1"]
 ##div.sponsored > span

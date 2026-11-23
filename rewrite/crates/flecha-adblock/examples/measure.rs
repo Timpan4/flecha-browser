@@ -73,6 +73,16 @@ fn main() {
             request_type: RequestType::Script,
         };
         println!("blocks doubleclick gpt.js: {}", blocker.should_block(&ad));
+        // EasyList's `@@||optout.networkadvertising.org^$document` exempts the whole page.
+        let on_exempt_page = Request {
+            source_url: "https://optout.networkadvertising.org/",
+            top_level_url: "https://optout.networkadvertising.org/",
+            ..ad
+        };
+        println!(
+            "blocks doubleclick gpt.js on optout.networkadvertising.org: {}",
+            blocker.should_block(&on_exempt_page)
+        );
     }
     println!(
         "{mode}: {:.1} ms; {}",

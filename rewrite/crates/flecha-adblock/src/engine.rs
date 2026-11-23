@@ -1,15 +1,18 @@
 //! Building the adblock-rust engine from list text, and the serialized copy that lets a launch
 //! skip parsing.
 //!
-//! `engine.dat` holds a SHA-256 key over the list texts, then adblock-rust's own serialization
-//! (which carries its crate version and a checksum). A key that doesn't match the cached lists,
-//! or a file adblock-rust refuses, means a rebuild from the text.
+//! `engine.dat` holds a SHA-256 key over the list texts, the page exception lines, then
+//! adblock-rust's own serialization (which carries its crate version and a checksum). A key
+//! that doesn't match the cached lists, or a file adblock-rust refuses, means a rebuild from the
+//! text.
 
 use std::{fs, io, path::Path};
 
 use adblock::{
     Engine, FilterSet,
+    filters::network::{NetworkFilter, NetworkFilterMask},
     lists::{FilterParseError, ParseOptions, ParsedLine, parse_filter},
+    request::Request,
 };
 use sha2::{Digest, Sha256};
 
@@ -21,9 +24,10 @@ const MAGIC: &[u8] = b"flecha-adblock engine\n";
 /// The hash a serialized engine is filed under.
 pub type EngineKey = [u8; 32];
 
-/// What [`build_engine`] keeps from a list. Change it whenever that changes, so an `engine.dat`
-/// built the old way is rebuilt.
-const RECIPE: &[u8] = b"flecha-adblock recipe 1: parse errors and redirects left out\n";
+/// What [`build_engine`] keeps from a list, and the `engine.dat` layout. Change it whenever
+/// either changes, so an `engine.dat` built the old way is rebuilt.
+const RECIPE: &[u8] =
+    b"flecha-adblock recipe 2: parse errors and redirects left out, page exceptions kept\n";
 
 const NO_REDIRECTS: &str = "redirect and rewrite filters need resources this engine doesn't load";
 
@@ -35,6 +39,42 @@ pub struct SkippedLine {
     pub line: usize,
     pub text: String,
     pub error: String,
+}
+
+/// The engine, and the pages the lists exempt from all blocking.
+pub struct Filters {
+    engine: Engine,
+    /// `@@…$document` exceptions without their `@@`, so they match as `$document` filters.
+    page_exception_lines: String,
+    page_exceptions: Engine,
+}
+
+impl Filters {
+    fn new(engine: Engine, page_exception_lines: String) -> Self {
+        let mut set = FilterSet::new(false);
+        set.add_filter_list(page_exception_lines.clone(), ParseOptions::default());
+        Self {
+            engine,
+            page_exception_lines,
+            page_exceptions: Engine::new_with_filter_set(set),
+        }
+    }
+
+    pub fn engine(&self) -> &Engine {
+        &self.engine
+    }
+
+    /// Whether an `@@…$document` exception covers this page or frame, as the shell's
+    /// priority-3 `allowAllRequests` rules did. adblock-rust lets any exception match a document
+    /// request (uBlock Origin's rule for letting a page load), so the main engine can't answer
+    /// this; only filters that name `$document` count.
+    pub fn exempts_page(&self, page_url: &str) -> bool {
+        Request::new(page_url, page_url, "document", "get").is_ok_and(|request| {
+            self.page_exceptions
+                .check_network_request(&request)
+                .should_block()
+        })
+    }
 }
 
 /// Identifies a set of list texts and the way they're built. Each list contributes its id and
@@ -58,24 +98,52 @@ pub fn engine_key<'a>(lists: impl IntoIterator<Item = (&'a str, &'a str)>) -> En
 /// them out, and so does this.
 pub fn build_engine<'a>(
     lists: impl IntoIterator<Item = (&'a str, &'a str)>,
-) -> (Engine, Vec<SkippedLine>) {
+) -> (Filters, Vec<SkippedLine>) {
     let mut set = FilterSet::new(false);
     let mut skipped = Vec::new();
+    let mut page_exceptions = String::new();
     for (id, text) in lists {
-        set.add_filter_list(kept_lines(id, text, &mut skipped), ParseOptions::default());
+        let kept = kept_lines(id, text, &mut skipped, &mut page_exceptions);
+        set.add_filter_list(kept, ParseOptions::default());
     }
-    (Engine::new_with_filter_set(set), skipped)
+    let engine = Engine::new_with_filter_set(set);
+    (Filters::new(engine, page_exceptions), skipped)
+}
+
+/// An exception that names `$document`: it exempts whole pages. `$csp` and `$removeparam`
+/// filters also carry the document type, but only change what a page gets.
+fn is_page_exception(filter: &NetworkFilter) -> bool {
+    filter.mask.contains(NetworkFilterMask::IS_EXCEPTION)
+        && filter.mask.contains(NetworkFilterMask::FROM_DOCUMENT)
+        && !filter.is_csp()
+        && !filter.is_removeparam()
 }
 
 /// The list without its redirect filters. Comments, blank lines and the header neither parse
 /// nor count as errors; adblock-rust calls syntax it doesn't take at all `Unsupported`.
-fn kept_lines(id: &str, text: &str, skipped: &mut Vec<SkippedLine>) -> String {
+fn kept_lines(
+    id: &str,
+    text: &str,
+    skipped: &mut Vec<SkippedLine>,
+    page_exceptions: &mut String,
+) -> String {
     let normalized = text.replace("\r\n", "\n");
     let mut kept = String::with_capacity(normalized.len());
     for (index, line) in normalized.split(['\n', '\r']).enumerate() {
         let error = match parse_filter(line, false, ParseOptions::default()) {
             Ok(ParsedLine::Network(filter)) if filter.is_redirect() => NO_REDIRECTS.to_owned(),
-            Ok(_) | Err(FilterParseError::Empty | FilterParseError::Unsupported) => {
+            Ok(parsed) => {
+                if let ParsedLine::Network(filter) = &parsed
+                    && is_page_exception(filter)
+                {
+                    page_exceptions.push_str(line.trim().trim_start_matches("@@"));
+                    page_exceptions.push('\n');
+                }
+                kept.push_str(line);
+                kept.push('\n');
+                continue;
+            }
+            Err(FilterParseError::Empty | FilterParseError::Unsupported) => {
                 kept.push_str(line);
                 kept.push('\n');
                 continue;
@@ -115,7 +183,7 @@ impl std::fmt::Display for CachedEngineError {
 
 impl std::error::Error for CachedEngineError {}
 
-pub fn load_engine(cache: &Path, key: &EngineKey) -> Result<Engine, CachedEngineError> {
+pub fn load_engine(cache: &Path, key: &EngineKey) -> Result<Filters, CachedEngineError> {
     let bytes = match fs::read(cache.join(ENGINE_FILE)) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -123,22 +191,36 @@ pub fn load_engine(cache: &Path, key: &EngineKey) -> Result<Engine, CachedEngine
         }
         Err(error) => return Err(CachedEngineError::Read(error)),
     };
-    let payload = bytes
+    let rest = bytes
         .strip_prefix(MAGIC)
         .and_then(|rest| rest.strip_prefix(key.as_slice()))
         .ok_or(CachedEngineError::StaleKey)?;
+    let damaged = |what: &str| CachedEngineError::Deserialize(format!("damaged {what}"));
+    let (length, rest) = rest
+        .split_first_chunk::<8>()
+        .ok_or_else(|| damaged("page exception length"))?;
+    let length = usize::try_from(u64::from_le_bytes(*length))
+        .ok()
+        .filter(|&length| length <= rest.len())
+        .ok_or_else(|| damaged("page exception length"))?;
+    let (lines, payload) = rest.split_at(length);
+    let lines = std::str::from_utf8(lines).map_err(|_| damaged("page exceptions"))?;
     let mut engine = Engine::default();
     engine
         .deserialize(payload)
         .map_err(|error| CachedEngineError::Deserialize(format!("{error:?}")))?;
-    Ok(engine)
+    Ok(Filters::new(engine, lines.to_owned()))
 }
 
-pub fn save_engine(cache: &Path, key: &EngineKey, engine: &Engine) -> io::Result<()> {
-    let serialized = engine.serialize();
-    let mut bytes = Vec::with_capacity(MAGIC.len() + key.len() + serialized.len());
+pub fn save_engine(cache: &Path, key: &EngineKey, filters: &Filters) -> io::Result<()> {
+    let serialized = filters.engine.serialize();
+    let lines = filters.page_exception_lines.as_bytes();
+    let mut bytes =
+        Vec::with_capacity(MAGIC.len() + key.len() + 8 + lines.len() + serialized.len());
     bytes.extend_from_slice(MAGIC);
     bytes.extend_from_slice(key);
+    bytes.extend_from_slice(&(lines.len() as u64).to_le_bytes());
+    bytes.extend_from_slice(lines);
     bytes.extend_from_slice(&serialized);
     fs::create_dir_all(cache)?;
     write_atomically(&cache.join(ENGINE_FILE), &bytes)
