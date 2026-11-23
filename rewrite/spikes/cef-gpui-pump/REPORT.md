@@ -7,7 +7,7 @@ Date: 2026-11-23. Pins from `rewrite/pins.toml`: CEF `158.0.3+g8c29be2+chromium-
 | Done check | Result |
 |---|---|
 | Pump runs only on CEF requests or CEF's documented periodic wake-up | Pass. 0 unexplained calls in 7 idle runs of 30 s |
-| Static page: GPUI draws no frames | Pass after the page's one post-load repaint. Fails strictly in a window that includes it (see "Idle") |
+| Static page: GPUI draws no frames | Fails strictly with a 3 s warmup: 1 GPUI frame, matching CEF's one repaint about 4 s after load, in 4 of 4 runs. Passes with a 6 s warmup: 0 frames in 3 of 3 runs (see "Pump and idle") |
 | Idle CPU (measurement only) | 0.50 to 0.68 % of one core for the whole process tree |
 | Page and GPUI animate together | Pass. Both frame counters advance |
 | `navigator.webdriver === false` during CDP calls | Pass. 482,760 calls, 903 page samples, 0 true |
@@ -25,7 +25,9 @@ Date: 2026-11-23. Pins from `rewrite/pins.toml`: CEF `158.0.3+g8c29be2+chromium-
 
 ## How it was run
 
-Everything ran on Xvfb (`-nolisten tcp`), with `WAYLAND_DISPLAY` unset, inside `dbus-run-session` using `scripts/isolated-session-bus.conf`. That bus has no service directories, so no portal, gvfs or a11y service starts. The first smoke run used stock `dbus-run-session`, which activated a private gvfs daemon, xdg-desktop-portal, the document portal, the gtk and cosmic portal backends and the a11y bus. gvfs failed to mount `/run/user/1000/gvfs` (permission denied). In the same second, 08:41:56, the desktop session's own `xdg-document-portal.service` exited with status 21 and stayed failed, so `/run/user/1000/doc` is not mounted. That run probably caused the failure, but it is not proven. No process from that run survives. The service was not restarted, because that needs the owner's approval. The isolated bus config exists to keep later runs from doing this. Each run used a fresh `mktemp` CEF cache, deleted afterwards. Chromium switches: `--ozone-platform=x11 --password-store=basic`. The sandbox was on. No test window opened on the desktop session, and the owner's Flecha install and profiles were not touched.
+Everything ran on Xvfb (`-nolisten tcp`), with `WAYLAND_DISPLAY` unset, inside `dbus-run-session` using `scripts/isolated-session-bus.conf`. That bus has no service directories, so no portal, gvfs or a11y service starts. The first smoke run used stock `dbus-run-session`, which activated a private gvfs daemon, xdg-desktop-portal, the document portal, the gtk and cosmic portal backends and the a11y bus. gvfs failed to mount `/run/user/1000/gvfs` (permission denied). No process from that run survives, and the desktop session's gvfs mount is intact. The isolated bus config keeps later runs from starting these services.
+
+Related host state, not caused by this spike as far as the journal shows: the desktop session's `xdg-document-portal.service` exited with status 21 at 08:41:56 and stayed failed, so `/run/user/1000/doc` is not mounted. The first smoke run's Xvfb started at 08:42:00, after that exit. The portal processes logging in that second (`gnome-keyring-daemon` 23676, `xdg-desktop-portal-cosmic` 23705) ran in another agent session's systemd scope. The cause is undetermined. The service was not restarted, because that needs the owner's approval. Each run used a fresh `mktemp` CEF cache, deleted afterwards. Chromium switches: `--ozone-platform=x11 --password-store=basic`. The sandbox was on. No test window opened on the desktop session, and the owner's Flecha install and profiles were not touched.
 
 ```sh
 cd rewrite
