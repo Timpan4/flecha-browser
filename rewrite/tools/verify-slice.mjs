@@ -122,8 +122,10 @@ async function splitCapture(app, name, snapshot) {
   }
 
   await app.present();
+
   const geometry = execFileSync(x11Driver, ['geometry', 'Flecha'], { encoding: 'utf8' })
     .trim().split(' ').map(Number);
+
   assert(geometry.length === 4 && geometry.every(Number.isInteger) && geometry[2] > 0 && geometry[3] > 0,
     'invalid X11 window geometry');
 
@@ -157,11 +159,13 @@ function paneMismatch(path, geometry, ratio, colors) {
   let top = Math.max(0, windowY);
 
   while (top < bottom && pixel(origin, top) !== sidebar) top++;
+
   if (top >= bottom) return 'could not locate the sidebar';
 
   let edge = origin;
 
   while (edge < end && pixel(edge, top) === sidebar) edge++;
+
   if (edge >= end) return 'could not locate the page area';
 
   // The split has no gutters or borders. A fractional boundary can
@@ -192,6 +196,7 @@ async function capture(name, colors, window = 'root') {
     const missing = colors.filter(color => !histogram.includes(color));
 
     if (!missing.length) return;
+
     if (name === 'restart-split' && histogram.includes(blankRestartColor)) {
       return 'blank restart control rendered its replacement frame';
     }
@@ -213,12 +218,15 @@ async function captureUntil(name, window, mismatch) {
 
     if (!reason) {
       if (previous) console.log(`READY ${name} capture`);
+
       return;
     }
+
     if (reason !== previous) {
       console.error(`RETRY ${name}: ${reason}`);
       previous = reason;
     }
+
     await delay(100); // Matches Spike 1's capture readiness polling.
   }
 }
@@ -319,12 +327,15 @@ async function isolateWithTransients(app, space) {
 
   // The verifier measured this point inside the Separate cookies row with two Spaces.
   execFileSync(x11Driver, ['click', 95, 189]);
+
   for (;;) {
     const state = await app.command('snapshot');
     assert.equal(isIsolated(state), false, 'Peek backdrop passed the click through to Separate cookies');
+
     if (!state.peeks.length) break;
     await delay(100); // Matches the capture poll.
   }
+
   await app.wait('CEF closure after clicking the Peek backdrop', event =>
     event.type === 'closed' && event.tab === clickedPeek);
   pass('clicking Separate cookies through the Peek backdrop dismissed Peek and left the Space shared');
@@ -342,11 +353,13 @@ async function isolateWithTransients(app, space) {
   assert(isIsolated(after));
   assert.deepEqual(after.peeks, [], 'partition change left a Peek on the previous cookie jar');
   assert.deepEqual(after.flechinhas, [], 'partition change left a Flechinha on the previous cookie jar');
+
   for (const tab of [detached, peek]) {
     assert(!after.browsers.some(browser => browser.tab === tab), 'transient browser survived its partition change');
     await app.wait('CEF closed a transient from the previous partition', event =>
       event.type === 'closed' && event.tab === tab);
   }
+
   assert(!(await app.command('snapshot')).nativeWindows.includes(mini), 'GPUI closed Flechinha after its partition changed');
   pass('changing a Space partition closed both its Peek and Flechinha CEF browsers');
 
