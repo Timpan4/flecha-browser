@@ -551,4 +551,82 @@ mod tests {
         engine.events.borrow_mut().push_back(live.clone());
         assert_eq!(engine.next_event(), Some(live));
     }
+
+    /// A live opener with a popup CEF has started creating, and the popup's slot.
+    fn opener_with_pending_popup(engine: &mut Engine) -> (Rc<Slot>, Rc<Slot>) {
+        let tab = TabId::new("opener");
+        let viewport = Viewport {
+            origin: (0, 0),
+            size: (800, 600),
+            screen: (0, 0, 800, 600),
+            scale: 1.,
+        };
+        let opener = Rc::new(Slot::new(
+            engine.generations.create(tab.clone()),
+            viewport,
+            engine.events.clone(),
+            engine.popups.clone(),
+        ));
+        assert!(!opener.created(1));
+        engine.browsers.insert(
+            tab,
+            Session {
+                owner: Owner::Tab(flecha_core::WindowId::new("window")),
+                partition: Partition::Shared,
+                slot: opener.clone(),
+                hidden: false,
+                opener: None,
+            },
+        );
+        let child = popup::open(&opener, 7, None);
+        (opener, child)
+    }
+
+    fn drain(engine: &mut Engine) -> Vec<Event> {
+        std::iter::from_fn(|| engine.next_event())
+            .map(|message| message.event)
+            .collect()
+    }
+
+    #[test]
+    fn quitting_does_not_wait_for_a_popup_its_closed_opener_abandoned() {
+        let mut engine = Engine::new(PathBuf::new(), || TabId::new("popup"));
+        let (opener, child) = opener_with_pending_popup(&mut engine);
+        engine.close_all();
+        assert!(!engine.is_drained());
+
+        // CEF destroys the opener and never calls on_before_popup_aborted.
+        opener.destroyed();
+        assert_eq!(drain(&mut engine), [Event::Closed, Event::Closed]);
+        assert!(engine.is_drained(), "quit waits for an abandoned popup");
+
+        // A popup CEF creates anyway is closed, and quit waits for that.
+        assert!(child.created(2), "a late popup stays open");
+        assert!(!engine.is_drained());
+        child.destroyed();
+        assert!(drain(&mut engine).is_empty());
+        assert!(engine.is_drained());
+    }
+
+    #[test]
+    fn a_page_closing_itself_releases_its_pending_popup() {
+        let mut engine = Engine::new(PathBuf::new(), || TabId::new("popup"));
+        let (opener, child) = opener_with_pending_popup(&mut engine);
+        assert_eq!(drain(&mut engine), [Event::Created(1)]);
+        assert!(engine.browsers.contains_key(&TabId::new("popup")));
+
+        // window.close() in the opener, and CEF never creates or aborts the popup.
+        opener.destroyed();
+        assert_eq!(
+            drain(&mut engine),
+            [Event::ClosedByPage, Event::ClosedByPage]
+        );
+        assert!(engine.browsers.is_empty());
+        assert!(engine.is_drained());
+
+        assert!(child.created(2), "a late popup has no tab to show it");
+        child.destroyed();
+        assert!(drain(&mut engine).is_empty());
+        assert!(engine.is_drained());
+    }
 }

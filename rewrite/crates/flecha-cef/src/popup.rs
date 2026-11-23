@@ -91,6 +91,22 @@ pub(crate) fn before_popup(
             disposition == Disposition::Popup && features.width_set != 0 && features.height_set != 0
         })
         .map(|features| (features.width.max(1), features.height.max(1)));
+    let child = open(opener, popup_id, size);
+    // CEF writes the whole struct back, so change only the fields OSR needs.
+    window.windowless_rendering_enabled = 1;
+    window.runtime_style = RuntimeStyle::ALLOY;
+    *client = Some(callbacks::client(child.clone()));
+    child.emit(Event::Opened(Opened {
+        url: url.map(ToString::to_string).unwrap_or_default(),
+        disposition,
+        size,
+    }));
+    true
+}
+
+/// Tracks the browser CEF is about to create for `opener`'s popup until CEF creates
+/// it, aborts it, or destroys `opener`.
+pub(crate) fn open(opener: &Rc<Slot>, popup_id: i32, size: Option<(i32, i32)>) -> Rc<Slot> {
     let mut viewport = opener.viewport.get();
     if let Some(size) = size {
         viewport.size = size;
@@ -101,21 +117,12 @@ pub(crate) fn before_popup(
     child
         .origin
         .replace(Some((Rc::downgrade(opener), popup_id)));
-    // CEF writes the whole struct back, so change only the fields OSR needs.
-    window.windowless_rendering_enabled = 1;
-    window.runtime_style = RuntimeStyle::ALLOY;
-    *client = Some(callbacks::client(child.clone()));
-    child.emit(Event::Opened(Opened {
-        url: url.map(ToString::to_string).unwrap_or_default(),
-        disposition,
-        size,
-    }));
     opener.opening.borrow_mut().insert(popup_id, child.clone());
     opener.popups.pending.borrow_mut().push(Pending {
-        child,
+        child: child.clone(),
         opener: opener.clone(),
     });
-    true
+    child
 }
 
 /// CEF gave up creating a popup after `before_popup` allowed it.
@@ -123,6 +130,16 @@ pub(crate) fn aborted(opener: &Slot, popup_id: i32) {
     let child = opener.opening.borrow_mut().remove(&popup_id);
     if let Some(child) = child {
         child.closed();
+    }
+}
+
+/// CEF destroyed `opener` without creating or aborting these popups. Nothing waits
+/// for them any longer, and `on_after_created` closes any that CEF creates later.
+pub(crate) fn opener_closed(opener: &Slot) {
+    let abandoned = std::mem::take(&mut *opener.opening.borrow_mut());
+    for child in abandoned.into_values() {
+        child.closed();
+        child.retired.set(true);
     }
 }
 

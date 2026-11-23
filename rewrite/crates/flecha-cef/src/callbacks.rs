@@ -65,6 +65,28 @@ impl Slot {
         }
     }
 
+    /// `on_after_created`. Returns whether the engine already closed this browser, so
+    /// the caller must close it now.
+    pub fn created(&self, identifier: i32) -> bool {
+        self.stage.set(Stage::Live);
+        self.popups.live.set(self.popups.live.get() + 1);
+        let origin = self.origin.take();
+        if let Some((opener, popup_id)) = origin
+            && let Some(opener) = opener.upgrade()
+        {
+            opener.opening.borrow_mut().remove(&popup_id);
+        }
+        self.emit(Event::Created(identifier));
+        self.retired.get()
+    }
+
+    /// `on_before_close`.
+    pub fn destroyed(&self) {
+        self.browser.take();
+        self.closed();
+        popup::opener_closed(self);
+    }
+
     /// CEF destroyed this browser or abandoned creating it. The engine closed a retired
     /// slot; anything else was the page (`window.close()`) or CEF.
     pub fn closed(&self) {
@@ -187,26 +209,16 @@ wrap_life_span_handler! {
     impl LifeSpanHandler {
         fn on_after_created(&self, browser: Option<&mut Browser>) {
             let Some(browser) = browser else { return };
-            let slot = &self.slot;
-            slot.stage.set(Stage::Live);
-            slot.popups.live.set(slot.popups.live.get() + 1);
-            let origin = slot.origin.take();
-            if let Some((opener, popup_id)) = origin
-                && let Some(opener) = opener.upgrade()
-            {
-                opener.opening.borrow_mut().remove(&popup_id);
-            }
-            slot.emit(Event::Created(browser.identifier()));
-            slot.browser.replace(Some(browser.clone()));
-            // The engine closed this popup while CEF was still creating it.
-            if slot.retired.get() && let Some(host) = browser.host() {
+            let closed = self.slot.created(browser.identifier());
+            self.slot.browser.replace(Some(browser.clone()));
+            // The engine closed this popup, or its opener left, while CEF was creating it.
+            if closed && let Some(host) = browser.host() {
                 host.close_browser(1);
             }
         }
 
         fn on_before_close(&self, _browser: Option<&mut Browser>) {
-            self.slot.browser.take();
-            self.slot.closed();
+            self.slot.destroyed();
         }
 
         fn on_before_popup(
