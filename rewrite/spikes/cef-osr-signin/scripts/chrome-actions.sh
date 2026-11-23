@@ -14,15 +14,18 @@ xdo windowactivate --sync "$wid" 2>/dev/null || xdo windowfocus --sync "$wid"
 wait_for '^\[console\] INPUT storage loads'
 sleep 0.5
 
-# New tab from Chrome's UI, then navigate it through the omnibox to the loopback page.
+# New tab from Chrome's UI, then navigate it through the omnibox to the loopback marker page.
+# Its /ran request proves the page loaded and logged its marker.
 m=$(mark)
+fm=$(fixture_mark)
 xdo key ctrl+t
 wait_for '^\[browser\] created id=[0-9]+ open=2' "$m"
 sleep 0.5
 xdo key ctrl+l
-xdo type --delay 40 "$FIXTURE/marker"
+xdo type --delay 40 "$FIXTURE/marker?tab"
 xdo key Return
 wait_for "^\\[load-end\\] ${FIXTURE//./\\.}\$" "$m"
+wait_fixture '^GET /ran\?tab$' "$fm"
 sleep 0.5
 import -window root "$OUT/chrome-two-tabs.png"
 

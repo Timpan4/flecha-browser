@@ -23,16 +23,17 @@ pub const REPORT_MARKER: &str = "FLECHA_SELFCHECK_REPORT ";
 pub const WEBSTORE_URL: &str =
     "https://chromewebstore.google.com/detail/ublock-origin-lite/ddkjiahejlhfcafbddmgiahcphecmpfh";
 
-/// Switch values kept in the report. Every other value is replaced, since `--` passes arbitrary
-/// switches and some carry paths.
+/// Switches whose values the report keeps, when the value is made only of letters, digits and
+/// `_.,:-` (feature lists, process types, platform and store names). Every other value is
+/// replaced, since `--` passes arbitrary switches and some carry paths.
 const SHOWN_SWITCH_VALUES: &[&str] = &[
-    "--type",
-    "--utility-sub-type",
-    "--lang",
-    "--ozone-platform",
-    "--disable-features",
-    "--enable-features",
-    "--password-store",
+    "type",
+    "utility-sub-type",
+    "lang",
+    "ozone-platform",
+    "disable-features",
+    "enable-features",
+    "password-store",
 ];
 
 struct Step {
@@ -144,6 +145,48 @@ fn file_url(path: &Path) -> String {
         }
     }
     url
+}
+
+fn percent_decode(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = |b: u8| (b as char).to_digit(16);
+        if bytes[i] == b'%'
+            && let (Some(Some(hi)), Some(Some(lo))) = (
+                bytes.get(i + 1).map(|&b| hex(b)),
+                bytes.get(i + 2).map(|&b| hex(b)),
+            )
+        {
+            out.push((hi * 16 + lo) as u8);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Replaces home directories with `~` in every string of a report value, including
+/// percent-encoded ones (a `file://` href): a string whose decoded form contains a home
+/// directory is reported decoded.
+fn redact_homes(value: &mut Value, homes: &[String]) {
+    match value {
+        Value::String(text) => {
+            let decoded = percent_decode(text);
+            let base = if homes.iter().any(|h| decoded.contains(h.as_str())) {
+                decoded
+            } else {
+                text.clone()
+            };
+            *text = homes.iter().fold(base, |t, h| t.replace(h.as_str(), "~"));
+        }
+        Value::Array(items) => items.iter_mut().for_each(|v| redact_homes(v, homes)),
+        Value::Object(map) => map.values_mut().for_each(|v| redact_homes(v, homes)),
+        _ => {}
+    }
 }
 
 /// Not a secret: it only keeps console output that did not come from the injected collector
@@ -399,7 +442,8 @@ fn finish() {
             p.cmdline
                 .iter()
                 .filter(|a| cli::is_forbidden(a))
-                .map(|a| json!({ "pid": p.pid, "switch": redact_switch(a) }))
+                .filter_map(|a| redact_switch(a))
+                .map(|switch| json!({ "pid": p.pid, "switch": switch }))
         })
         .collect();
     let processes: Vec<Value> = scan.processes.iter().map(|p| p.report.clone()).collect();
@@ -411,8 +455,11 @@ fn finish() {
         *text = redact_version_text(text);
     }
 
-    let report = json!({
+    let failures = verdict(&results, &forbidden, &scan.errors);
+    let mut report = json!({
         "mode": common::mode().name(),
+        "pass": failures.is_empty(),
+        "failures": failures,
         "cef": runtime,
         "browsers": browsers,
         "steps": results,
@@ -421,17 +468,60 @@ fn finish() {
         "process_scan": { "complete": scan.errors.is_empty(), "errors": scan.errors },
         "forbidden_switches_found": forbidden,
     });
-    let mut text = serde_json::to_string_pretty(&report).expect("serialize report");
-    for home in homes() {
-        text = text.replace(&home, "~");
-    }
+    redact_homes(&mut report, &homes());
+    let text = serde_json::to_string_pretty(&report).expect("serialize report");
     println!("{REPORT_MARKER}{text}");
+    for failure in &failures {
+        eprintln!("self-check failed: {failure}");
+    }
+    if !failures.is_empty() {
+        FAILED.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
     if let Some(path) = report_path
         && let Err(e) = fs::write(&path, &text)
     {
         eprintln!("cannot write report {}: {e}", path.display());
     }
     common::close_all();
+}
+
+static FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// True after a self-check found the sandbox off, a forbidden switch, `navigator.webdriver`
+/// not false, or an incomplete process scan; `main` then exits with a failure status.
+pub fn failed() -> bool {
+    FAILED.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// The conditions that make the browser differ from a shipping one. Each is a failure, so the
+/// exit status shows it without reading the report.
+fn verdict(
+    results: &Map<String, Value>,
+    forbidden: &[Value],
+    scan_errors: &[String],
+) -> Vec<String> {
+    let mut failures = Vec::new();
+    // The sandbox step reports "ready" only once chrome://sandbox says "adequately sandboxed".
+    if results.get("sandbox").and_then(|s| s.get("reason")) != Some(&json!("ready")) {
+        failures.push("chrome://sandbox did not report an adequate sandbox".to_string());
+    }
+    if !forbidden.is_empty() {
+        failures.push(format!(
+            "forbidden switches found: {}",
+            Value::from(forbidden.to_vec())
+        ));
+    }
+    match results.get("page").and_then(|p| p.get("webdriver")) {
+        Some(Value::Bool(false)) => {}
+        other => failures.push(format!("navigator.webdriver is {other:?}, not false")),
+    }
+    if !scan_errors.is_empty() {
+        failures.push(format!(
+            "process scan incomplete ({} errors), so switches and sandbox state are unproven",
+            scan_errors.len()
+        ));
+    }
+    failures
 }
 
 fn style_name(style: RuntimeStyle) -> &'static str {
@@ -465,35 +555,41 @@ fn homes() -> Vec<String> {
     homes
 }
 
-/// `--name=value` keeps its value only for switches in SHOWN_SWITCH_VALUES.
-fn redact_switch(arg: &str) -> String {
-    match arg.split_once('=') {
-        Some((name, _)) if !SHOWN_SWITCH_VALUES.contains(&name) => format!("{name}=<redacted>"),
-        _ => arg.to_string(),
-    }
+/// A switch as the report shows it, written `--name` whatever prefix it had (see
+/// `cli::switch`). Its value is kept only for switches in SHOWN_SWITCH_VALUES and only when
+/// it is made of safe characters. `None` for an argument that is not a switch.
+fn redact_switch(arg: &str) -> Option<String> {
+    let (name, value) = cli::switch(arg)?;
+    let safe = |v: &str| {
+        v.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ',' | ':' | '-'))
+    };
+    Some(match value {
+        None => format!("--{name}"),
+        Some(v) if SHOWN_SWITCH_VALUES.contains(&name) && safe(v) => format!("--{name}={v}"),
+        Some(_) => format!("--{name}=<redacted>"),
+    })
 }
 
-/// A command line as the report shows it: switches only, values redacted as above, and no
-/// program path or positional arguments.
+/// A command line as the report shows it, from the process's argv (/proc/<pid>/cmdline, so
+/// argument boundaries are exact): switches only, values redacted as above, and no program
+/// path or positional arguments.
 fn redact_cmdline(cmdline: &[String]) -> Vec<String> {
     cmdline
         .iter()
         .skip(1)
-        .filter(|a| a.starts_with("--"))
-        .map(|a| redact_switch(a))
+        .filter_map(|a| redact_switch(a))
         .collect()
 }
 
-/// `chrome://version` lists the executable, profile path and full command line; keep the
-/// command line's switches (redacted) and drop the paths.
+/// `chrome://version` lists the executable, profile path and full command line. The command
+/// line is a single string there, joined with spaces, so argument boundaries are lost; it is
+/// dropped (the process scan reports each process's switches from argv), and so are the paths.
 fn redact_version_text(text: &str) -> String {
     text.lines()
         .map(|line| match line.split_once('\t') {
-            Some(("Command Line", value)) => {
-                let args: Vec<String> = value.split(' ').map(str::to_string).collect();
-                let mut shown = vec!["<program>".to_string()];
-                shown.extend(redact_cmdline(&args));
-                format!("Command Line\t{}", shown.join(" "))
+            Some(("Command Line", _)) => {
+                "Command Line\t<omitted; see processes[].switches>".to_string()
             }
             // "Executable Path", "Module Path", "User Data Path [*]", "Profile Path [*]".
             Some((label, _)) if label.contains(" Path") => format!("{label}\t<redacted>"),
@@ -515,6 +611,10 @@ struct Scan {
     errors: Vec<String>,
 }
 
+/// Linux `ESRCH` (include/uapi/asm-generic/errno-base.h): reading /proc of a process that is
+/// exiting.
+const ESRCH: i32 = 3;
+
 /// Lists this process and its descendants with their sandbox state from /proc.
 fn inspect_processes() -> Scan {
     let root = std::process::id();
@@ -526,15 +626,31 @@ fn inspect_processes() -> Scan {
                 let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
                     continue;
                 };
-                // A process can exit between listing and reading; that is not a scan gap.
-                let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat")) else {
-                    continue;
+                // A process can exit between listing and reading (NotFound, or ESRCH); that is
+                // not a scan gap. Any other read error is.
+                let stat = match fs::read_to_string(format!("/proc/{pid}/stat")) {
+                    Ok(stat) => stat,
+                    Err(e)
+                        if e.kind() == std::io::ErrorKind::NotFound
+                            || e.raw_os_error() == Some(ESRCH) =>
+                    {
+                        continue;
+                    }
+                    Err(e) => {
+                        errors.push(format!("/proc/{pid}/stat: {e}"));
+                        continue;
+                    }
                 };
                 // Field 4 (ppid) follows the parenthesised command name, which may contain spaces.
-                if let Some(after) = stat.rsplit_once(')').map(|(_, a)| a)
-                    && let Some(ppid) = after.split_whitespace().nth(1).and_then(|v| v.parse().ok())
+                match stat
+                    .rsplit_once(')')
+                    .and_then(|(_, after)| after.split_whitespace().nth(1))
+                    .and_then(|v| v.parse().ok())
                 {
-                    parents.insert(pid, ppid);
+                    Some(ppid) => {
+                        parents.insert(pid, ppid);
+                    }
+                    None => errors.push(format!("/proc/{pid}/stat: no parent pid")),
                 }
             }
         }
@@ -549,7 +665,15 @@ fn inspect_processes() -> Scan {
             _ => return false,
         }
     };
-    let own_ns = |kind: &str| fs::read_link(format!("/proc/{root}/ns/{kind}")).ok();
+    let own_ns: HashMap<&str, std::io::Result<std::path::PathBuf>> = ["user", "pid", "net"]
+        .into_iter()
+        .map(|kind| (kind, fs::read_link(format!("/proc/{root}/ns/{kind}"))))
+        .collect();
+    for (kind, link) in &own_ns {
+        if let Err(e) = link {
+            errors.push(format!("/proc/{root}/ns/{kind}: {e}"));
+        }
+    }
     let mut pids: Vec<u32> = parents
         .keys()
         .copied()
@@ -572,7 +696,10 @@ fn inspect_processes() -> Scan {
             };
             let process_type = cmdline
                 .iter()
-                .find_map(|a| a.strip_prefix("--type="))
+                .find_map(|a| match cli::switch(a) {
+                    Some(("type", value)) => value,
+                    _ => None,
+                })
                 .unwrap_or(if pid == root { "browser" } else { "?" })
                 .to_string();
             let status = fs::read_to_string(format!("/proc/{pid}/status")).unwrap_or_else(|e| {
@@ -588,13 +715,19 @@ fn inspect_processes() -> Scan {
             let ns: Map<String, Value> = ["user", "pid", "net"]
                 .iter()
                 .map(|kind| {
-                    let value = match fs::read_link(format!("/proc/{pid}/ns/{kind}")) {
-                        Ok(link) => json!(if Some(&link) == own_ns(kind).as_ref() {
+                    // Either side unreadable means the comparison is unknown, not "separate".
+                    let link = fs::read_link(format!("/proc/{pid}/ns/{kind}"));
+                    let value = match (&link, &own_ns[kind]) {
+                        (Ok(link), Ok(own)) => json!(if link == own {
                             "same as browser"
                         } else {
                             "separate"
                         }),
-                        Err(e) => json!(format!("unreadable: {e}")),
+                        (Err(e), _) => {
+                            errors.push(format!("/proc/{pid}/ns/{kind}: {e}"));
+                            json!("unknown")
+                        }
+                        (Ok(_), Err(_)) => json!("unknown"),
                     };
                     (kind.to_string(), value)
                 })
@@ -721,3 +854,67 @@ const WEBSTORE_COLLECT: &str = r#"() => {
     management: typeof window.chrome?.management,
   };
 }"#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn switches_are_reported_by_name_whatever_the_prefix() {
+        assert_eq!(
+            redact_switch("-no-sandbox").as_deref(),
+            Some("--no-sandbox")
+        );
+        assert_eq!(
+            redact_switch("-remote-debugging-port=0").as_deref(),
+            Some("--remote-debugging-port=<redacted>")
+        );
+        assert_eq!(
+            redact_switch("--type=renderer").as_deref(),
+            Some("--type=renderer")
+        );
+        assert_eq!(
+            redact_switch("--lang=/home/x/evil").as_deref(),
+            Some("--lang=<redacted>")
+        );
+        assert_eq!(redact_switch("/opt/bin/app"), None);
+        let argv: Vec<String> = ["/opt/app", "-no-sandbox", "/home/x/--fake", "--lang=en-US"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(redact_cmdline(&argv), ["--no-sandbox", "--lang=en-US"]);
+    }
+
+    #[test]
+    fn home_paths_are_redacted_even_when_percent_encoded() {
+        let homes = vec!["/home/a b".to_string()];
+        let mut report = json!({
+            "href": "file:///home/a%20b/p%23x/page.html",
+            "list": ["/home/a b/x", "plain"],
+        });
+        redact_homes(&mut report, &homes);
+        assert_eq!(report["href"], "file://~/p#x/page.html");
+        assert_eq!(report["list"], json!(["~/x", "plain"]));
+    }
+
+    #[test]
+    fn verdict_fails_on_sandbox_switches_webdriver_and_scan_gaps() {
+        let good: Map<String, Value> = serde_json::from_value(json!({
+            "sandbox": { "reason": "ready" },
+            "page": { "webdriver": false },
+        }))
+        .unwrap();
+        assert!(verdict(&good, &[], &[]).is_empty());
+        let bad: Map<String, Value> = serde_json::from_value(json!({
+            "sandbox": { "reason": "timeout" },
+            "page": { "webdriver": true },
+        }))
+        .unwrap();
+        let failures = verdict(
+            &bad,
+            &[json!({"pid": 1, "switch": "--no-sandbox"})],
+            &["x".into()],
+        );
+        assert_eq!(failures.len(), 4, "{failures:?}");
+    }
+}

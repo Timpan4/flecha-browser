@@ -46,32 +46,61 @@ wrap_task! {
 /// sign-in page logs reaches the terminal or a log file.
 pub static LOG_CONSOLE: OnceLock<bool> = OnceLock::new();
 
-/// A URL as the terminal may show it: local and internal pages in full, web pages as their
-/// origin only, because paths and queries can carry OAuth codes or account identifiers.
+/// A URL as the terminal may show it. Paths, queries, fragments and opaque payloads can carry
+/// OAuth codes or account identifiers (`data:` content, a `mailto:` address), so only these
+/// parts are kept:
+/// - a hierarchical URL (`scheme://…`): `scheme://host[:port]`, without any `user:password@`;
+/// - `file`, `chrome` and `devtools` URLs: also the path, without query or fragment;
+/// - any other URL (`data:`, `mailto:`, `javascript:`, `blob:`, `about:`): `scheme:` only.
 pub fn display_url(url: &str) -> String {
-    let Some((scheme, rest)) = url.split_once("://") else {
-        return url.split(['?', '#']).next().unwrap_or("").to_string();
+    let Some((scheme, rest)) = url.split_once(':') else {
+        return if url.is_empty() {
+            "(none)"
+        } else {
+            "(not a URL)"
+        }
+        .to_string();
     };
-    match scheme {
-        "file" | "chrome" | "devtools" => url.to_string(),
+    // RFC 3986: ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )
+    let valid = scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+        && scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
+    if !valid {
+        return "(not a URL)".to_string();
+    }
+    let scheme = scheme.to_ascii_lowercase();
+    // Chromium treats `\` like `/` in special URLs.
+    let Some(hier) = rest
+        .strip_prefix("//")
+        .or_else(|| rest.strip_prefix("\\\\"))
+    else {
+        return format!("{scheme}:");
+    };
+    let without_query = hier.split(['?', '#']).next().unwrap_or("");
+    match scheme.as_str() {
+        "file" | "chrome" | "devtools" => format!("{scheme}://{without_query}"),
         _ => {
-            let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-            // Drop any user:password@ part.
+            let authority = without_query.split(['/', '\\']).next().unwrap_or("");
             let host = authority.rsplit('@').next().unwrap_or("");
             format!("{scheme}://{host}")
         }
     }
 }
 
-/// Console output is relayed only for pages loaded from local files (the spike's fixtures),
-/// judged by the browser's main-frame URL, unless `--log-console` is set.
-fn relay_console(browser: Option<&Browser>) -> bool {
+/// Console output is relayed only for the spike's local fixtures unless `--log-console` is
+/// set. CEF does not say which frame logged a message, so the message's source decides: it must
+/// be a `file://` script or document, and the main frame must be a `file://` page too. A remote
+/// iframe or remote script inside a local page logs with its own (remote) source and is not
+/// relayed; a message without a source is not relayed either.
+fn relay_console(browser: Option<&Browser>, source: &str) -> bool {
     if LOG_CONSOLE.get().copied().unwrap_or(false) {
         return true;
     }
-    browser
-        .and_then(|b| b.main_frame())
-        .is_some_and(|f| userfree_to_string(&f.url()).starts_with("file://"))
+    source.starts_with("file://")
+        && browser
+            .and_then(|b| b.main_frame())
+            .is_some_and(|f| userfree_to_string(&f.url()).starts_with("file://"))
 }
 
 pub fn mode() -> Mode {
@@ -144,10 +173,10 @@ wrap_display_handler! {
         ) -> ::std::os::raw::c_int {
             let browser = browser.map(|b| b.clone());
             let message = message.map(|m| m.to_string()).unwrap_or_default();
+            let source = source.map(|s| s.to_string()).unwrap_or_default();
             if !selfcheck::on_console_message(browser.as_ref(), &message)
-                && relay_console(browser.as_ref())
+                && relay_console(browser.as_ref(), &source)
             {
-                let source = source.map(|s| s.to_string()).unwrap_or_default();
                 eprintln!("[console] {message} ({}:{line})", display_url(&source));
             }
             // Handled here in every case. Returning 0 lets CEF also write the message and its
@@ -224,4 +253,42 @@ pub fn browser_settings() -> BrowserSettings {
 
 pub fn userfree_to_string(value: &CefStringUserfree) -> String {
     CefString::from(value).to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::display_url;
+
+    #[test]
+    fn display_url_keeps_no_payload_path_query_or_userinfo() {
+        for (url, shown) in [
+            ("data:text/html,TOKDATA", "data:"),
+            ("data:text/html,<a href=http://x/TOK>x</a>", "data:"),
+            ("data:,a://TOKHOST/TOKPATH", "data:"),
+            ("mailto:TOK@example.invalid", "mailto:"),
+            ("javascript:alert('TOK')", "javascript:"),
+            ("blob:https://example.com/TOK-uuid", "blob:"),
+            ("about:blank#TOK", "about:"),
+            (
+                "https://user:TOK@accounts.example:8443/p/TOK?code=TOK#TOK",
+                "https://accounts.example:8443",
+            ),
+            ("HTTPS://example.com/TOK", "https://example.com"),
+            ("https:\\\\example.com\\TOK", "https://example.com"),
+            (
+                "file:///tmp/fixture.html?q=TOK#TOK",
+                "file:///tmp/fixture.html",
+            ),
+            ("chrome://version/?TOK", "chrome://version/"),
+            (
+                "devtools://devtools/x.html#TOK",
+                "devtools://devtools/x.html",
+            ),
+            ("", "(none)"),
+            ("no scheme TOK", "(not a URL)"),
+            ("1x:TOK", "(not a URL)"),
+        ] {
+            assert_eq!(display_url(url), shown, "{url}");
+        }
+    }
 }

@@ -39,6 +39,10 @@
     for (const id of ['text', 'area']) {
       document.getElementById(id).addEventListener('input', e => log(id, JSON.stringify(e.target.value)));
     }
+    // The action scripts wait for focus before typing, so keys never go to the document.
+    for (const id of ['text', 'password', 'area']) {
+      document.getElementById(id).addEventListener('focus', () => log('focus', id));
+    }
     document.getElementById('password').addEventListener('input', e => {
       const v = e.target.value;
       log('password length', [...v].length, 'scripted', v === SCRIPTED_PASSWORD);
@@ -59,7 +63,7 @@
         .catch(e => log('camera error', e.name));
     });
     document.addEventListener('keydown', e => {
-      if (e.target.type !== 'password') log('keydown', e.key, e.code, e.keyCode);
+      if (e.target.type !== 'password') log('keydown', e.key, e.code, e.keyCode, 'ctrl', e.ctrlKey);
     });
     addEventListener('scroll', () => log('scroll', Math.round(scrollY)));
   }

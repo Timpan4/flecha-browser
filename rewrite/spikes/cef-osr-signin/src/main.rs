@@ -104,7 +104,7 @@ fn main() -> ExitCode {
     let is_subprocess = !args
         .iter()
         .any(|a| a == "--mode" || a.starts_with("--mode="))
-        && args.iter().any(|a| a.starts_with("--type="));
+        && args.iter().any(|a| cli::is_type_switch(a));
     if is_subprocess {
         let argv = Argv::new(&args);
         let code = execute_process(
@@ -220,7 +220,7 @@ fn main() -> ExitCode {
         None => run_message_loop(),
     }
     shutdown();
-    if common::startup_failed() {
+    if common::startup_failed() || selfcheck::failed() {
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS

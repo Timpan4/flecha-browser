@@ -4,7 +4,8 @@
 #   WAIT_SECS=<secs> xvfb-isolated.sh <out-dir> <cef-osr-signin args...>
 #
 # Isolation, for this script and everything it starts (Xvfb, the app, ACTIONS and any window
-# manager): no session bus address, scratch HOME, XDG and runtime dirs under <out-dir>, no
+# manager): no session bus address, a system bus address that points nowhere, no keyring or
+# desktop-session variables, scratch HOME, XDG and runtime dirs under <out-dir>, no
 # inherited LD_LIBRARY_PATH, WAYLAND_DISPLAY unset. The app gets a private D-Bus session bus
 # without service activation (session-bus.conf) and is started through run.sh, which loads the
 # runtime prepare.sh staged. Logs go to <out-dir>/stdout.log and stderr.log. The app's stdin
@@ -30,7 +31,11 @@ shift
 mkdir -p "$out"/{home,xdg-config,xdg-cache,xdg-data,runtime}
 chmod 700 "$out/runtime"
 
-unset DBUS_SESSION_BUS_ADDRESS WAYLAND_DISPLAY LD_LIBRARY_PATH
+unset DBUS_SESSION_BUS_ADDRESS WAYLAND_DISPLAY LD_LIBRARY_PATH SSH_AUTH_SOCK \
+    GNOME_KEYRING_CONTROL XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP DESKTOP_SESSION KDE_FULL_SESSION
+# libdbus and GDBus fall back to /run/dbus/system_bus_socket without this; a path that does
+# not exist keeps every process off the host's system bus.
+export DBUS_SYSTEM_BUS_ADDRESS=unix:path=/nonexistent/flecha-spike-no-system-bus
 export HOME=$out/home XDG_RUNTIME_DIR=$out/runtime XDG_CONFIG_HOME=$out/xdg-config \
     XDG_CACHE_HOME=$out/xdg-cache XDG_DATA_HOME=$out/xdg-data XDG_SESSION_TYPE=x11
 

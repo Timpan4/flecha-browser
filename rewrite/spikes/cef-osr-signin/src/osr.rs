@@ -457,6 +457,7 @@ fn add_pending(browser: Option<&Browser>, request: Request, origin: &str, what: 
     });
     let browser = browser.map_or(0, |b| b.identifier());
     PENDING.with_borrow_mut(|p| p.insert(id, Pending { browser, request }));
+    let origin = common::display_url(origin);
     eprintln!(
         "[permission {id}] {origin} requests {what}. Type `allow {id}` or `deny {id}` and press Enter."
     );
@@ -581,6 +582,45 @@ wrap_pdf_print_callback! {
     }
 }
 
+// Without a print handler CEF does not support printing on Linux (include/cef_client.h,
+// GetPrintHandler), so Ctrl+P and `print` would do nothing visible. The spike has no print
+// dialog: this handler logs that printing started (OnPrintStart runs however printing was
+// requested) and refuses the rest. It supplies no printer settings, so Chromium then logs that
+// no printer is available. `pdf` covers printed output.
+wrap_print_handler! {
+    struct SpikePrintHandler;
+
+    impl PrintHandler {
+        fn on_print_start(&self, _browser: Option<&mut Browser>) {
+            eprintln!("[print] start");
+        }
+
+        fn on_print_dialog(
+            &self,
+            _browser: Option<&mut Browser>,
+            _has_selection: ::std::os::raw::c_int,
+            callback: Option<&mut PrintDialogCallback>,
+        ) -> ::std::os::raw::c_int {
+            eprintln!("[print] dialog requested; cancelled (no print dialog in the spike)");
+            if let Some(callback) = callback {
+                callback.cancel();
+            }
+            1
+        }
+
+        fn on_print_job(
+            &self,
+            _browser: Option<&mut Browser>,
+            _document_name: Option<&CefString>,
+            _pdf_file_path: Option<&CefString>,
+            _callback: Option<&mut PrintJobCallback>,
+        ) -> ::std::os::raw::c_int {
+            eprintln!("[print] job refused");
+            0
+        }
+    }
+}
+
 wrap_client! {
     struct OsrClient {
         render: RenderHandler,
@@ -608,6 +648,10 @@ wrap_client! {
 
         fn load_handler(&self) -> Option<LoadHandler> {
             Some(SpikeLoadHandler::new())
+        }
+
+        fn print_handler(&self) -> Option<PrintHandler> {
+            Some(SpikePrintHandler::new())
         }
     }
 }

@@ -51,20 +51,21 @@ echo "permission prompts for camera: $(count '^\[permission [0-9]+\]' "$m")"
 # AltGr on a Swedish layout: AltGr+2 is @.
 setxkbmap se
 m=$(mark)
-xdo mousemove --window "$wid" 170 35 click 1
+focus "$wid" text 170 35
 xdo keydown ISO_Level3_Shift key 2 keyup ISO_Level3_Shift
 xdo type --delay 40 'åäö'
 wait_for '^\[console\] INPUT text "Hello Wörld 123!@åäö"|^\[console\] INPUT text "@åäö"' "$m"
 
 # French AZERTY: the key labelled A sits at the physical Q position. Ctrl+A must reach the
-# page as A (keyCode 65), so it selects all rather than acting as Ctrl+Q.
+# page as A (keyCode 65) with Ctrl held, so it selects all rather than acting as Ctrl+Q. A
+# plain `a` would also be KeyQ 65, so the Ctrl flag is part of the assertion.
 setxkbmap fr
 m=$(mark)
 xdo key ctrl+a
 line=$(wait_for '^\[console\] INPUT keydown a ' "$m")
 echo "$line"
 setxkbmap us
-[[ $line == *' KeyQ 65 '* ]] || { echo "FAIL AZERTY Ctrl+A arrived as: $line" >&2; exit 1; }
+[[ $line == *' KeyQ 65 ctrl true '* ]] || { echo "FAIL AZERTY Ctrl+A arrived as: $line" >&2; exit 1; }
 
 # Terminal commands. A web page's console output is not relayed by default.
 rm -f "$OUT/osr-print.pdf"
@@ -73,8 +74,10 @@ send "pdf $OUT/osr-print.pdf"
 wait_for '^\[pdf\] ok=true' "$m"
 check test -s "$OUT/osr-print.pdf"
 m=$(mark)
-send "go $FIXTURE/marker"
+fm=$(fixture_mark)
+send "go $FIXTURE/marker?osr"
 wait_for "^\\[load-end\\] ${FIXTURE//./\\.}\$" "$m"
+wait_fixture '^GET /ran\?osr$' "$fm"
 send "go file://$here/input-test.html"
 wait_for '^\[console\] INPUT storage loads' "$m"
 check test "$(count 'FLECHA_CONSOLE_MARKER' "$m")" = 0

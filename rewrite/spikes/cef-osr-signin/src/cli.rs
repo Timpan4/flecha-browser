@@ -39,27 +39,45 @@ pub struct SelfCheckOptions {
 /// Switches that make the browser differ from a shipping build: remote control, automation,
 /// sandbox off, a spoofed user agent, weakened web security, test mode. The self-check scans
 /// every process for them, and they are refused after `--`. `--type` is refused there too,
-/// because it would turn the browser process into a subprocess.
+/// because it would turn the browser process into a subprocess. Names are listed without a
+/// prefix; see `switch`.
 pub const FORBIDDEN_SWITCHES: &[&str] = &[
-    "--remote-debugging-port",
-    "--remote-debugging-pipe",
-    "--remote-debugging-address",
-    "--enable-automation",
-    "--headless",
-    "--no-sandbox",
-    "--disable-setuid-sandbox",
-    "--disable-seccomp-filter-sandbox",
-    "--disable-namespace-sandbox",
-    "--user-agent",
-    "--disable-web-security",
-    "--ignore-certificate-errors",
-    "--use-mock-keychain",
-    "--test-type",
+    "remote-debugging-port",
+    "remote-debugging-pipe",
+    "remote-debugging-address",
+    "enable-automation",
+    "headless",
+    "no-sandbox",
+    "disable-setuid-sandbox",
+    "disable-seccomp-filter-sandbox",
+    "disable-namespace-sandbox",
+    "user-agent",
+    "disable-web-security",
+    "ignore-certificate-errors",
+    "use-mock-keychain",
+    "test-type",
 ];
 
+/// A command-line switch as Chromium reads it on Linux (base/command_line.cc,
+/// `kSwitchPrefixes = {"--", "-"}`): the prefix is `--` or `-`, the name runs to the first `=`,
+/// and the rest is the value. Returns `None` for an argument that is not a switch.
+pub fn switch(arg: &str) -> Option<(&str, Option<&str>)> {
+    let body = arg.strip_prefix("--").or_else(|| arg.strip_prefix('-'))?;
+    if body.is_empty() {
+        return None;
+    }
+    Some(match body.split_once('=') {
+        Some((name, value)) => (name, Some(value)),
+        None => (body, None),
+    })
+}
+
 pub fn is_forbidden(arg: &str) -> bool {
-    let name = arg.split_once('=').map_or(arg, |(name, _)| name);
-    FORBIDDEN_SWITCHES.contains(&name)
+    switch(arg).is_some_and(|(name, _)| FORBIDDEN_SWITCHES.contains(&name))
+}
+
+pub fn is_type_switch(arg: &str) -> bool {
+    switch(arg).is_some_and(|(name, _)| name == "type")
 }
 
 /// cefsimple's start page (cef-rs examples/cefsimple/src/shared/simple_app.rs).
@@ -132,7 +150,7 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
 
     if let Some(bad) = cef_args
         .iter()
-        .find(|a| is_forbidden(a) || a.starts_with("--type="))
+        .find(|a| is_forbidden(a) || is_type_switch(a))
     {
         return Err(format!("refusing CEF switch {bad:?} after --"));
     }
@@ -181,14 +199,33 @@ mod tests {
     fn refuses_forbidden_and_type_switches_after_separator() {
         for bad in [
             "--no-sandbox",
+            "-no-sandbox",
             "--remote-debugging-port=9222",
+            "-remote-debugging-port=0",
             "--type=renderer",
+            "-type=renderer",
         ] {
             assert!(parse(&args(&["--", bad])).is_err(), "{bad}");
         }
-        for ok in ["--password-store=basic", "--ozone-platform=wayland"] {
+        for ok in [
+            "--password-store=basic",
+            "-password-store=basic",
+            "--ozone-platform=wayland",
+            "positional",
+        ] {
             assert!(parse(&args(&["--", ok])).is_ok(), "{ok}");
         }
+    }
+
+    #[test]
+    fn switches_follow_chromium_prefix_rules() {
+        assert_eq!(switch("--a=b=c"), Some(("a", Some("b=c"))));
+        assert_eq!(switch("-a"), Some(("a", None)));
+        assert_eq!(switch("---a"), Some(("-a", None)));
+        assert_eq!(switch("-"), None);
+        assert_eq!(switch("--"), None);
+        assert_eq!(switch("a"), None);
+        assert!(!is_forbidden("---no-sandbox"));
     }
 
     #[test]

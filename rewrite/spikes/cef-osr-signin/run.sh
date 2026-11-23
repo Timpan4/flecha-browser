@@ -6,9 +6,11 @@ set -euo pipefail
 # shellcheck source=scripts/cef-pins.sh
 . "$(dirname -- "${BASH_SOURCE[0]}")/scripts/cef-pins.sh"
 check_runtime
-bin=${FLECHA_SPIKE_BIN:-$rewrite/target/debug/cef-osr-signin}
-if [[ ! -x $bin ]]; then
-    printf 'No binary at %s. Build it with spikes/cef-osr-signin/build.sh.\n' "$bin" >&2
+requested=${FLECHA_SPIKE_BIN:-$rewrite/target/debug/cef-osr-signin}
+# Resolve the name the way exec would (a bare name through PATH), so the check and the exec
+# refer to the same file.
+if ! bin=$(command -v -- "$requested") || [[ ! -f $bin || ! -x $bin ]]; then
+    printf 'No executable at %s. Build it with spikes/cef-osr-signin/build.sh.\n' "$requested" >&2
     exit 1
 fi
 export LD_LIBRARY_PATH="$cef_runtime${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"

@@ -12,19 +12,20 @@ wid=$(window '^Flecha spike: osr$')
 xdo windowactivate --sync "$wid" 2>/dev/null || xdo windowfocus --sync "$wid"
 wait_for '^\[console\] INPUT storage loads'
 
+# Each field is clicked and its focus event awaited before typing.
 # Text field, including a non-ASCII character.
-xdo mousemove --window "$wid" 170 35 click 1; pause
+focus "$wid" text 170 35
 xdo type --delay 40 'Hello Wörld 123!'
 wait_for '^\[console\] INPUT text "Hello Wörld 123!"'
 
 # Password field, then Enter. The page reports only the length and whether it matches.
-xdo mousemove --window "$wid" 170 85 click 1; pause
+focus "$wid" password 170 85
 xdo type --delay 40 'pa$$ wörd'
 wait_for '^\[console\] INPUT password length 9 scripted true'
 xdo key Return; pause
 
 # Textarea: Enter inserts a newline, Ctrl+A then Backspace clears it.
-xdo mousemove --window "$wid" 170 160 click 1; pause
+focus "$wid" area 170 160
 xdo type --delay 40 'line1'; xdo key Return; xdo type --delay 40 'line2'
 wait_for '^\[console\] INPUT area "line1\\nline2"'
 m=$(mark)
@@ -49,6 +50,10 @@ wait_for '^\[console\] INPUT choice two'
 xdo mousemove --window "$wid" 600 400; xdo click --repeat 3 --delay 80 5
 wait_for '^\[console\] INPUT scroll [1-9]'
 
-# Ctrl+P calls BrowserHost::print(). The app must survive it.
-xdo key ctrl+p; pause; pause
+# Ctrl+P calls BrowserHost::print(). It must reach CEF's print pipeline (the app's print
+# handler logs OnPrintStart; with no printer settings Chromium then reports that no printer
+# is available), and the app must survive it.
+m=$(mark)
+xdo key ctrl+p
+wait_for '^\[print\] start' "$m"
 check alive

@@ -10,11 +10,26 @@ archives="$rewrite/target/cef-archives"
 archive="$archives/$cef_archive_name"
 mkdir -p "$archives" "$(dirname -- "$cef_runtime")"
 
+# One prepare at a time: a second run waits, then finds the archive and stage in place.
+exec 9>"$archives/prepare.lock"
+flock 9
+
+# Temporary download and unpack directories are removed on any exit, including failures.
+download=
+unpack=
+# shellcheck disable=SC2329 # runs through trap EXIT
+cleanup() {
+    if [[ -n $download ]]; then rm -f -- "$download"; fi
+    if [[ -n $unpack ]]; then rm -rf -- "$unpack"; fi
+}
+trap cleanup EXIT
+
 if [[ ! -f $archive ]]; then
     download=$(mktemp "$archives/download.XXXXXX")
     curl -fsSL "https://cef-builds.spotifycdn.com/${cef_archive_name//+/%2B}" -o "$download"
     printf '%s  %s\n' "$cef_sha1" "$download" | sha1sum --check --quiet
     mv -T "$download" "$archive"
+    download=
 else
     printf '%s  %s\n' "$cef_sha1" "$archive" | sha1sum --check --quiet
 fi
@@ -31,7 +46,6 @@ if [[ ! -e $cef_runtime ]]; then
     done
     printf '%s\n' "$cef_archive_json" >"$release/archive.json"
     mv -T "$release" "$cef_runtime"
-    rm -r -- "$unpack"
 fi
 check_runtime
 printf 'CEF_PATH=%s\n' "$cef_path"

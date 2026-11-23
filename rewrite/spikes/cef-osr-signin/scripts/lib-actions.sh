@@ -69,16 +69,48 @@ wait_exit() {
     done
 }
 
+# focus <wid> <field id> <x> <y>: clicks the field and waits for the page to report its
+# focus event, so typed keys cannot go to the document.
+focus() {
+    local m
+    m=$(mark)
+    xdo mousemove --window "$1" "$3" "$4" click 1
+    wait_for "^\\[console\\] INPUT focus $2 " "$m" >/dev/null
+}
+
 # debug_log_marker_count: the number of FLECHA_CONSOLE_MARKER lines in CEF's own log,
 # chrome_debug.log in the profile (PROFILE, default <out-dir>/profile). Call it after the app
-# exited. Fails if the log is missing, so a moved log cannot pass as a clean one.
+# exited. The log may be empty (CEF logs only warnings by default) but must exist and be
+# readable, so a moved or unreadable log cannot pass as a clean one.
 debug_log_marker_count() {
-    local log_file=${PROFILE:-$OUT/profile}/chrome_debug.log
-    if [[ ! -s $log_file ]]; then
-        echo "FAIL no CEF log at $log_file" >&2
+    local log_file=${PROFILE:-$OUT/profile}/chrome_debug.log status=0
+    if [[ ! -f $log_file || ! -r $log_file ]]; then
+        echo "FAIL no readable CEF log at $log_file" >&2
         return 1
     fi
-    grep -ac 'FLECHA_CONSOLE_MARKER' "$log_file" || true
+    grep -ac 'FLECHA_CONSOLE_MARKER' "$log_file" || status=$?
+    # grep: 1 is "no match" (it printed 0); anything else is an error.
+    if ((status > 1)); then
+        echo "FAIL cannot read $log_file" >&2
+        return 1
+    fi
+}
+
+# fixture_mark: the number of requests the fixture server has logged so far.
+fixture_mark() { grep -ac '' "$OUT/fixture-server.log" || true; }
+
+# wait_fixture <extended regex> [fixture mark]: waits for a request line in the fixture
+# server's log after line <mark>. The marker page requests /ran after it has logged its
+# console marker, so `wait_fixture '^GET /ran'` proves the marker page loaded and its script ran.
+wait_fixture() {
+    local deadline=$((SECONDS + WAIT_SECS)) from=$((${2:-0} + 1))
+    until tail -n "+$from" "$OUT/fixture-server.log" | grep -aEc "$1" >/dev/null; do
+        if ((SECONDS >= deadline)); then
+            echo "FAIL the fixture server got no request matching: $1" >&2
+            return 1
+        fi
+        sleep 0.2
+    done
 }
 
 # start_fixture_server: serves scripts/fixture-server.mjs on loopback and sets FIXTURE to its
