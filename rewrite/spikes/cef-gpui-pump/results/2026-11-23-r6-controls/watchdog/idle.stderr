@@ -1,0 +1,5 @@
+[619074:619347:1123/142401.557363:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[619074:619347:1123/142401.636538:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[619074:619347:1123/142401.636576:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[619074:619347:1123/142401.636590:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[2026-11-23T13:24:01Z ERROR gpui_linux::linux::x11::client] Found no xinput mouse pointers.

@@ -30,10 +30,12 @@ deleted on exit, and never touches the caller's checkout:
 - `clippy-guard-control.sh` applies `direct-timer.patch`, control 1's per-call
   `executor.timer()` reapplied to the current bridge, and runs workspace
   `cargo clippy --locked --all-targets -- -D warnings` in a copy. It fails
-  unless Clippy rejects the call. `clippy-guard-control.out` is its output on
-  d530b37: "use of a disallowed method `gpui::BackgroundExecutor::timer`" at
-  `bridge.rs:213`, exit 101. So control 1 passes `cdp_pass` at run time and
-  Clippy rejects it at build time.
+  unless Clippy's diagnostic for `gpui::BackgroundExecutor::timer` has its
+  primary span at the mutant's own call. `clippy-guard-control.out` is its
+  output on 5cebba2: "use of a disallowed method
+  `gpui::BackgroundExecutor::timer`" at `bridge.rs:230:64`, the mutant's call,
+  exit 101. So control 1 passes `cdp_pass` at run time and Clippy rejects it
+  at build time.
 
 The ledger counts only timers armed through `Timers::arm`. A per-call timer
 that calls `executor.timer()` directly, as in control 1, bypasses it and fails

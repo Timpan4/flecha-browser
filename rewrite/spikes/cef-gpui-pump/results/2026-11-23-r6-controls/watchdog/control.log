@@ -1,5 +1,9 @@
-stopped browser 572501 (process group 572498) at 14:10:02.028
-runner exit 1 at 14:10:40.002
-processes left in group 572498: none
-app or session processes left anywhere: none
-watchdog ended the hung run and its process group
+stopped browser 619074 (process group 619069) at 14:24:01.824
+session tree under group leader 619069: 10 processes (tree-before-stop.txt)
+added process 619650 to group 619069; it ignores SIGTERM
+session processes outside group 619069: none
+runner exit 1 at 14:24:39.154
+SIGTERM-ignoring process 619650 alive after the runner: no
+processes left in group 619069: none
+recorded session processes still alive: none
+watchdog ended the hung run and its whole process group
