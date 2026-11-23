@@ -73,6 +73,8 @@ pub fn decode(json: &str) -> Result<BrowserState, DecodeError> {
 pub struct SnapshotRepairs {
     /// Legacy folders flattened into the deepest retained ancestor.
     pub flattened_legacy_folders: usize,
+    /// Saved ad-block exceptions dropped because they are not request-domain hostnames.
+    pub skipped_ad_block_sites: usize,
 }
 
 #[derive(Debug)]
@@ -281,8 +283,8 @@ fn decode_document(json: &str, legacy_only: bool) -> Result<DecodedSnapshot, Dec
         .filter_map(|(id, tab)| Some((TabId::new(id), repair_tab(tab)?)))
         .collect();
     let mut repairs = SnapshotRepairs::default();
-    let state =
-        repair(snapshot::project(&fields, &mut repairs)?, tabs).ok_or(DecodeError::InvalidShape)?;
+    let projected = snapshot::project(&fields, &mut repairs)?;
+    let state = repair(projected, tabs, &mut repairs).ok_or(DecodeError::InvalidShape)?;
     Ok(DecodedSnapshot { state, repairs })
 }
 
@@ -367,7 +369,11 @@ fn needs_newer_reader(value: &Value) -> bool {
         })
 }
 
-fn repair(mut raw: Map<String, Value>, tabs: BTreeMap<TabId, Tab>) -> Option<BrowserState> {
+fn repair(
+    mut raw: Map<String, Value>,
+    tabs: BTreeMap<TabId, Tab>,
+    repairs: &mut SnapshotRepairs,
+) -> Option<BrowserState> {
     let raw_spaces = raw.remove("spaces")?;
     let raw_spaces: Vec<_> = raw_spaces
         .as_array()?
@@ -464,7 +470,7 @@ fn repair(mut raw: Map<String, Value>, tabs: BTreeMap<TabId, Tab>) -> Option<Bro
         .get("sidebarVisible")
         .and_then(Value::as_bool)
         .unwrap_or(true);
-    let settings = repair_settings(&mut raw);
+    let settings = repair_settings(&mut raw, repairs);
     let mut state = BrowserState {
         spaces,
         windows,
@@ -741,7 +747,7 @@ fn normalize_mobile(state: &mut BrowserState) {
     }
 }
 
-fn repair_settings(raw: &mut Map<String, Value>) -> Settings {
+fn repair_settings(raw: &mut Map<String, Value>, repairs: &mut SnapshotRepairs) -> Settings {
     fn take<T: DeserializeOwned>(raw: &mut Map<String, Value>, key: &str) -> Option<T> {
         serde_json::from_value(raw.remove(key)?).ok()
     }
@@ -772,11 +778,29 @@ fn repair_settings(raw: &mut Map<String, Value>) -> Settings {
         downloads_folder: take(raw, "downloadsFolder"),
         ask_where_to_save: take(raw, "askWhereToSave"),
         ad_block: take(raw, "adBlock"),
-        ad_block_allowed: take::<Vec<String>>(raw, "adBlockAllowed")
-            .filter(|hosts| hosts.iter().all(|host| is_site_host(host))),
+        ad_block_allowed: repair_ad_block_sites(raw.remove("adBlockAllowed"), repairs),
         onboarded: take(raw, "onboarded"),
         site_permissions: take(raw, "sitePermissions"),
     }
+}
+
+/// Keeps every saved exception that is a request-domain hostname. The Chromium shell drops the
+/// whole list for one bad entry because declarativeNetRequest refuses the whole allow rule; the
+/// rewrite's engine checks entries one by one, so one bad entry costs only itself.
+fn repair_ad_block_sites(raw: Option<Value>, repairs: &mut SnapshotRepairs) -> Option<Vec<String>> {
+    let Value::Array(entries) = raw? else {
+        return None;
+    };
+    let total = entries.len();
+    let sites: Vec<String> = entries
+        .into_iter()
+        .filter_map(|entry| match entry {
+            Value::String(host) if is_site_host(&host) => Some(host),
+            _ => None,
+        })
+        .collect();
+    repairs.skipped_ad_block_sites += total - sites.len();
+    Some(sites)
 }
 
 fn repair_environments(raw: Value) -> Option<Vec<Environment>> {

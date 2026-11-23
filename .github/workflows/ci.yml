@@ -35,6 +35,10 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check:source
+      - name: Check the browser import parity fixture
+        run: |
+          node rewrite/crates/flecha-import/scripts/generate-import-fixture.ts
+          git diff --exit-code -- rewrite/crates/flecha-import/tests/fixtures/import-parity.jsonl
       - uses: actions/setup-node@v7
         with:
           node-version: 26
@@ -87,6 +91,11 @@ jobs:
           bash spikes/gpui-cef-compositor/prepare.sh --sources-only
           check_zed_toolchain_absent
           time cargo +stable metadata --locked --format-version 1 > /dev/null
+      - name: Check the Rust browser importers
+        run: |
+          cargo +stable fmt -p flecha-import --check
+          cargo +stable clippy --locked -p flecha-import --all-targets -- -D warnings
+          cargo +stable test --locked -p flecha-import
       - name: Check the core crate in isolation
         shell: bash
         run: |
@@ -102,6 +111,21 @@ jobs:
           cargo +stable clippy -p flecha-core --all-targets -- -D warnings
           cargo +stable test -p flecha-core --all-targets
           cargo +stable test -p flecha-core --doc
+      - name: Check the ad-block crate in isolation
+        shell: bash
+        run: |
+          adblock_rewrite="$RUNNER_TEMP/flecha-adblock-ci/rewrite"
+          mkdir -p "$adblock_rewrite/crates"
+          cp -R crates/flecha-core crates/flecha-adblock "$adblock_rewrite/crates/"
+          cp Cargo.lock "$adblock_rewrite/"
+          printf '[workspace]\nresolver = "3"\nmembers = ["crates/flecha-adblock", "crates/flecha-core"]\n' > "$adblock_rewrite/Cargo.toml"
+          cd "$adblock_rewrite"
+          # Resolving the product workspace would fetch Spike 1's Git dependencies.
+          cargo +stable metadata --format-version 1 > metadata.json
+          jq -e '[.packages[].source | select(. != null and startswith("git+"))] | length == 0' metadata.json
+          cargo +stable fmt --check -p flecha-adblock
+          cargo +stable clippy -p flecha-adblock --all-targets -- -D warnings
+          cargo +stable test -p flecha-adblock --all-targets
 
   rewrite-services:
     name: Flecha services (Rust)

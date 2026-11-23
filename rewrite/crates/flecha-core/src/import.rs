@@ -171,7 +171,7 @@ impl BrowserState {
         window: &WindowId,
         now: EpochMillis,
     ) -> Result<ImportOutcome, ImportError> {
-        let pristine = !batch.spaces.is_empty() && self.is_pristine();
+        let pristine = !batch.spaces.is_empty() && self.has_pristine_import_space();
         if pristine {
             self.spaces.clear();
             for win in &mut self.windows {
@@ -300,7 +300,8 @@ impl BrowserState {
         Ok(outcome)
     }
 
-    fn is_pristine(&self) -> bool {
+    /// Whether importing any Spaces will replace the untouched starter Space.
+    pub fn has_pristine_import_space(&self) -> bool {
         let [space] = self.spaces.as_slice() else {
             return false;
         };
@@ -320,6 +321,14 @@ impl BrowserState {
                         .get(&space.id)
                         .is_none_or(|ws| ws.today.is_empty())
                 })
+    }
+
+    /// Count entries the archive would drop if these entries were imported.
+    pub fn preview_archive_drops(&self, incoming: &[ArchivedTab]) -> usize {
+        let mut archive = self.archive.clone();
+        let mut outcome = ImportOutcome::default();
+        merge_archive(&mut archive, incoming, &mut outcome);
+        outcome.archive_dropped
     }
 
     fn import_splits(
