@@ -3,7 +3,7 @@
 # Run through xvfb-isolated.sh with ACTIONS=<this file> and XDOTOOL=<path to xdotool>.
 # The pauses only give the page time to react between steps; they are not product limits.
 set -euo pipefail
-x=${XDOTOOL:-xdotool}
+xdo() { "${XDOTOOL:-xdotool}" "$@"; }
 pause() { sleep 0.5; }
 
 wid=$(xdo search --sync --name '^Flecha spike: osr$')
