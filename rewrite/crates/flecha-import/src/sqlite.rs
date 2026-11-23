@@ -140,10 +140,10 @@ impl Snapshot {
         let mut duplicate_places = 0;
         {
             // Resolve each place once, including in databases with no index on the ID.
-            let mut statement = self.prepare("SELECT id, url FROM moz_places ORDER BY rowid")?;
+            let mut statement = self.prepare("SELECT id, url FROM moz_places")?;
             let mut rows = statement.query([]).map_err(database_error)?;
             while let Some(row) = rows.next().map_err(database_error)? {
-                let Ok(id) = row.get::<_, i64>(0) else {
+                let Some(id) = PlaceId::from_value(row.get_ref(0).map_err(database_error)?) else {
                     continue;
                 };
                 match places.entry(id) {
@@ -227,7 +227,7 @@ fn authorize(kind: Database, ctx: AuthContext<'_>) -> Authorization {
             ),
             (Database::Firefox, "moz_places") => matches!(
                 column_name,
-                "id" | "url" | "title" | "visit_count" | "last_visit_date" | "hidden" | "ROWID"
+                "id" | "url" | "title" | "visit_count" | "last_visit_date" | "hidden"
             ),
             (Database::Firefox, "moz_bookmarks") => matches!(
                 column_name,
@@ -287,6 +287,41 @@ fn number(value: ValueRef<'_>) -> Option<f64> {
     number.is_finite().then_some(number)
 }
 
+#[derive(PartialEq, Eq, Hash)]
+enum PlaceId {
+    Integer(i64),
+    Real(u64),
+    Text(Box<[u8]>),
+    Blob(Box<[u8]>),
+}
+
+impl PlaceId {
+    fn from_value(value: ValueRef<'_>) -> Option<Self> {
+        Some(match value {
+            ValueRef::Integer(value) => Self::Integer(value),
+            ValueRef::Real(value) => {
+                // i64::MAX rounds up to 2^63 as an f64. Exclude that upper endpoint.
+                if value.fract() == 0.0 && (i64::MIN as f64..-(i64::MIN as f64)).contains(&value) {
+                    Self::Integer(value as i64)
+                } else {
+                    Self::Real(value.to_bits())
+                }
+            }
+            ValueRef::Text(bytes) => {
+                let integer = std::str::from_utf8(bytes)
+                    .ok()
+                    .and_then(|value| value.trim_ascii().parse::<i64>().ok());
+                match integer {
+                    Some(integer) => Self::Integer(integer),
+                    None => Self::Text(bytes.into()),
+                }
+            }
+            ValueRef::Blob(bytes) => Self::Blob(bytes.into()),
+            ValueRef::Null => return None,
+        })
+    }
+}
+
 struct FirefoxBookmark {
     id: i64,
     kind: i64,
@@ -296,7 +331,7 @@ struct FirefoxBookmark {
 
 fn firefox_record(
     row: &Row<'_>,
-    places: &HashMap<i64, Option<String>>,
+    places: &HashMap<PlaceId, Option<String>>,
 ) -> rusqlite::Result<(i64, String, FirefoxBookmark)> {
     Ok((
         row.get(1)?,
@@ -305,9 +340,7 @@ fn firefox_record(
             id: row.get(0)?,
             kind: row.get(2)?,
             title: title(row.get_ref(3)?),
-            url: row
-                .get::<_, i64>(5)
-                .ok()
+            url: PlaceId::from_value(row.get_ref(5)?)
                 .and_then(|id| places.get(&id))
                 .and_then(Clone::clone),
         },

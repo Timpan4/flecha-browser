@@ -184,7 +184,7 @@ fn arc_surrogate_ids_and_literal_replacement_chars_stay_distinct() {
 }
 
 #[test]
-fn firefox_reports_duplicate_place_ids_and_keeps_the_lowest_rowid() {
+fn firefox_reports_duplicate_place_ids_and_keeps_the_first_row() {
     let home = tempfile::tempdir().unwrap();
     let profile = home.path().join(".mozilla/firefox/example.default");
     fs::create_dir_all(&profile).unwrap();
@@ -209,6 +209,67 @@ fn firefox_reports_duplicate_place_ids_and_keeps_the_lowest_rowid() {
         plan.bookmarks.as_deref(),
         Some([Bookmark::Tab(tab)]) if tab.url == "https://example.org/first"
     ));
+}
+
+#[test]
+fn firefox_place_lookup_does_not_require_a_hidden_rowid() {
+    for (columns, suffix) in [
+        ("id INTEGER PRIMARY KEY", "WITHOUT ROWID"),
+        ("rowid INTEGER, id INTEGER", ""),
+        ("RowId INTEGER, id INTEGER", ""),
+    ] {
+        assert_firefox_place_lookup(columns, suffix, ["1", "2", "3"], ["1", "2", "3"]);
+    }
+}
+
+#[test]
+fn firefox_place_lookup_matches_mixed_storage_types() {
+    for ids in [["'1'", "2", "'3'"], ["1.0", "2", "3.0"]] {
+        assert_firefox_place_lookup("id INTEGER PRIMARY KEY", "", ["1", "2", "3"], ids);
+    }
+    assert_firefox_place_lookup("id", "", ["1.0", "'2'", "3"], ["1", "2", "3"]);
+    assert_firefox_place_lookup("id", "", ["'a'", "x'61'", "3.5"], ["'a'", "x'61'", "3.5"]);
+}
+
+fn assert_firefox_place_lookup(
+    columns: &str,
+    suffix: &str,
+    places: [&str; 3],
+    bookmarks: [&str; 3],
+) {
+    let home = tempfile::tempdir().unwrap();
+    let profile = home.path().join(".mozilla/firefox/example.default");
+    fs::create_dir_all(&profile).unwrap();
+    let db = Connection::open(profile.join("places.sqlite")).unwrap();
+    let [one, two, three] = places;
+    let [first, second, third] = bookmarks;
+    db.execute_batch(&format!(
+        "CREATE TABLE moz_places ({columns}, url, title, visit_count, last_visit_date, hidden) {suffix};
+         CREATE TABLE moz_bookmarks (id, parent, type, title, guid, fk, position);
+         INSERT INTO moz_places (id, url) VALUES
+             ({one}, 'https://example.org/one'), ({two}, 'https://example.org/two'),
+             ({three}, 'https://example.org/three');
+         INSERT INTO moz_bookmarks VALUES (100, 0, 2, 'Toolbar', 'toolbar_____', NULL, 0),
+             (101, 100, 1, 'One', 'one', {first}, 0),
+             (102, 100, 1, 'Two', 'two', {second}, 1),
+             (103, 100, 1, 'Three', 'three', {third}, 2);"
+    ))
+    .unwrap();
+    drop(db);
+
+    let config = BrowserLocations::new(Platform::Linux, home.path());
+    let plan = read_browser(Browser::Firefox, &config);
+    assert!(
+        plan.warnings.is_empty(),
+        "{columns} {suffix}, {places:?}, {bookmarks:?}"
+    );
+    assert_eq!(plan.bookmark_count, 3);
+    let nodes = plan.bookmarks.unwrap();
+    assert_eq!(nodes.len(), 3);
+    for (node, name) in nodes.iter().zip(["one", "two", "three"]) {
+        let expected = format!("https://example.org/{name}");
+        assert!(matches!(node, Bookmark::Tab(tab) if tab.url == expected));
+    }
 }
 
 #[test]
