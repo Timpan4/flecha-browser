@@ -67,6 +67,13 @@ export async function fixture() {
     '/popup': popupColors,
   }[path] ?? ['#147a70', '#ffcc49'];
 
+  // Asks before leaving. Chromium shows the prompt only after a user gesture.
+  const beforeUnload = `
+    addEventListener('beforeunload', event => {
+      event.preventDefault();
+      event.returnValue = '';
+    });`;
+
   const extra = {
     '/opener': `
       <a id="blank" href="/cookie/check" target="_blank">Open in a new tab</a>
@@ -75,15 +82,9 @@ export async function fixture() {
     '/popup': `
       <script>
         fetch('/probe/popup-opener?value=' + (window.opener !== null));
-        window.opener?.postMessage('hello-from-popup', '*');
+        window.opener?.postMessage('hello-from-popup', '*');${beforeUnload}
       </script>`,
-    '/unload': `
-      <script>
-        addEventListener('beforeunload', event => {
-          event.preventDefault();
-          event.returnValue = '';
-        });
-      </script>`,
+    '/unload': `<script>${beforeUnload}</script>`,
   }[path] ?? '';
 
   response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });

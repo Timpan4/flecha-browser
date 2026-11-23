@@ -56,7 +56,8 @@ expect_failure runtime-socket 'Host runtime sockets are visible inside the launc
 binary="./target/${suite##*/}/rewrite/target/debug/flecha"
 slice_mutations=(cookie stale stale-paint stale-title split-swap blank-restart close-archive
   peek-shared pane-size pane-height archive-dup stale-closedat-ui stale-closedat
-  pane-offset ratio-002 ratio-001 right-both pane-size-restart peek-blind-click flechinha-old-partition)
+  pane-offset ratio-002 ratio-001 right-both pane-size-restart peek-blind-click flechinha-old-partition
+  popups-allowed)
 for mutation in "${slice_mutations[@]}"; do
   case "$mutation" in
     cookie|peek-shared) expected='cookie request used the wrong Space context' ;;
@@ -70,6 +71,7 @@ for mutation in "${slice_mutations[@]}"; do
     stale-closedat|stale-closedat-ui) expected='archive timestamp predates the close command' ;;
     peek-blind-click) expected='Peek backdrop passed the click through to Separate cookies' ;;
     flechinha-old-partition) expected='partition change left a Flechinha on the previous cookie jar' ;;
+    popups-allowed) expected='a popup without a user gesture opened' ;;
   esac
   (
     cd "$shadow"
@@ -84,8 +86,8 @@ done
 (
   cd "$shadow"
   cp -R "$rewrite/crates/." crates/
-  node "$rewrite/tools/mutate-slice.mjs" stale-openlink
-  expect_failure stale-openlink 'retired callback reached the shell' \
+  node "$rewrite/tools/mutate-slice.mjs" stale-opened
+  expect_failure stale-opened 'retired callback reached the shell' \
     "${launcher[@]}" test --locked -p flecha-cef -j 14 --lib -- \
     tests::rejects_every_callback_from_a_retired_generation --exact
 )
