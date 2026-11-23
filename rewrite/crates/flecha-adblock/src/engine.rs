@@ -290,3 +290,48 @@ pub fn save_engine(cache: &Path, key: &EngineKey, filters: &Filters) -> io::Resu
     fs::create_dir_all(cache)?;
     write_atomically(&cache.join(ENGINE_FILE), &bytes)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Which exceptions go into the page-exception engine and `engine.dat`: only those that
+    /// name `$document` among their types.
+    #[test]
+    fn only_exceptions_naming_document_are_page_exceptions() {
+        let options = [
+            ("", false),
+            ("$script", false),
+            ("$~script", false),
+            ("$all", false),
+            ("$subdocument", false),
+            ("$document", true),
+            ("$document,subdocument", true),
+            ("$image,document", true),
+            ("$generichide", false),
+            ("$third-party", false),
+            ("$~third-party", false),
+            ("$1p", false),
+            ("$domain=news.example", false),
+            ("$important", false),
+            ("$xmlhttprequest", false),
+            ("$csp=script-src 'none'", false),
+        ];
+        for (option, expected) in options {
+            let line = format!("@@||page.example^{option}");
+            let Ok(ParsedLine::Network(filter)) =
+                parse_filter(&line, false, ParseOptions::default())
+            else {
+                panic!("{line} did not parse");
+            };
+            assert_eq!(is_page_exception(&filter), expected, "{line}");
+        }
+        // A blocking filter never is, `$document` or not.
+        let Ok(ParsedLine::Network(filter)) =
+            parse_filter("||page.example^$document", false, ParseOptions::default())
+        else {
+            panic!();
+        };
+        assert!(!is_page_exception(&filter));
+    }
+}
