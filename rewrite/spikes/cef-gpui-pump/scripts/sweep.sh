@@ -32,7 +32,8 @@ now_ms() { local t=${EPOCHREALTIME//[!0-9]/}; echo $((10#$t / 1000)); }
 # Ends what is left of a run: group $2 by its ID, while the inventory lists a
 # member of it (an empty group's ID can be reused once its leader is reaped),
 # and the processes marked with runtime dir $3 through the sweeper $1. Group
-# members get no per-PID signal. Waits until none is left, for at most
+# members get no per-PID kill(2); a marked member may also be signaled through
+# the sweeper's identity-checked pidfd. Waits until none is left, for at most
 # STEP_TIMEOUT_MS. Prints what it found and the sweeper's outcomes. Returns 0
 # if nothing was left, 1 if something was and it is gone, 2 if any survived,
 # 3 if an inventory or the marker sweep failed, so the sweep is incomplete.

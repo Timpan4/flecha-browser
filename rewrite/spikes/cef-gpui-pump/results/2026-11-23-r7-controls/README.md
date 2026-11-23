@@ -1,10 +1,14 @@
 # r7 controls
 
-All ran at `8321ba3`. The two app runs used `WARMUP_MS=3000 MEASURE_MS=5000 STEP_TIMEOUT_MS=5000`, through `scripts/run-checks.sh` with its full isolation. The scripts are not executable; run them with `bash`.
+All ran at `8321ba3`. The three app runs used `WARMUP_MS=3000 MEASURE_MS=5000 STEP_TIMEOUT_MS=5000`, through `scripts/run-checks.sh` with its full isolation. The scripts are not executable; run them with `bash`.
 
 ## Watchdog
 
-`watchdog/`: `results/2026-11-23-r6-controls/watchdog-control.sh` rerun against this runner (`bash .../watchdog-control.sh results/2026-11-23-r7-controls/watchdog`). The control passed. `idle.leftover.txt` lists both SIGTERM-ignoring helpers. The in-group helper ended with the group kill, which is the only signal group members get now. The own-session helper, outside the group and carrying only the run's `XDG_RUNTIME_DIR`, ended through the pidfd sweep: `sweep: killed N`.
+`watchdog/`: `results/2026-11-23-r6-controls/watchdog-control.sh` rerun against this runner (`bash .../watchdog-control.sh results/2026-11-23-r7-controls/watchdog`). The control passed. `idle.leftover.txt` lists both SIGTERM-ignoring helpers. The in-group helper, which does not carry the marker, ended with the group kill; group members get no per-PID `kill` now. The own-session helper, outside the group and carrying only the run's `XDG_RUNTIME_DIR`, ended through the pidfd sweep: `sweep: killed N`.
+
+## Startup
+
+`startup-race/`: `results/2026-11-23-r6-controls/startup-race-control.sh` rerun against this runner, whose EXIT trap now calls `stop_run` from `scripts/sweep.sh`. The control passed: the runner exited 143, the shim was gone and no process of the run started. `run.log` shows two sweeper lines, one per sweep of the trap: the sweep after it killed the launcher, and the sweep of the recorded run. Each covers the group and the run's marker. The executable `shim/timeout` the control generates was deleted, not committed.
 
 ## Failed inventory
 
