@@ -487,3 +487,26 @@ fn jwt_privacy_and_decoder_require_a_json_object_header() {
     assert!(developer_suggestions(&non_token, None, &[], 0).is_empty());
     assert_eq!(developer_suggestions("e30.e30.x", None, &[], 0).len(), 1);
 }
+
+#[test]
+fn jwt_decoder_rejects_a_mixed_base64_alphabet() {
+    use base64::engine::general_purpose::{STANDARD, URL_SAFE};
+    let header = STANDARD.encode(r#"{"alg":"HS256","kid":"¾ÿÿa"}"#);
+    assert!(header.contains('+') && header.contains('/'));
+    let mixed = header.replacen('+', "-", 1);
+    assert!(STANDARD.decode(&mixed).is_err() && URL_SAFE.decode(&mixed).is_err());
+    assert!(developer_suggestions(&format!("{mixed}.e30.signature"), None, &[], 0).is_empty());
+}
+
+#[test]
+fn jwt_privacy_scans_normalized_and_repeatedly_percent_decoded_dots() {
+    let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"HS256"}"#);
+    let payload = URL_SAFE_NO_PAD.encode(br#"{"sub":"fixture"}"#);
+    for dot in ["．", "%2E", "。", "%252E"] {
+        let note = format!("review {header}{dot}{payload}{dot}signature please");
+        assert!(
+            SearchEngine::Google.suggestion_url(&note).is_none(),
+            "delimiter {dot}"
+        );
+    }
+}

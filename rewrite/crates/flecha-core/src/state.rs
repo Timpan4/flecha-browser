@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::Settings;
 use crate::suggestions::{display_url, match_quality};
+use crate::tree::{self, Branch};
 
 macro_rules! durable_id {
     ($($name:ident),+ $(,)?) => {$(
@@ -92,11 +93,8 @@ pub struct HistoryEntry {
     pub title: String,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(tag = "kind", rename_all = "lowercase")]
 pub enum PinnedNode {
     Tab {
-        #[serde(rename = "tabId")]
         tab_id: TabId,
     },
     Folder {
@@ -590,10 +588,19 @@ impl BrowserState {
     }
 
     pub fn reopen_window(&mut self) -> Option<WindowId> {
-        if self.closed_windows.is_empty() {
-            return None;
-        }
-        let mut closed = self.closed_windows.remove(0);
+        let (index, _) = self.newest_closed_window()?;
+        Some(self.reopen_window_at(index))
+    }
+
+    fn newest_closed_window(&self) -> Option<(usize, &ClosedWindow)> {
+        self.closed_windows
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, window)| Reverse(window.closed_at))
+    }
+
+    fn reopen_window_at(&mut self, index: usize) -> WindowId {
+        let mut closed = self.closed_windows.remove(index);
         if !closed
             .window
             .spaces
@@ -608,27 +615,29 @@ impl BrowserState {
         let id = closed.window.id.clone();
         self.windows.insert(0, closed.window);
         self.repair_visible_tabs();
-        Some(id)
+        id
     }
 
-    /// Reopen the most recent closed window or archive entry. Archive entries reopen as new Today tabs.
+    /// Reopen by close time. Archive entries reopen as new Today tabs.
     pub fn reopen_last(&mut self, new_tab_id: TabId, now: EpochMillis) -> Option<Reopened> {
-        if let Some(closed) = self.closed_windows.first()
-            && self
-                .archive
-                .first()
-                .is_none_or(|entry| closed.closed_at > entry.closed_at)
+        let newest_tab = self
+            .archive
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, entry)| Reverse(entry.closed_at));
+        if let Some((index, closed)) = self.newest_closed_window()
+            && newest_tab.is_none_or(|(_, entry)| closed.closed_at > entry.closed_at)
         {
-            return self.reopen_window().map(Reopened::Window);
+            return Some(Reopened::Window(self.reopen_window_at(index)));
         }
-        let entry = self.archive.first()?;
+        let (index, entry) = newest_tab?;
         let mut tab = Tab::new(entry.url.clone(), now);
         tab.title.clone_from(&entry.title);
         let window = self.focused_window().id.clone();
         if !self.open_today(new_tab_id.clone(), tab, &window, None, true) {
             return None;
         }
-        self.archive.remove(0);
+        self.archive.remove(index);
         Some(Reopened::Tab(new_tab_id))
     }
 
@@ -817,6 +826,15 @@ impl BrowserState {
     }
 
     pub fn close_tab(&mut self, id: &TabId, now: EpochMillis) -> CloseTab {
+        self.close_tab_recording(id, now, |_| {})
+    }
+
+    fn close_tab_recording(
+        &mut self,
+        id: &TabId,
+        now: EpochMillis,
+        mut removed: impl FnMut(TabId),
+    ) -> CloseTab {
         let Some(location) = self.locate(id) else {
             return CloseTab::Missing;
         };
@@ -835,6 +853,7 @@ impl BrowserState {
                 .position(|tab| tab == id)
                 .expect("Today placement contains the tab");
             ws.today.remove(index);
+            removed(id.clone());
             if let Some([desktop, phone]) = &ws.split
                 && ws.split_mode == Some(SplitMode::Responsive)
             {
@@ -844,6 +863,7 @@ impl BrowserState {
                 {
                     ws.today.retain(|tab| tab != phone);
                     self.tabs.remove(phone);
+                    removed(phone.clone());
                     if ws.active_tab_id.as_ref() == Some(phone) {
                         ws.active_tab_id = Some(id.clone());
                     }
@@ -856,7 +876,7 @@ impl BrowserState {
                     .cloned();
             }
             let archived = self.archive_removed(id, now);
-            self.repair_selections();
+            self.repair_selections().into_iter().for_each(removed);
             return if archived {
                 CloseTab::Archived
             } else {
@@ -885,10 +905,12 @@ impl BrowserState {
                     ws.active_tab_id = ws.today.iter().find(|tab| *tab != phone).cloned();
                 }
                 ws.today.retain(|tab| tab != phone);
-                self.tabs.remove(phone);
+                if self.tabs.remove(phone).is_some() {
+                    removed(phone.clone());
+                }
             }
         }
-        self.repair_selections();
+        self.repair_selections().into_iter().for_each(removed);
         CloseTab::Unloaded
     }
 
@@ -935,7 +957,7 @@ impl BrowserState {
         removed
     }
 
-    /// Close rows in the same Today list or agent folder as the given tab.
+    /// Close rows in the same Today list or agent folder and report every removed tab.
     pub fn close_today_tabs(
         &mut self,
         tab: &TabId,
@@ -969,10 +991,11 @@ impl BrowserState {
                 .cloned()
                 .collect(),
         };
-        for id in &closed {
-            self.close_tab(id, now);
+        let mut removed = Vec::new();
+        for id in closed {
+            self.close_tab_recording(&id, now, |removed_id| removed.push(removed_id));
         }
-        closed
+        removed
     }
 
     pub fn archive_stale(&mut self, now: EpochMillis) -> Vec<TabId> {
@@ -1390,108 +1413,79 @@ pub(crate) fn compare_recency(
         .then_with(|| compare_activity(tabs, left, right))
 }
 
+impl Branch for PinnedNode {
+    fn children(&self) -> Option<&[Self]> {
+        match self {
+            Self::Folder { children, .. } => Some(children),
+            Self::Tab { .. } => None,
+        }
+    }
+
+    fn children_mut(&mut self) -> Option<&mut Vec<Self>> {
+        match self {
+            Self::Folder { children, .. } => Some(children),
+            Self::Tab { .. } => None,
+        }
+    }
+}
+
 pub(crate) fn walk_pins(
     nodes: &[PinnedNode],
 ) -> impl Iterator<Item = (&PinnedNode, usize, Option<&FolderId>)> {
-    let mut frames = vec![(nodes.iter(), None)];
-    std::iter::from_fn(move || {
-        loop {
-            let depth = frames.len().checked_sub(1)?;
-            let (siblings, parent) = frames.last_mut()?;
-            if let Some(node) = siblings.next() {
-                let parent = *parent;
-                if let PinnedNode::Folder { id, children, .. } = node {
-                    frames.push((children.iter(), Some(id)));
-                }
-                return Some((node, depth, parent));
-            }
-            frames.pop();
-        }
+    tree::walk(nodes).map(|(node, depth, parent)| {
+        let id = parent.and_then(|parent| match parent {
+            PinnedNode::Folder { id, .. } => Some(id),
+            PinnedNode::Tab { .. } => None,
+        });
+        (node, depth, id)
     })
 }
 
 impl Clone for PinnedNode {
     fn clone(&self) -> Self {
-        let mut tree = PinnedTree::default();
-        for (node, depth, _) in walk_pins(std::slice::from_ref(self)) {
-            let node = match node {
-                Self::Tab { tab_id } => Self::Tab {
-                    tab_id: tab_id.clone(),
-                },
-                Self::Folder { id, name, open, .. } => Self::Folder {
-                    id: id.clone(),
-                    name: name.clone(),
-                    open: *open,
-                    children: Vec::new(),
-                },
-            };
-            tree.push(depth, node);
-        }
-        tree.finish().pop().expect("cloning one root yields a root")
+        tree::clone_root(self, |node| match node {
+            Self::Tab { tab_id } => Self::Tab {
+                tab_id: tab_id.clone(),
+            },
+            Self::Folder { id, name, open, .. } => Self::Folder {
+                id: id.clone(),
+                name: name.clone(),
+                open: *open,
+                children: Vec::new(),
+            },
+        })
+    }
+}
+
+impl std::fmt::Debug for PinnedNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list()
+            .entries(pin_records(std::slice::from_ref(self)))
+            .finish()
     }
 }
 
 impl PartialEq for PinnedNode {
     fn eq(&self, other: &Self) -> bool {
-        let flatten = |(node, depth, _)| pin_record(node, depth);
-        walk_pins(std::slice::from_ref(self))
-            .map(flatten)
-            .eq(walk_pins(std::slice::from_ref(other)).map(flatten))
+        pin_records(std::slice::from_ref(self)).eq(pin_records(std::slice::from_ref(other)))
+    }
+}
+
+impl Serialize for PinnedNode {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serialize_pins(std::slice::from_ref(self), serializer)
     }
 }
 
 impl Drop for PinnedNode {
     fn drop(&mut self) {
-        if let Self::Folder { children, .. } = self {
-            let mut stack = std::mem::take(children);
-            while let Some(mut node) = stack.pop() {
-                if let Self::Folder { children, .. } = &mut node {
-                    stack.append(children);
-                }
-            }
-        }
+        tree::drop_descendants(self);
     }
 }
 
-#[derive(Default)]
-pub(crate) struct PinnedTree {
-    parents: Vec<(Vec<PinnedNode>, PinnedNode)>,
-    siblings: Vec<PinnedNode>,
-}
+pub(crate) type PinnedTree = tree::Builder<PinnedNode>;
 
-impl PinnedTree {
-    pub(crate) fn accepts_depth(&self, depth: usize) -> bool {
-        depth <= self.parents.len()
-    }
-
-    pub(crate) fn push(&mut self, depth: usize, node: PinnedNode) {
-        self.ascend(depth);
-        if matches!(node, PinnedNode::Folder { .. }) {
-            self.parents
-                .push((std::mem::take(&mut self.siblings), node));
-        } else {
-            self.siblings.push(node);
-        }
-    }
-
-    pub(crate) fn finish(mut self) -> Vec<PinnedNode> {
-        self.ascend(0);
-        self.siblings
-    }
-
-    pub(crate) fn ascend(&mut self, depth: usize) {
-        while self.parents.len() > depth {
-            let (siblings, mut folder) = self.parents.pop().expect("an ancestor remains");
-            let PinnedNode::Folder { children, .. } = &mut folder else {
-                unreachable!("only folders can be ancestors");
-            };
-            *children = std::mem::replace(&mut self.siblings, siblings);
-            self.siblings.push(folder);
-        }
-    }
-}
-
-#[derive(PartialEq, Serialize)]
+#[derive(Debug, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 enum PinRecord<'a> {
     Tab {
@@ -1507,8 +1501,8 @@ enum PinRecord<'a> {
     },
 }
 
-fn pin_record(node: &PinnedNode, depth: usize) -> PinRecord<'_> {
-    match node {
+fn pin_records(nodes: &[PinnedNode]) -> impl Iterator<Item = PinRecord<'_>> {
+    tree::walk(nodes).map(|(node, depth, _)| match node {
         PinnedNode::Tab { tab_id } => PinRecord::Tab { depth, tab_id },
         PinnedNode::Folder { id, name, open, .. } => PinRecord::Folder {
             depth,
@@ -1516,7 +1510,7 @@ fn pin_record(node: &PinnedNode, depth: usize) -> PinRecord<'_> {
             name,
             open: *open,
         },
-    }
+    })
 }
 
 fn serialize_pins<S: serde::Serializer>(
@@ -1524,7 +1518,7 @@ fn serialize_pins<S: serde::Serializer>(
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
     // Keep the snapshot's JSON nesting independent of the domain tree's depth.
-    serializer.collect_seq(walk_pins(nodes).map(|(node, depth, _)| pin_record(node, depth)))
+    serializer.collect_seq(pin_records(nodes))
 }
 
 fn collect_pins<'a>(nodes: &'a [PinnedNode], tabs: &mut Vec<&'a TabId>) {

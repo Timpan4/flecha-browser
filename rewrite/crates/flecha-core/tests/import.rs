@@ -493,3 +493,106 @@ fn imported_split_prefers_new_unseen_tabs_over_an_existing_favorite() {
         [&used, &left.id, &right.id, &fav.id]
     );
 }
+
+fn deep_trait_batch() -> ImportBatch {
+    let mut space = incoming_space("copy", "Work");
+    let mut nodes = vec![ImportNode::Tab(incoming_tab(
+        "leaf",
+        "https://example.org/",
+    ))];
+    // Match the depth from the verifier's stack-overflow reproducer.
+    for level in 0..60_000 {
+        nodes = vec![ImportNode::Folder {
+            id: FolderId::new(format!("folder-{level}")),
+            name: format!("Folder {level}"),
+            children: nodes,
+        }];
+    }
+    space.pinned = nodes;
+    ImportBatch {
+        spaces: vec![space],
+        ..ImportBatch::default()
+    }
+}
+
+#[test]
+fn import_batch_traits_support_the_verifiers_deep_tree() {
+    let batch = deep_trait_batch();
+    let copy = batch.clone();
+    assert!(copy == batch);
+    assert!(format!("{copy:?}").contains("\"Folder 0\""));
+}
+
+#[test]
+fn pinned_tree_traits_support_the_verifiers_deep_tree() {
+    let window = WindowId::new("w");
+    let mut state = BrowserState::new(SpaceId::new("s"), window.clone());
+    state
+        .import_spaces(&deep_trait_batch(), ImportMode::Append, &window, 0)
+        .unwrap();
+    let copy = state.clone();
+    assert!(copy == state);
+    assert!(format!("{copy:?}").contains("\"Folder 0\""));
+    let pin = &copy.spaces()[0].pinned[0];
+    let value = serde_json::to_value(pin).unwrap();
+    let records = value
+        .as_array()
+        .expect("the standalone pin uses flat records");
+    assert_eq!(records.first().unwrap()["name"], "Folder 59999");
+    assert_eq!(records.last().unwrap()["tabId"], "leaf");
+}
+
+#[test]
+fn merged_folder_keeps_its_slot_id_and_open_state() {
+    let space = SpaceId::new("s");
+    let window = WindowId::new("w");
+    let a = TabId::new("a");
+    let b = TabId::new("b");
+    let f = FolderId::new("f");
+    let g = FolderId::new("g");
+    let mut state = BrowserState::new(space.clone(), window.clone());
+    let pinned = Placement::Pinned {
+        space: &space,
+        folder: None,
+    };
+    assert!(state.create_tab(
+        a.clone(),
+        Tab::new("https://example.org/a", 0),
+        pinned,
+        None
+    ));
+    assert!(state.add_folder(f.clone(), "F", &space, None));
+    assert!(state.edit_folder(&f, None, Some(false)));
+    assert!(state.create_tab(
+        b.clone(),
+        Tab::new("https://example.org/b", 0),
+        pinned,
+        None
+    ));
+    assert!(state.add_folder(g.clone(), "G", &space, None));
+    let mut incoming = incoming_space("import", "Personal");
+    let leaf = incoming_tab("new-child", "https://example.org/new");
+    incoming.pinned.push(ImportNode::Folder {
+        id: FolderId::new("import-f"),
+        name: "F".into(),
+        children: vec![ImportNode::Tab(leaf.clone())],
+    });
+    let batch = ImportBatch {
+        spaces: vec![incoming],
+        ..ImportBatch::default()
+    };
+    let out = state
+        .import_spaces(&batch, ImportMode::Merge, &window, 0)
+        .unwrap();
+    assert_eq!((out.merged, out.folders, out.tabs), (1, 0, 1));
+    let [first, second, third, fourth] = state.space(&space).unwrap().pinned.as_slice() else {
+        panic!("expected two tabs and two folders")
+    };
+    assert!(matches!(first, PinnedNode::Tab { tab_id } if tab_id == &a));
+    assert!(
+        matches!(second, PinnedNode::Folder { id, open: false, children, .. }
+        if id == &f && matches!(children.as_slice(), [PinnedNode::Tab { tab_id }] if tab_id == &leaf.id))
+    );
+    assert!(matches!(third, PinnedNode::Tab { tab_id } if tab_id == &b));
+    assert!(matches!(fourth, PinnedNode::Folder { id, .. } if id == &g));
+}

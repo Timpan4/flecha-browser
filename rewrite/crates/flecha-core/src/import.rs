@@ -4,6 +4,7 @@ use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::state::{DEFAULT_SPACE_COLOR, walk_pins};
+use crate::tree::{self, Branch};
 use crate::{
     ARCHIVE_LIMIT, ArchivedTab, BrowserState, Device, EpochMillis, FolderId, PinnedNode, SpaceId,
     Tab, TabId, WindowId,
@@ -36,7 +37,6 @@ pub struct ImportSpace {
     pub splits: Vec<Vec<String>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ImportNode {
     Tab(ImportTab),
     Folder {
@@ -46,17 +46,73 @@ pub enum ImportNode {
     },
 }
 
-impl Drop for ImportNode {
-    fn drop(&mut self) {
-        if let Self::Folder { children, .. } = self {
-            let mut stack = std::mem::take(children);
-            while let Some(mut node) = stack.pop() {
-                if let Self::Folder { children, .. } = &mut node {
-                    stack.append(children);
-                }
-            }
+impl Branch for ImportNode {
+    fn children(&self) -> Option<&[Self]> {
+        match self {
+            Self::Folder { children, .. } => Some(children),
+            Self::Tab(_) => None,
         }
     }
+
+    fn children_mut(&mut self) -> Option<&mut Vec<Self>> {
+        match self {
+            Self::Folder { children, .. } => Some(children),
+            Self::Tab(_) => None,
+        }
+    }
+}
+
+impl Clone for ImportNode {
+    fn clone(&self) -> Self {
+        tree::clone_root(self, |node| match node {
+            Self::Tab(tab) => Self::Tab(tab.clone()),
+            Self::Folder { id, name, .. } => Self::Folder {
+                id: id.clone(),
+                name: name.clone(),
+                children: Vec::new(),
+            },
+        })
+    }
+}
+
+impl std::fmt::Debug for ImportNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list().entries(import_records(self)).finish()
+    }
+}
+
+impl PartialEq for ImportNode {
+    fn eq(&self, other: &Self) -> bool {
+        import_records(self).eq(import_records(other))
+    }
+}
+
+impl Eq for ImportNode {}
+
+impl Drop for ImportNode {
+    fn drop(&mut self) {
+        tree::drop_descendants(self);
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ImportRecord<'a> {
+    Tab {
+        depth: usize,
+        tab: &'a ImportTab,
+    },
+    Folder {
+        depth: usize,
+        id: &'a FolderId,
+        name: &'a str,
+    },
+}
+
+fn import_records(root: &ImportNode) -> impl Iterator<Item = ImportRecord<'_>> {
+    tree::walk(std::slice::from_ref(root)).map(|(node, depth, _)| match node {
+        ImportNode::Tab(tab) => ImportRecord::Tab { depth, tab },
+        ImportNode::Folder { id, name, .. } => ImportRecord::Folder { depth, id, name },
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

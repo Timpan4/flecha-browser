@@ -285,6 +285,97 @@ fn evicted_window_tabs_take_the_front_even_when_the_archive_is_full() {
 }
 
 #[test]
+fn reopen_orders_evicted_windows_and_tabs_by_close_time_even_after_restart() {
+    let main = WindowId::new("main");
+    let mut state = BrowserState::new(SpaceId::new("s"), main.clone());
+    for n in 0..CLOSED_WINDOW_LIMIT {
+        let window = WindowId::new(format!("window{n}"));
+        assert!(state.open_window(window.clone(), None));
+        assert!(state.open_today(
+            TabId::new(format!("w{n}")),
+            Tab::new(format!("https://example.org/w{n}"), 0),
+            &window,
+            None,
+            true
+        ));
+        assert!(state.close_window(&window, i64::try_from(n + 1).unwrap()));
+    }
+    let a = TabId::new("a");
+    assert!(state.open_today(
+        a.clone(),
+        Tab::new("https://example.org/a", 0),
+        &main,
+        None,
+        true
+    ));
+    assert_eq!(state.close_tab(&a, 100), CloseTab::Archived);
+    let last = WindowId::new("last");
+    assert!(state.open_window(last.clone(), None));
+    assert!(state.open_today(
+        TabId::new("last-tab"),
+        Tab::new("https://example.org/last", 0),
+        &last,
+        None,
+        true
+    ));
+    assert!(state.close_window(&last, 200));
+    assert_eq!(
+        state
+            .archive()
+            .iter()
+            .map(|entry| entry.closed_at)
+            .collect::<Vec<_>>(),
+        [1, 100]
+    );
+
+    let saved = encode(&state).unwrap();
+    for mut state in [state, decode(&saved).unwrap()] {
+        let reopened = TabId::new("reopened");
+        assert_eq!(
+            state.reopen_last(reopened.clone(), 201),
+            Some(Reopened::Window(last.clone()))
+        );
+        assert_eq!(
+            state.reopen_last(reopened.clone(), 202),
+            Some(Reopened::Tab(reopened.clone()))
+        );
+        assert_eq!(state.tab(&reopened).unwrap().url, "https://example.org/a");
+        assert_eq!(
+            state.reopen_last(TabId::new("unused"), 203),
+            Some(Reopened::Window(WindowId::new(format!(
+                "window{}",
+                CLOSED_WINDOW_LIMIT - 1
+            ))))
+        );
+    }
+}
+
+#[test]
+fn reopen_uses_close_time_for_windows_behind_the_front() {
+    let main = WindowId::new("main");
+    let earlier = WindowId::new("earlier");
+    let later = WindowId::new("later");
+    let mut state = BrowserState::new(SpaceId::new("s"), main);
+    for (window, time) in [(&later, 10_000), (&earlier, 9_000)] {
+        assert!(state.open_window(window.clone(), None));
+        assert!(state.open_today(
+            TabId::new(window.as_str()),
+            Tab::new("https://example.org", 0),
+            window,
+            None,
+            true
+        ));
+        assert!(state.close_window(window, time));
+    }
+    assert_eq!(state.closed_windows()[0].window.id, earlier);
+    let mut state = decode(&encode(&state).unwrap()).unwrap();
+    assert_eq!(
+        state.reopen_last(TabId::new("unused"), 9_100),
+        Some(Reopened::Window(later))
+    );
+}
+
+#[test]
 fn pinned_tab_and_folder_ids_do_not_collide_as_ordering_anchors() {
     let space = SpaceId::new("s");
     let mut state = BrowserState::new(space.clone(), WindowId::new("w"));
@@ -480,7 +571,7 @@ fn today_bulk_close_respects_agent_folder_and_shared_split_rows() {
 }
 
 #[test]
-fn ordinary_archive_order_survives_clock_rollback_and_restart() {
+fn archive_display_order_survives_clock_rollback_while_undo_uses_close_time() {
     let window = WindowId::new("w");
     let first = TabId::new("first");
     let last = TabId::new("last");
@@ -496,12 +587,13 @@ fn ordinary_archive_order_survives_clock_rollback_and_restart() {
     state.close_tab(&last, 9_000);
     let saved = encode(&state).unwrap();
     for mut version in [state, decode(&saved).unwrap()] {
+        assert_eq!(version.archive()[0].url, "https://example.org/b");
         assert_eq!(
             version.reopen_last(reopened.clone(), 9_100),
             Some(Reopened::Tab(reopened.clone()))
         );
-        assert_eq!(version.tab(&reopened).unwrap().url, "https://example.org/b");
-        assert_eq!(version.archive()[0].url, "https://example.org/a");
+        assert_eq!(version.tab(&reopened).unwrap().url, "https://example.org/a");
+        assert_eq!(version.archive()[0].url, "https://example.org/b");
     }
 }
 
@@ -541,6 +633,100 @@ fn closing_other_today_tabs_keeps_the_selected_responsive_pair() {
             [desktop.clone(), mirror.clone()]
         );
         assert_eq!(state.archive().len(), 1);
+    }
+}
+
+#[test]
+fn close_operations_report_every_removed_today_tab_for_each_pair_position() {
+    use flecha_core::{CloseToday, PinnedKey};
+    use std::collections::BTreeSet;
+
+    let space = SpaceId::new("s");
+    let window = WindowId::new("w");
+    let desktop = TabId::new("d");
+    let mirror = TabId::new("m");
+    let anchor = TabId::new("t");
+    let last = TabId::new("x");
+    let mut baseline = BrowserState::new(space.clone(), window.clone());
+    for (id, after) in [
+        (&desktop, None),
+        (&anchor, Some(&mirror)),
+        (&last, Some(&anchor)),
+    ] {
+        let active = id == &desktop;
+        let tab = Tab::new(format!("https://example.org/{}", id.as_str()), 0);
+        assert!(baseline.open_today(id.clone(), tab, &window, after, active));
+        if active {
+            baseline
+                .open_responsive(&window, mirror.clone(), 1)
+                .unwrap();
+        }
+    }
+
+    let all_tabs = |state: &BrowserState| {
+        state
+            .open_tabs()
+            .keys()
+            .map(|id| (*id).clone())
+            .collect::<BTreeSet<_>>()
+    };
+    let check = |state: &BrowserState, before: BTreeSet<TabId>, reported: Vec<TabId>| {
+        let actual: BTreeSet<_> = before
+            .into_iter()
+            .filter(|id| state.tab(id).is_none())
+            .collect();
+        assert_eq!(
+            reported.len(),
+            actual.len(),
+            "reported {reported:?}, removed {actual:?}"
+        );
+        assert_eq!(reported.into_iter().collect::<BTreeSet<_>>(), actual);
+    };
+    let moved = |before: Option<&TabId>| {
+        let mut state = baseline.clone();
+        assert!(state.place_tab(
+            &desktop,
+            Placement::Today {
+                space: &space,
+                window: &window
+            },
+            before.map(PinnedKey::Tab)
+        ));
+        state
+    };
+    let mut example = moved(Some(&last));
+    assert_eq!(
+        example.focused_window().spaces[&space].today,
+        [
+            mirror.clone(),
+            anchor.clone(),
+            desktop.clone(),
+            last.clone()
+        ]
+    );
+    let before = all_tabs(&example);
+    let removed = example.close_today_tabs(&anchor, CloseToday::Below, 2);
+    assert!(removed.contains(&mirror));
+    check(&example, before, removed);
+
+    for position in [Some(&mirror), Some(&anchor), Some(&last), None] {
+        for selected in [&desktop, &mirror, &anchor, &last] {
+            for which in [CloseToday::Below, CloseToday::Others] {
+                let mut state = moved(position);
+                assert!(state.activate(selected, &window, None).is_some());
+                let before = all_tabs(&state);
+                let reported = state.close_today_tabs(selected, which, 2);
+                check(&state, before, reported);
+            }
+        }
+        let mut state = moved(position);
+        let before = all_tabs(&state);
+        let reported = state.clear_today(&window, 2);
+        check(&state, before, reported);
+        let mut state = moved(position);
+        let before = all_tabs(&state);
+        let reported = state.archive_stale(12 * 60 * 60 * 1000 + 2);
+        check(&state, before, reported);
     }
 }
 

@@ -1,10 +1,13 @@
 //! Local command-bar suggestions and the search engine's response format.
 
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 
 use base64::{Engine as _, engine::general_purpose};
 use chrono::{DateTime, SecondsFormat};
-use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
+use percent_encoding::{
+    AsciiSet, NON_ALPHANUMERIC, percent_decode, percent_decode_str, utf8_percent_encode,
+};
 use serde_json::{Value, json};
 use unicode_normalization::UnicodeNormalization;
 use url::{Host, Url};
@@ -137,10 +140,7 @@ pub fn suggestable(raw: &str) -> bool {
         return false;
     }
     let normalized: String = query.nfkc().collect();
-    let decoded = percent_decode_str(&normalized).decode_utf8_lossy();
-    if (normalized != query && contains_jwt(&normalized))
-        || (decoded != normalized && contains_jwt(&decoded.nfkc().collect::<String>()))
-    {
+    if alternate_spelling_contains_jwt(query, &normalized) {
         return false;
     }
     let separator = re!(r"[^\p{L}\p{N}\p{M}\p{Default_Ignorable_Code_Point}\x21-\x7e。．｡]+");
@@ -165,6 +165,34 @@ pub fn suggestable(raw: &str) -> bool {
         }
     }
     true
+}
+
+fn alternate_spelling_contains_jwt(raw: &str, normalized: &str) -> bool {
+    let dotted = if normalized.contains('。') {
+        Cow::Owned(normalized.replace('。', "."))
+    } else {
+        Cow::Borrowed(normalized)
+    };
+    if dotted != raw && contains_jwt(&dotted) {
+        return true;
+    }
+    let mut encoded = Cow::Borrowed(dotted.as_bytes());
+    while encoded.contains(&b'%') {
+        let decoded: Vec<_> = percent_decode(&encoded).collect();
+        if decoded.len() == encoded.len() {
+            break;
+        }
+        // Work with bytes between passes. A successful escape always shrinks the input.
+        let clean: String = String::from_utf8_lossy(&decoded)
+            .nfkc()
+            .map(|ch| if ch == '。' { '.' } else { ch })
+            .collect();
+        if contains_jwt(&clean) {
+            return true;
+        }
+        encoded = Cow::Owned(decoded);
+    }
+    false
 }
 
 fn decode_component(word: &str) -> std::borrow::Cow<'_, str> {
@@ -210,6 +238,15 @@ fn has_jwt_header_suffix(segment: &str) -> bool {
     let header = segment.trim_end_matches('=');
     let start = header.rfind('=').map_or(0, |equals| equals + 1);
     let segment = &segment[start..];
+    // The surrounding text can use either alphabet. For privacy checks, normalize
+    // the prefix and header together so an unrelated prefix cannot hide the token.
+    let normalized;
+    let segment = if segment.contains(['-', '_']) {
+        normalized = segment.replace('-', "+").replace('_', "/");
+        normalized.as_str()
+    } else {
+        segment
+    };
     // Every Base64 start has one of four alignments. Decode each alignment once:
     // subsequent four-character group boundaries decode to three-byte boundaries.
     for alignment in 0..4 {
@@ -442,16 +479,11 @@ fn decode_jwt_json(part: &str) -> Option<Value> {
 }
 
 fn decode_base64(part: &str) -> Option<Vec<u8>> {
-    let normalized;
-    let part = if part.contains(['-', '_']) {
-        normalized = part.replace('-', "+").replace('_', "/");
-        normalized.as_str()
-    } else {
-        part
-    };
     general_purpose::STANDARD_NO_PAD
         .decode(part)
         .or_else(|_| general_purpose::STANDARD.decode(part))
+        .or_else(|_| general_purpose::URL_SAFE_NO_PAD.decode(part))
+        .or_else(|_| general_purpose::URL_SAFE.decode(part))
         .ok()
 }
 

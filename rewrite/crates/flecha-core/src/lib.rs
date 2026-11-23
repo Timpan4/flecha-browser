@@ -7,6 +7,7 @@ pub mod sleep;
 mod state;
 pub mod storage;
 pub mod suggestions;
+mod tree;
 
 pub use settings::*;
 pub use state::*;

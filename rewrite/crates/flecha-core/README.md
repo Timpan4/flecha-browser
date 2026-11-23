@@ -23,7 +23,7 @@ GPUI owns command-bar ranking across sources, Peeks, shortcut registration, loca
 - Shortcut comparisons use the native Chromium accelerator parser's rules. Unsupported saved keys fall back to defaults. Editing a shortcut unbinds every command configured to take the same key, including a shadowed default.
 - When two saved keys resolve to one accelerator, Chromium's registration order picks the winner. The core displays no shortcut for the earlier binding when it loses.
 - Exit Split selects the desktop source if its phone mirror was selected. This follows the responsive toggle and keeps the source visible after removing the mirror.
-- Close Other Tabs keeps both panes when invoked on either responsive pane so it preserves the selected tab.
-- Tabs from evicted windows go to the front of the archive and retain their original close time. Ordinary closes retain close order, including after restarting. Reopening a window whose active Space lost its Today tabs opens the first Space that retained tabs.
-- Suggestion requests keep JWTs local even when pasted directly beside other text. The local decoder accepts any JSON object header, including headers with leading whitespace, an empty object, or pretty-printed JSON.
+- Close Other Tabs keeps both panes when invoked on either responsive pane so it preserves the selected tab. Close Tabs Below reports any mirror it removes along with its source.
+- The archive keeps the shell's front insertion and cap. Evicted window tabs retain their original close time. Undo compares timestamps across the full archive and closed window list. The Chromium shell compares the heads of those lists. Reopening a window whose active Space lost its Today tabs opens the first Space that retained tabs.
+- Suggestion requests keep JWTs local even when pasted directly beside other text or with repeatedly encoded delimiters. The local decoder accepts either standard Base64 or Base64URL for each segment, and accepts any JSON object header.
 - GitHub issue shortcuts require a complete repository segment and fall back to GitHub search for ambiguous paths.
