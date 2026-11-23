@@ -40,7 +40,7 @@ wait_for '^\[console\] INPUT notification granted' "$m"
 # prompt is denied and must then be refused.
 m=$(mark)
 xdo mousemove --window "$wid" 170 435 click 1
-line=$(wait_for '^\[console\] INPUT camera|^\[permission [0-9]+\] .*camera' "$m")
+line=$(wait_for '^\[console\] INPUT camera (granted|error)|^\[permission [0-9]+\] .*camera' "$m")
 echo "$line"
 if [[ $line =~ ^\[permission\ ([0-9]+)\] ]]; then
     send "deny ${BASH_REMATCH[1]}"

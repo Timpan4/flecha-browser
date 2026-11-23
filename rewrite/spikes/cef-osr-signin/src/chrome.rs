@@ -21,6 +21,10 @@ wrap_client! {
         fn life_span_handler(&self) -> Option<LifeSpanHandler> {
             Some(ChromeLifeSpanHandler::new())
         }
+
+        fn request_handler(&self) -> Option<RequestHandler> {
+            common::request_handler()
+        }
     }
 }
 
