@@ -1,0 +1,9 @@
+head 5cebba26a0722ed094d824dcc30a1ca81c2a6ef3
+tracked changes in rewrite/:
+ M rewrite/spikes/cef-gpui-pump/results/2026-11-23-r5-controls/clippy-guard-control.out
+ M rewrite/spikes/cef-gpui-pump/results/2026-11-23-r6-controls/watchdog/build.txt
+ M rewrite/spikes/cef-gpui-pump/results/2026-11-23-r6-controls/watchdog/control.log
+ M rewrite/spikes/cef-gpui-pump/results/2026-11-23-r6-controls/watchdog/idle.scratch-dirs.txt
+ M rewrite/spikes/cef-gpui-pump/results/2026-11-23-r6-controls/watchdog/idle.stderr
+ M rewrite/spikes/cef-gpui-pump/results/2026-11-23-r6-controls/watchdog/idle.watchdog.txt
+ M rewrite/spikes/cef-gpui-pump/results/2026-11-23-r6-controls/watchdog/run.log

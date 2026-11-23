@@ -1,0 +1,545 @@
+{
+  "gpui_inactive_frame_interval_ms": 33.333,
+  "window_scale_factor": 1.0,
+  "context_initialized_after_ms": 0.00396,
+  "page_load_ms": 12.647677,
+  "devtools": {
+    "second_browser": true,
+    "runtime_style": "RuntimeStyle(CEF_RUNTIME_STYLE_CHROME)",
+    "show_devtools_call_ms": 36.303238,
+    "devtools_created_after_show_ms": 36.304758,
+    "close_devtools_after_show_ms": 2000.045401,
+    "devtools_closed_after_close_ms": 4.591616,
+    "health_before": [
+      {
+        "page": 0,
+        "on_paint_in_window": 60,
+        "on_paint_per_second": 29.739085516092047,
+        "evaluate": 2,
+        "evaluate_error": null,
+        "evaluate_ms": 0.5409510000000001
+      },
+      {
+        "page": 1,
+        "on_paint_in_window": 60,
+        "on_paint_per_second": 29.739085516092047,
+        "evaluate": 2,
+        "evaluate_error": null,
+        "evaluate_ms": 0.3298
+      }
+    ],
+    "health_after": [
+      {
+        "page": 0,
+        "on_paint_in_window": 61,
+        "on_paint_per_second": 30.25310519508366,
+        "evaluate": 2,
+        "evaluate_error": null,
+        "evaluate_ms": 0.223631
+      },
+      {
+        "page": 1,
+        "on_paint_in_window": 61,
+        "on_paint_per_second": 30.25310519508366,
+        "evaluate": 2,
+        "evaluate_error": null,
+        "evaluate_ms": 0.13249
+      }
+    ],
+    "renderers_before": [
+      {
+        "pid": 78714,
+        "ppid": 78670,
+        "type": "zygote-forked",
+        "start_time": 107451,
+        "inner_pid": 1
+      },
+      {
+        "pid": 78856,
+        "ppid": 78670,
+        "type": "zygote-forked",
+        "start_time": 107469,
+        "inner_pid": 1
+      },
+      {
+        "pid": 78857,
+        "ppid": 78670,
+        "type": "zygote-forked",
+        "start_time": 107469,
+        "inner_pid": 1
+      },
+      {
+        "pid": 78872,
+        "ppid": 78670,
+        "type": "zygote-forked",
+        "start_time": 107469,
+        "inner_pid": 1
+      },
+      {
+        "pid": 78891,
+        "ppid": 78670,
+        "type": "zygote-forked",
+        "start_time": 107499,
+        "inner_pid": 1
+      }
+    ],
+    "tree_while_open": [
+      {
+        "pid": 78663,
+        "ppid": 78661,
+        "type": "browser",
+        "start_time": 107445,
+        "inner_pid": 78663
+      },
+      {
+        "pid": 78667,
+        "ppid": 78663,
+        "type": "zygote",
+        "start_time": 107446,
+        "inner_pid": 78667
+      },
+      {
+        "pid": 78668,
+        "ppid": 78663,
+        "type": "zygote",
+        "start_time": 107446,
+        "inner_pid": 1
+      },
+      {
+        "pid": 78700,
+        "ppid": 78663,
+        "type": "utility",
+        "start_time": 107450,
+        "inner_pid": 78700
+      },
+      {
+        "pid": 78979,
+        "ppid": 78663,
+        "type": "other:bwrap",
+        "start_time": 107978,
+        "inner_pid": 78979
+      },
+      {
+        "pid": 78698,
+        "ppid": 78667,
+        "type": "zygote-forked-unsandboxed",
+        "start_time": 107450,
+        "inner_pid": 78698
+      },
+      {
+        "pid": 78670,
+        "ppid": 78668,
+        "type": "zygote",
+        "start_time": 107447,
+        "inner_pid": 3
+      },
+      {
+        "pid": 78980,
+        "ppid": 78979,
+        "type": "other:bwrap",
+        "start_time": 107978,
+        "inner_pid": 1
+      },
+      {
+        "pid": 78714,
+        "ppid": 78670,
+        "type": "zygote-forked",
+        "start_time": 107451,
+        "inner_pid": 1
+      },
+      {
+        "pid": 78856,
+        "ppid": 78670,
+        "type": "zygote-forked",
+        "start_time": 107469,
+        "inner_pid": 1
+      },
+      {
+        "pid": 78857,
+        "ppid": 78670,
+        "type": "zygote-forked",
+        "start_time": 107469,
+        "inner_pid": 1
+      },
+      {
+        "pid": 78872,
+        "ppid": 78670,
+        "type": "zygote-forked",
+        "start_time": 107469,
+        "inner_pid": 1
+      },
+      {
+        "pid": 78891,
+        "ppid": 78670,
+        "type": "zygote-forked",
+        "start_time": 107499,
+        "inner_pid": 1
+      },
+      {
+        "pid": 78959,
+        "ppid": 78670,
+        "type": "zygote-forked",
+        "start_time": 107976,
+        "inner_pid": 1
+      },
+      {
+        "pid": 78981,
+        "ppid": 78980,
+        "type": "other:glycin-svg",
+        "start_time": 107978,
+        "inner_pid": 2
+      }
+    ],
+    "renderers_after": [
+      {
+        "pid": 78714,
+        "ppid": 78670,
+        "type": "zygote-forked",
+        "start_time": 107451,
+        "inner_pid": 1
+      },
+      {
+        "pid": 78856,
+        "ppid": 78670,
+        "type": "zygote-forked",
+        "start_time": 107469,
+        "inner_pid": 1
+      },
+      {
+        "pid": 78857,
+        "ppid": 78670,
+        "type": "zygote-forked",
+        "start_time": 107469,
+        "inner_pid": 1
+      },
+      {
+        "pid": 78891,
+        "ppid": 78670,
+        "type": "zygote-forked",
+        "start_time": 107499,
+        "inner_pid": 1
+      },
+      {
+        "pid": 78959,
+        "ppid": 78670,
+        "type": "zygote-forked",
+        "start_time": 107976,
+        "inner_pid": 1
+      }
+    ],
+    "renderers_before_now_gone": [
+      {
+        "pid": 78872,
+        "ppid": 78670,
+        "type": "zygote-forked",
+        "start_time": 107469,
+        "inner_pid": 1
+      }
+    ],
+    "render_process_terminations": []
+  },
+  "devtools_pass": true,
+  "browsers_closed_after_ms": 1.604252,
+  "scenario_seconds": 12.15068748,
+  "totals": {
+    "gpui_renders": 253,
+    "gpui_animation_steps": 0,
+    "gpui_images_uploaded": 362,
+    "gpui_images_dropped": 362,
+    "on_paint_by_page": [
+      363,
+      362
+    ]
+  },
+  "step_timeout_ms": 20000.0,
+  "warmup_ms": 3000.0,
+  "measure_ms": 2000.0,
+  "sandbox": true,
+  "scenario": "DevTools",
+  "gpui_ran": true,
+  "pump_totals": {
+    "requests_immediate": 2345,
+    "requests_delayed": 0,
+    "calls_immediate": 2345,
+    "calls_delayed": 0,
+    "calls_periodic": 145,
+    "calls_rerun": 0,
+    "calls_total": 2490,
+    "recursive_calls_deferred": 0
+  },
+  "pump_requests_received_any_thread": 2348,
+  "max_pump_interval_ms": 33,
+  "shutdown": {
+    "cef_shutdown_returned": true,
+    "cef_shutdown_ms": 177.44573499999998,
+    "children_before_shutdown": [
+      {
+        "pid": 78667,
+        "ppid": 78663,
+        "type": "zygote",
+        "start_time": 107446,
+        "inner_pid": 78667
+      },
+      {
+        "pid": 78668,
+        "ppid": 78663,
+        "type": "zygote",
+        "start_time": 107446,
+        "inner_pid": 1
+      },
+      {
+        "pid": 78700,
+        "ppid": 78663,
+        "type": "utility",
+        "start_time": 107450,
+        "inner_pid": 78700
+      },
+      {
+        "pid": 78979,
+        "ppid": 78663,
+        "type": "other:bwrap",
+        "start_time": 107978,
+        "inner_pid": 78979
+      },
+      {
+        "pid": 78698,
+        "ppid": 78667,
+        "type": "zygote-forked-unsandboxed",
+        "start_time": 107450,
+        "inner_pid": 78698
+      },
+      {
+        "pid": 78670,
+        "ppid": 78668,
+        "type": "zygote",
+        "start_time": 107447,
+        "inner_pid": 3
+      },
+      {
+        "pid": 78980,
+        "ppid": 78979,
+        "type": "other:bwrap",
+        "start_time": 107978,
+        "inner_pid": 1
+      },
+      {
+        "pid": 78714,
+        "ppid": 78670,
+        "type": "zygote-forked",
+        "start_time": 107451,
+        "inner_pid": 1
+      },
+      {
+        "pid": 78856,
+        "ppid": 78670,
+        "type": "zygote-forked",
+        "start_time": 107469,
+        "inner_pid": 1
+      },
+      {
+        "pid": 78857,
+        "ppid": 78670,
+        "type": "zygote-forked",
+        "start_time": 107469,
+        "inner_pid": 1
+      },
+      {
+        "pid": 78891,
+        "ppid": 78670,
+        "type": "zygote-forked",
+        "start_time": 107499,
+        "inner_pid": 1
+      },
+      {
+        "pid": 78959,
+        "ppid": 78670,
+        "type": "zygote-forked",
+        "start_time": 107976,
+        "inner_pid": 1
+      },
+      {
+        "pid": 78981,
+        "ppid": 78980,
+        "type": "other:glycin-svg",
+        "start_time": 107978,
+        "inner_pid": 2
+      }
+    ],
+    "children_alive_right_after_cef_shutdown": [
+      {
+        "pid": 78667,
+        "ppid": 78663,
+        "type": "zygote",
+        "start_time": 107446,
+        "inner_pid": 78667
+      },
+      {
+        "pid": 78668,
+        "ppid": 78663,
+        "type": "zygote",
+        "start_time": 107446,
+        "inner_pid": 1
+      },
+      {
+        "pid": 78979,
+        "ppid": 78663,
+        "type": "other:bwrap",
+        "start_time": 107978,
+        "inner_pid": 78979
+      },
+      {
+        "pid": 78670,
+        "ppid": 78668,
+        "type": "zygote",
+        "start_time": 107447,
+        "inner_pid": 3
+      },
+      {
+        "pid": 78980,
+        "ppid": 78979,
+        "type": "other:bwrap",
+        "start_time": 107978,
+        "inner_pid": 1
+      },
+      {
+        "pid": 78981,
+        "ppid": 78980,
+        "type": "other:glycin-svg",
+        "start_time": 107978,
+        "inner_pid": 2
+      }
+    ],
+    "descendants_right_after_cef_shutdown": [
+      {
+        "pid": 78667,
+        "ppid": 78663,
+        "type": "zygote",
+        "start_time": 107446,
+        "inner_pid": 78667
+      },
+      {
+        "pid": 78668,
+        "ppid": 78663,
+        "type": "zygote",
+        "start_time": 107446,
+        "inner_pid": 1
+      },
+      {
+        "pid": 78979,
+        "ppid": 78663,
+        "type": "other:bwrap",
+        "start_time": 107978,
+        "inner_pid": 78979
+      },
+      {
+        "pid": 78670,
+        "ppid": 78668,
+        "type": "zygote",
+        "start_time": 107447,
+        "inner_pid": 3
+      },
+      {
+        "pid": 78980,
+        "ppid": 78979,
+        "type": "other:bwrap",
+        "start_time": 107978,
+        "inner_pid": 1
+      },
+      {
+        "pid": 78891,
+        "ppid": 78670,
+        "type": "exiting",
+        "start_time": 107499,
+        "inner_pid": 1
+      },
+      {
+        "pid": 78959,
+        "ppid": 78670,
+        "type": "exiting",
+        "start_time": 107976,
+        "inner_pid": 1
+      },
+      {
+        "pid": 78981,
+        "ppid": 78980,
+        "type": "other:glycin-svg",
+        "start_time": 107978,
+        "inner_pid": 2
+      }
+    ]
+  },
+  "scenario_pass": true,
+  "children_after_exit": {
+    "timeout_ms": 20000.0,
+    "exited": [
+      {
+        "pid": 78667,
+        "gone_after_ms": 0.0,
+        "note": "gone before wait"
+      },
+      {
+        "pid": 78668,
+        "gone_after_ms": 0.0,
+        "note": "gone before wait"
+      },
+      {
+        "pid": 78700,
+        "gone_after_ms": 0.0,
+        "note": "gone before wait"
+      },
+      {
+        "pid": 78979,
+        "gone_after_ms": 0.0,
+        "note": "gone before wait"
+      },
+      {
+        "pid": 78698,
+        "gone_after_ms": 0.0,
+        "note": "gone before wait"
+      },
+      {
+        "pid": 78670,
+        "gone_after_ms": 0.0,
+        "note": "gone before wait"
+      },
+      {
+        "pid": 78980,
+        "gone_after_ms": 0.0,
+        "note": "gone before wait"
+      },
+      {
+        "pid": 78714,
+        "gone_after_ms": 0.0,
+        "note": "gone before wait"
+      },
+      {
+        "pid": 78856,
+        "gone_after_ms": 0.0,
+        "note": "gone before wait"
+      },
+      {
+        "pid": 78857,
+        "gone_after_ms": 0.0,
+        "note": "gone before wait"
+      },
+      {
+        "pid": 78891,
+        "gone_after_ms": 0.0,
+        "note": "gone before wait"
+      },
+      {
+        "pid": 78959,
+        "gone_after_ms": 0.0,
+        "note": "gone before wait"
+      },
+      {
+        "pid": 78981,
+        "gone_after_ms": 0.0,
+        "note": "gone before wait"
+      }
+    ],
+    "still_alive_at_timeout": []
+  },
+  "shutdown_clean": true,
+  "pass": true
+}

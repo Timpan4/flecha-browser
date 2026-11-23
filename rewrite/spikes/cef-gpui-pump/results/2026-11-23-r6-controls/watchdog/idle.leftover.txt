@@ -1,0 +1,2 @@
+ 771295  771088 S<   perl -e $SIG{TERM} = "IGNORE"; setpgrp(0, $ARGV[0]) or die "setpgid: $!\n"; sleep 771088
+ 771296  771296 S<s  perl -MPOSIX -e $SIG{TERM} = "IGNORE"; POSIX::setsid() > 0 or die "setsid: $!\n"; sleep

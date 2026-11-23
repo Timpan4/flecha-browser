@@ -1,0 +1,30 @@
+[1630601:1630615:1123/102820.391327:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[1630601:1630615:1123/102820.414037:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[1630601:1630615:1123/102820.414063:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[1630601:1630615:1123/102820.414072:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[2026-11-23T09:28:20Z ERROR gpui_linux::linux::x11::client] Found no xinput mouse pointers.
+MESA-EGL: warning: DRI3 error: Could not get DRI3 device
+MESA-EGL: warning: Ensure your X server supports DRI3 to get accelerated rendering
+[1630601:1630615:1123/102820.600951:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[1630601:1630615:1123/102820.600972:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Failed to connect to socket /nonexistent: No such file or directory
+[1630601:1630601:1123/102820.601337:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.Properties.GetAll: object_path= /org/freedesktop/UPower/devices/DisplayDevice: unknown error type: 
+[scenario] browsers_closed: false
+[scenario] context_initialized_after_ms: 0.00362
+[engine] created Page(0) id=1 runtime_style=Some(RuntimeStyle(CEF_RUNTIME_STYLE_ALLOY))
+[engine] created Page(1) id=2 runtime_style=Some(RuntimeStyle(CEF_RUNTIME_STYLE_ALLOY))
+[scenario] page_load_ms: 13.26583
+[scenario] isolation_after_load: {"forbidden":["/run/user/1000","/run/dbus/system_bus_socket"],"processes":10,"open_files":[],"mapped_files":[],"unix_socket_peers":[],"sockets":66,"sockets_without_peer_info":17,"unreadable":[],"ss_error":null,"clean":true}
+[engine] created DevTools id=3 runtime_style=Some(RuntimeStyle(CEF_RUNTIME_STYLE_CHROME))
+
+(cef-gpui-pump:1630601): atspi-WARNING **: 10:28:53.776: AT-SPI: Error retrieving accessibility bus address: org.freedesktop.DBus.Error.ServiceUnknown: The name org.a11y.Bus was not provided by any .service files
+[engine] before_close DevTools id=3
+[scenario] devtools: {"second_browser":true,"runtime_style":"RuntimeStyle(CEF_RUNTIME_STYLE_CHROME)","show_devtools_call_ms":38.664246999999996,"devtools_created_after_show_ms":38.665807,"close_devtools_after_show_ms":100.044749,"close_late_ms":0.044749000000000004,"tree_scan_before_ms":31.991387000000003,"tree_scan_while_open_ms":31.321489,"devtools_closed_after_close_ms":3.784379,"health_before":[{"page":0,"on_paint_in_window":901,"on_paint_per_second":30.00201763735104,"evaluate":2,"evaluate_error":null,"evaluate_ms":8.648505},{"page":1,"on_paint_in_window":901,"on_paint_per_second":30.00201763735104,"evaluate":2,"evaluate_error":null,"evaluate_ms":0.47050899999999996}],"health_after":[{"page":0,"on_paint_in_window":901,"on_paint_per_second":29.997944448288926,"evaluate":2,"evaluate_error":null,"evaluate_ms":0.24738000000000002},{"page":1,"on_paint_in_window":901,"on_paint_per_second":29.997944448288926,"evaluate":2,"evaluate_error":null,"evaluate_ms":0.175589}],"renderers_before":[{"pid":1630651,"ppid":1630607,"type":"zygote-forked","start_time":664741,"inner_pid":1},{"pid":1630799,"ppid":1630607,"type":"zygote-forked","start_time":664759,"inner_pid":1},{"pid":1630800,"ppid":1630607,"type":"zygote-forked","start_time":664759,"inner_pid":1},{"pid":1630815,"ppid":1630607,"type":"zygote-forked","start_time":664759,"inner_pid":1}],"tree_while_open":[{"pid":1630601,"ppid":1630599,"type":"browser","start_time":664734,"inner_pid":1630601},{"pid":1630604,"ppid":1630601,"type":"zygote","start_time":664735,"inner_pid":1630604},{"pid":1630605,"ppid":1630601,"type":"zygote","start_time":664735,"inner_pid":1},{"pid":1630637,"ppid":1630601,"type":"utility","start_time":664739,"inner_pid":1630637},{"pid":1631558,"ppid":1630601,"type":"other:bwrap","start_time":668077,"inner_pid":1631558},{"pid":1630635,"ppid":1630604,"type":"zygote-forked-unsandboxed","start_time":664739,"inner_pid":1630635},{"pid":1630607,"ppid":1630605,"type":"zygote","start_time":664737,"inner_pid":3},{"pid":1631559,"ppid":1631558,"type":"other:bwrap","start_time":668077,"inner_pid":1},{"pid":1630651,"ppid":1630607,"type":"zygote-forked","start_time":664741,"inner_pid":1},{"pid":1630799,"ppid":1630607,"type":"zygote-forked","start_time":664759,"inner_pid":1},{"pid":1630800,"ppid":1630607,"type":"zygote-forked","start_time":664759,"inner_pid":1},{"pid":1630815,"ppid":1630607,"type":"zygote-forked","start_time":664759,"inner_pid":1},{"pid":1631535,"ppid":1630607,"type":"zygote-forked","start_time":668075,"inner_pid":1},{"pid":1631560,"ppid":1631559,"type":"other:glycin-svg","start_time":668077,"inner_pid":2}],"renderers_after":[{"pid":1630651,"ppid":1630607,"type":"zygote-forked","start_time":664741,"inner_pid":1},{"pid":1630799,"ppid":1630607,"type":"zygote-forked","start_time":664759,"inner_pid":1},{"pid":1630800,"ppid":1630607,"type":"zygote-forked","start_time":664759,"inner_pid":1},{"pid":1631535,"ppid":1630607,"type":"zygote-forked","start_time":668075,"inner_pid":1}],"renderers_before_now_gone":[{"pid":1630815,"ppid":1630607,"type":"zygote-forked","start_time":664759,"inner_pid":1}],"render_process_terminations":[]}
+[scenario] devtools_pass: true
+[scenario] isolation_before_shutdown: {"forbidden":["/run/user/1000","/run/dbus/system_bus_socket"],"processes":11,"open_files":[],"mapped_files":[],"unix_socket_peers":[],"sockets":79,"sockets_without_peer_info":19,"unreadable":[],"ss_error":null,"clean":true}
+[scenario] isolation_clean: true
+[engine] before_close Page(0) id=1
+[engine] before_close Page(1) id=2
+[scenario] browsers_closed_after_ms: 0.00039999999999999996
+[scenario] browsers_closed: true
+[scenario] scenario_seconds: 66.424998833
+[scenario] totals: {"gpui_renders":1582,"gpui_animation_steps":0,"gpui_images_uploaded":1987,"gpui_images_dropped":1580,"gpui_frames_never_drawn":407,"on_paint_by_page":[1988,1988]}

@@ -1,0 +1,10 @@
+stopped browser 861103 (process group 861098) at 15:10:33.240
+session tree under group leader 861098: 10 processes (tree-before-stop.txt)
+helper 861303 joined group 861098; it ignores SIGTERM
+helper 861304 runs in its own session with XDG_RUNTIME_DIR=/tmp/cef-gpui-pump-run.ht12LD/runtime; it ignores SIGTERM
+session processes outside group 861098: none
+runner exit 1 at 15:11:10.668
+helpers alive after the runner: none
+processes left in group 861098: none
+recorded session processes still alive: none
+watchdog ended the hung run, its process group and its marked processes

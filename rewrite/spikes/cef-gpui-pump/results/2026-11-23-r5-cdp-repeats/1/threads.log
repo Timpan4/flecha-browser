@@ -1,0 +1,33 @@
+13:20:02.599 pid=425543 | cef-gpui-pump[425543] S d=0 wchan=do_epoll_wait
+13:20:03.617 pid=425543 | cef-gpui-pump[425543] R d=24 wchan=0 | ThreadPoolForeg[425569] S d=1 wchan=futex_wait
+13:20:04.632 pid=425543 | cef-gpui-pump[425543] S d=18 wchan=do_epoll_wait | ThreadPoolForeg[425568] S d=1 wchan=futex_wait
+13:20:05.648 pid=425543 | cef-gpui-pump[425543] S d=16 wchan=do_epoll_wait
+13:20:06.664 pid=425543 | cef-gpui-pump[425543] S d=60 wchan=do_epoll_wait | Chrome_IOThread[425559] R d=27 wchan=0
+13:20:07.680 pid=425543 | cef-gpui-pump[425543] R d=63 wchan=0 | Chrome_IOThread[425559] S d=28 wchan=do_epoll_wait
+13:20:08.702 pid=425543 | cef-gpui-pump[425543] S d=63 wchan=0 | Chrome_IOThread[425559] R d=30 wchan=do_epoll_wait
+13:20:09.718 pid=425543 | cef-gpui-pump[425543] R d=62 wchan=0 | Chrome_IOThread[425559] S d=29 wchan=do_epoll_wait
+13:20:10.734 pid=425543 | cef-gpui-pump[425543] R d=60 wchan=0 | Chrome_IOThread[425559] S d=28 wchan=do_epoll_wait
+13:20:11.751 pid=425543 | cef-gpui-pump[425543] R d=61 wchan=0 | Chrome_IOThread[425559] S d=28 wchan=do_epoll_wait
+13:20:12.768 pid=425543 | cef-gpui-pump[425543] R d=63 wchan=0 | Chrome_IOThread[425559] S d=27 wchan=0
+13:20:13.785 pid=425543 | cef-gpui-pump[425543] S d=61 wchan=do_epoll_wait | Chrome_IOThread[425559] R d=27 wchan=do_epoll_wait
+13:20:14.802 pid=425543 | cef-gpui-pump[425543] S d=61 wchan=do_epoll_wait | Chrome_IOThread[425559] S d=29 wchan=do_epoll_wait
+13:20:15.819 pid=425543 | cef-gpui-pump[425543] R d=61 wchan=do_epoll_wait | Chrome_IOThread[425559] S d=29 wchan=0
+13:20:16.838 pid=425543 | cef-gpui-pump[425543] R d=61 wchan=do_epoll_wait | Chrome_IOThread[425559] S d=29 wchan=do_epoll_wait
+13:20:17.853 pid=425543 | cef-gpui-pump[425543] S d=62 wchan=0 | Chrome_IOThread[425559] R d=27 wchan=0
+13:20:18.870 pid=425543 | cef-gpui-pump[425543] R d=61 wchan=0 | Chrome_IOThread[425559] S d=28 wchan=0
+13:20:19.888 pid=425543 | cef-gpui-pump[425543] S d=59 wchan=do_epoll_wait | Chrome_IOThread[425559] S d=27 wchan=0
+13:20:20.904 pid=425543 | cef-gpui-pump[425543] R d=60 wchan=0 | Chrome_IOThread[425559] S d=27 wchan=0
+13:20:21.920 pid=425543 | cef-gpui-pump[425543] R d=62 wchan=do_epoll_wait | Chrome_IOThread[425559] S d=30 wchan=do_epoll_wait
+13:20:22.937 pid=425543 | cef-gpui-pump[425543] S d=61 wchan=0 | Chrome_IOThread[425559] S d=29 wchan=do_epoll_wait
+13:20:23.953 pid=425543 | cef-gpui-pump[425543] R d=61 wchan=0 | Chrome_IOThread[425559] S d=28 wchan=0
+13:20:24.970 pid=425543 | cef-gpui-pump[425543] S d=61 wchan=0 | Chrome_IOThread[425559] S d=29 wchan=0
+13:20:25.988 pid=425543 | cef-gpui-pump[425543] R d=62 wchan=0 | Chrome_IOThread[425559] S d=29 wchan=do_epoll_wait
+13:20:27.005 pid=425543 | cef-gpui-pump[425543] S d=60 wchan=do_epoll_wait | Chrome_IOThread[425559] S d=27 wchan=do_epoll_wait
+13:20:28.022 pid=425543 | cef-gpui-pump[425543] R d=60 wchan=0 | Chrome_IOThread[425559] S d=27 wchan=do_epoll_wait
+13:20:29.039 pid=425543 | cef-gpui-pump[425543] R d=60 wchan=0 | Chrome_IOThread[425559] R d=29 wchan=0
+13:20:30.058 pid=425543 | cef-gpui-pump[425543] S d=60 wchan=do_epoll_wait | Chrome_IOThread[425559] S d=28 wchan=do_epoll_wait
+13:20:31.075 pid=425543 | cef-gpui-pump[425543] R d=59 wchan=0 | Chrome_IOThread[425559] S d=26 wchan=do_epoll_wait
+13:20:32.092 pid=425543 | cef-gpui-pump[425543] S d=61 wchan=0 | Chrome_IOThread[425559] S d=27 wchan=0
+13:20:33.112 pid=425543 | cef-gpui-pump[425543] R d=62 wchan=0 | Chrome_IOThread[425559] S d=26 wchan=0
+13:20:34.130 pid=425543 | cef-gpui-pump[425543] S d=59 wchan=0 | Chrome_IOThread[425559] S d=26 wchan=do_epoll_wait
+13:20:35.147 pid=425543 | cef-gpui-pump[425543] R d=60 wchan=do_epoll_wait | Chrome_IOThread[425559] S d=28 wchan=0

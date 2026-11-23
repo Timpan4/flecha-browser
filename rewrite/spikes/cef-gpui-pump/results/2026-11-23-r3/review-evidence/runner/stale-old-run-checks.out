@@ -1,0 +1,4 @@
+bundle /home/timpan4/.t3/worktrees/flecha-browser/t3-3b42251b-74c4a1e059834541/rewrite/target/release/cef-gpui-pump-bundle (CEF from /home/timpan4/.t3/worktrees/flecha-browser/t3-3b42251b-74c4a1e059834541/rewrite/target/release/build/cef-dll-sys/5ef07ae7f7e11546/out/cef_linux_x86_64)
+Xvfb pid 1276818 on :1
+== idle
+   exit=1 scenario_pass=true shutdown_clean=true pass=true
