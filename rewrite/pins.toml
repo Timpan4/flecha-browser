@@ -22,8 +22,11 @@ macosarm64 = "25c8a98f652214b852f06ec943b504415d115e74"
 windows64 = "a8634573a10fb514fb9e8bc9fcf39016a2fb17bd"
 
 [cef-rs]
-git = "https://github.com/tauri-apps/cef-rs"
-# Open PR tauri-apps/cef-rs#520, binds CEF 158.0.3.
+# Flecha-owned fork, so the pinned commit stays referenced. The commit is upstream's generated
+# CEF 158.0.3 bindings from tauri-apps/cef-rs#520, which closed unmerged when the bot reset its
+# branch. Its tree equals the open #521 head 76b68127.
+git = "https://github.com/Timpan4/cef-rs"
+branch = "flecha/cef-158.0.3"
 rev = "32d6bc558545933eb1b4620aac4bc4799299c129"
 
 [gpui]

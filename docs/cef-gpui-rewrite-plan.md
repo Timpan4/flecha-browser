@@ -39,7 +39,7 @@ Google sign-in is why Flecha left Electron. If it fails in Alloy OSR, the rewrit
 ## Pins (verified 2026-11-23)
 
 - **CEF:** the newest beta-channel build is `158.0.3+g8c29be2+chromium-158.0.8127.18`. It was published as beta on 2026-11-13 and promoted to stable on 2026-11-20 ([index](https://cef-builds.spotifycdn.com/index.json)). No 159 beta exists yet. Flecha today is on Chromium 158.0.8127.2.
-- **cef-rs:** the latest release binds 156.0.31. Open [PR #520](https://github.com/tauri-apps/cef-rs/pull/520) at `32d6bc558545933eb1b4620aac4bc4799299c129` binds 158.0.3. It also has `cef/src/osr_texture_import/` with `dmabuf.rs`, `d3d11.rs` and `iosurface.rs`. It depends on `wgpu = "30"`.
+- **cef-rs:** the latest release binds 156.0.31. Upstream's bot generated 158.0.3 bindings at `32d6bc558545933eb1b4620aac4bc4799299c129` in [PR #520](https://github.com/tauri-apps/cef-rs/pull/520). That PR closed unmerged, and the same tree is now in open [PR #521](https://github.com/tauri-apps/cef-rs/pull/521). Flecha keeps the commit referenced on [Timpan4/cef-rs](https://github.com/Timpan4/cef-rs/tree/flecha/cef-158.0.3) branch `flecha/cef-158.0.3`. The commit also has `cef/src/osr_texture_import/` with `dmabuf.rs`, `d3d11.rs` and `iosurface.rs`. It depends on `wgpu = "30"`.
 - **GPUI:** Zed revision `f126950f9d3b62666f97437ae5d4ccac2272c4db` (2026-11-22). Its wgpu renderer drops surface batches (`crates/gpui_wgpu/src/wgpu_renderer.rs:1545`, "Surfaces are macOS-only"). Zed pins wgpu to a git revision (`cddb2f5d`), which conflicts with cef-rs's registry wgpu 30.
 
 ### Beta channel rule
@@ -48,6 +48,7 @@ Google sign-in is why Flecha left Electron. If it fails in Alloy OSR, the rewrit
 - Pin the exact CEF version string and SHA-1 in the repo, together with the cef-rs revision.
 - When a new beta appears before cef-rs publishes bindings, regenerate them with cef-rs's own update tooling on a Flecha-owned branch of cef-rs. The update lands only after the Phase 0 sign-in and compositor checks pass on the new build.
 - Do not move to a beta until CEF publishes it in the index. Never track CEF master.
+- Known gap: CEF published 158.0.3 (commit `g8c29be2`) to both channels as separate archives. cef-rs's build script picks the first index entry for the version, which is the stable archive. Until Flecha's own fetch step downloads the beta archive, checks its SHA-1 from `pins.toml` and sets `CEF_PATH`, builds use the stable archive of the same commit. Phase 1 adds that fetch step.
 
 ## Phase 0: go/no-go spikes
 
@@ -77,29 +78,32 @@ This needs a GPUI fork with a surface path on Linux. First evaluate [bite-gpui's
 
 Done check, on the owner's real native Wayland session with NVIDIA, then on X11:
 
-- A moving frame counter page shows no stale or blank frames.
-- Resize and a DPI change.
-- A GPUI overlay drawn on top of the page.
+- A moving frame counter page shows no stale or blank frames. Pass: every captured frame shows a counter value no lower than the previous capture, and no capture is blank.
+- Resize and a DPI change. Pass: after each change, the composited page's pixel size equals the page's own `innerWidth` and `innerHeight` times `devicePixelRatio`, and the counter keeps advancing.
+- A GPUI overlay drawn on top of the page. Pass: pixels inside the overlay rectangle have the overlay's colour, and pixels outside it match the page.
 - `<select>` popup, IME input, and dragging a file in.
 - Copying text from the page and pasting it into another app.
 - The page and the shell are reachable with the screen reader (Orca).
-- CPU, GPU and frame-time numbers, compared with today's Flecha on the same page using `chromium/tests/perf-bench.mjs`.
+- CPU, GPU and frame-time numbers, compared with today's Flecha on the same page using `chromium/tests/perf-bench.mjs`. Measurement only, with no pass threshold. The owner judges the comparison.
 
 The macOS IOSurface path needs the owner's MacBook. Windows D3D11 needs a Windows machine; none is known.
 
 ### Spike 2: event loop and agent access
 
-- Drive CEF's external message pump from GPUI's main thread. Done check: an idle window uses no measurable CPU, and pages keep animating while GPUI animates.
+- Drive CEF's external message pump from GPUI's main thread. Done check: with a static page, GPUI draws no frames and the pump runs only when CEF schedules work or at CEF's documented periodic wake-up (pass: logged pump calls match those requests). Idle CPU is recorded as a measurement only. Pages keep animating while GPUI animates (pass: both frame counters advance).
 - Reach a tab through CEF's per-browser DevTools calls (`SendDevToolsMessage`), never a port or pipe. Done check: the page sees `navigator.webdriver === false` while the call runs.
 
 ### Phase 0 agent split
 
 - Spike 0: one Opus 5.5 agent builds it. The owner runs the manual checks.
-- Spike 1: one GPT 6.2 Sol agent does the GPUI fork evaluation and surface work. One Opus 5.5 agent does CEF OSR, input and IME.
+- Spike 1: one GPT 6.2 Sol agent does the GPUI fork evaluation, surface work, OSR input and popups.
 - Spike 2: one Opus 5.5 agent.
+- `flecha-core` (Phase 1): one GPT 6.2 Sol agent, started alongside the spikes because it does not depend on CEF or GPUI.
 - A non-author verifier checks each spike's done check before it counts.
 
-## Later phases (conditional, re-planned after Phase 0)
+## Later phases
+
+The owner approved all phases on 2026-11-23. Phase 1 starts with the spikes. Phase 2 feature work waits for the Spike 0 sign-in verdict. Each phase's details are re-planned from Phase 0 results before its feature work starts.
 
 ### Phase 1: vertical slice
 
