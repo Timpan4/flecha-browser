@@ -5,6 +5,7 @@ members = [
     "crates/flecha-adblock",
     "crates/flecha-cef",
     "crates/flecha-core",
+    "crates/flecha-history",
     "crates/flecha-import",
     "crates/flecha-migrate",
     "crates/flecha-services",
