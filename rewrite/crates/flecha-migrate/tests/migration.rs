@@ -26,7 +26,7 @@ struct Fixture {
 }
 
 impl Fixture {
-    fn write(entries: &[(&str, &[u8])]) -> Result<Self> {
+    fn empty() -> Result<Self> {
         let scratch = tempfile::tempdir()?;
         let parent = scratch.path().canonicalize()?;
         let old = parent.join("chromium");
@@ -35,17 +35,34 @@ impl Fixture {
             .join("Default/Local Extension Settings")
             .join(SHELL_EXTENSION_ID);
         fs::create_dir_all(&leveldb)?;
-        let mut db = DB::open(&leveldb, Options::default())?;
-        for (key, value) in entries {
-            db.put(key.as_bytes(), value)?;
-        }
-        db.close()?;
         Ok(Self {
             _scratch: scratch,
             old,
             leveldb,
             new,
         })
+    }
+
+    fn write(entries: &[(&str, &[u8])]) -> Result<Self> {
+        let fixture = Self::empty()?;
+        let mut db = DB::open(&fixture.leveldb, Options::default())?;
+        for (key, value) in entries {
+            db.put(key.as_bytes(), value)?;
+        }
+        db.close()?;
+        Ok(fixture)
+    }
+
+    fn cpp_leveldb(name: &str) -> Result<Self> {
+        let fixture = Self::empty()?;
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/leveldb")
+            .join(name);
+        for entry in fs::read_dir(source)? {
+            let entry = entry?;
+            fs::copy(entry.path(), fixture.leveldb.join(entry.file_name()))?;
+        }
+        Ok(fixture)
     }
 
     fn compact_with_snappy(&self) -> Result<()> {
@@ -249,9 +266,12 @@ fn refuses_live_and_remote_locks_and_leaves_stale_lock_untouched() -> Result<()>
     let lock = fixture.old.join("SingletonLock");
     let uname = rustix::system::uname();
     let host = uname.nodename().to_str()?;
+    let mut process = std::process::Command::new("true").spawn()?;
+    let dead_pid = process.id();
+    assert!(process.wait()?.success());
     for target in [
         format!("{host}-{}", std::process::id()),
-        format!("other-{host}-1"),
+        format!("other-{host}-{dead_pid}"),
         "malformed".into(),
     ] {
         symlink(target, &lock)?;
@@ -260,11 +280,99 @@ fn refuses_live_and_remote_locks_and_leaves_stale_lock_untouched() -> Result<()>
         assert!(!fixture.new.exists());
         fs::remove_file(&lock)?;
     }
-    let mut process = std::process::Command::new("true").spawn()?;
-    let dead_pid = process.id();
-    assert!(process.wait()?.success());
     symlink(format!("{host}-{dead_pid}"), &lock)?;
     assert_eq!(fixture.migrate()?.state_source, StateSource::Primary);
+    Ok(())
+}
+
+fn assert_database_error(fixture: &Fixture, reason: &str) {
+    let error = fixture.migrate().unwrap_err();
+    let error = format!("{error:#}");
+    assert!(
+        error.contains("LevelDB") && error.contains(reason),
+        "{error}"
+    );
+    assert!(!fixture.new.exists());
+}
+
+#[test]
+fn rejects_k1_corrupt_log_record() -> Result<()> {
+    let fixture = Fixture::cpp_leveldb("logonly")?;
+    let path = fixture.leveldb.join("000003.log");
+    let mut bytes = fs::read(&path)?;
+    let needle = b"https://example.test/current";
+    let offset = bytes
+        .windows(needle.len())
+        .position(|value| value == needle)
+        .unwrap();
+    bytes[offset + 3] ^= 0x20;
+    fs::write(path, bytes)?;
+    assert_database_error(&fixture, "record checksum mismatch");
+    Ok(())
+}
+
+#[test]
+fn rejects_k2_corrupt_only_table() -> Result<()> {
+    let fixture = Fixture::cpp_leveldb("snappy")?;
+    flip_table_byte(&fixture, "000005.ldb", 496)?;
+    assert_database_error(&fixture, "block checksum mismatch");
+    Ok(())
+}
+
+#[test]
+fn rejects_k3_corrupt_newer_table_instead_of_reading_old_state() -> Result<()> {
+    let fixture = Fixture::cpp_leveldb("twolevel")?;
+    flip_table_byte(&fixture, "000007.ldb", 435)?;
+    assert_database_error(&fixture, "block checksum mismatch");
+    Ok(())
+}
+
+#[test]
+fn rejects_k4_truncated_table_without_panicking() -> Result<()> {
+    let fixture = Fixture::cpp_leveldb("snappy")?;
+    let path = fixture.leveldb.join("000005.ldb");
+    let mut bytes = fs::read(&path)?;
+    bytes.truncate(bytes.len() / 2);
+    fs::write(path, bytes)?;
+    assert_database_error(&fixture, "invalid table magic");
+    Ok(())
+}
+
+#[test]
+fn rejects_a_torn_final_write_ahead_log_record() -> Result<()> {
+    let fixture = Fixture::cpp_leveldb("logonly")?;
+    let log = fs::OpenOptions::new()
+        .write(true)
+        .open(fixture.leveldb.join("000003.log"))?;
+    log.set_len(log.metadata()?.len() - 1)?;
+    assert_database_error(&fixture, "truncated record payload");
+    Ok(())
+}
+
+fn flip_table_byte(fixture: &Fixture, name: &str, first_data_block_size: usize) -> Result<()> {
+    let path = fixture.leveldb.join(name);
+    let mut bytes = fs::read(&path)?;
+    assert_eq!(bytes[first_data_block_size], 1, "Snappy compression tag");
+    bytes[first_data_block_size / 2] ^= 0xff;
+    fs::write(path, bytes)?;
+    Ok(())
+}
+
+#[test]
+fn reads_undamaged_cpp_leveldb_fixtures() -> Result<()> {
+    for (layout, expected) in [
+        ("logonly", "current"),
+        ("snappy", "current"),
+        ("twolevel", "new"),
+    ] {
+        let fixture = Fixture::cpp_leveldb(layout)?;
+        assert_eq!(fixture.migrate()?.state_source, StateSource::Primary);
+        let state = fixture.load()?.unwrap();
+        assert_eq!(
+            state.tab(&TabId::new("t1")).unwrap().url,
+            format!("https://example.test/{expected}")
+        );
+    }
     Ok(())
 }
 

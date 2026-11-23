@@ -8,13 +8,13 @@ use std::fs;
 use std::os::unix::fs::DirBuilderExt as _;
 use std::path::Path;
 
-use anyhow::{Context as _, Result, anyhow};
+use anyhow::{Context as _, Result};
 use flecha_core::storage::{self, DecodedSnapshot, SnapshotRepairs};
 use flecha_services::StateStore;
-use rusty_leveldb::{DB, LdbIterator, Options};
 use serde_json::Value;
 use serde_json::value::RawValue;
 
+mod leveldb;
 mod profile;
 
 /// Pinned by `chromium/patches/0004-flecha-shell-extension-id.patch`.
@@ -88,18 +88,7 @@ pub fn migrate_profile(
 }
 
 fn migrate_database(db_path: &Path, destination: &Path) -> Result<MigrationReport> {
-    let mut db = DB::open(
-        db_path,
-        Options {
-            create_if_missing: false,
-            paranoid_checks: true,
-            ..Options::default()
-        },
-    )
-    .map_err(|error| anyhow!("open copied extension LevelDB ({:?})", error.code))?;
-    let mut entries = db
-        .new_iter()
-        .map_err(|error| anyhow!("read copied extension LevelDB ({:?})", error.code))?;
+    let db = leveldb::Database::open(db_path)?;
     let mut report = MigrationReport::default();
     let mut primary = None;
     let mut last_good = None;
@@ -107,30 +96,26 @@ fn migrate_database(db_path: &Path, destination: &Path) -> Result<MigrationRepor
     let mut has_primary = false;
 
     let (store, mut loaded) = StateStore::open(&destination.join("session"))?;
-    while entries.advance() {
-        let (key, value) = entries.current().context("read extension LevelDB entry")?;
-        match key.as_ref() {
+    db.scan(|key, value| {
+        match key {
             b"state" => {
                 has_primary = true;
-                primary = decode_state(&value, &mut report);
+                primary = decode_state(value, &mut report);
             }
-            b"state:last-good" => last_good = decode_state(&value, &mut report),
-            b"state:before-import" => before_import = decode_state(&value, &mut report),
+            b"state:last-good" => last_good = decode_state(value, &mut report),
+            b"state:before-import" => before_import = decode_state(value, &mut report),
             b"state:damaged" => report.damaged_backups += 1,
             b"boosts" => {
-                report.boosts = carry_boosts(destination, LEGACY_BOOSTS_FILE, &value, &mut report)?;
+                report.boosts = carry_boosts(destination, LEGACY_BOOSTS_FILE, value, &mut report)?;
             }
             b"boostsCompiled" => {
-                report.compiled_boosts = carry_boosts(
-                    destination,
-                    LEGACY_COMPILED_BOOSTS_FILE,
-                    &value,
-                    &mut report,
-                )?;
+                report.compiled_boosts =
+                    carry_boosts(destination, LEGACY_COMPILED_BOOSTS_FILE, value, &mut report)?;
             }
             _ => report.unknown_keys += 1,
         }
-    }
+        Ok(())
+    })?;
     let current = if primary.is_some() {
         report.state_source = StateSource::Primary;
         primary.as_ref()
