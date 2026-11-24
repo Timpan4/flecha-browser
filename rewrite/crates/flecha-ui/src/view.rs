@@ -67,6 +67,7 @@ pub(crate) struct Shell {
     pub(crate) last_suggestion_sent: Option<Instant>,
     pub(crate) bindings: Bindings,
     pub(crate) consumed_keys: BTreeSet<String>,
+    pub(crate) tab_drag: Option<crate::tab_drag::TabDrag>,
     images: BTreeMap<TabId, Vec<Arc<RenderImage>>>,
     title: String,
     native_fullscreen: crate::fullscreen::NativeFullscreen,
@@ -103,6 +104,7 @@ impl Shell {
                 this.state.borrow_mut().model.focus_window(&this.id);
             } else {
                 this.consumed_keys.clear();
+                this.cancel_tab_drag(window, cx);
             }
             let _ = this.sync_page_focus(window, cx);
         });
@@ -121,6 +123,7 @@ impl Shell {
             last_suggestion_sent: None,
             bindings,
             consumed_keys: BTreeSet::new(),
+            tab_drag: None,
             images: BTreeMap::new(),
             title: String::new(),
             native_fullscreen: Default::default(),
@@ -386,7 +389,10 @@ impl Shell {
         macro_rules! pointer {
             ($event:ty, $handler:ident) => {{
                 let (id, origin) = (id.clone(), origin.clone());
-                cx.listener(move |this, event: &$event, _, _| {
+                cx.listener(move |this, event: &$event, _, cx| {
+                    if this.tab_drag.is_some() && cx.has_active_drag() {
+                        return;
+                    }
                     if let Some(host) = this.state.borrow().engine.host(&id) {
                         input::$handler(&host, event, origin.get());
                     }
@@ -426,7 +432,10 @@ impl Shell {
                 )
                 .on_mouse_up(
                     button,
-                    cx.listener(move |this, event: &MouseUpEvent, _, _| {
+                    cx.listener(move |this, event: &MouseUpEvent, _, cx| {
+                        if this.tab_drag.is_some() && cx.has_active_drag() {
+                            return;
+                        }
                         if let Some(host) = this.state.borrow().engine.host(&up_id) {
                             input::click(
                                 &host,
@@ -458,6 +467,9 @@ impl Shell {
 
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if !cx.has_active_drag() {
+            self.tab_drag = None;
+        }
         let palette_now = {
             let state = self.state.borrow();
             let incognito = state.model.is_incognito(&self.id);
@@ -677,6 +689,14 @@ impl Render for Shell {
                         .flex_basis(relative(width))
                         .child(page_card(pane)),
                 );
+            }
+            if !self.overlay.is_open()
+                && !state.model.peeks.contains_key(&self.id)
+                && let Some(target) = self
+                    .dragged_tab(core)
+                    .and_then(|source| core.page_split_target(&self.id, source))
+            {
+                pages = pages.child(self.page_split_drop(target, cx));
             }
             if let Some(peek) = state.model.peeks.get(&self.id) {
                 // Peek (patch 0026): the page inset 8% of the area's width on each side, 48

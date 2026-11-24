@@ -185,7 +185,7 @@ impl Controller {
                         Destination::Today(space) => Placement::Today { space, window },
                     };
                     ensure!(
-                        self.place_tab(window, id, placement),
+                        self.place_tab(window, id, placement, None),
                         "The tab or destination has changed"
                     );
                 }
