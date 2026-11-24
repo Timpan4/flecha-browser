@@ -17,7 +17,8 @@ use gpui::{
 
 use crate::{Action, Shared, dispatch};
 use crate::{
-    command_bar::CommandBar, history_view::HistoryPanel, shortcuts::Bindings, text_field::TextField,
+    command_bar::CommandBar, history_view::HistoryPanel, settings_view::SettingsPanel,
+    shortcuts::Bindings, text_field::TextField,
 };
 
 /// A popup's read-only address bar, as tall as the Peek toolbar.
@@ -29,6 +30,7 @@ pub(crate) enum Overlay {
     None,
     Command(CommandBar),
     History(HistoryPanel),
+    Settings(Box<SettingsPanel>),
     Archive(TextField),
     Folder(Option<FolderId>, TextField),
     TabActions(TabId),
@@ -112,6 +114,12 @@ impl Shell {
     }
 
     pub(crate) fn dismiss_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Overlay::Settings(panel) = &mut self.overlay
+            && !panel.prepare_close()
+        {
+            cx.notify();
+            return;
+        }
         if self.overlay.is_open() {
             self.overlay = Overlay::None;
             if self.selected_pane.is_some() {
@@ -316,6 +324,8 @@ impl Shell {
 
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.bindings
+            .refresh(&self.state.borrow().model.core.settings.keybindings);
         let _ = self.sync_page_focus(window, cx);
         let popup_title = (self.state.borrow().model.popups.get(&self.id))
             .map(|popup| popup.page.tab.title.clone());
@@ -475,10 +485,14 @@ impl Render for Shell {
         if let Overlay::History(panel) = &mut self.overlay {
             panel.refresh(&self.state.borrow().history);
         }
+        if let Overlay::Settings(panel) = &mut self.overlay {
+            panel.refresh(&self.state.borrow());
+        }
         let overlay = match &self.overlay {
             Overlay::None => None,
             Overlay::Command(bar) => Some(self.command_panel(bar, cx)),
             Overlay::History(panel) => Some(self.history_panel(panel, cx)),
+            Overlay::Settings(panel) => Some(self.settings_panel(panel, cx)),
             Overlay::Archive(input) => Some(self.archive_panel(input, cx)),
             Overlay::Folder(id, input) => Some(self.folder_panel(id.as_ref(), input, cx)),
             Overlay::TabActions(id) => Some(self.tab_actions_panel(id, cx)),

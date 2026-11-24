@@ -9,17 +9,17 @@ publish.workspace = true
 anyhow.workspace = true
 cef.workspace = true
 chrono = "0.4"
+flecha-boosts.workspace = true
 flecha-cef.workspace = true
 flecha-core.workspace = true
 flecha-history.workspace = true
+flecha-import.workspace = true
 flecha-services.workspace = true
 flecha-surface.workspace = true
 futures.workspace = true
 gpui.workspace = true
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+tempfile = "3.27.0"
 unicode-segmentation = "1"
 uuid = { version = "1", features = ["v4"] }
-
-[dev-dependencies]
-tempfile = "3.27.0"
