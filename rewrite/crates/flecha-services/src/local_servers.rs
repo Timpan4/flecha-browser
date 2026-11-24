@@ -16,7 +16,6 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
-use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 /// `DEV_PORTS` in `localServers.ts`: default ports of common dev servers (Next, Rails, Express,
@@ -218,12 +217,12 @@ impl Scanner {
     }
 }
 
-/// The background scan. Dropping it stops the thread.
+/// The background scan. Dropping it ends the thread once its current scan finishes, so quitting
+/// never waits on a slow server.
 pub struct LocalServerWatch {
     latest: Arc<Mutex<Option<Vec<LocalServer>>>>,
     excluded: Arc<AtomicU32>,
-    stop: Option<mpsc::Sender<()>>,
-    thread: Option<JoinHandle<()>>,
+    _stop: mpsc::Sender<()>,
 }
 
 /// No excluded port in [`LocalServerWatch::excluded`]: outside the `u16` range.
@@ -234,7 +233,7 @@ impl LocalServerWatch {
         let latest = Arc::new(Mutex::new(None));
         let excluded = Arc::new(AtomicU32::new(NONE));
         let (stop, stopped) = mpsc::channel::<()>();
-        let thread = std::thread::Builder::new()
+        std::thread::Builder::new()
             .name("flecha-local-servers".into())
             .spawn({
                 let (latest, excluded) = (latest.clone(), excluded.clone());
@@ -258,8 +257,7 @@ impl LocalServerWatch {
         Ok(Self {
             latest,
             excluded,
-            stop: Some(stop),
-            thread: Some(thread),
+            _stop: stop,
         })
     }
 
@@ -275,15 +273,6 @@ impl LocalServerWatch {
     pub fn exclude(&self, port: Option<u16>) {
         self.excluded
             .store(port.map_or(NONE, u32::from), Ordering::Relaxed);
-    }
-}
-
-impl Drop for LocalServerWatch {
-    fn drop(&mut self) {
-        drop(self.stop.take());
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
     }
 }
 
@@ -429,8 +418,13 @@ mod tests {
     fn the_watch_stops_without_waiting_out_its_poll() {
         let watch = LocalServerWatch::spawn().unwrap();
         watch.exclude(Some(3000));
+        let latest = Arc::downgrade(&watch.latest);
         let started = Instant::now();
         drop(watch);
-        assert!(started.elapsed() < POLL);
+        // The thread holds the list until it ends.
+        while latest.strong_count() > 0 {
+            assert!(started.elapsed() < POLL, "the thread outlived its poll");
+            std::thread::yield_now();
+        }
     }
 }
