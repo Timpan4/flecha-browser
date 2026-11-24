@@ -17,7 +17,7 @@ use crate::settings_view::SettingsTab;
 use crate::shortcuts::{Shortcut, platform};
 use crate::theme::palette;
 use crate::tokens;
-use crate::view::{Overlay, Shell, menu_item};
+use crate::view::{Overlay, Shell, disabled_menu_item, menu_item};
 use crate::{Action, dispatch};
 
 /// What a menu item does: a shortcut's command, so the menu and the keys share one path, or an
@@ -319,6 +319,7 @@ impl Shell {
                     menu_row(
                         (id, index),
                         label.clone(),
+                        enabled,
                         checkable,
                         *checked == Some(true),
                     )
@@ -337,19 +338,15 @@ impl Shell {
                             }
                         }))
                     })
-                    .map(|row| {
-                        if enabled {
-                            row.on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                                this.run_menu(run.clone(), window, cx);
-                            }))
-                        } else {
-                            disabled(row)
-                        }
+                    .when(enabled, |row| {
+                        row.on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                            this.run_menu(run.clone(), window, cx);
+                        }))
                     })
                     .into_any_element()
                 }
                 Entry::Submenu { label, entries } if entries.is_empty() => {
-                    disabled(menu_row((id, index), label.clone(), checkable, false))
+                    menu_row((id, index), label.clone(), false, checkable, false)
                         .child(submenu_arrow())
                         .when(open.is_some(), |row| {
                             row.on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
@@ -362,7 +359,7 @@ impl Shell {
                 }
                 Entry::Submenu { label, entries } => {
                     let shown = open == Some(Some(index));
-                    menu_row((id, index), label.clone(), checkable, false)
+                    menu_row((id, index), label.clone(), true, checkable, false)
                         .relative()
                         .when(shown, |row| {
                             row.bg(palette().selection)
@@ -418,37 +415,36 @@ fn submenu_arrow() -> Div {
         .child("›")
 }
 
-/// `.shell-menu-item:disabled` (chromium/shell/shell.css:117-119): faded, with no hover.
-fn disabled(row: gpui::Stateful<Div>) -> gpui::Stateful<Div> {
-    row.opacity(tokens::MENU_DISABLED_OPACITY)
-        .hover(|style| style)
-}
-
 /// `.shell-menu-item` (chromium/shell/shell.css:85-131): its label, then what goes on its right.
 /// Rows are told apart by their place, as two Spaces may share a name.
 fn menu_row(
     id: (&'static str, usize),
     label: SharedString,
+    enabled: bool,
     checkable: bool,
     checked: bool,
 ) -> gpui::Stateful<Div> {
-    menu_item(id, "")
-        .flex()
-        .items_center()
-        .when(checkable, |row| {
-            row.relative().pl(px(tokens::MENU_CHECKABLE_PAD_LEFT))
-        })
-        .when(checked, |row| {
-            row.child(
-                div()
-                    .absolute()
-                    .left(px(
-                        tokens::MENU_CHECKABLE_PAD_LEFT - tokens::MENU_CHECK_OFFSET
-                    ))
-                    .child("✓"),
-            )
-        })
-        .child(div().flex_1().child(label))
+    if enabled {
+        menu_item(id, "")
+    } else {
+        disabled_menu_item(id, "")
+    }
+    .flex()
+    .items_center()
+    .when(checkable, |row| {
+        row.relative().pl(px(tokens::MENU_CHECKABLE_PAD_LEFT))
+    })
+    .when(checked, |row| {
+        row.child(
+            div()
+                .absolute()
+                .left(px(
+                    tokens::MENU_CHECKABLE_PAD_LEFT - tokens::MENU_CHECK_OFFSET
+                ))
+                .child("✓"),
+        )
+    })
+    .child(div().flex_1().child(label))
 }
 
 #[cfg(test)]
