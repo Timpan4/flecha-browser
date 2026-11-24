@@ -575,26 +575,33 @@ fn nav_icon(glyph: &'static str, tint: &'static str) -> Div {
 /// `.nav-search` (ui/settings.css:1327-1358): the search field above the panes.
 fn nav_search(panel: &SettingsPanel, cx: &Context<Shell>) -> gpui::Stateful<Div> {
     let palette = palette();
-    let mut shadow = vec![hairline(palette.surface_line)];
-    if panel.search_focused {
-        shadow.push(ring(palette.focus, tokens::FOCUS_RING));
-    }
+    // GPUI paints a shadow under its element, so the focus ring sits on an opaque layer
+    // beneath the translucent fill instead of tinting it.
     div()
         .id("settings-search")
-        .flex()
         .flex_none()
-        .items_center()
-        .gap(px(tokens::NAV_SEARCH_GAP))
         .h(px(tokens::NAV_SEARCH))
         .mb(px(tokens::NAV_SEARCH_BOTTOM))
-        .px(px(tokens::NAV_SEARCH_PAD))
         .rounded(px(tokens::RADIUS_SM))
-        .bg(palette.fill_subtle)
-        .shadow(shadow)
-        .text_color(palette.text_3)
+        .bg(palette.surface)
+        .when(panel.search_focused, |field| {
+            field.shadow(vec![ring(palette.focus, tokens::FOCUS_RING)])
+        })
         .cursor_text()
-        .child(icon("search", tokens::NAV_SEARCH_ICON, palette.text_3))
-        .child(panel.search.render_inline("Search", panel.search_focused))
+        .child(
+            div()
+                .flex()
+                .size_full()
+                .items_center()
+                .gap(px(tokens::NAV_SEARCH_GAP))
+                .px(px(tokens::NAV_SEARCH_PAD))
+                .rounded(px(tokens::RADIUS_SM))
+                .bg(palette.fill_subtle)
+                .shadow(vec![hairline(palette.surface_line)])
+                .text_color(palette.text_3)
+                .child(icon("search", tokens::NAV_SEARCH_ICON, palette.text_3))
+                .child(panel.search.render_inline("Search", panel.search_focused)),
+        )
         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
             if let Some(panel) = this.settings_mut()
                 && !panel.search_focused
