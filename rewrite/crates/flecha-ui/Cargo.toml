@@ -7,6 +7,8 @@ publish.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+async-compat = "0.2.6"
+async-io = "2.6.0"
 cef.workspace = true
 chrono = "0.4"
 flecha-adblock.workspace = true
@@ -21,6 +23,7 @@ flecha-services.workspace = true
 flecha-surface.workspace = true
 futures.workspace = true
 gpui.workspace = true
+reqwest = { version = "0.13.5", default-features = false, features = ["charset", "rustls", "system-proxy"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tempfile = "3.27.0"
