@@ -57,8 +57,20 @@ export async function fixture() {
     response.setHeader('Set-Cookie', `flecha_phase1=${write}; Path=/; HttpOnly; SameSite=Lax`);
   }
 
+  // A cookie and a localStorage entry named by the caller, so a scan of the profile on disk
+  // can look for that name. Max-Age makes the cookie one a persistent jar writes to disk.
+  const jar = /^[a-z0-9_]+$/.exec(new URL(request.url, 'http://localhost').searchParams.get('jar') ?? '')?.[0];
+  const inJar = jar !== undefined && (request.headers.cookie ?? '').split('; ').includes(`${jar}=1`);
+
+  if (jar && path === '/jar/set') {
+    response.setHeader('Set-Cookie', `${jar}=1; Path=/; Max-Age=86400; SameSite=Lax`);
+  }
+
   const cookieResult = { isolated: 'Cookie present', shared: 'Shared cookie' };
-  const name = path === '/cookie/check' ? (cookieResult[cookie] ?? 'Cookie absent') : `Flecha fixture ${path}`;
+  const jarTitle = path === '/jar/list'
+    ? `jars:${(request.headers.cookie ?? '').split('; ').map(entry => entry.split('=')[0]).filter(name => name.startsWith('flecha_')).sort().join(',')}`
+    : jar && { '/jar/set': `${jar}:set`, '/jar/check': `${jar}:${inJar ? 'present' : 'absent'}` }[path];
+  const name = jarTitle || (path === '/cookie/check' ? (cookieResult[cookie] ?? 'Cookie absent') : `Flecha fixture ${path}`);
 
   const [background, marker] = {
     '/split': ['#703496', '#f386b9'],
@@ -85,6 +97,7 @@ export async function fixture() {
         window.opener?.postMessage('hello-from-popup', '*');${beforeUnload}
       </script>`,
     '/unload': `<script>${beforeUnload}</script>`,
+    '/jar/set': jar ? `<script>localStorage.setItem('${jar}', '${jar}_stored');</script>` : '',
   }[path] ?? '';
 
   response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });

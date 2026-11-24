@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { once, EventEmitter } from 'node:events';
-import { createWriteStream, readFileSync, renameSync } from 'node:fs';
-import { join } from 'node:path';
+import { createWriteStream, readdirSync, readFileSync, renameSync } from 'node:fs';
+import { join, relative } from 'node:path';
 import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
 
@@ -16,7 +16,7 @@ const mode = process.argv[2] ?? 'slice';
 const shippingTrace = readFileSync(new URL('./slice-ts-replay.jsonl', import.meta.url), 'utf8')
   .trim().split('\n').map(line => JSON.parse(line));
 
-assert(['slice', 'open', 'focus', 'popups', 'break-restore'].includes(mode), 'unknown slice check');
+assert(['slice', 'open', 'focus', 'popups', 'incognito', 'break-restore'].includes(mode), 'unknown slice check');
 
 const site = await fixture();
 const { base } = site;
@@ -500,6 +500,132 @@ async function openTab(app, path) {
   return tab;
 }
 
+// Incognito windows: one in-memory cookie jar per session, kept apart from the regular one,
+// gone when the last incognito window closes, and nowhere in the profile on disk afterwards.
+function incognitoTab(snapshot, window) {
+  const state = snapshot.incognito?.state;
+  const record = state?.windows.find(entry => entry.id === window);
+  assert(record, `no incognito window ${window}`);
+
+  return record.spaces[record.activeSpaceId]?.activeTabId;
+}
+
+async function jarPage(app, window, path, jar, incognito) {
+  const after = app.events.length;
+  const url = `${base}${path}?jar=${jar}`;
+  const snapshot = await app.command('open', { url, window });
+  const tab = incognito ? incognitoTab(snapshot, window) : active(snapshot).activeTabId;
+  const load = await app.wait(`HTTP load of ${path} for ${jar}`, event =>
+    event.type === 'loaded' && event.tab === tab && event.url === url, after);
+  assert.equal(load.status, 200, url);
+  const titled = await app.wait(`${path} title for ${jar}`, event =>
+    event.type === 'title' && event.tab === tab && event.title.startsWith(`${jar}:`), after);
+
+  return { tab, title: titled.title };
+}
+
+async function openIncognito(app) {
+  const after = app.events.length;
+  const snapshot = await app.command('new_incognito_window');
+  const window = snapshot.incognito.state.windows[0].id;
+  await app.wait('GPUI to bring the incognito window to the front', event =>
+    event.type === 'activated' && event.window === window, after);
+
+  return { window, session: snapshot.incognito.session };
+}
+
+/** Every file under `dir` whose bytes contain `needle`. */
+function filesContaining(dir, needle) {
+  const found = [];
+  const bytes = Buffer.from(needle);
+
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+
+    if (entry.isDirectory()) found.push(...filesContaining(path, needle));
+    else if (entry.isFile() && readFileSync(path).includes(bytes)) found.push(path);
+  }
+
+  return found;
+}
+
+async function incognitoChecks(app, main) {
+  const run = Date.now().toString(36);
+  const regularJar = `flecha_regular_${run}`;
+  const privateJar = `flecha_incognito_${run}`;
+
+  assert.equal((await jarPage(app, main, '/jar/set', regularJar, false)).title, `${regularJar}:set`);
+  const first = await openIncognito(app);
+  assert.equal(first.session, 1);
+
+  assert.equal((await jarPage(app, first.window, '/jar/check', regularJar, true)).title, `${regularJar}:absent`,
+    'a regular cookie reached the incognito window');
+  const set = await jarPage(app, first.window, '/jar/set', privateJar, true);
+  assert.equal((await jarPage(app, first.window, '/jar/check', privateJar, true)).title, `${privateJar}:present`,
+    'the incognito window lost its own cookie within the session');
+  // The regular window lists its cookies without naming the incognito one in its address.
+  const after = app.events.length;
+  const listTab = active(await app.command('open', { url: base + '/jar/list', window: main })).activeTabId;
+  await app.loaded(listTab, '/jar/list', after);
+  const { title: listed } = await app.wait('regular cookie list', event =>
+    event.type === 'title' && event.tab === listTab && event.title.startsWith('jars:'), after);
+  assert(listed.includes(regularJar), `the regular window lost its cookie: ${listed}`);
+  assert(!listed.includes(privateJar), 'an incognito cookie reached the regular window');
+  pass('regular and incognito cookies stayed in their own jars, and the incognito one lasted for its session');
+
+  // A location grant in each kind of window. The incognito page is on another host name, so
+  // its origin is one the regular window never visits.
+  const privateOrigin = base.replace('127.0.0.1', 'localhost');
+  const beforeGrant = app.events.length;
+  const grantTab = incognitoTab(await app.command('open', { url: privateOrigin + '/open', window: first.window }), first.window);
+  await app.wait('incognito page on localhost', event =>
+    event.type === 'loaded' && event.tab === grantTab && event.url === privateOrigin + '/open', beforeGrant);
+  assert.deepEqual(await app.command('allow_geolocation', { window: first.window }), { allowed: true });
+  await app.command('select', { tab: listTab, window: main });
+  assert.deepEqual(await app.command('allow_geolocation', { window: main }), { allowed: true });
+  pass('Site Controls allowed location for an incognito page and a regular one');
+
+  const running = await app.command('snapshot');
+  const session = `incognito-${first.session}`;
+  assert.deepEqual(running.browsers.find(page => page.tab === set.tab)?.partition, session);
+  assert(running.contexts.includes(session), 'no incognito request context');
+  assert(running.nativeWindows.includes(first.window), 'GPUI did not open the incognito window');
+  assert(Object.values(running.core.tabs).every(tab => !tab.url.includes(privateJar)),
+    'an incognito tab reached the regular state');
+  await app.present(first.window);
+  await capture('incognito', ['#2A2338', '#147A70'], 'Flecha Incognito');
+  pass('the incognito window drew its violet sidebar beside the page');
+
+  const closed = await app.command('close_window', { window: first.window });
+  assert.equal(closed.incognito, null);
+  assert(!closed.contexts.includes(session), 'the incognito context outlived its last window');
+  await app.wait('CEF closure of the incognito pages', event => event.type === 'closed' && event.tab === set.tab);
+  const second = await openIncognito(app);
+  assert.equal(second.session, 2);
+  assert.equal((await jarPage(app, second.window, '/jar/check', privateJar, true)).title, `${privateJar}:absent`,
+    'a new incognito session kept the last one\'s cookie');
+  await app.command('close_window', { window: second.window });
+  pass('closing the last incognito window destroyed its context: the next session started with an empty jar');
+
+  await app.quit();
+  const profile = process.env.FLECHA_PROFILE;
+  const kept = filesContaining(profile, regularJar).map(path => relative(profile, path));
+  assert(kept.length, 'the disk scan found nothing a regular window saved');
+  assert.deepEqual(filesContaining(profile, privateJar), [], 'incognito browsing reached the profile on disk');
+  assert(readFileSync(join(profile, 'permissions.json'), 'utf8').includes(base), 'the regular location grant was not saved');
+  assert.deepEqual(filesContaining(profile, privateOrigin.slice('http://'.length)), [], 'the incognito location grant reached the disk');
+  pass(`no file under the profile names the incognito cookie, storage entry or page; the regular one is in ${kept.join(', ')}`);
+
+  const restarted = launch('incognito-restart');
+  await restarted.wait('restored CEF context ready', event => event.type === 'ready');
+  const restored = await restarted.command('snapshot');
+  assert.equal(restored.incognito, null);
+  assert.deepEqual(restored.nativeWindows, restored.core.windows.map(window => window.id).sort());
+  assert(Object.values(restored.core.tabs).every(tab => !tab.url.includes(privateJar)));
+  pass('restart restored no incognito window or tab');
+  await restarted.quit();
+}
+
 // The checks for browsers pages open. Each reports its own failure, so a run
 // against an older build shows every check it fails.
 async function popupChecks(app) {
@@ -757,6 +883,8 @@ try {
     await app.quit();
   } else if (mode === 'popups') {
     await popupChecks(app);
+  } else if (mode === 'incognito') {
+    await incognitoChecks(app, main);
   } else if (mode !== 'open') {
     const publicUrl = base.replace('127.0.0.1', 'localtest.me') + '/open';
     const attempted = await app.command('peek', { url: publicUrl });

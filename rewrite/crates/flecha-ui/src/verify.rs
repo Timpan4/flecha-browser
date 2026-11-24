@@ -33,6 +33,8 @@ enum Command {
     CloseWindow,
     OpenWindow { url: String },
     NewIncognitoWindow,
+    /// Site Controls' "Allow" for location on the window's current page.
+    AllowGeolocation,
     Switch { space: SpaceId },
     NewSpace,
     Isolate,
@@ -136,6 +138,24 @@ impl Command {
                     "current": current.generation(),
                     "browser": state.engine.browser_id(&tab),
                 }));
+            }
+            Self::AllowGeolocation => {
+                let site = state
+                    .site_for_window(window)
+                    .context("no web page in this window")?;
+                let kind = flecha_permissions::PermissionKind::Geolocation;
+                state.act(
+                    window,
+                    Action::Site(
+                        site.clone(),
+                        crate::site_controls::SiteChange::Permission(
+                            kind,
+                            flecha_permissions::Decision::Allow,
+                        ),
+                    ),
+                )?;
+                let decision = state.site_permissions(&site).decision(kind);
+                return Ok(json!({ "allowed": decision == flecha_permissions::Decision::Allow }));
             }
             Self::Script { tab, source } => {
                 ensure!(

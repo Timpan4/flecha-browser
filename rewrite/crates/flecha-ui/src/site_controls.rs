@@ -107,7 +107,7 @@ impl Controller {
         }
     }
 
-    fn site_permissions(&self, site: &Site) -> SiteSettings {
+    pub(crate) fn site_permissions(&self, site: &Site) -> SiteSettings {
         self.engine.site_permissions(&site.partition, &site.origin)
     }
 }
