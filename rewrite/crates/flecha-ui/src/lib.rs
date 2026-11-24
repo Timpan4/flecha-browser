@@ -21,7 +21,9 @@ mod shell_menu;
 mod shortcuts;
 mod sidebar;
 mod site_controls;
+mod space_editor;
 mod tab_drag;
+mod tab_menu;
 mod tab_sleep;
 mod text_field;
 mod theme;
@@ -200,8 +202,6 @@ enum Action {
     Return,
     Close,
     CloseTab(TabId),
-    /// The audio mark on a tab row (ui/app.ts:569-573).
-    ToggleMute(TabId),
     /// The window's close button: the window closes for good, or the app quits with
     /// its last Flecha window (patches 0059 and 0062).
     CloseWindow,
@@ -215,6 +215,12 @@ enum Action {
     Switch(SpaceId),
     NewSpace,
     Isolate,
+    /// A tab's menu, shortcut or command-bar action on that tab.
+    Tab(TabId, tab_menu::TabAction),
+    /// A Space's menu or editor.
+    Space(SpaceId, space_editor::SpaceAction),
+    /// "Clear Today" (`clearToday`): archives the shown Space's Today tabs.
+    ClearToday,
     Sidebar(SidebarAction),
     ResizeSidebar(flecha_core::SidebarWidth),
     Reopen,
@@ -690,13 +696,6 @@ impl Controller {
                 }
                 self.close_tab(&tab);
             }
-            Action::ToggleMute(tab) => {
-                if let Some((entry, _)) = self.model.tab_mut(&tab) {
-                    let muted = entry.muted != Some(true);
-                    entry.muted = muted.then_some(true);
-                    self.engine.set_muted(&tab, muted);
-                }
-            }
             Action::Switch(space) => {
                 self.model
                     .core
@@ -727,11 +726,21 @@ impl Controller {
                     .space(&id)
                     .context("missing active Space")?
                     .isolated;
-                for tab in self.model.core.set_isolated(&id, !isolated) {
-                    self.reconcile_partition(&tab);
+                self.set_space_isolated(&id, !isolated);
+            }
+            Action::Tab(id, action) => self.tab_action(window, &id, action)?,
+            Action::Space(id, action) => {
+                if let Some(opened) = self.space_action(&id, action)? {
+                    self.front = Some(opened);
                 }
-                for tab in self.model.close_space_transients(&id) {
-                    self.engine.close(&tab);
+            }
+            Action::ClearToday => {
+                let state = self
+                    .model
+                    .state_mut(window)
+                    .context("missing Flecha window")?;
+                for id in state.clear_today(window, now()) {
+                    self.engine.close(&id);
                 }
             }
             Action::Sidebar(action) => self.sidebar_action(window, action),
@@ -978,15 +987,15 @@ impl Controller {
                 Event::SecurityChanged | Event::DialogChanged => changed = true,
                 Event::Closed => self.history.forget(id),
                 Event::Created(_) => {
-                    self.start_download_retries(id);
-                    // A new browser starts unmuted: restart, restore and CPU-copy reopen.
-                    let muted = self
+                    // A tab muted while it had no browser opens muted.
+                    if self
                         .model
                         .tab(id)
-                        .is_some_and(|tab| tab.muted == Some(true));
-                    if muted {
-                        self.engine.set_muted(id, true);
+                        .is_some_and(|tab| tab.muted == Some(true))
+                    {
+                        self.engine.set_audio_muted(id, true);
                     }
+                    self.start_download_retries(id);
                     self.favicons_stale();
                 }
                 Event::FaviconUrls(urls) => {

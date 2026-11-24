@@ -6,8 +6,9 @@ use std::time::{Duration, Instant};
 use async_io::Timer;
 
 use flecha_core::{
-    BrowserState, SearchEngine, Settings, Tab, TabId, WindowId,
+    ArchivedTab, BrowserState, SearchEngine, Settings, Tab, TabId, WindowId,
     input_text::trim_input,
+    shortcuts,
     suggestions::{
         self, InlineCompletion, InputResolution, MatchQuality, SuggestionAction, VisitedPage,
     },
@@ -21,6 +22,7 @@ use gpui::{
 
 use crate::icons::icon;
 use crate::settings_view::{RESTORE_BEFORE_IMPORT, SettingsTab};
+use crate::shortcuts::{Navigation, Shortcut, ShownWindow, platform};
 use crate::text_field::TextField;
 use crate::theme::palette;
 use crate::tokens;
@@ -40,6 +42,7 @@ const SEARCH_SCORE: u16 = 1200;
 const REMOTE_SCORE: u16 = 1020;
 const TAB_ROWS: usize = 6;
 const HISTORY_ROWS: usize = 6;
+const ARCHIVE_ROWS: usize = 5;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Command {
@@ -63,6 +66,11 @@ impl Command {
             Self::OpenSettings => "Settings",
         }
     }
+
+    /// Shipping's three bar modes (`paletteMode`) offer actions; Peek and Flechinha pick a page.
+    fn offers_actions(self) -> bool {
+        matches!(self, Self::NewTab | Self::EditLocation | Self::Split)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -71,7 +79,10 @@ enum Target {
     Address(String),
     Search(String),
     Copy(String),
-    RestoreBeforeImport,
+    /// A Flecha command (`ACTIONS`).
+    Action(Shortcut),
+    /// An archived tab's address, which opens as a new page.
+    Archived(String),
 }
 
 struct Suggestion {
@@ -88,6 +99,7 @@ impl Suggestion {
         match &self.target {
             Target::Tab(_, url) => Some(url),
             Target::Address(url) if matches!(self.kind, "History" | "Completion") => Some(url),
+            Target::Archived(url) => Some(url),
             _ => None,
         }
     }
@@ -106,6 +118,8 @@ struct CommandMatches {
 
 pub(crate) struct CommandBar {
     mode: Command,
+    /// Tab in an empty bar searches only the actions (`actionMode`).
+    actions: bool,
     input: TextField,
     typed: String,
     matches: CommandMatches,
@@ -119,6 +133,7 @@ enum Key {
     Down,
     Submit,
     Dismiss,
+    Tab,
     Edit,
 }
 
@@ -131,6 +146,7 @@ fn command_key(stroke: &gpui::Keystroke) -> Key {
         "down" => Key::Down,
         "enter" => Key::Submit,
         "escape" => Key::Dismiss,
+        "tab" => Key::Tab,
         _ => Key::Edit,
     }
 }
@@ -171,6 +187,7 @@ fn suggestions_for(
         tabs: core,
         settings,
         history,
+        archive,
         ..
     } = sources;
     let mut rows = Vec::new();
@@ -305,6 +322,34 @@ fn suggestions_for(
             })
             .take(HISTORY_ROWS),
     );
+    // Archived tabs, newest first, reopen as a new page (`reopen`, chromium/shell/ui/app.ts).
+    rows.extend(
+        archive
+            .iter()
+            .filter(|_| !empty)
+            .filter_map(|entry| {
+                let address = suggestions::display_url(&entry.url);
+                let quality = suggestions::match_quality(text, &[&entry.title, &address])?;
+                let titled = !entry.title.is_empty();
+                Some(Suggestion {
+                    target: Target::Archived(entry.url.clone()),
+                    label: if titled {
+                        entry.title.clone()
+                    } else {
+                        address.clone()
+                    },
+                    detail: if titled { address } else { String::new() },
+                    kind: "Archived",
+                    score: match quality {
+                        MatchQuality::Start => 1100,
+                        MatchQuality::Word => 1000,
+                        MatchQuality::Contains => 850,
+                    },
+                    recency: entry.closed_at,
+                })
+            })
+            .take(ARCHIVE_ROWS),
+    );
 
     let completion = may_complete
         .then(|| {
@@ -361,6 +406,8 @@ pub(crate) struct Sources<'a> {
     tabs: &'a BrowserState,
     settings: &'a Settings,
     history: Option<&'a HistoryStore>,
+    /// The regular profile's archive; an incognito window keeps none.
+    archive: &'a [ArchivedTab],
     remote: RemoteSuggestions,
 }
 
@@ -371,6 +418,7 @@ impl<'a> Sources<'a> {
             tabs: core,
             settings: &core.settings,
             history,
+            archive: core.archive(),
             remote: RemoteSuggestions::Allowed,
         }
     }
@@ -378,11 +426,17 @@ impl<'a> Sources<'a> {
 
 impl Controller {
     pub(crate) fn command_sources(&self, window: &WindowId) -> Option<Sources<'_>> {
+        let incognito = self.model.is_incognito(window);
         Some(Sources {
             tabs: self.model.state(window)?,
             settings: &self.model.core.settings,
             history: self.history.store(),
-            remote: if self.model.is_incognito(window) {
+            archive: if incognito {
+                &[]
+            } else {
+                self.model.core.archive()
+            },
+            remote: if incognito {
                 RemoteSuggestions::Refused
             } else {
                 RemoteSuggestions::Allowed
@@ -392,31 +446,31 @@ impl Controller {
 }
 
 impl CommandMatches {
+    /// What the bar shows for `text`: only the actions in action mode, and otherwise the pages
+    /// with the actions ranked among them when `mode` offers actions.
     fn for_window(
         state: &Controller,
         sources: Sources<'_>,
         window: &WindowId,
         text: &str,
         may_complete: bool,
+        mode: Command,
+        actions: bool,
     ) -> Self {
+        if actions {
+            return Self {
+                rows: action_rows(state, window, text, true),
+                engine: sources.settings.search_engine,
+                suggestions_enabled: sources.settings.search_suggestions_enabled(),
+                ..Self::default()
+            };
+        }
         let mut matches = Self::new(sources, state.model.active(window), text, may_complete);
-        // The backup holds regular state, so only a regular window offers it back.
-        if let Some(score) = restore_action_score(text)
-            && !state.model.is_incognito(window)
-            && state.store.has_before_import()
-        {
-            let rank = matches.rows.partition_point(|row| row.score >= score);
-            matches.rows.insert(
-                rank,
-                Suggestion {
-                    target: Target::RestoreBeforeImport,
-                    label: RESTORE_BEFORE_IMPORT.into(),
-                    detail: String::new(),
-                    kind: "Action",
-                    score,
-                    recency: 0,
-                },
-            );
+        if mode.offers_actions() {
+            matches.rows.extend(action_rows(state, window, text, false));
+            matches
+                .rows
+                .sort_by_key(|row| Reverse((row.score, row.recency)));
         }
         matches
     }
@@ -510,23 +564,319 @@ fn remote_row(label: String, target: Target) -> Suggestion {
     }
 }
 
-fn restore_action_score(text: &str) -> Option<u16> {
-    let query = trim_input(text).to_lowercase();
-    let label = RESTORE_BEFORE_IMPORT.to_lowercase();
-    let keywords = "undo restore revert backup import flecha electron state";
-    // Action matching and scores from chromium/shell/{ui/app.ts,lib/commandBar.ts}.
-    (query.encode_utf16().count() >= 2
-        && query.split_whitespace().all(|prefix| {
-            label
-                .split_whitespace()
-                .chain(keywords.split_whitespace())
-                .any(|word| word.starts_with(prefix))
-        }))
+/// A command the bar runs, found by any word of its label or keywords (`ACTIONS`,
+/// chromium/shell/ui/app.ts:1165-1206). `empty_bar` ones fill an empty bar after its tabs.
+pub(crate) struct BarAction {
+    pub(crate) label: &'static str,
+    keywords: &'static str,
+    icon: &'static str,
+    /// The id of its keyboard shortcut, shown beside it.
+    pub(crate) shortcut: Option<&'static str>,
+    empty_bar: bool,
+    pub(crate) run: Shortcut,
+}
+
+const fn bar_action(
+    label: &'static str,
+    keywords: &'static str,
+    icon: &'static str,
+    shortcut: Option<&'static str>,
+    run: Shortcut,
+) -> BarAction {
+    BarAction {
+        label,
+        keywords,
+        icon,
+        shortcut,
+        empty_bar: false,
+        run,
+    }
+}
+
+/// Shipping's actions in its order, then the tab and window commands its shortcuts run.
+pub(crate) const ACTIONS: &[BarAction] = &[
+    BarAction {
+        empty_bar: true,
+        ..bar_action(
+            "New Space",
+            "space create add",
+            "space",
+            Some("newSpace"),
+            Shortcut::NewSpace,
+        )
+    },
+    bar_action(
+        "Edit Space",
+        "space rename emoji colour color icon",
+        "space",
+        None,
+        Shortcut::EditSpace,
+    ),
+    BarAction {
+        empty_bar: true,
+        ..bar_action(
+            "New Flechinha Window",
+            "flechinha little mini small window quick lookup",
+            "miniWindow",
+            Some("newFlechinha"),
+            Shortcut::Command(Command::Flechinha),
+        )
+    },
+    bar_action(
+        "Settings",
+        "preferences settings config options",
+        "settings",
+        Some("settings"),
+        Shortcut::Command(Command::OpenSettings),
+    ),
+    bar_action(
+        "Toggle Sidebar",
+        "sidebar hide show",
+        "sidebar",
+        Some("toggleSidebar"),
+        Shortcut::Sidebar,
+    ),
+    bar_action(
+        "Clear Today Tabs",
+        "clear archive today close",
+        "archive",
+        Some("clearToday"),
+        Shortcut::ClearToday,
+    ),
+    bar_action(
+        "Show Downloads",
+        "downloads files",
+        "download",
+        None,
+        Shortcut::Downloads,
+    ),
+    bar_action(
+        "Show History",
+        "history visited pages clear",
+        "history",
+        Some("history"),
+        Shortcut::History,
+    ),
+    bar_action(
+        "Import from another browser",
+        "import migrate bookmarks history arc chrome safari firefox brave edge vivaldi opera",
+        "import",
+        None,
+        Shortcut::SettingsTab(SettingsTab::Import),
+    ),
+    bar_action(
+        RESTORE_BEFORE_IMPORT,
+        "undo restore revert backup import flecha electron state",
+        "import",
+        None,
+        Shortcut::RestoreBeforeImport,
+    ),
+    bar_action(
+        "Show Boosts",
+        "boosts scripts css styles",
+        "zap",
+        Some("editBoost"),
+        Shortcut::SettingsTab(SettingsTab::Boosts),
+    ),
+    bar_action(
+        "Show Archive",
+        "archive archived closed tabs reopen",
+        "archive",
+        None,
+        Shortcut::Archive,
+    ),
+    bar_action(
+        "New Window",
+        "window new browser",
+        "tab",
+        None,
+        Shortcut::NewWindow,
+    ),
+    bar_action(
+        "New Incognito Window",
+        "incognito private window",
+        "tab",
+        None,
+        Shortcut::NewIncognitoWindow,
+    ),
+    bar_action(
+        "Copy Link",
+        "copy link url address share",
+        "link",
+        Some("copyLink"),
+        Shortcut::CopyLink(false),
+    ),
+    bar_action(
+        "Copy as Markdown Link",
+        "copy markdown link url",
+        "link",
+        Some("copyMarkdown"),
+        Shortcut::CopyLink(true),
+    ),
+    bar_action(
+        "Pin or Unpin Tab",
+        "pin unpin tab",
+        "stack",
+        Some("pinTab"),
+        Shortcut::Pin,
+    ),
+    bar_action(
+        "Duplicate Tab",
+        "duplicate copy tab",
+        "tab",
+        Some("duplicateTab"),
+        Shortcut::Duplicate,
+    ),
+    bar_action(
+        "Mute or Unmute Tab",
+        "mute unmute sound audio silence tab",
+        "muted",
+        Some("muteTab"),
+        Shortcut::Mute,
+    ),
+    bar_action(
+        "Reload",
+        "reload refresh page",
+        "reload",
+        Some("reload"),
+        Shortcut::Browser(Navigation::Reload),
+    ),
+    bar_action(
+        "Developer Tools",
+        "developer tools devtools inspect console",
+        "terminal",
+        Some("devTools"),
+        Shortcut::DevTools,
+    ),
+    bar_action(
+        "View Source",
+        "view source html code page",
+        "code",
+        Some("viewSource"),
+        Shortcut::ViewSource,
+    ),
+    bar_action(
+        "Split View with New Tab",
+        "split view new tab side",
+        "columns",
+        Some("splitNew"),
+        Shortcut::Command(Command::Split),
+    ),
+    bar_action(
+        "Exit Split View",
+        "exit close split view",
+        "columns",
+        Some("exitSplit"),
+        Shortcut::ExitSplit,
+    ),
+    bar_action(
+        "Peek at an Address",
+        "peek preview open address",
+        "external",
+        None,
+        Shortcut::Command(Command::Peek),
+    ),
+    bar_action(
+        "Next Space",
+        "next space switch",
+        "arrowRight",
+        Some("nextSpace"),
+        Shortcut::StepSpace(false),
+    ),
+    bar_action(
+        "Previous Space",
+        "previous space switch",
+        "arrowLeft",
+        Some("previousSpace"),
+        Shortcut::StepSpace(true),
+    ),
+];
+
+/// `EMPTY_ACTIONS` (chromium/shell/lib/commandBar.ts:14): the actions an empty bar shows.
+const EMPTY_ACTIONS: usize = 2;
+/// `actionItems(q).slice(0, 4)` (chromium/shell/ui/app.ts:1305): the actions among a query's
+/// results.
+const QUERY_ACTIONS: usize = 4;
+
+fn action_for(run: Shortcut) -> Option<&'static BarAction> {
+    ACTIONS.iter().find(|action| action.run == run)
+}
+
+/// The icon of a row that isn't a page.
+fn target_icon(target: &Target) -> &'static str {
+    match target {
+        Target::Copy(_) => "copy",
+        Target::Action(run) => action_for(*run).map_or("zap", |action| action.icon),
+        _ => "search",
+    }
+}
+
+/// `matchingActions` and the `action` scores (chromium/shell/ui/app.ts:1212-1220,
+/// lib/commandBar.ts:36-46): every typed word starts a word of the label or keywords, and a
+/// label that starts with the query ranks first. Fewer than `min_length` UTF-16 units match
+/// nothing.
+fn action_score(action: &BarAction, query: &str, min_length: usize) -> Option<u16> {
+    let query = trim_input(query).to_lowercase();
+    let label = action.label.to_lowercase();
+    let keywords = action.keywords.to_lowercase();
+    let words = || label.split_whitespace().chain(keywords.split_whitespace());
+    (!query.is_empty()
+        && query.encode_utf16().count() >= min_length
+        && query
+            .split_whitespace()
+            .all(|prefix| words().any(|word| word.starts_with(prefix))))
     .then_some(if label.starts_with(&query) {
         1400
     } else {
         1250
     })
+}
+
+/// The actions `window` can run now, matched against `text`: every one in an empty Actions
+/// bar, the two `empty_bar` ones in an empty bar, and the best four for a query.
+fn action_rows(
+    state: &Controller,
+    window: &WindowId,
+    text: &str,
+    actions: bool,
+) -> Vec<Suggestion> {
+    let Some(shown) = ShownWindow::read(state, window) else {
+        return Vec::new();
+    };
+    // The backup holds regular state, so only a regular window offers it back.
+    let offered = ACTIONS.iter().filter(|action| {
+        shown.can_run(action.run)
+            && (action.run != Shortcut::RestoreBeforeImport || state.store.has_before_import())
+    });
+    let row = |action: &BarAction, score| Suggestion {
+        target: Target::Action(action.run),
+        label: action.label.into(),
+        detail: String::new(),
+        kind: "Action",
+        score,
+        recency: 0,
+    };
+    let empty = trim_input(text).is_empty();
+    if empty {
+        return offered
+            .filter(|action| actions || action.empty_bar)
+            .take(if actions { usize::MAX } else { EMPTY_ACTIONS })
+            .map(|action| row(action, 0))
+            .collect();
+    }
+    let mut rows: Vec<_> = offered
+        .filter_map(|action| {
+            Some(row(
+                action,
+                action_score(action, text, if actions { 1 } else { 2 })?,
+            ))
+        })
+        .collect();
+    rows.sort_by_key(|row| Reverse(row.score));
+    if !actions {
+        rows.truncate(QUERY_ACTIONS);
+    }
+    rows
 }
 
 impl CommandBar {
@@ -536,7 +886,15 @@ impl CommandBar {
         };
         let previous = std::mem::replace(
             &mut self.matches,
-            CommandMatches::for_window(state, sources, window, &self.typed, may_complete),
+            CommandMatches::for_window(
+                state,
+                sources,
+                window,
+                &self.typed,
+                may_complete,
+                self.mode,
+                self.actions,
+            ),
         );
         self.matches.keep_remote(&previous);
         self.show_selected_completion();
@@ -590,10 +948,18 @@ impl Shell {
                 tab.map_or_else(String::new, |tab| tab.url.clone()),
                 tab.is_some(),
             );
-            let matches =
-                CommandMatches::for_window(&state, sources, &self.id, input.text(), false);
+            let matches = CommandMatches::for_window(
+                &state,
+                sources,
+                &self.id,
+                input.text(),
+                false,
+                mode,
+                false,
+            );
             CommandBar {
                 mode,
+                actions: false,
                 typed: input.text().into(),
                 input,
                 matches,
@@ -696,6 +1062,20 @@ impl Shell {
                 self.dismiss_overlay(window, cx);
                 return;
             }
+            // Tab keeps focus in the bar; in an empty bar it searches the actions.
+            Key::Tab => {
+                if bar.typed.is_empty() && !bar.actions && bar.mode.offers_actions() {
+                    bar.actions = true;
+                    bar.refresh_matches(&self.state.borrow(), &self.id, false);
+                }
+            }
+            Key::Edit
+                if bar.actions && stroke.key == "backspace" && bar.input.text().is_empty() =>
+            {
+                bar.actions = false;
+                bar.refresh_matches(&self.state.borrow(), &self.id, false);
+                self.start_suggestions(cx);
+            }
             Key::Edit => {
                 let previous = bar.input.text().to_owned();
                 bar.input.key(stroke, cx);
@@ -719,9 +1099,26 @@ impl Shell {
         if !bar.matches.rows.iter().any(|row| &row.target == target) {
             return;
         }
+        let mode = bar.mode;
         let url = match target {
-            Target::RestoreBeforeImport => {
-                self.open_restore_before_import(window, cx);
+            Target::Action(shortcut) => {
+                let shortcut = *shortcut;
+                self.dismiss_overlay(window, cx);
+                self.invoke_shortcut(shortcut, window, cx);
+                return;
+            }
+            Target::Archived(url) => {
+                let url = url.clone();
+                // `reopen` opens a new page where the bar's own mode would replace the current one.
+                let action = match mode {
+                    Command::Split => Action::SplitNew(url),
+                    Command::Peek => Action::Peek(url),
+                    Command::Flechinha => Action::OpenFlechinha(url),
+                    Command::NewTab | Command::EditLocation | Command::OpenSettings => {
+                        Action::Open(url)
+                    }
+                };
+                self.navigate_from_overlay(action, window, cx);
                 return;
             }
             Target::Copy(text) => {
@@ -736,7 +1133,7 @@ impl Shell {
             }
             Target::Tab(_, url) | Target::Address(url) | Target::Search(url) => url.clone(),
         };
-        let action = match bar.mode {
+        let action = match mode {
             Command::NewTab => Action::Open(url),
             Command::EditLocation => Action::Navigate(url),
             Command::Split => Action::SplitNew(url),
@@ -747,13 +1144,13 @@ impl Shell {
         self.navigate_from_overlay(action, window, cx);
     }
 
-    /// A tab result's own icon, or for an address the icon of a tab on its site in the
-    /// partition of the window's shown tab.
-    fn target_icon(&self, target: &Target) -> Option<Arc<gpui::RenderImage>> {
+    /// A tab result's own icon, or for an address or archived tab the icon of a tab on its
+    /// site in the partition of the window's shown tab.
+    fn target_favicon(&self, target: &Target) -> Option<Arc<gpui::RenderImage>> {
         let state = self.state.borrow();
         match target {
             Target::Tab(id, _) => state.tab_favicon(id),
-            Target::Address(url) => {
+            Target::Address(url) | Target::Archived(url) => {
                 let partition = state.model.partition(state.model.active(&self.id)?)?;
                 state.site_favicon(&partition, url)
             }
@@ -762,6 +1159,18 @@ impl Shell {
     }
 
     pub(crate) fn command_panel(&self, bar: &CommandBar, cx: &Context<Self>) -> Div {
+        let keybindings = self.state.borrow().model.core.settings.keybindings.clone();
+        // An action shows its shortcut where a page shows its kind (`actionItem`'s `hint`).
+        let hint = |target: &Target| {
+            let Target::Action(run) = target else {
+                return None;
+            };
+            let keys = shortcuts::display_keys(
+                shortcuts::keys_for(&keybindings, action_for(*run)?.shortcut?, platform()),
+                platform(),
+            );
+            (!keys.is_empty()).then_some(keys)
+        };
         // #palette-results .item (ui/styles.css:1315-1397).
         let rows = bar.matches.rows.iter().enumerate().map(|(index, row)| {
             let target = row.target.clone();
@@ -772,21 +1181,19 @@ impl Shell {
                 palette().text_2
             };
             let chip = match &row.target {
-                Target::Tab(_, url) | Target::Address(url) => self.site_icon(
-                    self.target_icon(&row.target),
-                    url,
-                    (
-                        tokens::FAVICON,
-                        tokens::FAVICON_RADIUS,
-                        tokens::FAVICON_LETTER,
+                Target::Tab(_, url) | Target::Address(url) | Target::Archived(url) => self
+                    .site_icon(
+                        self.target_favicon(&row.target),
+                        url,
+                        (
+                            tokens::FAVICON,
+                            tokens::FAVICON_RADIUS,
+                            tokens::FAVICON_LETTER,
+                        ),
                     ),
-                ),
-                Target::Search(_) => icon("search", tokens::ICON, icon_color).into_any_element(),
-                Target::Copy(_) => icon("copy", tokens::ICON, icon_color).into_any_element(),
-                Target::RestoreBeforeImport => {
-                    icon("import", tokens::ICON, icon_color).into_any_element()
-                }
+                target => icon(target_icon(target), tokens::ICON, icon_color).into_any_element(),
             };
+            let hint = hint(&row.target);
             let go = match (&row.target, bar.mode) {
                 (Target::Tab(..), Command::Split) => Some("Split with Tab"),
                 (Target::Tab(..), Command::Flechinha) => None,
@@ -863,7 +1270,10 @@ impl Shell {
                         } else {
                             palette().text_3
                         })
-                        .child(go.unwrap_or(row.kind))
+                        .map(|right| match hint {
+                            Some(keys) => right.child(kbd(keys)),
+                            None => right.child(go.unwrap_or(row.kind)),
+                        })
                         .when(go.is_some(), |go| {
                             go.child(
                                 div()
@@ -882,30 +1292,38 @@ impl Shell {
                         }),
                 )
         });
+        // The field shows the selected row's icon (`palette-icon`).
         let field_icon = match bar
             .matches
             .rows
             .get(bar.matches.selected)
             .map(|row| &row.target)
         {
-            Some(target @ (Target::Tab(_, url) | Target::Address(url))) => self.site_icon(
-                self.target_icon(target),
-                url,
-                (
-                    tokens::PALETTE_ICON,
-                    tokens::FAVICON_RADIUS,
-                    tokens::FAVICON_LETTER,
-                ),
-            ),
-            Some(Target::Copy(_)) => {
-                icon("copy", tokens::PALETTE_ICON, palette().text_3).into_any_element()
+            Some(target @ (Target::Tab(_, url) | Target::Address(url) | Target::Archived(url))) => {
+                self.site_icon(
+                    self.target_favicon(target),
+                    url,
+                    (
+                        tokens::PALETTE_ICON,
+                        tokens::FAVICON_RADIUS,
+                        tokens::FAVICON_LETTER,
+                    ),
+                )
             }
-            Some(Target::RestoreBeforeImport) => {
-                icon("import", tokens::PALETTE_ICON, palette().text_3).into_any_element()
+            Some(target) => {
+                icon(target_icon(target), tokens::PALETTE_ICON, palette().text_3).into_any_element()
             }
-            Some(Target::Search(_)) | None => {
-                icon("search", tokens::PALETTE_ICON, palette().text_3).into_any_element()
-            }
+            None => icon(
+                if bar.actions { "zap" } else { "search" },
+                tokens::PALETTE_ICON,
+                palette().text_3,
+            )
+            .into_any_element(),
+        };
+        let (mode, placeholder) = if bar.actions {
+            ("Actions", "Search actions…")
+        } else {
+            (bar.mode.label(), "Search or Enter URL…")
         };
         overlay_panel()
             .p_0()
@@ -928,7 +1346,7 @@ impl Shell {
                     .child(field_icon)
                     .child(
                         bar.input
-                            .render("Search or Enter URL…")
+                            .render(placeholder)
                             .flex_1()
                             .h_auto()
                             .px_0()
@@ -948,7 +1366,7 @@ impl Shell {
                             .text_size(px(tokens::TEXT_XS))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(palette().text_2)
-                            .child(bar.mode.label()),
+                            .child(mode),
                     )
                     .child(
                         div()
@@ -982,6 +1400,24 @@ mod tests {
     use flecha_core::{Placement, SpaceId};
     use gpui::Keystroke;
 
+    fn bar_rows(
+        state: &Controller,
+        window: &WindowId,
+        query: &str,
+        mode: Command,
+        actions: bool,
+    ) -> Vec<Suggestion> {
+        let sources = state.command_sources(window).unwrap();
+        CommandMatches::for_window(state, sources, window, query, false, mode, actions).rows
+    }
+
+    fn action_labels(rows: &[Suggestion]) -> Vec<&str> {
+        rows.iter()
+            .filter(|row| matches!(row.target, Target::Action(_)))
+            .map(|row| row.label.as_str())
+            .collect()
+    }
+
     #[test]
     fn restore_action_is_offered_for_a_matching_query_only_when_a_backup_exists()
     -> anyhow::Result<()> {
@@ -989,11 +1425,9 @@ mod tests {
         let state = Controller::open_test_profile(profile.path())?;
         let command = |query: &str| {
             let window = &state.model.core.focused_window().id;
-            let sources = state.command_sources(window).unwrap();
-            CommandMatches::for_window(&state, sources, window, query, false)
-                .rows
+            bar_rows(&state, window, query, Command::NewTab, false)
                 .into_iter()
-                .find(|row| row.target == Target::RestoreBeforeImport)
+                .find(|row| row.target == Target::Action(Shortcut::RestoreBeforeImport))
         };
         assert!(command("restore spaces").is_none());
         state
@@ -1012,6 +1446,133 @@ mod tests {
             RESTORE_BEFORE_IMPORT
         );
         Ok(())
+    }
+
+    #[test]
+    fn actions_fill_an_empty_bar_rank_among_pages_and_list_alone_after_tab() {
+        let profile = tempfile::tempdir().unwrap();
+        let mut state = Controller::open_test_profile(profile.path()).unwrap();
+        let window = state.model.core.focused_window().id.clone();
+        state
+            .act(&window, Action::Open("https://pin.example/".into()))
+            .unwrap();
+
+        let empty = bar_rows(&state, &window, "", Command::NewTab, false);
+        assert_eq!(action_labels(&empty), ["New Space", "New Flechinha Window"]);
+        assert!(matches!(
+            empty.last().unwrap().target,
+            Target::Action(Shortcut::Command(Command::Flechinha))
+        ));
+        // A Peek or Flechinha bar picks a page, so it offers no actions.
+        assert!(action_labels(&bar_rows(&state, &window, "", Command::Peek, false)).is_empty());
+
+        // "pin" starts the label of Pin or Unpin Tab, which ranks above the typed search.
+        let pin = bar_rows(&state, &window, "pin", Command::NewTab, false);
+        let action = pin
+            .iter()
+            .position(|row| row.target == Target::Action(Shortcut::Pin))
+            .unwrap();
+        let search = pin.iter().position(|row| row.kind == "Search").unwrap();
+        assert!(action < search);
+        // Among pages one letter matches no action; on their own it does.
+        assert!(action_labels(&bar_rows(&state, &window, "s", Command::NewTab, false)).is_empty());
+        let alone = bar_rows(&state, &window, "s", Command::NewTab, true);
+        assert!(!alone.is_empty());
+        assert!(
+            alone
+                .iter()
+                .all(|row| matches!(row.target, Target::Action(_)))
+        );
+        assert_eq!(alone[0].score, 1400);
+
+        let all = bar_rows(&state, &window, "", Command::NewTab, true);
+        assert!(
+            all.iter()
+                .all(|row| matches!(row.target, Target::Action(_)))
+        );
+        let labels = action_labels(&all);
+        for offered in ["New Window", "Copy Link", "Developer Tools", "View Source"] {
+            assert!(labels.contains(&offered), "{offered}");
+        }
+        // Nothing is split and no backup exists.
+        for absent in ["Exit Split View", RESTORE_BEFORE_IMPORT] {
+            assert!(!labels.contains(&absent), "{absent}");
+        }
+
+        let private = state.model.open_incognito_window();
+        state
+            .model
+            .open(&private, "https://private.example/".into(), true)
+            .unwrap();
+        let labels = bar_rows(&state, &private, "", Command::NewTab, true);
+        let labels = action_labels(&labels);
+        assert!(labels.contains(&"Copy Link"));
+        for absent in ["New Space", "Edit Space", "Next Space", "Show Archive"] {
+            assert!(!labels.contains(&absent), "{absent}");
+        }
+    }
+
+    #[test]
+    fn archived_tabs_match_and_reopen_as_pages_but_never_in_incognito() {
+        let profile = tempfile::tempdir().unwrap();
+        let mut state = Controller::open_test_profile(profile.path()).unwrap();
+        let window = state.model.core.focused_window().id.clone();
+        let closed = TabId::new("closed");
+        let mut tab = Tab::new("https://archived.example/notes", 0);
+        tab.title = "Quarterly notes".into();
+        let space = state.model.core.focused_window().active_space_id.clone();
+        assert!(state.model.core.create_tab(
+            closed.clone(),
+            tab,
+            Placement::Today {
+                window: &window,
+                space: &space,
+            },
+            None,
+        ));
+        let _ = state.model.core.close_tab(&closed, 1);
+        assert_eq!(state.model.core.archive().len(), 1);
+
+        let rows = bar_rows(&state, &window, "quarterly", Command::NewTab, false);
+        let row = rows.iter().find(|row| row.kind == "Archived").unwrap();
+        assert_eq!(
+            row.target,
+            Target::Archived("https://archived.example/notes".into())
+        );
+        assert_eq!(row.score, 1100);
+        assert_eq!(row.detail, "archived.example/notes");
+        assert!(
+            bar_rows(&state, &window, "", Command::NewTab, false)
+                .iter()
+                .all(|row| row.kind != "Archived")
+        );
+
+        let private = state.model.open_incognito_window();
+        assert!(
+            bar_rows(&state, &private, "quarterly", Command::NewTab, false)
+                .iter()
+                .all(|row| row.kind != "Archived")
+        );
+    }
+
+    #[test]
+    fn every_action_has_a_shipping_icon_and_a_known_shortcut() {
+        for action in ACTIONS {
+            assert!(
+                crate::icons::ICONS
+                    .iter()
+                    .any(|(name, _)| *name == action.icon),
+                "{}",
+                action.label
+            );
+            if let Some(id) = action.shortcut {
+                assert_eq!(
+                    crate::shortcuts::shortcut_for_id(id),
+                    Some(action.run),
+                    "{id}"
+                );
+            }
+        }
     }
 
     #[test]

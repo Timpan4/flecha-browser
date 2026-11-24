@@ -178,9 +178,9 @@ struct Session {
     slot: Rc<Slot>,
     hidden: bool,
     opener: Option<Weak<Slot>>,
-    /// Whether tab sleep froze this browser. A frozen browser is muted whatever `muted` says.
+    /// Whether tab sleep froze this browser. A frozen browser stays muted.
     frozen: bool,
-    /// The shell's mute for this tab, applied whenever the browser isn't frozen.
+    /// Whether the tab's own audio is muted, which a thawed browser returns to.
     muted: bool,
 }
 
@@ -719,19 +719,6 @@ impl Engine {
     pub fn is_audio_muted(&self, tab: &TabId) -> bool {
         self.host(tab)
             .is_some_and(|host| host.is_audio_muted() != 0)
-    }
-
-    /// Mutes or unmutes the tab's page. A frozen page stays muted until it thaws.
-    pub fn set_muted(&mut self, tab: &TabId, muted: bool) {
-        let Some(session) = self.browsers.get_mut(tab) else {
-            return;
-        };
-        session.muted = muted;
-        if !session.frozen
-            && let Some(host) = self.host(tab)
-        {
-            host.set_audio_muted(i32::from(muted));
-        }
     }
 
     /// Whether the tab's page is in HTML fullscreen, as its renderer has it now.

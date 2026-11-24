@@ -64,8 +64,7 @@ impl crate::Engine {
             return true;
         }
         self.set_visible(tab, false);
-        let host = self.host(tab);
-        if let Some(host) = &host {
+        if let Some(host) = &self.host(tab) {
             host.set_audio_muted(1);
             let slot = self.browsers[tab].slot.clone();
             let (method, params) = lifecycle(true);
@@ -84,8 +83,8 @@ impl crate::Engine {
         true
     }
 
-    /// Undoes [`Self::freeze_tab`], back to the shell's mute ([`Self::set_muted`]). The tab
-    /// stays hidden until it is shown.
+    /// Undoes [`Self::freeze_tab`]. The tab stays hidden until it is shown, and its audio
+    /// returns to the tab's own mute, which may have changed while it slept.
     pub fn thaw_tab(&mut self, tab: &TabId) -> bool {
         let Some(session) = self.browsers.get_mut(tab) else {
             return false;
@@ -93,8 +92,8 @@ impl crate::Engine {
         if !std::mem::take(&mut session.frozen) {
             return false;
         }
-        let muted = session.muted;
         let slot = session.slot.clone();
+        let muted = session.muted;
         if let Some(host) = self.host(tab) {
             let (method, params) = lifecycle(false);
             let _ = crate::devtools::send(
@@ -111,6 +110,21 @@ impl crate::Engine {
 
     pub fn is_frozen(&self, tab: &TabId) -> bool {
         self.browsers.get(tab).is_some_and(|session| session.frozen)
+    }
+
+    /// Mutes or unmutes the tab's audio. A frozen browser stays silent and takes the setting when
+    /// it thaws. Returns whether the tab has a browser.
+    pub fn set_audio_muted(&mut self, tab: &TabId, muted: bool) -> bool {
+        let Some(session) = self.browsers.get_mut(tab) else {
+            return false;
+        };
+        session.muted = muted;
+        if !session.frozen
+            && let Some(host) = self.host(tab)
+        {
+            host.set_audio_muted(i32::from(muted));
+        }
+        true
     }
 
     /// Closes the tab's browser and keeps its page, owner and partition for

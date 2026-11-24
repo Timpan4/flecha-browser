@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use flecha_cef::{BrowserKey, ContextMenuRequest, Owner, Viewport};
-use flecha_core::{FolderId, TabId, WindowId};
+use flecha_core::{FolderId, SpaceId, TabId, WindowId};
 use flecha_surface::{Frame, input, surface};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
@@ -47,7 +47,10 @@ pub(crate) enum Overlay {
     Settings(Box<SettingsPanel>),
     Archive(TextField),
     Folder(Option<FolderId>, TextField),
-    TabActions(TabId),
+    Rename(TabId, TextField),
+    SpaceEditor(SpaceId, TextField),
+    /// The question before a Space goes.
+    DeleteSpace(SpaceId),
     Downloads(DownloadsPanel),
     SiteControls,
     ContextMenu(ContextMenuRequest),
@@ -203,6 +206,26 @@ impl Shell {
             let _ = self.sync_page_focus(window, cx);
             self.sidebar_pointer(window, cx);
             cx.notify();
+        }
+    }
+
+    /// An overlay about a tab or Space that closed, here or in another window, goes with it.
+    fn dismiss_stale_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let state = self.state.borrow();
+        let gone = match &self.overlay {
+            Overlay::Rename(id, _) => state
+                .model
+                .state(&self.id)
+                .and_then(|core| core.tab(id))
+                .is_none(),
+            Overlay::SpaceEditor(id, _) | Overlay::DeleteSpace(id) => {
+                state.model.core.space(id).is_none()
+            }
+            _ => false,
+        };
+        drop(state);
+        if gone {
+            self.dismiss_overlay(window, cx);
         }
     }
 
@@ -982,6 +1005,7 @@ impl Render for Shell {
             .state(&self.id)
             .is_some_and(|core| core.sidebar_visible(&self.id));
         drop(state);
+        self.dismiss_stale_overlay(window, cx);
         if let Overlay::History(panel) = &mut self.overlay {
             panel.refresh(&self.state.borrow().history);
         }
@@ -998,13 +1022,16 @@ impl Render for Shell {
             Overlay::Settings(panel) => Some(self.settings_panel(panel, cx)),
             Overlay::Archive(input) => Some(self.archive_panel(input, cx)),
             Overlay::Folder(id, input) => Some(self.folder_panel(id.as_ref(), input, cx)),
-            Overlay::TabActions(id) => Some(self.tab_actions_panel(id, cx)),
+            Overlay::Rename(_, input) => Some(self.rename_panel(input, cx)),
+            Overlay::SpaceEditor(id, input) => Some(self.space_editor_panel(id, input, cx)),
+            Overlay::DeleteSpace(id) => Some(self.delete_space_panel(id, cx)),
             Overlay::Downloads(panel) => Some(self.downloads_panel(panel, cx)),
             Overlay::SiteControls => Some(self.site_controls_panel(cx)),
         };
         if let Some(panel) = overlay {
             let placement = match self.overlay {
                 Overlay::Command(_) => Placement::Palette,
+                Overlay::DeleteSpace(_) => Placement::Dialog,
                 Overlay::Settings(_) | Overlay::History(_) => Placement::Page,
                 Overlay::Archive(_) | Overlay::Downloads(_) => Placement::SidebarFoot,
                 Overlay::SiteControls => Placement::SidebarTop(tokens::SITE_PANEL_TOP),
@@ -1034,6 +1061,15 @@ impl Render for Shell {
                                 |panel, delta| panel.opacity(delta).mt(px(-6. * (1. - delta))),
                             ),
                     )
+                    .into_any_element(),
+                // `<dialog class="shell-dialog">` in the middle of the window (shell.css:139-150).
+                Placement::Dialog => div()
+                    .absolute()
+                    .inset_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(panel.w(px(tokens::DIALOG_WIDTH)).max_w(relative(0.9)))
                     .into_any_element(),
                 // Settings and History are pages of their own in the shipping shell, shown in
                 // the page area.
@@ -1098,6 +1134,9 @@ impl Render for Shell {
                     .when(placement == Placement::Palette, |backdrop| {
                         backdrop.bg(palette().backdrop)
                     })
+                    .when(placement == Placement::Dialog, |backdrop| {
+                        backdrop.bg(palette().dialog_backdrop)
+                    })
                     .child(div().absolute().inset_0().on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, _: &MouseDownEvent, window, cx| {
@@ -1147,6 +1186,8 @@ impl Render for Shell {
 enum Placement {
     /// The command bar, centred 16vh from the top over a dimmed window.
     Palette,
+    /// A question in the middle of the window, over its own backdrop.
+    Dialog,
     /// A page of its own (Settings, History), over the page area.
     Page,
     /// A popover above the sidebar's footer (downloads).
@@ -1382,6 +1423,24 @@ pub(crate) fn menu_item(
     id: impl Into<gpui::ElementId>,
     name: impl Into<gpui::SharedString>,
 ) -> gpui::Stateful<Div> {
+    menu_item_frame(id, name).hover(|item| {
+        item.bg(palette().selection)
+            .text_color(palette().selection_text)
+    })
+}
+
+/// `.shell-menu-item:disabled` (chromium/shell/shell.css:117-119): faded, with no hover.
+pub(crate) fn disabled_menu_item(
+    id: impl Into<gpui::ElementId>,
+    name: impl Into<gpui::SharedString>,
+) -> gpui::Stateful<Div> {
+    menu_item_frame(id, name).opacity(tokens::MENU_DISABLED_OPACITY)
+}
+
+fn menu_item_frame(
+    id: impl Into<gpui::ElementId>,
+    name: impl Into<gpui::SharedString>,
+) -> gpui::Stateful<Div> {
     div()
         .id(id)
         .px(px(tokens::MENU_ITEM_PAD_X))
@@ -1389,10 +1448,6 @@ pub(crate) fn menu_item(
         .rounded(px(tokens::MENU_ITEM_RADIUS))
         .whitespace_nowrap()
         .cursor_default()
-        .hover(|item| {
-            item.bg(palette().selection)
-                .text_color(palette().selection_text)
-        })
         .child(name.into())
 }
 
@@ -1625,7 +1680,7 @@ pub(crate) fn danger_button(
 /// `sans-serif`, which Chromium on Linux draws in fontconfig's match for its default sans-serif
 /// family, Arial; GPUI loads only named families, so this asks fontconfig the same question.
 /// Without fontconfig, GPUI's own UI font.
-fn ui_font(cx: &gpui::App) -> Option<gpui::SharedString> {
+pub(crate) fn ui_font(cx: &gpui::App) -> Option<gpui::SharedString> {
     static FONT: std::sync::OnceLock<Option<gpui::SharedString>> = std::sync::OnceLock::new();
     FONT.get_or_init(|| {
         let installed = cx.text_system().all_font_names();

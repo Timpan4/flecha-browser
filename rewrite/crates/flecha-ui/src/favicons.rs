@@ -444,7 +444,7 @@ mod tests {
             "an unreferenced icon goes"
         );
 
-        let toggle = || crate::Action::ToggleMute(tab.clone());
+        let toggle = || crate::Action::Tab(tab.clone(), crate::tab_menu::TabAction::ToggleMute);
         controller.act(&window, toggle()).unwrap();
         assert_eq!(controller.model.tab(&tab).unwrap().muted, Some(true));
         controller.act(&window, toggle()).unwrap();

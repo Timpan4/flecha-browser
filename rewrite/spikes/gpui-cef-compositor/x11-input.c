@@ -185,11 +185,14 @@ int main(int argc, char **argv)
             ok = XTestFakeButtonEvent(display, 1, True, CurrentTime);
     } else if (argc == 2 && strcmp(argv[1], "release") == 0) {
         ok = XTestFakeButtonEvent(display, 1, False, CurrentTime);
-    } else if (argc == 4 && (strcmp(argv[1], "click") == 0 || strcmp(argv[1], "right-click") == 0 ||
-                            strcmp(argv[1], "back") == 0 || strcmp(argv[1], "forward") == 0)) {
+    } else if (argc == 4 && (strcmp(argv[1], "click") == 0 || strcmp(argv[1], "middle-click") == 0 ||
+                             strcmp(argv[1], "right-click") == 0 || strcmp(argv[1], "back") == 0 ||
+                             strcmp(argv[1], "forward") == 0)) {
         int x = coordinate(argv[2]), y = coordinate(argv[3]);
         unsigned int button = 1;
-        if (strcmp(argv[1], "right-click") == 0)
+        if (strcmp(argv[1], "middle-click") == 0)
+            button = 2;
+        else if (strcmp(argv[1], "right-click") == 0)
             button = 3;
         else if (strcmp(argv[1], "back") == 0)
             button = 8;
@@ -202,10 +205,17 @@ int main(int argc, char **argv)
 #endif
     } else if (argc == 3 && strcmp(argv[1], "key") == 0) {
         ok = tap(display, XStringToKeysym(argv[2]));
-    } else if (argc == 4 && strcmp(argv[1], "chord") == 0) {
-        KeySym modifier = XStringToKeysym(argv[2]);
-        ok = press(display, modifier, True) && tap(display, XStringToKeysym(argv[3])) &&
-             press(display, modifier, False);
+    } else if (argc >= 4 && strcmp(argv[1], "chord") == 0) {
+        // Every argument but the last is a modifier held while the last key is tapped.
+        int held = 2;
+        ok = 1;
+        while (ok && held < argc - 1) {
+            ok = press(display, XStringToKeysym(argv[held]), True);
+            held++;
+        }
+        ok = ok && tap(display, XStringToKeysym(argv[argc - 1]));
+        while (held > 2)
+            ok = press(display, XStringToKeysym(argv[--held]), False) && ok;
     } else if (argc == 3 && strcmp(argv[1], "geometry") == 0) {
         ok = geometry(display, argv[2]);
     } else if (argc == 3 && strcmp(argv[1], "focus") == 0) {

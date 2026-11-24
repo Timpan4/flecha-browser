@@ -465,6 +465,31 @@ cited! {
     SUBMENU_GAP = 2., SETTINGS_UI: 92 "const right = at.right + 2";
     /// ... and this far above it, so its first item lines up with the item.
     SUBMENU_RAISE = 5., SETTINGS_UI: 94 "at.top - 5";
+    // `.shell-dialog` (shell.css:139-172), the shell's question.
+    DIALOG_WIDTH = 360., SHELL: 140 "width: 360px";
+    DIALOG_PAD = 20., SHELL: 141 "padding: 20px";
+    DIALOG_TEXT_GAP_TOP = 8., SHELL: 159 "margin: 8px 0 18px";
+    DIALOG_TEXT_GAP_BOTTOM = 18., SHELL: 159 "margin: 8px 0 18px";
+    DIALOG_BUTTON_GAP = 8., SHELL: 171 "gap: 8px";
+
+    // The Space editor (ui/styles.css:1417-1584).
+    EDITOR_PAD_TOP = 4., STYLES: 1431 "padding: 4px 14px 12px";
+    EDITOR_PAD_X = 14., STYLES: 1431 "padding: 4px 14px 12px";
+    EDITOR_PAD_BOTTOM = 12., STYLES: 1431 "padding: 4px 14px 12px";
+    FIELD_LABEL_GAP = 4., STYLES: 1451 "margin-top: 4px";
+    EMOJI_COLUMNS = 8., STYLES: 1459 "grid-template-columns: repeat(8, 1fr)";
+    EMOJI_GAP = 2., STYLES: 1460 "gap: 2px";
+    SWATCH_COLUMNS = 7., STYLES: 1493 "grid-template-columns: repeat(7, 1fr)";
+    EMOJI_TEXT = 15., STYLES: 1468 "font-size: 15px";
+    EMOJI_SELECTED_RING = 1.5, STYLES: 1483 "inset 0 0 0 1.5px var(--selection)";
+    EMOJI_ICON = 12., STYLES: 1487 "width: 12px";
+    SWATCH_GAP = 6., STYLES: 1494 "gap: 6px";
+    SWATCH_SELECTED_GAP = 2., STYLES: 1511 "0 0 0 2px var(--surface)";
+    SWATCH_SELECTED_RING = 3.5, STYLES: 1511 "0 0 0 3.5px var(--selection)";
+    TOGGLE_ROW_GAP = 6., STYLES: 1533 "margin-top: 6px";
+    TOGGLE_ROW_PAD_Y = 10., STYLES: 1534 "padding: 10px 12px";
+    TOGGLE_ROW_PAD_X = 12., STYLES: 1534 "padding: 10px 12px";
+    TOGGLE_ROW_NOTE_GAP = 1., STYLES: 1546 "margin-top: 1px";
 
     // Settings.
     SETTINGS_NAV = 216., SETTINGS: 5 "--nav: 216px";
