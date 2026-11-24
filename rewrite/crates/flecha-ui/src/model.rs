@@ -15,9 +15,9 @@ pub struct Model {
     pub(crate) incognito: Option<Incognito>,
     incognito_sessions: u64,
     /// The last regular window closed while incognito windows stayed open, as Chromium allows.
-    /// The regular state keeps that window for the next start, as a quit would, and shows nothing
-    /// until then.
-    pub(crate) regular_closed: bool,
+    /// The regular state keeps that window, as a quit would, and shows nothing until a new
+    /// regular window or the next start brings it back.
+    regular_closed: bool,
     pub peeks: BTreeMap<WindowId, Transient>,
     pub flechinhas: BTreeMap<WindowId, Transient>,
     pub popups: BTreeMap<WindowId, Popup>,
@@ -141,6 +141,32 @@ impl Model {
         }
     }
 
+    /// Whether the regular windows are closed while incognito windows stay open.
+    pub(crate) fn regular_closed(&self) -> bool {
+        self.regular_closed
+    }
+
+    /// The last regular window closed while incognito windows stay open.
+    pub(crate) fn close_regular(&mut self) {
+        self.regular_closed = true;
+    }
+
+    /// A regular window. After the regular windows closed while incognito windows stayed open, it
+    /// is the window they left, with its tabs: shipping's `attachWindow` gives a new Chromium
+    /// window the saved window no other one shows. Otherwise it is a new window on the focused
+    /// window's Space.
+    pub(crate) fn open_regular_window(&mut self) -> Result<WindowId> {
+        if std::mem::take(&mut self.regular_closed) {
+            return Ok(self.core.focused_window().id.clone());
+        }
+        let window = window_id();
+        ensure!(
+            self.core.open_window(window.clone(), None),
+            "could not open window"
+        );
+        Ok(window)
+    }
+
     /// The incognito windows, while a session lasts.
     pub(crate) fn incognito_windows(&self) -> &[flecha_core::Window] {
         self.incognito
@@ -211,13 +237,14 @@ impl Model {
         }
     }
 
-    /// The window a page with this partition joins when it leaves a Flechinha or popup.
+    /// The window a page with this partition joins when it leaves a Flechinha or popup, if one of
+    /// its kind is open.
     pub(crate) fn focused_window_for(&self, partition: &Partition) -> Option<&WindowId> {
         match &self.incognito {
             Some(incognito) if partition.is_incognito() => {
                 (incognito.partition() == *partition).then(|| &incognito.state.focused_window().id)
             }
-            _ if partition.is_incognito() => None,
+            _ if partition.is_incognito() || self.regular_closed => None,
             _ => Some(&self.core.focused_window().id),
         }
     }
@@ -292,12 +319,7 @@ impl Model {
             );
             self.open_incognito_window()
         } else {
-            let window = window_id();
-            ensure!(
-                self.core.open_window(window.clone(), None),
-                "could not open window"
-            );
-            window
+            self.open_regular_window()?
         };
         self.open_page(id, &window, url, None, true)?;
         Ok(window)

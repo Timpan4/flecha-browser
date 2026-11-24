@@ -15,7 +15,7 @@
 //! lets go of its request context ([`flecha_cef::Engine::end_incognito`]).
 
 use flecha_cef::{IncognitoSession, Owner, Partition};
-use flecha_core::{BrowserState, SpaceId, WindowId};
+use flecha_core::{BrowserState, SpaceId, TabId, WindowId};
 
 use crate::sidebar::SidebarAction;
 use crate::site_controls::SiteChange;
@@ -83,7 +83,17 @@ impl Controller {
     /// with that window, as a quit saves it, for the next start. Closing the last incognito
     /// window then quits.
     pub(crate) fn close_last_regular_window(&mut self) -> anyhow::Result<()> {
-        self.model.regular_closed = true;
+        self.model.close_regular();
+        for id in self.close_regular_pages() {
+            self.engine.close(&id);
+        }
+        self.update_visibility();
+        self.save()
+    }
+
+    /// Drops the regular profile's Peeks, Flechinhas and popups, and returns every regular page
+    /// with a browser, for the caller to close. Incognito pages are not the regular profile's.
+    pub(crate) fn close_regular_pages(&mut self) -> Vec<TabId> {
         let model = &mut self.model;
         model.peeks.retain(|_, page| page.partition.is_incognito());
         model
@@ -92,22 +102,19 @@ impl Controller {
         model
             .popups
             .retain(|_, popup| popup.page.partition.is_incognito());
-        let regular = self
-            .engine
+        self.engine
             .ids()
-            .filter(|id| {
-                !self
-                    .engine
-                    .partition(id)
-                    .is_some_and(Partition::is_incognito)
-            })
+            .filter(|id| self.is_regular_page(id))
             .cloned()
-            .collect::<Vec<_>>();
-        for id in &regular {
-            self.engine.close(id);
-        }
-        self.update_visibility();
-        self.save()
+            .collect()
+    }
+
+    /// Whether the engine's page `id` browses in the regular profile.
+    pub(crate) fn is_regular_page(&self, id: &TabId) -> bool {
+        !self
+            .engine
+            .partition(id)
+            .is_some_and(Partition::is_incognito)
     }
 }
 
@@ -459,6 +466,73 @@ mod tests {
         assert_eq!(controller.model.regular_windows().len(), 1);
         controller.act(&regular, Action::CloseWindow).unwrap();
         assert!(controller.quitting);
+    }
+
+    #[test]
+    fn a_new_window_or_launch_brings_the_regular_window_back_beside_incognito() {
+        let profile = tempfile::tempdir().unwrap();
+        let mut controller = Controller::open_test_profile(profile.path()).unwrap();
+        let regular = controller.model.core.focused_window().id.clone();
+        controller
+            .act(&regular, Action::Open(REGULAR.into()))
+            .unwrap();
+        let kept = controller.model.active(&regular).unwrap().clone();
+        let private = incognito_window(&mut controller, &regular);
+        controller
+            .act(&private, Action::Open(PRIVATE.into()))
+            .unwrap();
+        let private_tab = controller.model.active(&private).unwrap().clone();
+        let close_regular = |controller: &mut Controller| {
+            controller.act(&regular, Action::CloseWindow).unwrap();
+            assert!(controller.model.regular_windows().is_empty());
+        };
+        let regular_back = |controller: &mut Controller| {
+            let windows = controller.model.regular_windows();
+            assert_eq!(windows.len(), 1, "the regular window did not come back");
+            assert_eq!(
+                windows[0].id, regular,
+                "a new window replaced the one left open"
+            );
+            assert_eq!(controller.front.as_ref(), Some(&regular));
+            assert_eq!(controller.model.incognito_windows()[0].id, private);
+            assert_eq!(controller.model.active(&private), Some(&private_tab));
+            assert!(!controller.quitting);
+        };
+
+        // Ctrl+N from the incognito window.
+        close_regular(&mut controller);
+        controller.act_from(&private, Action::NewWindow).unwrap();
+        regular_back(&mut controller);
+        assert_eq!(controller.model.active(&regular), Some(&kept));
+
+        // Another launch, without an address and with one.
+        close_regular(&mut controller);
+        controller.relaunch(None).unwrap();
+        regular_back(&mut controller);
+        close_regular(&mut controller);
+        controller.relaunch(Some("regular.example/again")).unwrap();
+        regular_back(&mut controller);
+        let opened = controller.model.active(&regular).unwrap();
+        assert_eq!(
+            controller.model.core.tab(opened).unwrap().url,
+            "https://regular.example/again"
+        );
+
+        // With the regular window open, Ctrl+N opens another on its Space.
+        controller.act_from(&private, Action::NewWindow).unwrap();
+        let windows = controller.model.regular_windows();
+        assert_eq!(windows.len(), 2);
+        let new = controller.front.clone().unwrap();
+        assert_ne!(new, regular);
+        assert_eq!(
+            controller.model.core.window(&new).unwrap().active_space_id,
+            controller
+                .model
+                .core
+                .window(&regular)
+                .unwrap()
+                .active_space_id
+        );
     }
 
     #[test]

@@ -1887,7 +1887,7 @@ mod tests {
         assert_eq!(
             suggested(&regular, 1).1.parent(),
             Some(folder().as_path()),
-            "a regular dialog starts in the incognito session's folder"
+            "a regular dialog still starts in the regular default folder"
         );
         assert_eq!(services.downloads.borrow().list.last_prompt_folder(), None);
 

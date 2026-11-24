@@ -167,7 +167,8 @@ int main(int argc, char **argv)
     } else if (argc == 3 && strcmp(argv[1], "focus") == 0) {
         // What a window manager does when it activates a window: Xvfb has none.
         Window window = named(display, argv[2]);
-        ok = window != None && XSetInputFocus(display, window, RevertToParent, CurrentTime);
+        ok = window != None && XRaiseWindow(display, window) &&
+             XSetInputFocus(display, window, RevertToParent, CurrentTime);
     } else if (argc == 2 && strcmp(argv[1], "copy") == 0) {
         ok = press(display, XK_Control_L, True) && tap(display, XK_a) &&
              tap(display, XK_c) && press(display, XK_Control_L, False);

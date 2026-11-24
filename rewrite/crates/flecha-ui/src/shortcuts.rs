@@ -41,6 +41,7 @@ enum Shortcut {
     SettingsTab(SettingsTab),
     Sidebar,
     Return,
+    NewWindow,
     NewIncognitoWindow,
     Quit,
     Escape,
@@ -85,6 +86,8 @@ impl Bindings {
             ("f5", Shortcut::Browser(Navigation::Reload)),
             ("secondary-q", Shortcut::Quit),
             ("escape", Shortcut::Escape),
+            // Chromium's IDC_NEW_WINDOW, which shipping leaves to Chromium (`ui/app.ts`).
+            ("secondary-n", Shortcut::NewWindow),
             // Chromium's IDC_NEW_INCOGNITO_WINDOW, which the shipping menu shows (`ui/app.ts`).
             ("secondary-shift-n", Shortcut::NewIncognitoWindow),
         ] {
@@ -395,6 +398,7 @@ impl Shell {
             Shortcut::Return if self.state.borrow().model.peeks.contains_key(&self.id) => {
                 Action::Promote
             }
+            Shortcut::NewWindow => Action::NewWindow,
             Shortcut::NewIncognitoWindow => Action::NewIncognitoWindow,
             Shortcut::Quit => Action::Quit,
             _ => return false,
@@ -442,6 +446,7 @@ mod tests {
             ("ctrl-tab".into(), Shortcut::Cycle(false)),
             ("ctrl-shift-tab".into(), Shortcut::Cycle(true)),
             (format!("{ctrl}-9"), Shortcut::Select(8)),
+            (format!("{ctrl}-n"), Shortcut::NewWindow),
             (format!("{ctrl}-shift-n"), Shortcut::NewIncognitoWindow),
             ("escape".into(), Shortcut::Escape),
         ] {

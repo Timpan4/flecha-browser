@@ -80,7 +80,15 @@ pub fn start(
         let window = controller.borrow().model.core.focused_window().id.clone();
         controller.borrow_mut().act(&window, Action::Open(url))?;
     }
+    let relaunches = runtime.relaunches();
     runtime.drive(cx, move |ready, cx| {
+        for address in relaunches.take() {
+            let mut controller = controller.borrow_mut();
+            if let Err(error) = controller.relaunch(address.as_deref()) {
+                controller.status.set(None, error.to_string());
+            }
+            cx.refresh_windows();
+        }
         let keep_running = controller.borrow_mut().tick(ready, cx);
         if keep_running && let Err(error) = sync_windows(&controller, cx) {
             controller.borrow_mut().fail(error, cx);
@@ -118,6 +126,8 @@ enum Action {
     /// The window's close button: the window closes for good, or the app quits with
     /// its last Flecha window (patches 0059 and 0062).
     CloseWindow,
+    /// Chromium's "New window", Ctrl+N, from any window.
+    NewWindow,
     /// "New incognito window" (`ui/app.ts`), Ctrl+Shift+N.
     NewIncognitoWindow,
     Switch(SpaceId),
@@ -456,6 +466,7 @@ impl Controller {
                 self.reconcile_partition(&returned);
                 self.front = Some(destination);
             }
+            Action::NewWindow => self.front = Some(self.model.open_regular_window()?),
             Action::NewIncognitoWindow => {
                 self.front = Some(self.model.open_incognito_window());
                 return Ok(());
@@ -468,7 +479,7 @@ impl Controller {
                 }
                 if self.model.is_incognito(window) {
                     self.close_incognito_window(window);
-                    if self.model.regular_closed && self.model.incognito.is_none() {
+                    if self.model.regular_closed() && self.model.incognito.is_none() {
                         return self.act(window, Action::Quit);
                     }
                     return Ok(());
@@ -754,6 +765,24 @@ impl Controller {
 type Shared = Rc<RefCell<Controller>>;
 
 impl Controller {
+    /// A later launch of Flecha, which CEF hands to this one. As in Chromium, its address opens in
+    /// the last focused regular window, and a launch without one opens a regular window.
+    fn relaunch(&mut self, address: Option<&str>) -> Result<()> {
+        let focused = self.model.core.focused_window().id.clone();
+        let Some(input) = address else {
+            return self.act(&focused, Action::NewWindow);
+        };
+        let url = pinnable_address(input).context("--open requires a browser address")?;
+        let window = if self.model.regular_closed() {
+            self.model.open_regular_window()?
+        } else {
+            focused
+        };
+        self.act(&window, Action::Open(url))?;
+        self.front = Some(window);
+        Ok(())
+    }
+
     /// Runs an action from `window` and shows its error on that window's status line.
     fn act_from(&mut self, window: &WindowId, action: Action) -> Result<()> {
         let session = self.model.incognito_session(window);

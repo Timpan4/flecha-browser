@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use anyhow::{Result, bail};
-use flecha_cef::Runtime;
+use flecha_cef::{Runtime, Start};
 use flecha_services::StateStore;
 
 mod launch;
@@ -33,8 +33,10 @@ fn main() -> Result<()> {
         .with_quit_mode(gpui::QuitMode::Explicit)
         .run(move |cx| {
             let mut runtime = app_runtime.borrow_mut();
-            if let Err(error) = runtime.initialize(&cef_profile).and_then(|()| {
-                flecha_ui::start(
+            let started = runtime.initialize(&cef_profile, options.initial.as_deref());
+            if let Err(error) = started.and_then(|start| match start {
+                Start::Forwarded => std::process::exit(0),
+                Start::Running => flecha_ui::start(
                     cx,
                     &mut runtime,
                     cef_profile,
@@ -42,7 +44,7 @@ fn main() -> Result<()> {
                     loaded,
                     options,
                     app_failure.clone(),
-                )
+                ),
             }) {
                 *app_failure.borrow_mut() = Some(error);
                 cx.quit();

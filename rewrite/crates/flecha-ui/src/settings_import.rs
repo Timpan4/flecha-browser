@@ -216,25 +216,26 @@ impl Controller {
             ));
         }
         self.sync_engine_settings(&previous.settings);
+        // Imports replace the regular profile's state. Incognito pages stay as they are.
         if replace {
-            for id in self.engine.ids() {
-                self.history.forget(id);
-            }
             // Exports can reuse both tab and window IDs for unrelated pages.
-            self.engine.close_all();
+            for id in self.close_regular_pages() {
+                self.history.forget(&id);
+                self.engine.close(&id);
+            }
             self.sleep.clear_pages(&mut self.engine);
-            self.model.peeks.clear();
-            self.model.flechinhas.clear();
-            self.model.popups.clear();
-            self.front = Some(self.model.core.focused_window().id.clone());
+            if !self.model.regular_closed() {
+                self.front = Some(self.model.core.focused_window().id.clone());
+            }
         } else {
             let retired: Vec<_> = self
                 .engine
                 .ids()
                 .filter(|tab| {
-                    self.model.core.tab(tab).is_none()
-                        && matches!(self.engine.owner(tab), Some(flecha_cef::Owner::Tab(_)))
-                        || self.engine.partition(tab) != self.model.partition(tab).as_ref()
+                    self.is_regular_page(tab)
+                        && (self.model.core.tab(tab).is_none()
+                            && matches!(self.engine.owner(tab), Some(flecha_cef::Owner::Tab(_)))
+                            || self.engine.partition(tab) != self.model.partition(tab).as_ref())
                 })
                 .cloned()
                 .collect();
@@ -733,6 +734,68 @@ mod tests {
             original
         );
         assert_eq!(fs::read(backup_path)?, saved_backup);
+        Ok(())
+    }
+
+    #[test]
+    fn imports_and_restores_leave_incognito_windows_and_pages_alone() -> Result<()> {
+        use crate::Action;
+
+        let profile = tempfile::tempdir()?;
+        let mut state = Controller::open_test_profile(profile.path())?;
+        let window = state.model.core.focused_window().id.clone();
+        state.act(
+            &window,
+            Action::Open("https://example.test/original".into()),
+        )?;
+        state.act(&window, Action::Peek("https://example.test/peek".into()))?;
+        state.act(&window, Action::NewIncognitoWindow)?;
+        let private = state.model.incognito_windows()[0].id.clone();
+        state.act(
+            &private,
+            Action::Open("https://private.test/detached".into()),
+        )?;
+        let detached = state.model.active(&private).unwrap().clone();
+        state.act(&private, Action::DetachTab(detached))?;
+        state.act(&private, Action::Open("https://private.test/draft".into()))?;
+        state.act(&private, Action::Peek("https://private.test/peek".into()))?;
+        let private_tab = state.model.active(&private).unwrap().clone();
+        let private_peek = state.model.peeks[&private].id.clone();
+        let flechinha = state.model.flechinhas.keys().next().unwrap().clone();
+        let private_intact = |state: &Controller| {
+            assert_eq!(state.model.incognito_windows()[0].id, private);
+            assert_eq!(state.model.active(&private), Some(&private_tab));
+            assert_eq!(
+                state.model.peeks.get(&private).map(|page| &page.id),
+                Some(&private_peek)
+            );
+            assert!(state.model.flechinhas.contains_key(&flechinha));
+        };
+
+        let mut imported = state.model.core.clone();
+        imported.add_space(flecha_core::SpaceId::new("imported"));
+        let export = FlechaExport::parse(&storage::encode(&imported)?)?;
+        state.apply_import(PreparedImport::Export(export), &window)?;
+        private_intact(&state);
+        assert!(
+            !state.model.peeks.contains_key(&window),
+            "the regular Peek outlived the import"
+        );
+
+        state.restore_before_import()?;
+        private_intact(&state);
+        assert_eq!(state.front.as_ref(), Some(&window));
+
+        // From an incognito window with the regular windows closed, they stay closed.
+        state.act(&window, Action::CloseWindow)?;
+        state.front = None;
+        state.restore_before_import()?;
+        private_intact(&state);
+        assert!(state.model.regular_windows().is_empty());
+        assert_eq!(
+            state.front, None,
+            "restore brought a closed regular window to the front"
+        );
         Ok(())
     }
 

@@ -36,8 +36,8 @@ pub use identity::{BrowserKey, IncognitoSession, Owner, Partition};
 pub use permissions::{PermissionEvent, PermissionPrompt};
 pub use popup::{Disposition, Opened};
 use popup::{Pending, Popups};
-pub use runtime::Runtime;
 use runtime::path_string;
+pub use runtime::{Relaunches, Runtime, Start};
 use services::Services;
 pub use sleep::{Discarded, SleepChange};
 

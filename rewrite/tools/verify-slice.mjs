@@ -482,12 +482,15 @@ async function managerFocus(app, left, right) {
   await keyDelivery(app, { A: left }, 'g', 'Tabs & Spaces dismissed', 'A');
 }
 
-async function restoreSpaces(app, left) {
+// Restore Spaces From Before Import through the command bar of the regular window, whose active
+// tab `left` shows `path`.
+async function restoreSpaces(app, left, path = '/open') {
   const session = join(process.env.FLECHA_PROFILE, 'session');
   copyFileSync(join(session, 'state.json'), join(session, 'before-import.json'));
   const before = await app.command('snapshot');
   const changed = await app.command('new_space');
   assert.equal(changed.core.spaces.length, before.core.spaces.length + 1);
+  execFileSync(x11Driver, ['focus', 'Flecha']);
   execFileSync(x11Driver, ['chord', 'Control_L', 'l']);
 
   for (const key of 'restore') execFileSync(x11Driver, ['key', key]);
@@ -501,7 +504,7 @@ async function restoreSpaces(app, left) {
   // The Restore button below the question in the centered Settings panel.
   const after = app.events.length;
   execFileSync(x11Driver, ['click', Math.round(x + (width - 680) / 2 + 115), y + 229]);
-  await app.loaded(left, '/open', after);
+  await app.loaded(left, path, after);
   const restored = await app.command('snapshot');
   assert.deepEqual(restored.core.spaces, before.core.spaces);
   assert.equal(active(restored).activeTabId, left);
@@ -756,22 +759,90 @@ async function incognitoChecks(app, main) {
   assert.equal(readFileSync(savedFile, 'utf8'), downloadBody, 'closing the session removed the downloaded file');
   pass('closing the last incognito window destroyed its context: the next session started with an empty jar, and its download left the list but kept its file');
 
-  // Closing the last regular window leaves the incognito one open, as Chromium does; closing
-  // that one quits.
+  // Restoring Spaces from before an import replaces the regular profile's pages only.
   const privatePage = incognitoTab(await app.command('snapshot'), second.window);
-  await app.command('close_window', { window: main });
+  const privateDocument = await document(app, privatePage, 'private-draft',
+    "document.querySelector('input').value = 'private draft';");
+  const privateBrowser = (await app.command('snapshot')).browsers.find(page => page.tab === privatePage)?.browser;
+  assert(privateBrowser > 0, 'the incognito page has no browser');
 
-  const regularClosed = await poll('GPUI to close the regular window', async () => {
-    const snapshot = await app.command('snapshot');
+  const privateKept = async step => {
+    const { browsers } = await app.command('snapshot');
+    assert.equal(browsers.find(page => page.tab === privatePage)?.browser, privateBrowser,
+      `${step} replaced the incognito page's browser`);
+    assert.deepEqual(await document(app, privatePage, `private-after-${step.replaceAll(/\W/g, '-')}`), privateDocument,
+      `${step} lost the incognito page's document or draft`);
+  };
 
-    return !snapshot.nativeWindows.includes(main) && snapshot;
-  });
+  await restoreSpaces(app, listTab, '/jar/list');
+  await privateKept('Restore Spaces');
+  pass('Restore Spaces reloaded the regular pages and left the incognito page with its browser, document and draft');
+
+  // Closing the last regular window leaves the incognito one open, as Chromium does.
+  const closeRegular = async () => {
+    await app.command('close_window', { window: main });
+
+    return poll('GPUI to close the regular window', async () => {
+      const snapshot = await app.command('snapshot');
+
+      return !snapshot.nativeWindows.includes(main) && snapshot;
+    });
+  };
+
+  const regularClosed = await closeRegular();
 
   assert.deepEqual(regularClosed.nativeWindows, [second.window], 'the incognito window closed with the regular one');
   assert(regularClosed.browsers.some(page => page.tab === privatePage), 'the incognito page closed with the regular window');
   assert(regularClosed.browsers.every(page => page.partition === `incognito-${second.session}`),
     `a regular page outlived its last window: ${JSON.stringify(regularClosed.browsers)}`);
+  await privateKept('closing the regular window');
 
+  // Ctrl+N in the incognito window, another launch, and another launch with an address each
+  // bring the regular window back with its tabs, beside the incognito one.
+  const reopened = async (step, after) => {
+    const snapshot = await poll(`the regular window to come back after ${step}`, async () => {
+      const state = await app.command('snapshot');
+
+      return state.nativeWindows.includes(main) && state;
+    });
+
+    assert.deepEqual([...snapshot.nativeWindows].sort(), [main, second.window].sort(), `${step} opened another window`);
+    assert.equal(snapshot.window, main);
+    await app.wait(`the regular page to load again after ${step}`, event =>
+      event.type === 'loaded' && event.tab === active(snapshot).activeTabId, after);
+    await privateKept(step);
+
+    return snapshot;
+  };
+
+  // A second launch of the binary hands its command line to the running Flecha and exits.
+  const relaunch = args => execFileSync('./target/debug/flecha', args, {
+    stdio: 'pipe',
+    timeout: stepTimeoutMs,
+    killSignal: 'SIGKILL',
+  });
+
+  execFileSync(x11Driver, ['focus', 'Flecha Incognito']);
+  let reopenedAt = app.events.length;
+  execFileSync(x11Driver, ['chord', 'Control_L', 'n']);
+  assert.equal(active(await reopened('Ctrl+N', reopenedAt)).activeTabId, listTab, 'Ctrl+N lost the regular tab');
+  await closeRegular();
+  reopenedAt = app.events.length;
+  relaunch([]);
+  assert.equal(active(await reopened('a second launch', reopenedAt)).activeTabId, listTab, 'a second launch lost the regular tab');
+  await closeRegular();
+  const relaunchUrl = `${base}/open?relaunched=${run}`;
+  reopenedAt = app.events.length;
+  relaunch(['--open', relaunchUrl]);
+  const withAddress = await reopened('a second launch with --open', reopenedAt);
+  const relaunchedTab = active(withAddress).activeTabId;
+  assert.notEqual(relaunchedTab, listTab, 'the second launch\'s address did not open a tab');
+  await app.wait('the second launch\'s address', event =>
+    event.type === 'loaded' && event.tab === relaunchedTab && event.url === relaunchUrl, reopenedAt);
+  pass('Ctrl+N, a second launch and a second launch with --open each brought the regular window back beside the incognito one');
+
+  // Closing the last window of either kind quits.
+  await closeRegular();
   const beforeQuit = app.events.length;
 
   await app.command('close_window', { window: second.window });
