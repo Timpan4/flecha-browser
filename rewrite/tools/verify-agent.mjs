@@ -29,6 +29,7 @@ delete env.FLECHA_PROFILE;
 // Agents stay off until Settings lets them in, as in the shell, so the profile starts with
 // the switch on. The state file holds its JSON as a string.
 mkdirSync(join(profile, 'session'), { recursive: true });
+
 writeFileSync(
   join(profile, 'session', 'state.json'),
   JSON.stringify(JSON.stringify({ version: 3, tabs: {}, spaces: [{ id: 'agents' }], agent: { enabled: true } })),
