@@ -28,11 +28,14 @@ publish = false
 [workspace.dependencies]
 anyhow = "1"
 cef = { path = "target/spike1-src/cef-rs/cef", default-features = false }
+flecha-adblock = { path = "crates/flecha-adblock" }
 flecha-boosts = { path = "crates/flecha-boosts" }
 flecha-cef = { path = "crates/flecha-cef" }
 flecha-core = { path = "crates/flecha-core" }
+flecha-downloads = { path = "crates/flecha-downloads" }
 flecha-history = { path = "crates/flecha-history" }
 flecha-import = { path = "crates/flecha-import" }
+flecha-permissions = { path = "crates/flecha-permissions" }
 flecha-services = { path = "crates/flecha-services" }
 flecha-surface = { path = "crates/flecha-surface" }
 flecha-ui = { path = "crates/flecha-ui" }

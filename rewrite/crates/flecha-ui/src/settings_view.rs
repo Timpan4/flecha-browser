@@ -119,7 +119,10 @@ impl SettingsPanel {
 }
 
 impl Controller {
-    fn edit_settings<T>(&mut self, edit: impl FnOnce(&mut Settings) -> Result<T>) -> Result<T> {
+    pub(crate) fn edit_settings<T>(
+        &mut self,
+        edit: impl FnOnce(&mut Settings) -> Result<T>,
+    ) -> Result<T> {
         let mut settings = self.model.core.settings.clone();
         let result = edit(&mut settings)?;
         if settings != self.model.core.settings {
@@ -128,8 +131,23 @@ impl Controller {
                 self.model.core.settings = previous;
                 return Err(error.context("Save settings"));
             }
+            self.sync_engine_settings(&previous);
         }
         Ok(result)
+    }
+
+    fn sync_engine_settings(&mut self, previous: &Settings) {
+        let current = &self.model.core.settings;
+        let adblock_changed = previous.ad_block != current.ad_block
+            || previous.ad_block_allowed != current.ad_block_allowed;
+        let downloads_changed = previous.downloads_folder != current.downloads_folder
+            || previous.ask_where_to_save != current.ask_where_to_save;
+        if adblock_changed {
+            self.sync_adblock();
+        }
+        if downloads_changed {
+            self.sync_download_config();
+        }
     }
 }
 

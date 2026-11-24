@@ -17,8 +17,8 @@ use gpui::{
 
 use crate::{Action, Shared, dispatch};
 use crate::{
-    command_bar::CommandBar, history_view::HistoryPanel, settings_view::SettingsPanel,
-    shortcuts::Bindings, text_field::TextField,
+    command_bar::CommandBar, downloads_view::DownloadsPanel, history_view::HistoryPanel,
+    settings_view::SettingsPanel, shortcuts::Bindings, text_field::TextField,
 };
 
 /// A popup's read-only address bar, as tall as the Peek toolbar.
@@ -34,6 +34,8 @@ pub(crate) enum Overlay {
     Archive(TextField),
     Folder(Option<FolderId>, TextField),
     TabActions(TabId),
+    Downloads(DownloadsPanel),
+    SiteControls,
 }
 
 impl Overlay {
@@ -64,8 +66,17 @@ impl Shell {
         let bindings = Bindings::new(&state.borrow().model.core.settings.keybindings);
         focus.focus(window, cx);
         cx.new(|cx| {
+            state
+                .borrow_mut()
+                .sleep
+                .window_activation(&id, window.is_window_active());
             let activation = cx.observe_window_activation(window, |this: &mut Self, window, cx| {
-                if window.is_window_active() {
+                let active = window.is_window_active();
+                this.state
+                    .borrow_mut()
+                    .sleep
+                    .window_activation(&this.id, active);
+                if active {
                     this.state.borrow_mut().model.core.focus_window(&this.id);
                 } else {
                     this.consumed_keys.clear();
@@ -216,7 +227,14 @@ impl Shell {
         images: &mut BTreeMap<TabId, Vec<Arc<RenderImage>>>,
         cx: &Context<Self>,
     ) -> Div {
-        let frames = self.state.borrow().engine.frames(&id).unwrap_or_default();
+        let (frames, prompt, writable) = {
+            let state = self.state.borrow();
+            (
+                state.engine.frames(&id).unwrap_or_default(),
+                state.engine.pending_permission_prompt(&id),
+                state.permissions.error().is_none(),
+            )
+        };
         let pane_images = [
             frames.view.as_ref(),
             frames.popup.as_ref().map(|(_, frame)| frame),
@@ -318,7 +336,14 @@ impl Shell {
                     }),
                 );
         }
-        element
+        div()
+            .flex()
+            .flex_col()
+            .size_full()
+            .when_some(prompt, |pane, prompt| {
+                pane.child(self.permission_banner(prompt, writable, cx))
+            })
+            .child(div().flex_1().min_h_0().child(element))
     }
 }
 
@@ -454,7 +479,7 @@ impl Render for Shell {
                         ))),
                 ));
             }
-            let sidebar = self.sidebar(core, current, cx);
+            let sidebar = self.sidebar(&state, current, cx);
             let mut body = div().flex_1().min_h_0().relative().flex();
             if core.sidebar_visible(&self.id) {
                 body = body.child(sidebar).child(page_area);
@@ -488,6 +513,9 @@ impl Render for Shell {
         if let Overlay::Settings(panel) = &mut self.overlay {
             panel.refresh(&self.state.borrow());
         }
+        if let Overlay::Downloads(panel) = &mut self.overlay {
+            panel.refresh(&self.state.borrow().downloads);
+        }
         let overlay = match &self.overlay {
             Overlay::None => None,
             Overlay::Command(bar) => Some(self.command_panel(bar, cx)),
@@ -496,15 +524,20 @@ impl Render for Shell {
             Overlay::Archive(input) => Some(self.archive_panel(input, cx)),
             Overlay::Folder(id, input) => Some(self.folder_panel(id.as_ref(), input, cx)),
             Overlay::TabActions(id) => Some(self.tab_actions_panel(id, cx)),
+            Overlay::Downloads(panel) => Some(self.downloads_panel(panel, cx)),
+            Overlay::SiteControls => Some(self.site_controls_panel(cx)),
         };
         if let Some(panel) = overlay {
-            let archive = matches!(self.overlay, Overlay::Archive(_));
+            let drawer = matches!(self.overlay, Overlay::Archive(_) | Overlay::Downloads(_));
+            let site_controls = matches!(self.overlay, Overlay::SiteControls);
             main = main.child(deferred(
                 div()
                     .absolute()
                     .inset_0()
                     .occlude()
-                    .bg(gpui::rgba(0x00000088))
+                    .when(!site_controls, |backdrop| {
+                        backdrop.bg(gpui::rgba(0x00000088))
+                    })
                     .child(div().absolute().inset_0().on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, _: &MouseDownEvent, window, cx| {
@@ -521,8 +554,9 @@ impl Render for Shell {
                             .px_4()
                             .h_full()
                             .pb_4()
-                            .when(archive, |frame| frame.justify_end().pt_4())
-                            .child(panel.when(archive, |drawer| drawer.h_full().w(px(420.)))),
+                            .when(drawer, |frame| frame.justify_end().pt_4())
+                            .when(site_controls, |frame| frame.justify_start())
+                            .child(panel.when(drawer, |drawer| drawer.h_full().w(px(420.)))),
                     ),
             ));
         }

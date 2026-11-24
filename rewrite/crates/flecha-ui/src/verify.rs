@@ -38,6 +38,7 @@ enum Command {
     Quit,
     Snapshot,
     Capture,
+    Discard { tab: TabId },
     Recreate { tab: TabId },
     Script { tab: TabId, source: String },
 }
@@ -89,6 +90,23 @@ impl Command {
                     window.refresh();
                 })?;
                 return Ok(Value::Null);
+            }
+            Self::Discard { tab } => {
+                ensure!(
+                    matches!(state.engine.owner(&tab), Some(Owner::Tab(_)))
+                        && state
+                            .model
+                            .core
+                            .windows()
+                            .iter()
+                            .all(|window| !window.visible_tabs().contains(&tab)),
+                    "only a hidden tab can be discarded for verification"
+                );
+                state
+                    .engine
+                    .discard_tab(&tab)
+                    .context("could not discard the tab")?;
+                return snapshot(state);
             }
             Self::Recreate { tab } => {
                 let owner = state.engine.owner(&tab).context("no engine owner")?.clone();

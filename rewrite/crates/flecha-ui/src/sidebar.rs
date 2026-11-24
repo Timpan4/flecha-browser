@@ -98,10 +98,11 @@ impl Controller {
 impl Shell {
     pub(crate) fn sidebar(
         &self,
-        core: &BrowserState,
+        state: &Controller,
         current: &flecha_core::Window,
         cx: &Context<Self>,
     ) -> Div {
+        let core = &state.model.core;
         let toggle = Action::Sidebar(SidebarAction::Toggle);
         if !core.sidebar_visible(&self.id) {
             return div()
@@ -255,6 +256,8 @@ impl Shell {
                     }),
             );
         }
+        let toolbar = state.toolbars.get(&self.id).copied().unwrap_or_default();
+        let downloads = state.downloads.count();
         div()
             .flex()
             .flex_col()
@@ -272,20 +275,35 @@ impl Shell {
                     .items_center()
                     .justify_between()
                     .child(self.action_button("sidebar-toggle", "Hide", toggle, cx))
-                    .child(self.action_button("back", "‹", Action::Browser(Navigation::Back), cx))
-                    .child(self.action_button(
+                    .child(self.navigation_button("back", "←", Navigation::Back, toolbar.back, cx))
+                    .child(self.navigation_button(
                         "forward",
-                        "›",
-                        Action::Browser(Navigation::Forward),
+                        "→",
+                        Navigation::Forward,
+                        toolbar.forward,
                         cx,
                     ))
-                    .child(self.action_button(
+                    .child(self.navigation_button(
                         "reload",
-                        "↻",
-                        Action::Browser(Navigation::Reload),
+                        if toolbar.loading { "■" } else { "↻" },
+                        if toolbar.loading {
+                            Navigation::Stop
+                        } else {
+                            Navigation::Reload
+                        },
+                        toolbar.available,
                         cx,
                     )),
             )
+            .when(toolbar.loading, |sidebar| {
+                sidebar.child(
+                    div()
+                        .px_2()
+                        .text_xs()
+                        .text_color(rgb(0xa4b5c3))
+                        .child("Loading…"),
+                )
+            })
             .child(
                 button(
                     "sidebar-address",
@@ -298,6 +316,15 @@ impl Shell {
                     this.open_command(Command::EditLocation, window, cx);
                 })),
             )
+            .when(state.site_for_window(&self.id).is_some(), |sidebar| {
+                sidebar.child(
+                    button("site-controls", "Site Controls")
+                        .self_start()
+                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                            this.toggle_site_controls(window, cx)
+                        })),
+                )
+            })
             .child(favorites)
             .child(tabs)
             .child(
@@ -320,6 +347,22 @@ impl Shell {
                     .child(button("show-history", "History").on_click(cx.listener(
                         |this, _: &ClickEvent, window, cx| this.toggle_history(window, cx),
                     )))
+                    .child(
+                        button("show-downloads", "Downloads")
+                            .when(downloads > 0, |button| {
+                                button.flex().gap_1().items_center().child(
+                                    div()
+                                        .px_1()
+                                        .text_xs()
+                                        .rounded_md()
+                                        .bg(rgb(0x37545e))
+                                        .child(downloads.to_string()),
+                                )
+                            })
+                            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                                this.toggle_downloads(window, cx)
+                            })),
+                    )
                     .child(button("show-archive", "Archive").on_click(cx.listener(
                         |this, _: &ClickEvent, window, cx| this.toggle_archive(window, cx),
                     )))
@@ -348,6 +391,34 @@ impl Shell {
                             cx,
                         ))
                     }),
+            )
+    }
+
+    fn navigation_button(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        navigation: Navigation,
+        enabled: bool,
+        cx: &Context<Self>,
+    ) -> gpui::Stateful<Div> {
+        button(id, label)
+            .px_1()
+            .aria_label(match navigation {
+                Navigation::Back => "Back",
+                Navigation::Forward => "Forward",
+                Navigation::Reload => "Reload",
+                Navigation::HardReload => "Reload without cache",
+                Navigation::Stop => "Stop loading",
+            })
+            .when_else(
+                enabled,
+                |button| {
+                    button.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        dispatch(&this.state, &this.id, Action::Browser(navigation), cx)
+                    }))
+                },
+                |button| button.opacity(0.5).cursor_default(),
             )
     }
 

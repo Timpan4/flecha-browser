@@ -80,7 +80,7 @@ impl Controller {
             "This Boost was edited in another window. Discard this draft to reload the saved version"
         );
         let error = build.as_ref().and_then(|build| build.error.clone());
-        self.boosts.save(name, source, build)?;
+        self.edit_boosts(|boosts| boosts.save(name, source, build))?;
         Ok(if error.is_some() {
             "Saved source with a compile error.".into()
         } else {
@@ -196,8 +196,7 @@ impl Shell {
                     let result = this
                         .state
                         .borrow_mut()
-                        .boosts
-                        .set_enabled(&name, !enabled)
+                        .edit_boosts(|boosts| boosts.set_enabled(&name, !enabled))
                         .map(|()| {
                             if enabled {
                                 "Boost disabled.".into()
@@ -330,7 +329,10 @@ impl Shell {
             _ if !panel.boosts.host.is_empty() => panel.boosts.host.clone(),
             _ => active,
         };
-        let result = self.state.borrow_mut().boosts.create(&host, kind);
+        let result = self
+            .state
+            .borrow_mut()
+            .edit_boosts(|boosts| boosts.create(&host, kind));
         match result {
             Ok(name) => {
                 if let Some(panel) = self.settings_mut() {
@@ -451,8 +453,7 @@ impl Shell {
         let result = self
             .state
             .borrow_mut()
-            .boosts
-            .delete(&name)
+            .edit_boosts(|boosts| boosts.delete(&name))
             .map(|()| "Boost deleted.".into());
         if let Some(panel) = self.settings_mut() {
             if result.is_ok() {

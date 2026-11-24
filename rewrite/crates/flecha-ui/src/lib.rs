@@ -1,11 +1,15 @@
 mod boosts;
 mod command_bar;
+mod downloads_view;
 mod history_view;
 mod model;
+mod permissions_view;
 mod popup;
 mod settings_view;
 mod shortcuts;
 mod sidebar;
+mod site_controls;
+mod tab_sleep;
 mod text_field;
 mod verify;
 mod view;
@@ -14,6 +18,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::time::Instant;
 
 use anyhow::{Context as _, Result, ensure};
 use flecha_boosts::Boosts;
@@ -27,10 +32,14 @@ use flecha_services::StateStore;
 use gpui::{App, Bounds, WindowBounds, WindowHandle, WindowOptions, px, size};
 
 use boosts::ProfileBoosts;
+use downloads_view::{DownloadCommand, Downloads};
 use history_view::{ClearRange, History};
 use model::{Model, now};
-use shortcuts::Navigation;
+use permissions_view::PermissionStore;
+use shortcuts::{Navigation, Toolbar};
 use sidebar::SidebarAction;
+use site_controls::{Site, SiteChange};
+use tab_sleep::TabSleep;
 use view::Shell;
 
 pub struct Options {
@@ -78,6 +87,13 @@ enum Action {
     Open(String),
     Navigate(String),
     Browser(Navigation),
+    Download(flecha_cef::DownloadHandle, DownloadCommand),
+    ResolvePermission(
+        flecha_permissions::RequestId,
+        flecha_permissions::PromptOutcome,
+    ),
+    RetryPermissionSave,
+    Site(Site, SiteChange),
     Select(TabId),
     Split(TabId),
     SplitNew(String),
@@ -111,6 +127,11 @@ struct Controller {
     history: History,
     boosts: ProfileBoosts,
     engine: Engine,
+    downloads: Downloads,
+    permissions: PermissionStore,
+    sleep: TabSleep,
+    toolbars: BTreeMap<WindowId, Toolbar>,
+    pending_reloads: BTreeMap<i32, flecha_cef::BrowserKey>,
     store: StateStore,
     session_dir: PathBuf,
     snapshots: LoadedState,
@@ -127,20 +148,39 @@ impl Controller {
     fn new(
         cef_profile: PathBuf,
         store: StateStore,
+        snapshots: LoadedState,
+        verify: bool,
+        failure: Rc<RefCell<Option<anyhow::Error>>>,
+    ) -> Result<Self> {
+        let isolated =
+            verify || std::env::var_os("FLECHA_LAUNCHER").as_deref() == Some("isolated".as_ref());
+        Self::with_profile(cef_profile, store, snapshots, verify, isolated, failure)
+    }
+
+    fn with_profile(
+        cef_profile: PathBuf,
+        store: StateStore,
         mut snapshots: LoadedState,
         verify: bool,
+        isolated: bool,
         failure: Rc<RefCell<Option<anyhow::Error>>>,
     ) -> Result<Self> {
         let profile = cef_profile
             .parent()
-            .context("CEF data has no profile directory")?;
+            .context("CEF data has no profile directory")?
+            .to_owned();
         let ready = snapshots.apply_recovery(|write| store.write(write))?;
-        Ok(Self {
+        let mut state = Self {
             model: Model::new(ready.state.take()),
-            history: History::open(profile),
+            history: History::open(&profile),
             boosts: ProfileBoosts::open(profile.join("boosts")),
             session_dir: profile.join("session"),
             engine: Engine::new(cef_profile, model::tab_id),
+            downloads: Downloads::new(&profile, isolated),
+            permissions: PermissionStore::open(&profile),
+            sleep: TabSleep::new(Instant::now()),
+            toolbars: BTreeMap::new(),
+            pending_reloads: BTreeMap::new(),
             store,
             snapshots,
             windows: BTreeMap::new(),
@@ -150,7 +190,15 @@ impl Controller {
             verify,
             failure,
             status: String::new(),
-        })
+        };
+        state.permissions.restore(&mut state.engine);
+        if profile.join("adblock").is_dir() {
+            state.engine.load_adblock_rules(&profile.join("adblock"));
+        }
+        state.sync_adblock();
+        state.engine.set_boosts(state.boosts().clone());
+        state.sync_download_config();
+        Ok(state)
     }
 
     pub(crate) fn boosts(&self) -> &Boosts {
@@ -190,10 +238,13 @@ impl Controller {
                 self.model.open(window, url, true)?;
             }
             Action::Navigate(url) => self.navigate_tab(window, url)?,
-            Action::Browser(navigation) => {
-                self.browser_navigation(window, navigation);
-                return Ok(());
+            Action::Browser(navigation) => return self.browser_navigation(window, navigation),
+            Action::Download(handle, command) => return self.manage_download(handle, command),
+            Action::ResolvePermission(request, outcome) => {
+                return self.resolve_permission(request, outcome);
             }
+            Action::RetryPermissionSave => return self.save_permissions(),
+            Action::Site(site, change) => return self.change_current_site(window, &site, change),
             Action::Select(id) => {
                 let change = self.model.core.activate(&id, window, Some(now()));
                 for id in change.removed {
@@ -263,6 +314,9 @@ impl Controller {
             Action::DetachTab(tab) => {
                 let detached = self.model.detach(window, &tab)?;
                 self.history.forget(&tab);
+                if self.engine.discarded(&tab).is_some() {
+                    self.engine.close(&tab);
+                }
                 self.engine
                     .transfer(&tab, detached.tab, Owner::Flechinha(detached.window));
                 for removed in detached.removed {
@@ -403,6 +457,7 @@ impl Controller {
                 .is_some_and(|owner| self.model.page(owner, &id).is_some());
             self.engine.set_visible(&id, visible);
         }
+        self.note_shown_tabs(Instant::now());
     }
 
     fn split(&mut self, window: &WindowId, left: TabId, right: TabId) -> Result<()> {
@@ -418,6 +473,7 @@ impl Controller {
         if self
             .engine
             .partition(tab)
+            .or_else(|| self.engine.discarded(tab).map(|record| &record.partition))
             .is_some_and(|partition| Some(partition) != self.model.partition(tab).as_ref())
         {
             self.engine.close(tab);
@@ -435,8 +491,7 @@ impl Controller {
             .model
             .partition(&id)
             .context("page lacks a request context")?;
-        self.engine
-            .ensure(id.clone(), owner, partition, &tab.url, viewport)?;
+        tab_sleep::ensure_visible(&mut self.engine, &id, owner, partition, &tab.url, viewport)?;
         self.engine.set_visible(&id, true);
         Ok(())
     }
@@ -520,6 +575,12 @@ impl Controller {
             }
         }
         changed |= self.finish_history();
+        changed |= self.drain_downloads();
+        changed |= self.poll_permissions();
+        changed |= self.poll_toolbars();
+        if self.ready && !self.quitting {
+            changed |= self.poll_sleep(Instant::now());
+        }
         if save && let Err(error) = self.save() {
             self.fail(error, cx);
         }
@@ -542,11 +603,12 @@ impl Controller {
 impl Controller {
     fn open_test_profile(profile: &std::path::Path) -> Result<Self> {
         let (store, loaded) = StateStore::open(&profile.join("session"))?;
-        Self::new(
+        Self::with_profile(
             profile.join("cef"),
             store,
             loaded,
             false,
+            true,
             Rc::new(RefCell::new(None)),
         )
     }
@@ -593,7 +655,11 @@ fn sync_windows(controller: &Shared, cx: &mut App) -> Result<()> {
     };
     for (id, handle) in &opened {
         if !wanted.contains_key(id) {
-            controller.borrow_mut().windows.remove(id);
+            {
+                let mut state = controller.borrow_mut();
+                state.windows.remove(id);
+                state.sleep.window_activation(id, false);
+            }
             let _ = handle.update(cx, |_, window, _| window.remove_window());
         }
     }

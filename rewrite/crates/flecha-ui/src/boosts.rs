@@ -7,7 +7,24 @@ use std::process::{Command, Stdio};
 use anyhow::{Context as _, Result, ensure};
 use flecha_boosts::{BoostKind, BoostName, Boosts, CompiledBoost, compile, snapshot};
 
+use crate::Controller;
+
 const CURRENT: &str = "boosts.json";
+
+impl Controller {
+    pub(crate) fn edit_boosts<T>(
+        &mut self,
+        edit: impl FnOnce(&mut ProfileBoosts) -> Result<T>,
+    ) -> Result<T> {
+        let revision = self.boosts.revision();
+        let result = edit(&mut self.boosts)?;
+        if revision != self.boosts.revision() {
+            self.engine.set_boosts(self.boosts().clone());
+            self.engine.reload_boosts();
+        }
+        Ok(result)
+    }
+}
 
 #[derive(Default, Eq, PartialEq)]
 struct SavedBoosts {
@@ -247,6 +264,37 @@ fn transform(name: &str, source: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_boost_edits_are_installed_in_the_engine() -> Result<()> {
+        let profile = tempfile::tempdir()?;
+        let mut controller = Controller::open_test_profile(profile.path())?;
+        let name =
+            controller.edit_boosts(|boosts| boosts.create("example.test", BoostKind::Styles))?;
+        let css = "body { color: red; }";
+        controller.edit_boosts(|boosts| boosts.save(&name, css, None))?;
+        assert_eq!(
+            controller.engine.boosts().get(name.as_str()).unwrap().code,
+            css
+        );
+        drop(controller);
+
+        let mut restarted = Controller::open_test_profile(profile.path())?;
+        assert_eq!(
+            restarted.engine.boosts().get(name.as_str()).unwrap().code,
+            css
+        );
+        restarted.edit_boosts(|boosts| boosts.set_enabled(&name, false))?;
+        assert!(restarted.engine.boosts().get(name.as_str()).is_none());
+        restarted.edit_boosts(|boosts| boosts.set_enabled(&name, true))?;
+        assert_eq!(
+            restarted.engine.boosts().get(name.as_str()).unwrap().code,
+            css
+        );
+        restarted.edit_boosts(|boosts| boosts.delete(&name))?;
+        assert!(restarted.engine.boosts().get(name.as_str()).is_none());
+        Ok(())
+    }
 
     #[test]
     #[ignore = "requires the esbuild executable on PATH"]
