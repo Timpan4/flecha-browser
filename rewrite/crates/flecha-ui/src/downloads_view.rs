@@ -4,8 +4,10 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, ensure};
-use flecha_cef::{DownloadConfig, DownloadEvent, DownloadHandle, DownloadMessage};
-use flecha_core::{EpochMillis, Settings, TabId};
+use flecha_cef::{
+    DownloadConfig, DownloadEvent, DownloadHandle, DownloadMessage, IncognitoSession,
+};
+use flecha_core::{EpochMillis, Settings, TabId, WindowId};
 use flecha_downloads::{
     AskReason, DownloadId, DownloadList, DownloadRow, DownloadSettings, RowState, State, Warning,
 };
@@ -44,6 +46,9 @@ pub(crate) struct Downloads {
     isolated: bool,
     prompts: BTreeMap<DownloadHandle, Prompt>,
     active: BTreeMap<DownloadHandle, Option<TabId>>,
+    /// The incognito session of each download in `active`, or `None` for a regular one. Only
+    /// windows of that session show it.
+    sessions: BTreeMap<DownloadHandle, Option<IncognitoSession>>,
     config_error: Option<String>,
 }
 
@@ -54,6 +59,7 @@ impl Downloads {
             isolated,
             prompts: BTreeMap::new(),
             active: BTreeMap::new(),
+            sessions: BTreeMap::new(),
             config_error: None,
         }
     }
@@ -71,6 +77,8 @@ impl Downloads {
     }
 
     fn track(&mut self, message: DownloadMessage, list: &DownloadList) {
+        let handle = message.event.handle();
+        let incognito = message.incognito;
         match message.event {
             DownloadEvent::AskPath {
                 handle,
@@ -104,6 +112,11 @@ impl Downloads {
                 self.active.remove(&handle);
             }
         }
+        if self.active.contains_key(&handle) {
+            self.sessions.insert(handle, incognito);
+        } else {
+            self.sessions.remove(&handle);
+        }
     }
 
     fn track_row(
@@ -123,8 +136,25 @@ impl Downloads {
         }
     }
 
-    pub(crate) fn count(&self) -> usize {
-        self.active.len()
+    fn in_session(&self, handle: &DownloadHandle, session: Option<IncognitoSession>) -> bool {
+        self.sessions.get(handle).copied().flatten() == session
+    }
+
+    /// The downloads asking a question or running in windows of `session`.
+    pub(crate) fn count(&self, session: Option<IncognitoSession>) -> usize {
+        self.active
+            .keys()
+            .filter(|handle| self.in_session(handle, session))
+            .count()
+    }
+
+    fn prompts_in(
+        &self,
+        session: Option<IncognitoSession>,
+    ) -> impl DoubleEndedIterator<Item = (&DownloadHandle, &Prompt)> {
+        self.prompts
+            .iter()
+            .filter(move |(handle, _)| self.in_session(handle, session))
     }
 
     pub(crate) fn uses_tab(&self, tab: &TabId) -> bool {
@@ -229,6 +259,18 @@ impl Controller {
         }
     }
 
+    /// The rows a window's downloads panel lists. Each incognito session lists only its own
+    /// downloads, and regular windows none of them, as each Chromium profile keeps its own.
+    pub(crate) fn download_rows(&self, window: &WindowId) -> Vec<DownloadRow> {
+        let session = self.model.incognito_session(window);
+        self.engine
+            .downloads()
+            .rows(EpochMillis::MIN)
+            .into_iter()
+            .filter(|row| self.engine.download_session(row.id) == session)
+            .collect()
+    }
+
     pub(crate) fn drain_downloads(&mut self) -> bool {
         let Some(first) = self.engine.next_download_event() else {
             return false;
@@ -328,6 +370,8 @@ impl Shell {
     pub(crate) fn downloads_panel(&self, panel: &DownloadsPanel, cx: &Context<Self>) -> Div {
         let state = self.state.borrow();
         let list = state.engine.downloads();
+        let session = state.model.incognito_session(&self.id);
+        let rows = state.download_rows(&self.id);
         let mut content = div()
             .id("download-rows")
             .flex()
@@ -338,10 +382,10 @@ impl Shell {
         if let Some(error) = &state.downloads.config_error {
             content = content.child(error.clone());
         }
-        if state.downloads.prompts.is_empty() && list.iter().next().is_none() {
+        if state.downloads.prompts_in(session).next().is_none() && rows.is_empty() {
             content = content.child("No downloads yet.");
         }
-        for (&handle, prompt) in state.downloads.prompts.iter().rev() {
+        for (&handle, prompt) in state.downloads.prompts_in(session).rev() {
             let row = match prompt {
                 Prompt::Path { suggested, reason } => {
                     self.download_path_row(handle, suggested, *reason, panel, cx)
@@ -380,7 +424,7 @@ impl Shell {
             };
             content = content.child(row);
         }
-        for row in list.rows(EpochMillis::MIN) {
+        for row in rows {
             if row.warning.is_none() {
                 let handle = state.engine.download_handle(row.id);
                 content = content.child(self.download_row(row, handle, cx));
@@ -575,6 +619,7 @@ mod tests {
         downloads.track(
             DownloadMessage {
                 tab: Some(tab.clone()),
+                incognito: None,
                 event: DownloadEvent::AskPath {
                     handle,
                     url: url.into(),
@@ -591,7 +636,7 @@ mod tests {
                 reason: AskReason::Preference,
             })
         );
-        assert_eq!(downloads.count(), 1);
+        assert_eq!(downloads.count(None), 1);
         assert!(downloads.uses_tab(&tab));
 
         let id = list.begin(NewDownload {
@@ -605,6 +650,7 @@ mod tests {
         downloads.track(
             DownloadMessage {
                 tab: Some(tab.clone()),
+                incognito: None,
                 event: DownloadEvent::Held {
                     handle,
                     id,
@@ -620,12 +666,13 @@ mod tests {
                 warning: Warning::Insecure
             })
         );
-        assert_eq!(downloads.count(), 1);
+        assert_eq!(downloads.count(None), 1);
 
         list.keep(id)?;
         downloads.track(
             DownloadMessage {
                 tab: Some(tab.clone()),
+                incognito: None,
                 event: DownloadEvent::Started {
                     handle,
                     id,
@@ -635,7 +682,7 @@ mod tests {
             &list,
         );
         assert!(downloads.prompts.is_empty());
-        assert_eq!(downloads.count(), 1);
+        assert_eq!(downloads.count(None), 1);
 
         list.update(
             handle.0,
@@ -649,17 +696,19 @@ mod tests {
         downloads.track(
             DownloadMessage {
                 tab: Some(tab.clone()),
+                incognito: None,
                 event: DownloadEvent::Updated { handle, id },
             },
             &list,
         );
-        assert_eq!(downloads.count(), 0);
+        assert_eq!(downloads.count(None), 0);
         assert!(!downloads.uses_tab(&tab));
 
         let handle = DownloadHandle(2);
         downloads.track(
             DownloadMessage {
                 tab: Some(tab),
+                incognito: None,
                 event: DownloadEvent::AskPath {
                     handle,
                     url: url.into(),
@@ -672,12 +721,34 @@ mod tests {
         downloads.track(
             DownloadMessage {
                 tab: None,
+                incognito: None,
                 event: DownloadEvent::Cancelled { handle, id: None },
             },
             &list,
         );
         assert!(downloads.prompts.is_empty());
-        assert_eq!(downloads.count(), 0);
+        assert_eq!(downloads.count(None), 0);
+
+        // An incognito window's question is asked in that session's windows only.
+        let session = IncognitoSession::new(1);
+        let handle = DownloadHandle(3);
+        downloads.track(
+            DownloadMessage {
+                tab: None,
+                incognito: Some(session),
+                event: DownloadEvent::AskPath {
+                    handle,
+                    url: url.into(),
+                    suggested: profile.path().join("private"),
+                    reason: AskReason::Preference,
+                },
+            },
+            &list,
+        );
+        assert_eq!(downloads.count(None), 0);
+        assert_eq!(downloads.count(Some(session)), 1);
+        assert_eq!(downloads.prompts_in(None).count(), 0);
+        assert_eq!(downloads.prompts_in(Some(session)).count(), 1);
         Ok(())
     }
 

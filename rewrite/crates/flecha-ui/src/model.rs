@@ -96,15 +96,21 @@ impl Model {
 
     /// Whether this window, or the page in a Flechinha or popup window, is incognito.
     pub(crate) fn is_incognito(&self, window: &WindowId) -> bool {
+        self.incognito_session(window).is_some()
+    }
+
+    /// The incognito session a window browses in, or `None` for a regular window.
+    pub(crate) fn incognito_session(&self, window: &WindowId) -> Option<IncognitoSession> {
         if let Some(page) = self.flechinhas.get(window) {
-            return page.partition.is_incognito();
+            return page.partition.incognito_session();
         }
         if let Some(popup) = self.popups.get(window) {
-            return popup.page.partition.is_incognito();
+            return popup.page.partition.incognito_session();
         }
         self.incognito
             .as_ref()
-            .is_some_and(|incognito| incognito.state.window(window).is_some())
+            .filter(|incognito| incognito.state.window(window).is_some())
+            .map(|incognito| incognito.session)
     }
 
     /// The incognito windows, while a session lasts.

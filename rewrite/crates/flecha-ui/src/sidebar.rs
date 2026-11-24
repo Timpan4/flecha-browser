@@ -265,7 +265,9 @@ impl Shell {
             );
         }
         let toolbar = state.toolbars.get(&self.id).copied().unwrap_or_default();
-        let downloads = state.downloads.count();
+        let downloads = state
+            .downloads
+            .count(state.model.incognito_session(&self.id));
         div()
             .flex()
             .flex_col()

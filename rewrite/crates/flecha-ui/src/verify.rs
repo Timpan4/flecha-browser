@@ -227,6 +227,7 @@ fn snapshot(state: &Controller) -> Result<Value> {
             "state": incognito.state,
         })),
         "contexts": state.engine.context_partitions().map(partition).collect::<Vec<_>>(),
+        "downloads": state.windows.keys().map(|window| (window.as_str().to_owned(), json!(state.download_rows(window)))).collect::<serde_json::Map<_, _>>(),
         "liveBrowsers": state.engine.live_browsers(),
         "nativeWindows": state.windows.keys().collect::<Vec<_>>(),
     }))

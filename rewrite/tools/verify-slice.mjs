@@ -6,7 +6,7 @@ import { join, relative } from 'node:path';
 import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
 
-import { blankRestartColor, fixture, openerColors } from './fixture.mjs';
+import { blankRestartColor, downloadBody, fixture, openerColors } from './fixture.mjs';
 import { checkProcessEnvironment } from './verify-process-env.mjs';
 
 const out = join(process.env.HOME, '..');
@@ -569,6 +569,21 @@ async function openIncognito(app) {
   return { window, session: snapshot.incognito.session };
 }
 
+/** Asks `check` until it returns a value, within the per-step allowance. */
+async function poll(label, check) {
+  waitingFor = label;
+  const deadline = Date.now() + stepTimeoutMs;
+
+  for (;;) {
+    const value = await check();
+
+    if (value) return value;
+
+    assert(Date.now() < deadline, `timed out waiting for ${label}`);
+    await delay(100); // Matches the capture poll.
+  }
+}
+
 /** Every file under `dir` whose bytes contain `needle`. */
 function filesContaining(dir, needle) {
   const found = [];
@@ -622,6 +637,22 @@ async function incognitoChecks(app, main) {
   assert.deepEqual(await app.command('allow_geolocation', { window: main }), { allowed: true });
   pass('Site Controls allowed location for an incognito page and a regular one');
 
+  // A download from the incognito window saves its file and is listed in that window only.
+  const privateDownload = row => row.url.includes(privateJar);
+  await app.command('open', { url: `${base}/jar/download?jar=${privateJar}`, window: first.window });
+
+  const downloaded = await poll('the incognito download to finish', async () => {
+    const { downloads } = await app.command('snapshot');
+
+    return downloads[first.window]?.some(row => privateDownload(row) && row.state === 'completed') && downloads;
+  });
+
+  const savedFile = join(process.env.FLECHA_PROFILE, 'downloads', `${privateJar}.txt`);
+  assert.equal(readFileSync(savedFile, 'utf8'), downloadBody);
+  assert(!downloaded[main].some(privateDownload), 'a regular window lists the incognito download');
+  pass('a download from the incognito window saved its file and was listed in that window only');
+  await app.command('select', { tab: grantTab, window: first.window });
+
   const running = await app.command('snapshot');
   const session = `incognito-${first.session}`;
   assert.deepEqual(running.browsers.find(page => page.tab === set.tab)?.partition, session);
@@ -641,8 +672,11 @@ async function incognitoChecks(app, main) {
   assert.equal(second.session, 2);
   assert.equal((await jarPage(app, second.window, '/jar/check', privateJar, true)).title, `${privateJar}:absent`,
     'a new incognito session kept the last one\'s cookie');
+  const { downloads: afterSession } = await app.command('snapshot');
+  assert(!Object.values(afterSession).flat().some(privateDownload), 'the ended session\'s download is still listed');
+  assert.equal(readFileSync(savedFile, 'utf8'), downloadBody, 'closing the session removed the downloaded file');
   await app.command('close_window', { window: second.window });
-  pass('closing the last incognito window destroyed its context: the next session started with an empty jar');
+  pass('closing the last incognito window destroyed its context: the next session started with an empty jar, and its download left the list but kept its file');
 
   await app.quit();
   const profile = process.env.FLECHA_PROFILE;
@@ -651,7 +685,7 @@ async function incognitoChecks(app, main) {
   assert.deepEqual(filesContaining(profile, privateJar), [], 'incognito browsing reached the profile on disk');
   assert(readFileSync(join(profile, 'permissions.json'), 'utf8').includes(base), 'the regular location grant was not saved');
   assert.deepEqual(filesContaining(profile, privateOrigin.slice('http://'.length)), [], 'the incognito location grant reached the disk');
-  pass(`no file under the profile names the incognito cookie, storage entry or page; the regular one is in ${kept.join(', ')}`);
+  pass(`no file under the profile names the incognito cookie, storage entry, page, download or location grant; the regular jar is in ${kept.join(', ')}`);
 
   const restarted = launch('incognito-restart');
   await restarted.wait('restored CEF context ready', event => event.type === 'ready');

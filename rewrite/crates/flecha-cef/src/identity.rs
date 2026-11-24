@@ -70,7 +70,14 @@ impl Partition {
     }
 
     pub fn is_incognito(&self) -> bool {
-        matches!(self, Self::Incognito(_))
+        self.incognito_session().is_some()
+    }
+
+    pub fn incognito_session(&self) -> Option<IncognitoSession> {
+        match self {
+            Self::Incognito(session) => Some(*session),
+            Self::Shared | Self::Isolated(_) => None,
+        }
     }
 }
 

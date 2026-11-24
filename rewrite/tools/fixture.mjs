@@ -7,6 +7,9 @@ export const blankRestartColor = '#E64DA3';
 export const openerColors = ['#2B2D6E', '#F2E94E'];
 export const popupColors = ['#5A1F1F', '#9AF2C4'];
 
+// The bytes of /jar/download.
+export const downloadBody = 'Flecha fixture download\n';
+
 // The opener page's controls. Each sets a fresh title once window.open returns, so the
 // title change reaches the shell after any popup event the call queued.
 const openerScript = `
@@ -66,6 +69,15 @@ export async function fixture(handle = () => false) {
 
   if (jar && path === '/jar/set') {
     response.setHeader('Set-Cookie', `${jar}=1; Path=/; Max-Age=86400; SameSite=Lax`);
+  }
+
+  // A file named after the jar. Its bytes never name the jar, so a scan of the profile finds a
+  // download record that names it but not the saved file.
+  if (jar && path === '/jar/download') {
+    response.writeHead(200, { 'Content-Type': 'text/plain', 'Content-Disposition': `attachment; filename="${jar}.txt"` });
+    response.end(downloadBody);
+
+    return;
   }
 
   const cookieResult = { isolated: 'Cookie present', shared: 'Shared cookie' };

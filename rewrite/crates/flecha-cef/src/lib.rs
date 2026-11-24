@@ -452,6 +452,7 @@ impl Engine {
         }
         self.discarded.retain(|_, page| page.partition != partition);
         self.contexts.remove(&partition);
+        self.end_download_session(session);
         let ephemeral = permissions::partition(&partition);
         self.edit_permissions(|manager| ((), manager.clear_partition(&ephemeral)));
     }
