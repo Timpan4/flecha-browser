@@ -2082,11 +2082,19 @@ dependencies = [
  "async-channel",
  "async-io",
  "cef",
+ "chrono",
+ "flecha-adblock",
+ "flecha-boosts",
  "flecha-core",
+ "flecha-downloads",
+ "flecha-permissions",
  "flecha-surface",
  "futures",
  "gpui",
+ "serde_json",
  "sha2 0.10.9",
+ "tempfile",
+ "url",
 ]
 
 [[package]]

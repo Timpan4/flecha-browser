@@ -1,13 +1,16 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, VecDeque};
 use std::rc::{Rc, Weak};
+use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 
 use cef::{rc::Rc as _, *};
 use flecha_surface::{Frame as SurfaceFrame, SurfaceTarget};
 use gpui::{Bounds, Pixels, point, px, size};
 
 use crate::popup::{self, Popups};
-use crate::{BrowserEvent, BrowserKey, Event, Viewport};
+use crate::{BrowserEvent, BrowserKey, Event, Partition, Viewport};
+use crate::{adblock, boosts, downloads, permissions, services};
 
 pub(crate) type Queue = Rc<RefCell<VecDeque<BrowserEvent>>>;
 
@@ -46,6 +49,14 @@ pub(crate) struct Slot {
     pub opening: RefCell<BTreeMap<i32, Rc<Slot>>>,
     /// For a popup still being created: its opener and its popup ID there.
     pub origin: RefCell<Option<(Weak<Slot>, i32)>>,
+    /// CEF's browser identifier, from `on_after_created`.
+    pub identifier: Cell<Option<i32>>,
+    /// The request context the engine placed this browser in. Permission decisions stay in it.
+    pub partition: RefCell<Option<Partition>>,
+    /// Requests the IO thread's ad blocker cancelled on the current page.
+    pub blocked: Arc<AtomicU64>,
+    /// The DevTools observer, registered by the first CDP call.
+    pub devtools: RefCell<Option<Registration>>,
 }
 
 impl Slot {
@@ -62,12 +73,17 @@ impl Slot {
             stage: Cell::new(Stage::Pending),
             opening: RefCell::new(BTreeMap::new()),
             origin: RefCell::new(None),
+            identifier: Cell::new(None),
+            partition: RefCell::new(None),
+            blocked: Arc::new(AtomicU64::new(0)),
+            devtools: RefCell::new(None),
         }
     }
 
     /// `on_after_created`. Returns whether the engine already closed this browser, so
     /// the caller must close it now.
     pub fn created(&self, identifier: i32) -> bool {
+        self.identifier.set(Some(identifier));
         self.stage.set(Stage::Live);
         self.popups.live.set(self.popups.live.get() + 1);
         let origin = self.origin.take();
@@ -80,9 +96,18 @@ impl Slot {
         self.retired.get()
     }
 
-    /// `on_before_close`.
+    /// `on_before_close`. Releases every CEF object the engine holds for this browser and
+    /// ends what it was waiting on: its downloads are cancelled and its permission requests
+    /// denied.
     pub fn destroyed(&self) {
         self.browser.take();
+        self.devtools.take();
+        let services = services::of(self);
+        let acts = services.downloads.borrow_mut().browser_closed(self);
+        downloads::run(&services, acts);
+        if let Some(identifier) = self.identifier.get() {
+            permissions::leave(&services, &permissions::queue_id(identifier));
+        }
         self.closed();
         popup::opener_closed(self);
     }
@@ -258,9 +283,27 @@ wrap_display_handler! {
 wrap_load_handler! {
     struct Load { slot: Rc<Slot> }
     impl LoadHandler {
+        fn on_load_start(
+            &self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, _transition_type: TransitionType,
+        ) {
+            let Some(frame) = frame.filter(|frame| frame.is_main() != 0) else { return };
+            let services = services::of(&self.slot);
+            // The page this tab's permission requests came from is gone.
+            if let Some(identifier) = self.slot.identifier.get() {
+                permissions::leave(&services, &permissions::queue_id(identifier));
+            }
+            if !self.slot.retired.get() {
+                boosts::page_committed(&services, frame, &CefString::from(&frame.url()).to_string());
+            }
+        }
+
         fn on_load_end(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, status: i32) {
             if let Some(frame) = frame.filter(|frame| frame.is_main() != 0) {
-                self.slot.emit(Event::Loaded { url: CefString::from(&frame.url()).to_string(), status });
+                let url = CefString::from(&frame.url()).to_string();
+                if !self.slot.retired.get() {
+                    boosts::page_loaded(&services::of(&self.slot), frame, &url);
+                }
+                self.slot.emit(Event::Loaded { url, status });
             }
         }
 
@@ -281,20 +324,34 @@ wrap_client! {
         life: LifeSpanHandler,
         display: DisplayHandler,
         load: LoadHandler,
+        request: RequestHandler,
+        download: DownloadHandler,
+        permission: PermissionHandler,
     }
     impl Client {
         fn render_handler(&self) -> Option<RenderHandler> { Some(self.render.clone()) }
         fn life_span_handler(&self) -> Option<LifeSpanHandler> { Some(self.life.clone()) }
         fn display_handler(&self) -> Option<DisplayHandler> { Some(self.display.clone()) }
         fn load_handler(&self) -> Option<LoadHandler> { Some(self.load.clone()) }
+        fn request_handler(&self) -> Option<RequestHandler> { Some(self.request.clone()) }
+        fn download_handler(&self) -> Option<DownloadHandler> { Some(self.download.clone()) }
+        fn permission_handler(&self) -> Option<PermissionHandler> { Some(self.permission.clone()) }
     }
 }
 
+/// Every browser the engine owns gets these handlers, popups included.
 pub(crate) fn client(slot: Rc<Slot>) -> Client {
+    let io = adblock::Io {
+        blocker: slot.popups.services.adblock.clone(),
+        blocked: slot.blocked.clone(),
+    };
     OsrClient::new(
         Osr::new(slot.clone()),
         Life::new(slot.clone()),
         Display::new(slot.clone()),
-        Load::new(slot),
+        Load::new(slot.clone()),
+        adblock::handler(io),
+        downloads::handler(slot.clone()),
+        permissions::handler(slot),
     )
 }
