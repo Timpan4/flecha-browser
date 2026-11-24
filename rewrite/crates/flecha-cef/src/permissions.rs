@@ -10,10 +10,17 @@
 //! Requests are queued per CEF browser rather than per tab id, so a prompt follows its browser
 //! when the shell moves it to another tab.
 //!
-//! Chromium saves every answer CEF gives it as a content setting of the request context, and
-//! after that stops asking. A saved flecha decision may stay there. An answer no saved decision
-//! backs, such as Allow once, is reset to Chromium's default when the document that got it goes
-//! away, so the next document asks again.
+//! Chromium saves every answer CEF gives it as a content setting of the request context, on
+//! disk, and after that stops asking. A request context's content settings must hold the saved
+//! flecha decisions and nothing else, apart from answers the current documents got:
+//! - When a context becomes ready, every site's setting for the kinds flecha decides is cleared
+//!   and the saved decisions are written back ([`reconcile`]). An Allow once Chromium kept when
+//!   the app last stopped without resetting it, after a crash, ends there.
+//! - Changing a saved decision writes it to every ready context at once ([`edit`]), so a page
+//!   sees the site panel's change without reloading.
+//! - An answer no saved decision backs, such as Allow once, is put back to the saved decision,
+//!   or Chromium's default, when the document that got it goes away, so the next document asks
+//!   again.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Weak;
@@ -21,8 +28,9 @@ use std::rc::Weak;
 use cef::{rc::Rc as _, *};
 use flecha_core::TabId;
 use flecha_permissions::{
-    Completion, Evaluation, Origin, Partition, PermissionError, PermissionKind, PermissionManager,
-    PermissionSet, PromptOutcome, RequestId, TabId as QueueId, Verdict,
+    Completion, Decision, Evaluation, Origin, Partition, PermissionError, PermissionKind,
+    PermissionManager, PermissionSet, PromptOutcome, RequestId, SiteSettings, Snapshot,
+    TabId as QueueId, Verdict,
 };
 
 use crate::callbacks::Slot;
@@ -185,28 +193,103 @@ impl crate::Engine {
             .pending(&queue_id(identifier))
     }
 
-    /// Answers the banner's prompt and every request the answer decides.
+    /// Answers the banner's prompt and every request the answer decides. Allow always and Block
+    /// always reach every ready context of the partition at once.
     pub fn resolve_permission(
         &mut self,
         request: RequestId,
         outcome: PromptOutcome,
     ) -> Result<(), PermissionError> {
-        resolve(self.services(), request, outcome)
+        self.edit_permissions(|manager| match manager.resolve_prompt(request, outcome) {
+            Ok(completions) => (Ok(()), completions),
+            Err(error) => (Err(error), Vec::new()),
+        })
     }
 
-    /// Saved decisions, for the site panel and for saving (`PermissionManager::snapshot`).
-    pub fn permissions(&self) -> std::cell::Ref<'_, PermissionManager> {
-        std::cell::Ref::map(self.services().permissions.borrow(), |state| &state.manager)
+    /// The saved decisions for `origin` in `partition`, as the site panel shows them.
+    pub fn site_permissions(&self, partition: &crate::Partition, origin: &Origin) -> SiteSettings {
+        self.services()
+            .permissions
+            .borrow()
+            .manager
+            .site_settings(&self::partition(partition), origin)
     }
 
-    /// Changes decisions, as the site panel does. `change` returns its result and the
-    /// manager's completions, which the engine answers:
-    /// `engine.permissions_mut(|m| match m.set_setting(..) { Ok(done) => (Ok(()), done), Err(e) => (Err(e), vec![]) })`.
-    pub fn permissions_mut<R>(
+    /// The site panel's setter: saves `decision` for `kinds`, or forgets it for
+    /// [`Decision::Ask`]. Chromium follows at once in every ready context of the partition, and
+    /// waiting requests the setting decides are answered.
+    pub fn set_site_permission(
+        &mut self,
+        partition: &crate::Partition,
+        origin: &Origin,
+        kinds: impl Into<PermissionSet>,
+        decision: Decision,
+    ) -> Result<(), PermissionError> {
+        let partition = self::partition(partition);
+        let kinds = kinds.into();
+        self.edit_permissions(|manager| {
+            match manager.set_setting(&partition, origin, kinds, decision) {
+                Ok(completions) => (Ok(()), completions),
+                Err(error) => (Err(error), Vec::new()),
+            }
+        })
+    }
+
+    /// Forgets every saved and one-time decision for `origin` in `partition`, as clearing the
+    /// site's data does.
+    pub fn clear_site_permissions(&mut self, partition: &crate::Partition, origin: &Origin) {
+        let partition = self::partition(partition);
+        self.edit_permissions(|manager| ((), manager.clear_origin(&partition, origin)));
+    }
+
+    /// The saved decisions to write to disk (`SnapshotFile::save`).
+    pub fn permission_snapshot(&self) -> Snapshot {
+        self.services().permissions.borrow().manager.snapshot()
+    }
+
+    /// Whether saved decisions changed since the last [`Self::mark_permissions_saved`].
+    pub fn permissions_dirty(&self) -> bool {
+        self.services().permissions.borrow().manager.is_dirty()
+    }
+
+    pub fn mark_permissions_saved(&self) {
+        self.services()
+            .permissions
+            .borrow_mut()
+            .manager
+            .mark_saved();
+    }
+
+    /// Installs the saved decisions loaded at startup (`SnapshotFile::load`) in place of the
+    /// current ones. Waiting requests are denied and one-time answers forgotten, and every
+    /// ready context is reconciled to the new decisions.
+    pub fn restore_permissions(&mut self, snapshot: Snapshot) -> anyhow::Result<()> {
+        let queues: BTreeSet<QueueId> = {
+            let state = self.services().permissions.borrow();
+            state.held.values().map(|held| held.queue.clone()).collect()
+        };
+        apply(self.services(), |manager| {
+            let denied = queues
+                .iter()
+                .flat_map(|queue| manager.cancel_tab_prompts(queue))
+                .collect();
+            *manager = PermissionManager::from_snapshot(snapshot);
+            ((), denied)
+        });
+        for (partition, context) in self.permission_contexts() {
+            reconcile(self.services(), &partition, &context)?;
+        }
+        Ok(())
+    }
+
+    /// Changes decisions with the manager's own methods. `change` returns its result and the
+    /// manager's completions, which the engine answers. Saved decisions `change` adds, changes
+    /// or forgets reach every ready context at once.
+    pub fn edit_permissions<R>(
         &mut self,
         change: impl FnOnce(&mut PermissionManager) -> (R, Vec<Completion>),
     ) -> R {
-        apply(self.services(), change)
+        edit(self.services(), &self.permission_contexts(), change)
     }
 
     /// The flecha-permissions partition of the tab's request context.
@@ -383,17 +466,133 @@ pub(crate) fn apply<R>(
     result
 }
 
-pub(crate) fn resolve(
+/// Saved decisions of one partition, by origin and kind.
+type Saved = BTreeMap<(Origin, PermissionKind), Verdict>;
+
+fn saved(services: &Services, partition: &Partition) -> Saved {
+    let state = services.permissions.borrow();
+    state
+        .manager
+        .saved_decisions(partition)
+        .map(|(origin, kind, verdict)| ((origin.clone(), kind), verdict))
+        .collect()
+}
+
+/// Applies a manager change like [`apply`], then writes the saved decisions it added, changed
+/// or forgot to each ready context of their partition.
+pub(crate) fn edit<R>(
     services: &Services,
-    request: RequestId,
-    outcome: PromptOutcome,
-) -> Result<(), PermissionError> {
-    apply(services, |manager| {
-        match manager.resolve_prompt(request, outcome) {
-            Ok(completions) => (Ok(()), completions),
-            Err(error) => (Err(error), Vec::new()),
+    contexts: &[(Partition, impl ContentSettings)],
+    change: impl FnOnce(&mut PermissionManager) -> (R, Vec<Completion>),
+) -> R {
+    let before: Vec<Saved> = contexts
+        .iter()
+        .map(|(partition, _)| saved(services, partition))
+        .collect();
+    let result = apply(services, change);
+    for ((partition, settings), before) in contexts.iter().zip(before) {
+        let after = saved(services, partition);
+        for (origin, kind) in before.keys().filter(|key| !after.contains_key(key)) {
+            settings.set(origin.as_str(), origin.as_str(), *kind, None);
         }
-    })
+        for ((origin, kind), verdict) in &after {
+            if before.get(&(origin.clone(), *kind)) != Some(verdict) {
+                settings.set(origin.as_str(), origin.as_str(), *kind, Some(*verdict));
+            }
+        }
+    }
+    result
+}
+
+/// Makes a request context that just became ready hold the partition's saved decisions and
+/// nothing else. Chromium loaded its content settings from disk, where an answer the app never
+/// got to reset, such as an Allow once before a crash, would otherwise outlive the session.
+/// Fails when Chromium refuses to clear a kind, so the caller never browses with it.
+pub(crate) fn reconcile(
+    services: &Services,
+    partition: &Partition,
+    settings: &impl ContentSettings,
+) -> anyhow::Result<()> {
+    let saved = saved(services, partition);
+    for kind in PermissionKind::ALL {
+        settings.clear(kind).map_err(|error| {
+            anyhow::anyhow!(
+                "could not clear Chromium's saved {} answers: {error}",
+                kind.name()
+            )
+        })?;
+    }
+    for ((origin, kind), verdict) in saved {
+        settings.set(origin.as_str(), origin.as_str(), kind, Some(verdict));
+    }
+    Ok(())
+}
+
+/// A request context's content settings, where Chromium keeps the permission answers it got.
+pub(crate) trait ContentSettings {
+    /// Forgets every site's setting for `kind`.
+    fn clear(&self, kind: PermissionKind) -> Result<(), String>;
+    /// Sets `kind` for `requesting` in a page at `top`. `None` puts back Chromium's default,
+    /// which asks.
+    fn set(&self, requesting: &str, top: &str, kind: PermissionKind, verdict: Option<Verdict>);
+}
+
+/// Chromium's content setting for `kind`, and the profile preference that holds every site's
+/// value for it (`WebsiteSettingsInfo::pref_name`).
+fn chromium_setting(kind: PermissionKind) -> (ContentSettingTypes, &'static str) {
+    match kind {
+        PermissionKind::Geolocation => (
+            ContentSettingTypes::GEOLOCATION,
+            "profile.content_settings.exceptions.geolocation",
+        ),
+        PermissionKind::Camera => (
+            ContentSettingTypes::MEDIASTREAM_CAMERA,
+            "profile.content_settings.exceptions.media_stream_camera",
+        ),
+        PermissionKind::Microphone => (
+            ContentSettingTypes::MEDIASTREAM_MIC,
+            "profile.content_settings.exceptions.media_stream_mic",
+        ),
+        PermissionKind::Notifications => (
+            ContentSettingTypes::NOTIFICATIONS,
+            "profile.content_settings.exceptions.notifications",
+        ),
+        PermissionKind::ClipboardRead => (
+            ContentSettingTypes::CLIPBOARD_READ_WRITE,
+            "profile.content_settings.exceptions.clipboard",
+        ),
+    }
+}
+
+impl ContentSettings for RequestContext {
+    fn clear(&self, kind: PermissionKind) -> Result<(), String> {
+        let name = CefString::from(chromium_setting(kind).1);
+        if self.can_set_preference(Some(&name)) == 0 {
+            return Err(format!("{name} can't be set"));
+        }
+        // CEF refuses the call when the error string has no storage, which a default
+        // `CefString` lacks; CEF replaces this text when it reports why.
+        let mut error = CefString::from("no reason given");
+        // No value restores the preference's default: no site has a setting.
+        if self.set_preference(Some(&name), None, Some(&mut error)) == 0 {
+            return Err(error.to_string());
+        }
+        Ok(())
+    }
+
+    fn set(&self, requesting: &str, top: &str, kind: PermissionKind, verdict: Option<Verdict>) {
+        let value = match verdict {
+            Some(Verdict::Allow) => ContentSettingValues::ALLOW,
+            Some(Verdict::Block) => ContentSettingValues::BLOCK,
+            None => ContentSettingValues::DEFAULT,
+        };
+        self.set_content_setting(
+            Some(&CefString::from(requesting)),
+            Some(&CefString::from(top)),
+            chromium_setting(kind).0,
+            value,
+        );
+    }
 }
 
 /// The tab's page went away (navigation) or its browser closed: deny everything it holds and
@@ -426,13 +625,19 @@ pub(crate) fn dismissed(services: &Services, prompt: u64) {
 /// The document a request came from, where Chromium keeps the answer as a content setting.
 pub(crate) struct Document {
     slot: Weak<Slot>,
-    context: RequestContext,
-    requesting: String,
-    top: String,
+    answer: OneTime,
 }
 
-/// Puts back to Chromium's default the content settings one document's answers left.
-pub(crate) struct OneTime(Box<dyn FnOnce()>);
+/// Answers Chromium holds for one document only, and where.
+pub(crate) struct OneTime {
+    pub settings: Box<dyn ContentSettings>,
+    pub partition: Partition,
+    /// The requesting origin, which a saved decision is for.
+    pub origin: Origin,
+    pub requesting: String,
+    pub top: String,
+    pub kinds: PermissionSet,
+}
 
 impl Document {
     fn of(
@@ -440,11 +645,17 @@ impl Document {
         browser: &Browser,
         requesting: Option<&CefString>,
     ) -> Option<Self> {
+        let requesting = requesting?.to_string();
         Some(Self {
             slot: std::rc::Rc::downgrade(slot),
-            context: browser.host()?.request_context()?,
-            requesting: requesting?.to_string(),
-            top: top_url(browser)?,
+            answer: OneTime {
+                settings: Box::new(browser.host()?.request_context()?),
+                partition: slot.partition.borrow().as_ref().map(partition)?,
+                origin: Origin::parse(&requesting).ok()?,
+                requesting,
+                top: top_url(browser)?,
+                kinds: PermissionSet::EMPTY,
+            },
         })
     }
 
@@ -453,48 +664,45 @@ impl Document {
         let Some(slot) = self.slot.upgrade().filter(|_| !kinds.is_empty()) else {
             return;
         };
-        let Self {
-            context,
-            requesting,
-            top,
-            ..
-        } = self;
-        let reset = move || {
-            let (requesting, top) = (
-                CefString::from(requesting.as_str()),
-                CefString::from(top.as_str()),
-            );
-            for kind in kinds.iter() {
-                for &setting in content_settings(kind) {
-                    context.set_content_setting(
-                        Some(&requesting),
-                        Some(&top),
-                        setting,
-                        ContentSettingValues::DEFAULT,
-                    );
-                }
-            }
-        };
-        slot.one_time.borrow_mut().push(OneTime(Box::new(reset)));
+        slot.one_time.borrow_mut().push(OneTime {
+            kinds,
+            ..self.answer
+        });
     }
 }
 
-/// The Chromium content settings that hold `kind`.
-fn content_settings(kind: PermissionKind) -> &'static [ContentSettingTypes] {
-    match kind {
-        PermissionKind::Geolocation => &[ContentSettingTypes::GEOLOCATION],
-        PermissionKind::Camera => &[ContentSettingTypes::MEDIASTREAM_CAMERA],
-        PermissionKind::Microphone => &[ContentSettingTypes::MEDIASTREAM_MIC],
-        PermissionKind::Notifications => &[ContentSettingTypes::NOTIFICATIONS],
-        PermissionKind::ClipboardRead => &[ContentSettingTypes::CLIPBOARD_READ_WRITE],
-    }
-}
-
-/// `slot`'s document went away (navigation or close): Chromium forgets the answers it gave that
-/// no saved decision backs, so the next document's requests reach the engine again.
+/// `slot`'s document went away (navigation or close): Chromium puts the answers it gave that no
+/// saved decision backed back to the saved decision, which may have been made since, or to its
+/// default, so the next document's requests reach the engine again.
 pub(crate) fn forget_one_time(slot: &Slot) {
-    for OneTime(reset) in slot.one_time.take() {
-        reset();
+    let answers = slot.one_time.take();
+    if answers.is_empty() {
+        return;
+    }
+    let services = services::of(slot);
+    let resets: Vec<(OneTime, SiteSettings)> = {
+        let state = services.permissions.borrow();
+        answers
+            .into_iter()
+            .map(|answer| {
+                let saved = state
+                    .manager
+                    .site_settings(&answer.partition, &answer.origin);
+                (answer, saved)
+            })
+            .collect()
+    };
+    for (answer, saved) in resets {
+        for kind in answer.kinds.iter() {
+            let verdict = match saved.decision(kind) {
+                Decision::Allow => Some(Verdict::Allow),
+                Decision::Block => Some(Verdict::Block),
+                Decision::Ask => None,
+            };
+            answer
+                .settings
+                .set(&answer.requesting, &answer.top, kind, verdict);
+        }
     }
 }
 
@@ -608,9 +816,254 @@ pub(crate) mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    use flecha_permissions::{Decision, SiteControl};
+    use flecha_permissions::SiteControl;
 
     use super::*;
+
+    fn resolve(
+        services: &Services,
+        request: RequestId,
+        outcome: PromptOutcome,
+    ) -> Result<(), PermissionError> {
+        apply(services, |manager| {
+            match manager.resolve_prompt(request, outcome) {
+                Ok(completions) => (Ok(()), completions),
+                Err(error) => (Err(error), Vec::new()),
+            }
+        })
+    }
+
+    /// One request context's content settings, by requesting origin and kind.
+    #[derive(Clone, Default)]
+    struct Chromium {
+        settings: Rc<RefCell<BTreeMap<(String, PermissionKind), Verdict>>>,
+        refuse_clear: bool,
+    }
+
+    impl Chromium {
+        fn holds(&self) -> Vec<(String, PermissionKind, Verdict)> {
+            self.settings
+                .borrow()
+                .iter()
+                .map(|((origin, kind), verdict)| (origin.clone(), *kind, *verdict))
+                .collect()
+        }
+    }
+
+    impl ContentSettings for Chromium {
+        fn clear(&self, kind: PermissionKind) -> Result<(), String> {
+            if self.refuse_clear {
+                return Err("refused".into());
+            }
+            self.settings
+                .borrow_mut()
+                .retain(|(_, held), _| *held != kind);
+            Ok(())
+        }
+
+        fn set(
+            &self,
+            requesting: &str,
+            _top: &str,
+            kind: PermissionKind,
+            verdict: Option<Verdict>,
+        ) {
+            let key = (Origin::parse(requesting).unwrap().to_string(), kind);
+            let mut settings = self.settings.borrow_mut();
+            match verdict {
+                Some(verdict) => settings.insert(key, verdict),
+                None => settings.remove(&key),
+            };
+        }
+    }
+
+    fn origin(url: &str) -> Origin {
+        Origin::parse(url).unwrap()
+    }
+
+    fn save(
+        services: &Services,
+        partition: &Partition,
+        url: &str,
+        kind: PermissionKind,
+        decision: Decision,
+    ) {
+        apply(services, |manager| {
+            let done = manager
+                .set_setting(partition, &origin(url), kind, decision)
+                .unwrap();
+            ((), done)
+        });
+    }
+
+    #[test]
+    fn a_ready_context_keeps_saved_decisions_and_forgets_answers_a_crash_left() {
+        use PermissionKind::{Camera, Geolocation, Notifications};
+        let services = Services::new();
+        let work = Partition::Isolated("work".into());
+        save(
+            &services,
+            &Partition::Shared,
+            "https://maps.example/",
+            Geolocation,
+            Decision::Allow,
+        );
+        save(
+            &services,
+            &Partition::Shared,
+            "https://spam.example/",
+            Notifications,
+            Decision::Block,
+        );
+        save(
+            &services,
+            &work,
+            "https://intranet.example/",
+            Camera,
+            Decision::Allow,
+        );
+
+        // The last session stopped during an Allow once and a Block once, and while a saved
+        // Allow was still Chromium's earlier Block.
+        let chromium = Chromium::default();
+        let meet = "https://meet.example/";
+        chromium.set(meet, meet, Camera, Some(Verdict::Allow));
+        let news = "https://news.example/";
+        chromium.set(news, news, Notifications, Some(Verdict::Block));
+        let maps = "https://maps.example/";
+        chromium.set(maps, maps, Geolocation, Some(Verdict::Block));
+
+        reconcile(&services, &Partition::Shared, &chromium).unwrap();
+        assert_eq!(
+            chromium.holds(),
+            [
+                ("https://maps.example".into(), Geolocation, Verdict::Allow),
+                ("https://spam.example".into(), Notifications, Verdict::Block),
+            ],
+            "only the shared partition's saved decisions are left"
+        );
+
+        let refusing = Chromium {
+            refuse_clear: true,
+            ..Chromium::default()
+        };
+        assert!(
+            reconcile(&services, &Partition::Shared, &refusing).is_err(),
+            "a context Chromium won't clear must not be browsed in"
+        );
+    }
+
+    #[test]
+    fn saved_decision_changes_reach_chromium_at_once_and_need_saving() {
+        use PermissionKind::Geolocation;
+        let services = Services::new();
+        let shared = Chromium::default();
+        let work = Chromium::default();
+        let contexts = [
+            (Partition::Shared, shared.clone()),
+            (Partition::Isolated("work".into()), work.clone()),
+        ];
+        let maps = origin("https://maps.example/");
+        let set = |decision| {
+            edit(&services, &contexts, |manager| {
+                let done = manager
+                    .set_setting(&Partition::Shared, &maps, Geolocation, decision)
+                    .unwrap();
+                ((), done)
+            });
+        };
+        let dirty = || {
+            let mut state = services.permissions.borrow_mut();
+            let dirty = state.manager.is_dirty();
+            state.manager.mark_saved();
+            dirty
+        };
+        let held = |verdict| vec![("https://maps.example".to_owned(), Geolocation, verdict)];
+
+        set(Decision::Allow);
+        assert_eq!(shared.holds(), held(Verdict::Allow));
+        assert!(dirty());
+        set(Decision::Block);
+        assert_eq!(shared.holds(), held(Verdict::Block));
+        assert!(dirty());
+        set(Decision::Ask);
+        assert!(
+            shared.holds().is_empty(),
+            "Ask puts back Chromium's default"
+        );
+        assert!(dirty());
+
+        set(Decision::Allow);
+        assert!(dirty());
+        edit(&services, &contexts, |manager| {
+            ((), manager.clear_origin(&Partition::Shared, &maps))
+        });
+        assert!(shared.holds().is_empty(), "clearing the site forgets it");
+        assert!(dirty());
+        assert!(work.holds().is_empty(), "other partitions never change");
+
+        // Allow always from a prompt is a saved decision too.
+        request(
+            &services,
+            camera_ask("browser-1", "https://meet.example/"),
+            recorder("always", &Log::default()),
+        );
+        let front = services
+            .permissions
+            .borrow()
+            .pending(&QueueId::new("browser-1"))
+            .unwrap();
+        edit(&services, &contexts, |manager| {
+            let done = manager
+                .resolve_prompt(front.request, PromptOutcome::AllowAlways)
+                .unwrap();
+            ((), done)
+        });
+        assert_eq!(
+            shared.holds(),
+            [(
+                "https://meet.example".to_owned(),
+                PermissionKind::Camera,
+                Verdict::Allow
+            )]
+        );
+        assert!(dirty());
+    }
+
+    #[test]
+    fn leaving_a_page_puts_back_the_saved_decision_made_after_its_allow_once() {
+        use PermissionKind::Camera;
+        let slot = crate::tests::slot("tab");
+        let services = services::of(&slot);
+        let chromium = Chromium::default();
+        let contexts = [(Partition::Shared, chromium.clone())];
+        let one_time = |url: &str| OneTime {
+            settings: Box::new(chromium.clone()),
+            partition: Partition::Shared,
+            origin: origin(url),
+            requesting: url.into(),
+            top: url.into(),
+            kinds: Camera.into(),
+        };
+        let (meet, call) = ("https://meet.example/", "https://call.example/");
+        for url in [meet, call] {
+            chromium.set(url, url, Camera, Some(Verdict::Allow));
+            slot.one_time.borrow_mut().push(one_time(url));
+        }
+        edit(&services, &contexts, |manager| {
+            let done = manager
+                .set_setting(&Partition::Shared, &origin(meet), Camera, Decision::Block)
+                .unwrap();
+            ((), done)
+        });
+
+        forget_one_time(&slot);
+        assert_eq!(
+            chromium.holds(),
+            [("https://meet.example".to_owned(), Camera, Verdict::Block)],
+            "the site panel's Block stays; the unsaved Allow once is gone"
+        );
+    }
 
     pub(crate) type Log = Rc<RefCell<Vec<(&'static str, Option<Verdict>)>>>;
 

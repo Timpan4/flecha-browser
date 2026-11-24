@@ -576,3 +576,29 @@ fn allow_always_after_a_panel_allow_saves_only_the_rest() {
     );
     assert!(manager.is_dirty());
 }
+
+#[test]
+fn saved_decisions_list_one_partition_without_one_time_answers() {
+    let mut manager = PermissionManager::new();
+    let tab = TabId::new("a");
+    let (maps, meet) = (
+        origin("https://maps.example"),
+        origin("https://meet.example"),
+    );
+    let work = Partition::Isolated("work".into());
+    manager
+        .set_setting(&Partition::Shared, &maps, Geolocation, Decision::Allow)
+        .unwrap();
+    manager
+        .set_setting(&work, &maps, Notifications, Decision::Block)
+        .unwrap();
+    let id = prompt(manager.evaluate(&Partition::Shared, &tab, &meet, media()));
+    manager
+        .resolve_prompt(id, PromptOutcome::AllowOnce)
+        .unwrap();
+
+    let saved: Vec<_> = manager.saved_decisions(&Partition::Shared).collect();
+    assert_eq!(saved, [(&maps, Geolocation, Verdict::Allow)]);
+    let saved: Vec<_> = manager.saved_decisions(&work).collect();
+    assert_eq!(saved, [(&maps, Notifications, Verdict::Block)]);
+}

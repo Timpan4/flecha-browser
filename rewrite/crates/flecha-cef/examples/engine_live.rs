@@ -2,7 +2,9 @@
 //! CDP bridge: network blocking with its per-site switch, ad hiding, style and script Boosts,
 //! `navigator.webdriver`, navigation helpers, the page lifecycle call tab sleep uses, downloads
 //! from a shared and an isolated request context at once, one-time and saved geolocation
-//! answers across navigations, and restoring a discarded tab while its context is created.
+//! answers across navigations, site panel changes reaching a page at once, clearing answers a
+//! crash left in a context's content settings, and restoring a discarded tab while its context
+//! is created.
 //!
 //! CEF must never reach the desktop session, so this runs only inside the isolated launcher:
 //!
@@ -26,6 +28,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, bail, ensure};
+use cef::{
+    CefString, ContentSettingTypes, ContentSettingValues, ImplBrowserHost as _,
+    ImplRequestContext as _, RequestContext,
+};
 use flecha_boosts::{Boosts, CompiledBoost};
 use flecha_cef::{
     DevToolsEvent, DownloadConfig, DownloadError, DownloadEvent, DownloadHandle, Engine, Event,
@@ -33,7 +39,7 @@ use flecha_cef::{
 };
 use flecha_core::{SpaceId, TabId, WindowId};
 use flecha_downloads::{DownloadSettings, State};
-use flecha_permissions::PromptOutcome;
+use flecha_permissions::{Decision, Origin, PermissionKind, PromptOutcome};
 use gpui::{Bounds, point, px, size};
 use serde_json::{Value, json};
 
@@ -174,11 +180,32 @@ impl Live<'_> {
         );
         self.engine.set_boosts(boosts()?);
 
+        // Answers a crashed session left in the shared profile: no saved decision backs them.
+        let global = cef::request_context_get_global_context().context("global context")?;
+        for kind in SEEDED {
+            seed(&global, &self.base, kind)?;
+        }
+
         let tab = TabId::new("live");
         let url = format!("{}/page", self.base);
         self.engine
             .ensure(tab.clone(), owner(), Partition::Shared, &url, viewport())?;
         self.wait_loaded(&tab, "/page")?;
+        for kind in SEEDED {
+            let left = setting(&global, &self.base, kind);
+            ensure!(
+                left != ContentSettingValues::ALLOW,
+                "the shared context kept an unsaved {kind:?} Allow"
+            );
+        }
+        let state = self.permission_state(&tab, "geolocation")?;
+        ensure!(
+            state == "prompt",
+            "the page got the unsaved geolocation Allow: {state}"
+        );
+        println!(
+            "PASS opening the shared context cleared unsaved Allows for every kind; the page asks"
+        );
 
         self.blocking_and_boosts(&tab)?;
         self.navigation(&tab)?;
@@ -458,18 +485,88 @@ impl Live<'_> {
             "Allow always didn't outlive the document: {after}"
         );
         println!("PASS Allow always stayed granted after a navigation");
+        self.site_panel(tab)
+    }
+
+    /// The site panel's changes reach the open page without a reload, and need saving.
+    fn site_panel(&mut self, tab: &TabId) -> Result<()> {
+        let site = Origin::parse(&self.base)?;
+        let geolocation = PermissionKind::Geolocation;
+        let saved = self.engine.site_permissions(&Partition::Shared, &site);
+        ensure!(
+            saved.decision(geolocation) == Decision::Allow,
+            "Allow always wasn't saved"
+        );
+        ensure!(self.engine.permissions_dirty(), "Allow always needs saving");
+        ensure!(
+            self.engine
+                .permission_snapshot()
+                .encode()
+                .contains(site.as_str()),
+            "the snapshot to save lacks the decision"
+        );
+        self.engine.mark_permissions_saved();
+        for (decision, expected) in [
+            (Decision::Block, "denied"),
+            (Decision::Ask, "prompt"),
+            (Decision::Allow, "granted"),
+        ] {
+            self.engine
+                .set_site_permission(&Partition::Shared, &site, geolocation, decision)?;
+            self.wait_permission_state(tab, "geolocation", expected)?;
+            ensure!(
+                self.engine.permissions_dirty(),
+                "{decision:?} wasn't marked for saving"
+            );
+            self.engine.mark_permissions_saved();
+        }
+        self.engine
+            .clear_site_permissions(&Partition::Shared, &site);
+        self.wait_permission_state(tab, "geolocation", "prompt")?;
+        ensure!(
+            self.engine.permissions_dirty(),
+            "clearing the site wasn't marked for saving"
+        );
+        println!(
+            "PASS the site panel's Block, Ask, Allow and clear reached the open page's permission state at once"
+        );
         Ok(())
     }
 
     fn geolocation(&mut self, tab: &TabId) -> Result<String> {
+        self.permission_state(tab, "geolocation")
+    }
+
+    /// `navigator.permissions.query` for `name` in the tab's page.
+    fn permission_state(&mut self, tab: &TabId, name: &str) -> Result<String> {
         let state = self.evaluate(
             tab,
-            "navigator.permissions.query({ name: 'geolocation' }).then(status => status.state)",
+            &format!(
+                "navigator.permissions.query({{ name: '{name}' }}).then(status => status.state)"
+            ),
         )?;
         state
             .as_str()
             .map(str::to_owned)
             .context("permission state")
+    }
+
+    fn wait_permission_state(&mut self, tab: &TabId, name: &str, expected: &str) -> Result<()> {
+        let start = Instant::now();
+        loop {
+            let state = self.permission_state(tab, name)?;
+            if state == expected {
+                self.steps
+                    .longest
+                    .set(self.steps.longest.get().max(start.elapsed()));
+                return Ok(());
+            }
+            ensure!(
+                start.elapsed() <= self.steps.budget,
+                "waited longer than --step-timeout-ms for {name} to be {expected}; it is {state}"
+            );
+            pump();
+        }
     }
 
     fn ask_geolocation(&mut self, tab: &TabId, outcome: PromptOutcome) -> Result<()> {
@@ -494,6 +591,31 @@ impl Live<'_> {
             "no main frame"
         );
         self.wait_loaded(isolated, "/second")?;
+
+        // The Space's profile gets an Allow no saved decision backs, as a crash during Allow
+        // once leaves it, next to a saved Block.
+        let context = self
+            .engine
+            .host(isolated)
+            .and_then(|host| host.request_context())
+            .context("the isolated request context")?;
+        seed(
+            &context,
+            &self.base,
+            ContentSettingTypes::MEDIASTREAM_CAMERA,
+        )?;
+        self.wait_permission_state(isolated, "camera", "granted")?;
+        let site = Origin::parse(&self.base)?;
+        let space = Partition::Isolated(SpaceId::new("live"));
+        self.engine.set_site_permission(
+            &space,
+            &site,
+            PermissionKind::Geolocation,
+            Decision::Block,
+        )?;
+        self.wait_permission_state(isolated, "geolocation", "denied")?;
+        drop(context);
+
         let discarded = self
             .engine
             .discard_tab(isolated)
@@ -532,6 +654,19 @@ impl Live<'_> {
         );
         println!(
             "PASS a discarded tab came back to its page while its isolated context was created again"
+        );
+        let camera = self.permission_state(isolated, "camera")?;
+        ensure!(
+            camera == "prompt",
+            "the recreated isolated context kept the unsaved camera Allow: {camera}"
+        );
+        let geolocation = self.permission_state(isolated, "geolocation")?;
+        ensure!(
+            geolocation == "denied",
+            "the recreated isolated context lost the saved geolocation Block: {geolocation}"
+        );
+        println!(
+            "PASS the recreated isolated context cleared the unsaved camera Allow and kept the saved geolocation Block"
         );
         Ok(())
     }
@@ -615,6 +750,36 @@ impl Live<'_> {
             pump();
         }
     }
+}
+
+/// The content settings flecha decides, seeded with unsaved Allows before the engine opens the
+/// shared context.
+const SEEDED: [ContentSettingTypes; 5] = [
+    ContentSettingTypes::GEOLOCATION,
+    ContentSettingTypes::MEDIASTREAM_CAMERA,
+    ContentSettingTypes::MEDIASTREAM_MIC,
+    ContentSettingTypes::NOTIFICATIONS,
+    ContentSettingTypes::CLIPBOARD_READ_WRITE,
+];
+
+fn setting(
+    context: &RequestContext,
+    site: &str,
+    kind: ContentSettingTypes,
+) -> ContentSettingValues {
+    let site = CefString::from(site);
+    context.content_setting(Some(&site), Some(&site), kind)
+}
+
+/// Gives `site` an Allow for `kind` in the context's content settings, and checks it took.
+fn seed(context: &RequestContext, site: &str, kind: ContentSettingTypes) -> Result<()> {
+    let url = CefString::from(site);
+    context.set_content_setting(Some(&url), Some(&url), kind, ContentSettingValues::ALLOW);
+    ensure!(
+        setting(context, site, kind) == ContentSettingValues::ALLOW,
+        "seeding an Allow for {kind:?} didn't take"
+    );
+    Ok(())
 }
 
 const PAGE_STATE: &str = r#"({
