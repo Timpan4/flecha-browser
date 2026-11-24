@@ -8,11 +8,12 @@ use flecha_core::{
 };
 use gpui::{
     ClickEvent, Context, Div, ElementId, ParentElement as _, SharedString, Stateful,
-    StatefulInteractiveElement as _, Styled as _, div, prelude::FluentBuilder as _, rgb,
+    StatefulInteractiveElement as _, Styled as _, div, prelude::FluentBuilder as _,
 };
 use uuid::Uuid;
 
 use super::{Draft, Field, SettingsPanel, muted, row, section};
+use crate::theme::palette;
 use crate::view::{Shell, button};
 
 #[derive(Clone, PartialEq, Eq)]
@@ -153,7 +154,7 @@ impl Shell {
             .child(self.toggle(
                 "fullscreen-sidebar",
                 "Sidebar in page fullscreen",
-                settings.sidebar_in_page_fullscreen.unwrap_or(false),
+                settings.keeps_sidebar_in_page_fullscreen(),
                 |settings, enabled| settings.sidebar_in_page_fullscreen = Some(enabled),
                 cx,
             ));
@@ -185,7 +186,7 @@ impl Shell {
             .child(self.toggle(
                 "links-flechinha",
                 "Open external links in Flechinha",
-                settings.open_links_in_flechinha.unwrap_or(true),
+                settings.opens_links_in_flechinha(),
                 |settings, enabled| settings.open_links_in_flechinha = Some(enabled),
                 cx,
             ))
@@ -383,7 +384,7 @@ impl Shell {
         cx: &Context<Self>,
     ) -> Stateful<Div> {
         button(id, label)
-            .when(selected, |button| button.bg(rgb(0x27547b)))
+            .when(selected, |button| button.bg(palette().accent))
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 let result = this.state.borrow_mut().edit_settings(|settings| {
                     edit(settings);

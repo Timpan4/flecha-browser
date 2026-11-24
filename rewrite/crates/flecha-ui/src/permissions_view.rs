@@ -7,9 +7,10 @@ use flecha_cef::{Engine, PermissionPrompt};
 use flecha_permissions::{PermissionKind, PromptOutcome, RequestId, Snapshot};
 use gpui::{
     ClickEvent, Context, Div, ParentElement as _, StatefulInteractiveElement as _, Styled as _,
-    div, prelude::FluentBuilder as _, rgb,
+    div, prelude::FluentBuilder as _,
 };
 
+use crate::theme::palette;
 use crate::view::{Shell, button};
 use crate::{Action, Controller, dispatch};
 
@@ -179,7 +180,7 @@ impl Shell {
             .gap_1()
             .p_2()
             .text_sm()
-            .bg(rgb(0x273b46))
+            .bg(palette().surface)
             .child(div().child(format!("{} requests {kinds}", prompt.origin)))
             .when(!writable, |banner| {
                 banner.child("Saved permissions are read-only.")

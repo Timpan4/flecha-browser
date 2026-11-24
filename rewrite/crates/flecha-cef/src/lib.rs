@@ -63,12 +63,21 @@ pub enum Event {
     Closed,
     Address(String),
     Title(String),
-    Loaded { url: String, status: i32 },
-    LoadFailed { url: String, code: i32 },
+    Loaded {
+        url: String,
+        status: i32,
+    },
+    LoadFailed {
+        url: String,
+        code: i32,
+    },
     Paint,
     PaintFailed,
     Opened(Opened),
     ClosedByPage,
+    /// The page entered (`true`) or left HTML fullscreen. With Alloy-style browsers the
+    /// client makes the window transition and handles Esc ([`Engine::exit_fullscreen`]).
+    Fullscreen(bool),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -653,6 +662,19 @@ impl Engine {
             .is_some_and(|browser| browser.is_loading() != 0)
     }
 
+    /// Whether the tab's page is in HTML fullscreen, as its renderer has it now.
+    pub fn is_fullscreen(&self, tab: &TabId) -> bool {
+        self.host(tab).is_some_and(|host| host.is_fullscreen() != 0)
+    }
+
+    /// Asks the page to leave HTML fullscreen; [`Event::Fullscreen`] follows. Alloy-style
+    /// clients call this for the user's exit actions, such as Esc (`cef_browser_capi.h`).
+    pub fn exit_fullscreen(&self, tab: &TabId) {
+        if let Some(host) = self.host(tab) {
+            host.exit_fullscreen(1);
+        }
+    }
+
     /// The main frame's URL, as CEF has it now.
     pub fn url(&self, tab: &TabId) -> Option<String> {
         let frame = self.browser(tab)?.main_frame()?;
@@ -849,6 +871,7 @@ mod tests {
                 size: Some((480, 360)),
             }),
             Event::ClosedByPage => Event::ClosedByPage,
+            Event::Fullscreen(_) => Event::Fullscreen(true),
         ] {
             engine.events.borrow_mut().push_back(BrowserEvent {
                 key: retired.clone(),

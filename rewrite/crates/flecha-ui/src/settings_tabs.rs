@@ -7,12 +7,13 @@ use flecha_core::{
 use gpui::{
     ClickEvent, Context, Div, InteractiveElement as _, IntoElement as _, Keystroke, Modifiers,
     ParentElement as _, ScrollHandle, StatefulInteractiveElement as _, Styled as _, div,
-    prelude::FluentBuilder as _, px, rgb,
+    prelude::FluentBuilder as _, px,
 };
 
 use super::{SettingsPanel, muted, row};
 use crate::sidebar::tab_label;
 use crate::text_field::TextField;
+use crate::theme::palette;
 use crate::view::{Overlay, Shell, button};
 use crate::{Controller, now};
 
@@ -465,7 +466,7 @@ impl Shell {
             .flex_1()
             .min_w_0()
             .when(manager.search_focused, |field| {
-                field.border_b_1().border_color(rgb(0x73b4e4))
+                field.border_b_1().border_color(palette().accent_strong)
             })
             .child(if manager.search_focused {
                 manager.search.render("Search tabs and folders")
@@ -592,7 +593,7 @@ impl Shell {
     ) -> Div {
         let (id, title, detail, depth) = match row {
             Row::Heading(name) => {
-                return div().pt_2().text_color(rgb(0xa4b5c3)).child(name.clone());
+                return div().pt_2().text_color(palette().muted).child(name.clone());
             }
             Row::Tab(id, depth) => {
                 let Some(tab) = core.tab(id) else {
@@ -626,9 +627,9 @@ impl Shell {
                 .py_1()
                 .rounded_md()
                 .cursor_pointer()
-                .hover(|row| row.bg(rgb(0x37545e)))
+                .hover(|row| row.bg(palette().hover))
                 .when(manager.selected.contains(&item), |row| {
-                    row.bg(rgb(0x27547b))
+                    row.bg(palette().accent)
                 })
                 .child(div().flex_1().min_w_0().truncate().child(title))
                 .child(muted(detail).min_w_0().truncate().text_xs())

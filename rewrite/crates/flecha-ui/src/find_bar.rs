@@ -2,10 +2,11 @@ use flecha_cef::{BrowserKey, FindEvent, FindResult};
 use gpui::{
     ClickEvent, Context, Div, InteractiveElement as _, Keystroke, MouseButton, MouseDownEvent,
     MouseUpEvent, ParentElement as _, StatefulInteractiveElement as _, Styled as _, Window, div,
-    px, rgb,
+    px,
 };
 
 use crate::text_field::TextField;
+use crate::theme::palette;
 use crate::view::{Shell, button};
 
 pub(crate) struct FindSession {
@@ -181,8 +182,8 @@ impl Shell {
             .p_1()
             .rounded_lg()
             .border_1()
-            .border_color(rgb(0x405863))
-            .bg(rgb(0x1d2a32))
+            .border_color(palette().border)
+            .bg(palette().panel)
             .shadow_lg()
             .text_sm()
             .on_any_mouse_down(|_: &MouseDownEvent, _, cx| cx.stop_propagation())
@@ -213,7 +214,7 @@ impl Shell {
                 div()
                     .min_w(px(36.))
                     .text_xs()
-                    .text_color(rgb(0xa4b5c3))
+                    .text_color(palette().muted)
                     .child(find.bar.count()),
             )
             .child(step("find-previous", "↑", false))

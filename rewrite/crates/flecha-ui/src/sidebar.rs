@@ -9,6 +9,7 @@ use uuid::Uuid;
 use crate::command_bar::Command;
 use crate::shortcuts::Navigation;
 use crate::text_field::TextField;
+use crate::theme::palette;
 use crate::view::{Overlay, Shell, button, overlay_panel};
 use crate::{Action, Controller, dispatch, now};
 
@@ -149,7 +150,7 @@ impl Shell {
                 .left_2()
                 .occlude()
                 .rounded_md()
-                .bg(rgb(0x202a30))
+                .bg(palette().sidebar)
                 .flex()
                 .items_center()
                 .child(self.action_button("sidebar-toggle", "Show sidebar", toggle, cx))
@@ -180,11 +181,11 @@ impl Shell {
                         .max_w(px(120.))
                         .truncate()
                         .flex_shrink_0()
-                        .bg(rgb(if active == Some(id) {
-                            0x37545e
+                        .bg(if active == Some(id) {
+                            palette().hover
                         } else {
-                            0x26343d
-                        }))
+                            palette().surface
+                        })
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                             dispatch(&this.state, &this.id, action.clone(), cx);
                         })),
@@ -288,8 +289,8 @@ impl Shell {
                     .py_1()
                     .rounded_md()
                     .cursor_pointer()
-                    .when(selected, |row| row.bg(rgb(0x304855)))
-                    .hover(|row| row.bg(rgb(0x37545e)))
+                    .when(selected, |row| row.bg(palette().row))
+                    .hover(|row| row.bg(palette().hover))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         dispatch(&this.state, &this.id, action.clone(), cx);
                     }))
@@ -312,11 +313,7 @@ impl Shell {
             .min_h_0()
             .p_2()
             .gap_2()
-            .bg(rgb(if incognito {
-                crate::incognito::SIDEBAR
-            } else {
-                0x202a30
-            }))
+            .bg(palette().sidebar)
             .text_sm()
             .when(incognito, |sidebar| {
                 sidebar.child(
@@ -373,7 +370,7 @@ impl Shell {
                     div()
                         .px_2()
                         .text_xs()
-                        .text_color(rgb(0xa4b5c3))
+                        .text_color(palette().muted)
                         .child("Loading…"),
                 )
             })
@@ -383,7 +380,7 @@ impl Shell {
                     address.unwrap_or_else(|| "Address or search".into()),
                 )
                 .truncate()
-                .bg(rgb(0x26343d))
+                .bg(palette().surface)
                 .flex_shrink_0()
                 .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                     this.open_command(Command::EditLocation, window, cx);
@@ -417,7 +414,7 @@ impl Shell {
                     .flex_shrink_0()
                     .gap_1()
                     .border_t_1()
-                    .border_color(rgb(0x30404a))
+                    .border_color(palette().divider)
                     .pt_1()
                     .when(!incognito, |row| {
                         row.child(button("show-history", "History").on_click(cx.listener(
@@ -432,7 +429,7 @@ impl Shell {
                                         .px_1()
                                         .text_xs()
                                         .rounded_md()
-                                        .bg(rgb(0x37545e))
+                                        .bg(palette().hover)
                                         .child(downloads.to_string()),
                                 )
                             })
@@ -519,7 +516,7 @@ impl Shell {
     ) -> gpui::Stateful<Div> {
         button(id, label)
             .text_xs()
-            .text_color(rgb(0xa4b5c3))
+            .text_color(palette().muted)
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 dispatch(&this.state, &this.id, Action::Sidebar(action.clone()), cx);
             }))
@@ -629,7 +626,7 @@ impl Shell {
             .min_w_0()
             .h(px(38.))
             .rounded_md()
-            .when(selected, |row| row.bg(rgb(0x37545e)))
+            .when(selected, |row| row.bg(palette().hover))
             .child(
                 div()
                     .id(format!("tab-{}", id.as_str()))
@@ -642,7 +639,7 @@ impl Shell {
                     .px_2()
                     .cursor_pointer()
                     .rounded_md()
-                    .hover(|row| row.bg(rgb(0x304855)))
+                    .hover(|row| row.bg(palette().row))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         dispatch(&this.state, &this.id, select.clone(), cx);
                     }))
@@ -651,7 +648,7 @@ impl Shell {
                         div()
                             .text_xs()
                             .truncate()
-                            .text_color(rgb(0xa4b5c3))
+                            .text_color(palette().muted)
                             .child(address),
                     ),
             );
@@ -817,7 +814,7 @@ fn section(label: &'static str) -> Div {
         .px_2()
         .py_1()
         .text_xs()
-        .text_color(rgb(0xa4b5c3))
+        .text_color(palette().muted)
         .child(label)
 }
 

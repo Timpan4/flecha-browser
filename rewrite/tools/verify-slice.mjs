@@ -19,7 +19,7 @@ const stepTimeoutMs = 10_000;
 const shippingTrace = readFileSync(new URL('./slice-ts-replay.jsonl', import.meta.url), 'utf8')
   .trim().split('\n').map(line => JSON.parse(line));
 
-assert(['slice', 'open', 'focus', 'popups', 'adblock', 'incognito', 'break-restore', 'clipboard'].includes(mode), 'unknown slice check');
+assert(['slice', 'open', 'focus', 'popups', 'adblock', 'incognito', 'fullscreen', 'break-restore', 'clipboard'].includes(mode), 'unknown slice check');
 
 const easylist = '[Adblock Plus 2.0]\n! Title: EasyList\n/fixture-ad$xmlhttprequest\n';
 const easyprivacy = '[Adblock Plus 2.0]\n! Title: EasyPrivacy\n/fixture-tracker$xmlhttprequest\n';
@@ -197,7 +197,10 @@ function paneMismatch(path, geometry, ratio, colors) {
 
   const pixel = (x, y) => pixels.readUIntBE((y * width + x) * 3, 3);
   const [left, right] = colors.map(color => Number.parseInt(color.slice(1), 16));
-  const sidebar = 0x202a30;
+  // The Dark and Light palettes' sidebars (flecha-ui/src/theme.rs). The default
+  // System theme follows the desktop's appearance, which GPUI reads as Light on
+  // this session's private bus, where no desktop portal answers.
+  const sidebars = [0x202a30, 0xe4e9ed];
   // The sidebar's first row starts below the command bar. Its padding
   // leaves this entire row solid, so both chrome edges come from the
   // screenshot independently of the page layout.
@@ -207,9 +210,11 @@ function paneMismatch(path, geometry, ratio, colors) {
   const bottom = Math.min(height, windowY + windowHeight);
   let top = Math.max(0, windowY);
 
-  while (top < bottom && pixel(origin, top) !== sidebar) top++;
+  while (top < bottom && !sidebars.includes(pixel(origin, top))) top++;
 
   if (top >= bottom) return 'could not locate the sidebar';
+
+  const sidebar = pixel(origin, top);
 
   let edge = origin;
 
@@ -361,15 +366,24 @@ async function nativeContextMenu(app) {
   ], { encoding: 'utf8' }).trim().split(' ').map(Number);
 
   assert(Number.isFinite(x) && Number.isFinite(y), 'missing page marker');
+
+  const histogram = path => execFileSync('magick', [path, '-format', '%c', 'histogram:info:'], { encoding: 'utf8' });
+  // The menu's border (theme.rs border, Dark or Light): Theme::System follows Xvfb's Light
+  // appearance. Only a colour the window did not already show marks the menu.
+  const shownBefore = histogram(join(out, 'open.png'));
+  const borders = ['#405863', '#B4C2CC'].filter(color => !shownBefore.includes(color));
+
+  assert(borders.length, 'the window already shows both menu border colours');
   execFileSync(x11Driver, ['right-click', x + 1, y + 1]);
   await app.present();
-  await capture('page-context-menu', ['#405863']);
+  await captureUntil('page-context-menu', 'root', path =>
+    borders.some(color => histogram(path).includes(color)) ? undefined : 'the menu border is missing');
   execFileSync(x11Driver, ['key', 'Escape']);
   await app.present();
   await captureUntil('page-context-menu-dismissed', 'root', path => {
-    const colors = execFileSync('magick', [path, '-format', '%c', 'histogram:info:'], { encoding: 'utf8' });
+    const colors = histogram(path);
 
-    if (colors.includes('#405863')) return 'menu border is still visible';
+    if (borders.some(color => colors.includes(color))) return 'menu border is still visible';
 
     if (!colors.includes('#FFCC49')) return 'page is missing';
   });
@@ -482,7 +496,13 @@ async function managerFocus(app, left, right) {
 
   // The fifth tab in the centered GPUI Settings panel on the Xvfb fixture.
   execFileSync(x11Driver, ['click', Math.round(x + width / 2 + 5), y + 105]);
-  await capture('tabs-spaces-manager', ['#73B4E4']);
+  // The selected Settings tab's accent (theme.rs accent_strong), Dark or Light: Theme::System
+  // follows Xvfb's Light appearance.
+  await captureUntil('tabs-spaces-manager', 'root', path => {
+    const histogram = execFileSync('magick', [path, '-format', '%c', 'histogram:info:'], { encoding: 'utf8' });
+
+    return ['#73B4E4', '#1F6FB5'].some(color => histogram.includes(color)) ? undefined : 'the Tabs & Spaces tab is not selected';
+  });
 
   execFileSync(x11Driver, ['key', 'q']);
   execFileSync(x11Driver, ['chord', 'Control_L', 'a']);
@@ -636,6 +656,55 @@ async function openTab(app, path) {
   await app.loaded(tab, path.split('?')[0], after);
 
   return tab;
+}
+
+// HTML fullscreen: the page alone in its window without the sidebar, which comes back when Esc
+// or a tab switch ends it. Xvfb runs no window manager, so the native fullscreen request has
+// no effect here and the window keeps its size.
+async function pageFullscreen(app, main, other) {
+  const sidebars = ['#202A30', '#E4E9ED'];
+  const page = ['#147A70', '#FFCC49'];
+  const tab = await openTab(app, '/fullscreen');
+  const histogram = path => execFileSync('magick', [path, '-format', '%c', 'histogram:info:'], { encoding: 'utf8' });
+  const sidebarShown = path => sidebars.some(color => histogram(path).includes(color));
+
+  const enter = async label => {
+    const after = app.events.length;
+
+    await clickElement(app, tab, '#full', page, label, main);
+    await app.wait(`${label}: the page to enter fullscreen`, event =>
+      event.type === 'fullscreen' && event.tab === tab && event.fullscreen, after);
+    await app.present(main);
+    await captureUntil(`${label}-shown`, 'root', path => {
+      if (sidebarShown(path)) return 'the sidebar stayed beside the fullscreen page';
+
+      return page.every(color => histogram(path).includes(color)) ? undefined : 'the fullscreen page is not on screen';
+    });
+  };
+
+  const ended = async (step, after) => {
+    await app.wait(`${step} to end fullscreen`, event =>
+      event.type === 'fullscreen' && event.tab === tab && !event.fullscreen, after);
+    await app.present(main);
+    await captureUntil(`fullscreen-${step.replaceAll(/\W/g, '-')}`, 'root', path =>
+      sidebarShown(path) ? undefined : 'the sidebar did not come back');
+  };
+
+  await enter('fullscreen');
+  pass('a page entered HTML fullscreen through CEF and the window showed it without the sidebar');
+
+  let after = app.events.length;
+
+  execFileSync(x11Driver, ['key', 'Escape']);
+  await ended('Esc', after);
+  pass('Esc asked the page to leave fullscreen and the sidebar came back');
+
+  await enter('fullscreen-again');
+  after = app.events.length;
+  await app.command('select', { tab: other });
+  await ended('a tab switch', after);
+  pass('switching tabs ended the page\'s fullscreen and the sidebar came back');
+  await app.quit();
 }
 
 // Incognito windows: one in-memory cookie jar per session, kept apart from the regular one,
@@ -862,18 +931,40 @@ async function incognitoChecks(app, main) {
   relaunch([]);
   assert.equal(active(await reopened('a second launch', reopenedAt)).activeTabId, listTab, 'a second launch lost the regular tab');
   await closeRegular();
+  pass('Ctrl+N and a second launch each brought the regular window back beside the incognito one');
+
+  // A second launch's address is an external link: with "Open external links in Flechinha"
+  // on, its default, it opens in a Flechinha on the regular Space and leaves the regular
+  // window closed.
+  await closeRegular();
   const relaunchUrl = `${base}/open?relaunched=${run}`;
-  reopenedAt = app.events.length;
+  const linkedAt = app.events.length;
   relaunch(['--open', relaunchUrl]);
-  const withAddress = await reopened('a second launch with --open', reopenedAt);
-  const relaunchedTab = active(withAddress).activeTabId;
-  assert.notEqual(relaunchedTab, listTab, 'the second launch\'s address did not open a tab');
-  await app.wait('the second launch\'s address', event =>
-    event.type === 'loaded' && event.tab === relaunchedTab && event.url === relaunchUrl, reopenedAt);
-  pass('Ctrl+N, a second launch and a second launch with --open each brought the regular window back beside the incognito one');
+
+  const linked = await poll('the second launch\'s Flechinha', async () => {
+    const state = await app.command('snapshot');
+
+    return state.flechinhas.length === 1 && state.nativeWindows.includes(state.flechinhas[0].window) && state;
+  });
+
+  const [{ window: linkMini, tab: linkPage }] = linked.flechinhas;
+  assert(!linked.nativeWindows.includes(main), 'the second launch\'s address reopened the regular window');
+  await app.wait('the second launch\'s address in its Flechinha', event =>
+    event.type === 'loaded' && event.tab === linkPage && event.url === relaunchUrl, linkedAt);
+  const { browsers: linkBrowsers } = await app.command('snapshot');
+  const linkBrowser = linkBrowsers.find(page => page.tab === linkPage);
+  assert(linkBrowser?.owner?.kind === 'flechinha' && !String(linkBrowser.partition).startsWith('incognito-'),
+    `the link's Flechinha left the regular request contexts: ${JSON.stringify(linkBrowsers)}`);
+  await privateKept('a second launch with --open');
+  await app.command('close_window', { window: linkMini });
+  await poll('the link\'s Flechinha to close', async () => {
+    const state = await app.command('snapshot');
+
+    return !state.nativeWindows.includes(linkMini) && state;
+  });
+  pass('a second launch with --open showed its address in a Flechinha on the regular Space, beside the incognito window');
 
   // Closing the last window of either kind quits.
-  await closeRegular();
   const beforeQuit = app.events.length;
 
   await app.command('close_window', { window: second.window });
@@ -1243,6 +1334,8 @@ async function verifySlice() {
     await popupChecks(app);
   } else if (mode === 'incognito') {
     await incognitoChecks(app, main);
+  } else if (mode === 'fullscreen') {
+    await pageFullscreen(app, main, left);
   } else if (mode !== 'open') {
     const publicUrl = base.replace('127.0.0.1', 'localtest.me') + '/open';
     const attempted = await app.command('peek', { url: publicUrl });

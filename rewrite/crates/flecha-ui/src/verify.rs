@@ -464,6 +464,9 @@ pub(super) fn event(message: &BrowserEvent) {
             "size": opened.size,
         }),
         Event::ClosedByPage => json!({ "type": "closed_by_page", "tab": tab }),
+        Event::Fullscreen(fullscreen) => {
+            json!({ "type": "fullscreen", "tab": tab, "fullscreen": fullscreen })
+        }
         Event::PaintFailed => return,
     };
     value["generation"] = json!(message.key.generation());

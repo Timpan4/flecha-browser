@@ -12,9 +12,10 @@ use gpui::{
     App, ClickEvent, Context, Div, FocusHandle, InteractiveElement as _, IntoElement, KeyUpEvent,
     MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _,
     Pixels, Render, RenderImage, ScrollEvent, StatefulInteractiveElement as _, Styled as _,
-    Subscription, Window, canvas, deferred, div, px, relative, rgb,
+    Subscription, Window, canvas, deferred, div, px, relative,
 };
 
+use crate::theme::{Palette, palette};
 use crate::{Action, Shared, dispatch};
 use crate::{
     command_bar::{CommandBar, SuggestionClient},
@@ -65,7 +66,9 @@ pub(crate) struct Shell {
     pub(crate) consumed_keys: BTreeSet<String>,
     images: BTreeMap<TabId, Vec<Arc<RenderImage>>>,
     title: String,
+    native_fullscreen: crate::fullscreen::NativeFullscreen,
     _activation: Subscription,
+    _appearance: Subscription,
 }
 
 /// The first window's content until CEF has started and a main window takes it over.
@@ -100,6 +103,8 @@ impl Shell {
             }
             let _ = this.sync_page_focus(window, cx);
         });
+        // Theme::System follows the desktop's light or dark appearance as it changes.
+        let appearance = cx.observe_window_appearance(window, |_, _, cx| cx.notify());
         Self {
             state,
             id,
@@ -115,7 +120,9 @@ impl Shell {
             consumed_keys: BTreeSet::new(),
             images: BTreeMap::new(),
             title: String::new(),
+            native_fullscreen: Default::default(),
             _activation: activation,
+            _appearance: appearance,
         }
     }
 
@@ -247,6 +254,40 @@ impl Shell {
         focused
     }
 
+    /// Records where this window shows pages, so an agent's background page takes that size
+    /// while the window shows none.
+    fn page_area_probe(&self) -> impl IntoElement {
+        let (state, id) = (self.state.clone(), self.id.clone());
+        canvas(
+            |_, _, _| (),
+            move |area, (), window, cx| {
+                let screen = window
+                    .display(cx)
+                    .map_or(window.bounds(), |display| display.bounds());
+                let viewport = Viewport::new(area, window.bounds(), screen, window.scale_factor());
+                let (state, id) = (state.clone(), id.clone());
+                cx.defer(move |_| state.borrow_mut().page_area(id, viewport));
+            },
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+    }
+
+    /// Puts the window in native fullscreen while its page is in HTML fullscreen, and takes it
+    /// out afterwards unless the user had made it fullscreen first. GPUI redraws a window whose
+    /// bounds change, as a native fullscreen change does, so a late entry is undone here too.
+    fn sync_native_fullscreen(&mut self, page_fullscreen: bool, window: &mut Window) {
+        let (next, toggle) = self
+            .native_fullscreen
+            .next(page_fullscreen, window.is_fullscreen());
+        self.native_fullscreen = next;
+        if toggle {
+            window.toggle_fullscreen();
+        }
+    }
+
     pub(crate) fn page_key(
         &self,
         focused: Option<BrowserKey>,
@@ -293,7 +334,7 @@ impl Shell {
             .relative()
             .size_full()
             .overflow_hidden()
-            .bg(rgb(0x171e22))
+            .bg(palette().page)
             .child(surface(frames.view, frames.popup))
             .child(
                 canvas(|_, _, _| (), {
@@ -400,6 +441,9 @@ impl Shell {
 
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let incognito = self.state.borrow().model.is_incognito(&self.id);
+        let theme = self.state.borrow().model.core.settings.theme;
+        crate::theme::draw_with(Palette::resolve(theme, window.appearance(), incognito));
         self.bindings
             .refresh(&self.state.borrow().model.core.settings.keybindings);
         self.sync_command_preferences(cx);
@@ -412,18 +456,13 @@ impl Render for Shell {
             window.set_window_title(&title);
             self.title = title;
         }
-        let incognito = self.state.borrow().model.is_incognito(&self.id);
         let mut main = div()
             .relative()
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(if incognito {
-                crate::incognito::BACKGROUND
-            } else {
-                0x161c20
-            }))
-            .text_color(rgb(0xe2edf1))
+            .bg(palette().background)
+            .text_color(palette().text)
             .on_key_down(cx.listener(|this, event, window, cx| this.key(event, window, cx)))
             .on_key_up(cx.listener(|this, event: &KeyUpEvent, window, cx| {
                 if this.consumed_keys.remove(&event.keystroke.key) || this.overlay.is_open() {
@@ -436,8 +475,23 @@ impl Render for Shell {
             .child(div().absolute().size_0().track_focus(&self.page_focus))
             .child(div().absolute().size_0().track_focus(&self.focus));
         let mut images = BTreeMap::new();
+        let fullscreen = self.state.borrow().fullscreen_pane(&self.id);
+        self.sync_native_fullscreen(fullscreen.is_some(), window);
         let state = self.state.borrow();
-        if let Some(popup) = state.model.popups.get(&self.id) {
+        if let Some((owner, tab)) = fullscreen.clone() {
+            let mut body = div().flex_1().min_h_0().relative().flex();
+            if let Some(core) = state.model.state(&self.id)
+                && let Some(current) = core.window(&self.id)
+                && crate::fullscreen::keeps_sidebar(
+                    &state.model.core.settings,
+                    core.sidebar_visible(&self.id),
+                )
+            {
+                body = body.child(self.sidebar(&state, current, cx));
+            }
+            let page = self.pane(owner, tab, &mut images, cx);
+            main = main.child(body.child(div().flex_1().min_w_0().min_h_0().child(page)));
+        } else if let Some(popup) = state.model.popups.get(&self.id) {
             main = main
                 .child(
                     div()
@@ -496,7 +550,13 @@ impl Render for Shell {
                 };
                 pages = pages.child(div().h_full().w(relative(width)).child(pane));
             }
-            let mut page_area = div().relative().flex_1().min_h_0().min_w_0().child(pages);
+            let mut page_area = div()
+                .relative()
+                .flex_1()
+                .min_h_0()
+                .min_w_0()
+                .child(pages)
+                .child(self.page_area_probe());
             if let Some(peek) = state.model.peeks.get(&self.id) {
                 page_area = page_area.child(deferred(
                     div()
@@ -510,7 +570,7 @@ impl Render for Shell {
                         .occlude()
                         .flex()
                         .flex_col()
-                        .bg(rgb(0x26333a))
+                        .bg(palette().surface)
                         .child(
                             div()
                                 .h(px(40.))
@@ -553,7 +613,7 @@ impl Render for Shell {
         if let Some(status) = state.status_for(&self.id) {
             main = main.child(div().p_2().child(status.to_owned()));
         }
-        if state.model.peeks.contains_key(&self.id) {
+        if fullscreen.is_none() && state.model.peeks.contains_key(&self.id) {
             main = main.child(
                 div()
                     .absolute()
@@ -561,7 +621,7 @@ impl Render for Shell {
                     .left_0()
                     .size_full()
                     .occlude()
-                    .bg(gpui::rgba(0x00000088))
+                    .bg(palette().backdrop)
                     .on_any_mouse_down(cx.listener(|this, _: &MouseDownEvent, _, cx| {
                         dispatch(&this.state, &this.id, Action::ClosePeek, cx);
                         cx.stop_propagation();
@@ -597,9 +657,7 @@ impl Render for Shell {
                     .absolute()
                     .inset_0()
                     .occlude()
-                    .when(!site_controls, |backdrop| {
-                        backdrop.bg(gpui::rgba(0x00000088))
-                    })
+                    .when(!site_controls, |backdrop| backdrop.bg(palette().backdrop))
                     .child(div().absolute().inset_0().on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, _: &MouseDownEvent, window, cx| {
@@ -655,8 +713,8 @@ pub(crate) fn overlay_panel() -> Div {
         .text_sm()
         .rounded_xl()
         .border_1()
-        .border_color(rgb(0x405863))
-        .bg(rgb(0x1d2a32))
+        .border_color(palette().border)
+        .bg(palette().panel)
         .shadow_lg()
 }
 
@@ -670,6 +728,6 @@ pub(crate) fn button(
         .py_1()
         .rounded_md()
         .cursor_pointer()
-        .hover(|style| style.bg(rgb(0x37545e)))
+        .hover(|style| style.bg(palette().hover))
         .child(name.into())
 }
