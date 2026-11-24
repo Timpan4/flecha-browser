@@ -1,6 +1,6 @@
 use url::{Host, Url};
 
-use super::{decode_component, default_ignorables, encode_component};
+use super::{decode_component, default_ignorables, encode_component, rejected_alias_argument};
 use crate::SearchEngine;
 use crate::input_text::{is_js_whitespace, trim_input};
 
@@ -16,7 +16,7 @@ pub fn resolve_input(raw: &str, engine: SearchEngine) -> InputResolution {
     if let Some(address) = web_address(input) {
         return InputResolution::Navigate(address);
     }
-    if input.is_empty() || rejected_address(input) {
+    if input.is_empty() || rejected_address(input) || rejected_alias_argument(input) {
         return InputResolution::Invalid;
     }
     InputResolution::Search(engine.search_url(input))
@@ -33,10 +33,20 @@ pub fn pinnable_address(raw: &str) -> Option<String> {
 
 fn has_credentials(input: &str) -> bool {
     let input = trim_input(input);
-    let Some((userinfo, destination)) = input.split_once('@') else {
+    if !input.contains('@') {
+        return false;
+    }
+    // Ignore padding around the separator for privacy classification only.
+    let Some(separator) = re!(
+        r"[\p{White_Space}\p{Cf}\p{Default_Ignorable_Code_Point}]*",
+        r"@[\p{White_Space}\p{Cf}\p{Default_Ignorable_Code_Point}]*"
+    )
+    .find(input) else {
         return false;
     };
-    if userinfo.is_empty() || destination.starts_with(is_js_whitespace) {
+    let userinfo = &input[..separator.start()];
+    let destination = &input[separator.end()..];
+    if userinfo.is_empty() {
         return false;
     }
     let has_tail = re!(r"^[^", js_space_chars!(), r"/?#\\]+[/?#\\]").is_match(destination);
@@ -47,11 +57,50 @@ fn has_credentials(input: &str) -> bool {
                 || trim_input(password).contains(is_js_whitespace)
         }
         None => {
-            !userinfo.contains(['/', '?', '#'])
-                && (has_tail || !userinfo.contains(is_js_whitespace))
+            if userinfo.contains(['/', '?', '#']) {
+                return false;
+            }
+            let padded = separator
+                .as_str()
+                .chars()
+                .any(|ch| ch != '\u{FEFF}' && is_js_whitespace(ch));
+            if padded {
+                (has_tail || !userinfo.contains(is_js_whitespace))
+                    && (starts_with_host(destination) || has_single_label_host_tail(destination))
+            } else {
+                has_tail || !userinfo.contains(is_js_whitespace)
+            }
         }
         _ => false,
     }
+}
+
+fn has_single_label_host_tail(destination: &str) -> bool {
+    let Some(captures) = re!(
+        r"^([^",
+        js_space_chars!(),
+        r"/?#\\]+)[/?#\\][^",
+        js_space_chars!(),
+        r"]"
+    )
+    .captures(destination) else {
+        return false;
+    };
+    let host = captures[1].trim_end_matches('.');
+    re!(r"(?i-u:^[a-z](?:[a-z0-9-]*[a-z0-9])?$)").is_match(host)
+}
+
+fn starts_with_host(destination: &str) -> bool {
+    let Some(authority) = re!(r"\A[^\p{White_Space}/?#\\]+").find(destination) else {
+        return false;
+    };
+    let authority = authority.as_str();
+    let (host, port) = authority.split_once(':').unwrap_or((authority, ""));
+    let host = host.trim_end_matches('.');
+    authority.starts_with('[')
+        || host.eq_ignore_ascii_case("localhost")
+        || host.contains(['.', '。', '．', '｡'])
+        || (!host.is_empty() && !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 pub fn rejected_address(raw: &str) -> bool {

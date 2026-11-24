@@ -30,6 +30,7 @@ anyhow = "1"
 cef = { path = "target/spike1-src/cef-rs/cef", default-features = false }
 flecha-cef = { path = "crates/flecha-cef" }
 flecha-core = { path = "crates/flecha-core" }
+flecha-history = { path = "crates/flecha-history" }
 flecha-services = { path = "crates/flecha-services" }
 flecha-surface = { path = "crates/flecha-surface" }
 flecha-ui = { path = "crates/flecha-ui" }

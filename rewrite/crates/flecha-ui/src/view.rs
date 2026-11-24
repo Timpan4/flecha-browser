@@ -1,44 +1,55 @@
 use std::cell::Cell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
 use flecha_cef::{BrowserKey, Owner, Viewport};
-use flecha_core::{
-    TabId, WindowId,
-    suggestions::{self, InputResolution, SuggestionAction},
-};
+use flecha_core::{FolderId, TabId, WindowId};
 use flecha_surface::{Frame, input, surface};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, AppContext as _, ClickEvent, ClipboardItem, Context, Div, Entity, FocusHandle,
-    InteractiveElement as _, IntoElement, KeyDownEvent, KeyUpEvent, MouseButton, MouseDownEvent,
-    MouseExitEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Render, RenderImage,
-    ScrollEvent, StatefulInteractiveElement as _, Styled as _, Subscription, Window, canvas,
-    deferred, div, px, relative, rgb,
+    App, AppContext as _, ClickEvent, Context, Div, Entity, FocusHandle, InteractiveElement as _,
+    IntoElement, KeyUpEvent, MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent,
+    MouseUpEvent, ParentElement as _, Pixels, Render, RenderImage, ScrollEvent,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Window, canvas, deferred, div, px,
+    relative, rgb,
 };
 
-use crate::{Action, Shared, dispatch, now};
+use crate::{Action, Shared, dispatch};
+use crate::{
+    command_bar::CommandBar, history_view::HistoryPanel, shortcuts::Bindings, text_field::TextField,
+};
 
 /// A popup's read-only address bar, as tall as the Peek toolbar.
 pub(crate) const POPUP_BAR_HEIGHT: Pixels = px(40.);
 
-#[derive(Clone, Copy)]
-enum Command {
-    Open,
-    Split,
-    Peek,
+#[derive(Default)]
+pub(crate) enum Overlay {
+    #[default]
+    None,
+    Command(CommandBar),
+    History(HistoryPanel),
+    Archive(TextField),
+    Folder(Option<FolderId>, TextField),
+    TabActions(TabId),
+}
+
+impl Overlay {
+    pub(crate) fn is_open(&self) -> bool {
+        !matches!(self, Self::None)
+    }
 }
 
 pub(crate) struct Shell {
-    state: Shared,
-    id: WindowId,
+    pub(crate) state: Shared,
+    pub(crate) id: WindowId,
     focus: FocusHandle,
     page_focus: FocusHandle,
     selected_pane: Option<(Owner, TabId)>,
     focused_browser: Option<BrowserKey>,
-    input: String,
-    command: Command,
+    pub(crate) overlay: Overlay,
+    pub(crate) bindings: Bindings,
+    pub(crate) consumed_keys: BTreeSet<String>,
     images: BTreeMap<TabId, Vec<Arc<RenderImage>>>,
     title: String,
     _activation: Subscription,
@@ -48,11 +59,14 @@ impl Shell {
     pub fn new(state: Shared, id: WindowId, window: &mut Window, cx: &mut App) -> Entity<Self> {
         let focus = cx.focus_handle();
         let page_focus = cx.focus_handle();
+        let bindings = Bindings::new(&state.borrow().model.core.settings.keybindings);
         focus.focus(window, cx);
         cx.new(|cx| {
             let activation = cx.observe_window_activation(window, |this: &mut Self, window, cx| {
                 if window.is_window_active() {
                     this.state.borrow_mut().model.core.focus_window(&this.id);
+                } else {
+                    this.consumed_keys.clear();
                 }
                 let _ = this.sync_page_focus(window, cx);
             });
@@ -63,8 +77,9 @@ impl Shell {
                 page_focus,
                 selected_pane: None,
                 focused_browser: None,
-                input: String::new(),
-                command: Command::Open,
+                overlay: Overlay::None,
+                bindings,
+                consumed_keys: BTreeSet::new(),
                 images: BTreeMap::new(),
                 title: String::new(),
                 _activation: activation,
@@ -72,7 +87,7 @@ impl Shell {
         })
     }
 
-    fn action_button(
+    pub(crate) fn action_button(
         &self,
         id: &'static str,
         label: &'static str,
@@ -84,139 +99,49 @@ impl Shell {
         }))
     }
 
-    fn choose(&mut self, command: Command, window: &mut Window, cx: &mut Context<Self>) {
-        self.command = command;
+    pub(crate) fn show_overlay(
+        &mut self,
+        overlay: Overlay,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.overlay = overlay;
         self.focus.focus(window, cx);
+        let _ = self.sync_page_focus(window, cx);
         cx.notify();
     }
 
-    fn submit(&mut self, cx: &mut Context<Self>) {
-        let input = std::mem::take(&mut self.input);
-        let (local, resolved) = {
-            let state = self.state.borrow();
-            let core = &state.model.core;
-            let current = state
-                .model
-                .active(&self.id)
-                .and_then(|id| core.tab(id))
-                .map(|tab| tab.url.as_str());
-            let local = suggestions::developer_suggestions(
-                &input,
-                current,
-                &core.settings.environments,
-                now(),
-            )
-            .into_iter()
-            .next()
-            .map(|suggestion| suggestion.action);
-            let private = suggestions::contains_private_jwt(&input);
-            let local =
-                local.filter(|action| !private || matches!(action, SuggestionAction::Copy(_)));
-            let resolved = if local.is_none() && !private {
-                suggestions::resolve_input(&input, core.settings.search_engine)
-            } else {
-                InputResolution::Invalid
-            };
-            (local, resolved)
-        };
-        let url = match (local, resolved) {
-            (Some(SuggestionAction::Copy(text)), _) => {
-                cx.write_to_clipboard(ClipboardItem::new_string(text));
-                cx.notify();
-                return;
+    pub(crate) fn dismiss_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.overlay.is_open() {
+            self.overlay = Overlay::None;
+            if self.selected_pane.is_some() {
+                self.page_focus.focus(window, cx);
             }
-            (Some(SuggestionAction::Open(url)), _)
-            | (_, InputResolution::Navigate(url) | InputResolution::Search(url)) => url,
-            _ => {
-                cx.notify();
-                return;
-            }
-        };
-        let action = match self.command {
-            Command::Open => Action::Open(url),
-            Command::Split => Action::SplitNew(url),
-            Command::Peek => Action::Peek(url),
-        };
-        self.command = Command::Open;
+            let _ = self.sync_page_focus(window, cx);
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn navigate_from_overlay(
+        &mut self,
+        action: Action,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dismiss_overlay(window, cx);
+        if !matches!(action, Action::Peek(_))
+            && self.state.borrow().model.peeks.contains_key(&self.id)
+        {
+            dispatch(&self.state, &self.id, Action::ClosePeek, cx);
+        }
         dispatch(&self.state, &self.id, action, cx);
     }
 
-    fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let focused = self.sync_page_focus(window, cx);
-        let stroke = &event.keystroke;
-        let shortcut = if cfg!(target_os = "macos") {
-            stroke.modifiers.platform
-        } else {
-            stroke.modifiers.control
-        };
-        if shortcut {
-            match stroke.key.as_str() {
-                "w" => dispatch(&self.state, &self.id, Action::Close, cx),
-                "o" if self.state.borrow().model.flechinhas.contains_key(&self.id) => {
-                    dispatch(&self.state, &self.id, Action::Return, cx);
-                }
-                "o" if self.state.borrow().model.peeks.contains_key(&self.id) => {
-                    dispatch(&self.state, &self.id, Action::Promote, cx);
-                }
-                // Only a Flecha window has a command bar.
-                "l" | "t" if self.state.borrow().model.core.window(&self.id).is_some() => {
-                    self.choose(Command::Open, window, cx);
-                }
-                "q" => dispatch(&self.state, &self.id, Action::Quit, cx),
-                "v" if self.focus.is_focused(window) => {
-                    if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-                        self.input.push_str(&text);
-                        cx.notify();
-                    }
-                }
-                "a" if self.focus.is_focused(window) => {
-                    self.input.clear();
-                    cx.notify();
-                }
-                _ => {
-                    self.page_key(
-                        focused,
-                        stroke,
-                        false,
-                        event.is_held,
-                        event.prefer_character_input,
-                    );
-                    return;
-                }
-            }
-        } else if stroke.key == "escape" && self.state.borrow().model.peeks.contains_key(&self.id) {
-            dispatch(&self.state, &self.id, Action::ClosePeek, cx);
-            self.input.clear();
-        } else if self.focus.is_focused(window) {
-            match stroke.key.as_str() {
-                "enter" => self.submit(cx),
-                "backspace" => {
-                    self.input.pop();
-                    cx.notify();
-                }
-                _ => {
-                    if let Some(text) = &stroke.key_char {
-                        self.input.push_str(text);
-                        cx.notify();
-                    } else {
-                        return;
-                    }
-                }
-            }
-        } else {
-            self.page_key(
-                focused,
-                stroke,
-                false,
-                event.is_held,
-                event.prefer_character_input,
-            );
-            return;
-        }
-        cx.stop_propagation();
-    }
-
-    fn sync_page_focus(&mut self, window: &mut Window, cx: &mut App) -> Option<BrowserKey> {
+    pub(crate) fn sync_page_focus(
+        &mut self,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<BrowserKey> {
         let state = self.state.borrow();
         let pane = state.model.keyboard_pane(&self.id);
         let selection = pane
@@ -224,7 +149,7 @@ impl Shell {
             .map(|(owner, tab)| (owner.clone(), (*tab).clone()));
         if self.selected_pane != selection {
             self.selected_pane = selection;
-            if self.selected_pane.is_some() {
+            if self.selected_pane.is_some() && !self.overlay.is_open() {
                 self.page_focus.focus(window, cx);
             } else {
                 self.focus.focus(window, cx);
@@ -261,7 +186,7 @@ impl Shell {
         focused
     }
 
-    fn page_key(
+    pub(crate) fn page_key(
         &self,
         focused: Option<BrowserKey>,
         stroke: &gpui::Keystroke,
@@ -407,12 +332,17 @@ impl Render for Shell {
             .flex_col()
             .bg(rgb(0x161c20))
             .text_color(rgb(0xe2edf1))
-            .track_focus(&self.page_focus)
             .on_key_down(cx.listener(|this, event, window, cx| this.key(event, window, cx)))
             .on_key_up(cx.listener(|this, event: &KeyUpEvent, window, cx| {
+                if this.consumed_keys.remove(&event.keystroke.key) || this.overlay.is_open() {
+                    cx.stop_propagation();
+                    return;
+                }
                 let focused = this.sync_page_focus(window, cx);
                 this.page_key(focused, &event.keystroke, true, false, false);
-            }));
+            }))
+            .child(div().absolute().size_0().track_focus(&self.page_focus))
+            .child(div().absolute().size_0().track_focus(&self.focus));
         let mut images = BTreeMap::new();
         let state = self.state.borrow();
         if let Some(popup) = state.model.popups.get(&self.id) {
@@ -452,121 +382,7 @@ impl Render for Shell {
         } else if let Some(current) = state.model.core.window(&self.id) {
             let core = &state.model.core;
             let active_space = &current.active_space_id;
-            let active_tab = state.model.active(&self.id);
             let view = current.visible_tabs();
-            let mut sidebar = div()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .p_2()
-                .flex_shrink_0()
-                .w(px(core.settings.sidebar_width.pixels() as f32))
-                .bg(rgb(0x202a30));
-            for space in core.spaces() {
-                let action = Action::Switch(space.id.clone());
-                sidebar = sidebar.child(
-                    button(format!("space-{}", space.id.as_str()), space.name.clone())
-                        .when(&space.id == active_space, |row| row.bg(rgb(0x37545e)))
-                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            dispatch(&this.state, &this.id, action.clone(), cx);
-                        })),
-                );
-            }
-            sidebar =
-                sidebar.child(self.action_button("new-space", "New Space", Action::NewSpace, cx));
-            if let Some(space) = core.space(active_space) {
-                sidebar = sidebar.child(self.action_button(
-                    "isolation",
-                    if space.isolated {
-                        "Separate cookies: On"
-                    } else {
-                        "Separate cookies: Off"
-                    },
-                    Action::Isolate,
-                    cx,
-                ));
-            }
-            for id in core.tab_ids(&self.id, active_space).unwrap_or_default() {
-                let Some(tab) = core.tab(id) else { continue };
-                let select = Action::Select(id.clone());
-                let split = Action::Split(id.clone());
-                let selected = active_tab == Some(id);
-                sidebar = sidebar.child(
-                    div()
-                        .flex()
-                        .gap_1()
-                        .min_w_0()
-                        .child(
-                            button(
-                                format!("tab-{}", id.as_str()),
-                                tab.custom_title.as_ref().unwrap_or(&tab.title).clone(),
-                            )
-                            .truncate()
-                            .flex_1()
-                            .when(selected, |row| row.bg(rgb(0x37545e)))
-                            .on_click(cx.listener(
-                                move |this, _: &ClickEvent, _, cx| {
-                                    dispatch(&this.state, &this.id, select.clone(), cx);
-                                },
-                            )),
-                        )
-                        .when(active_tab.is_some() && !selected, |row| {
-                            row.child(button(format!("split-{}", id.as_str()), "Split").on_click(
-                                cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                    dispatch(&this.state, &this.id, split.clone(), cx);
-                                }),
-                            ))
-                        }),
-                );
-            }
-            let placeholder = match self.command {
-                Command::Open => "Address or search",
-                Command::Split => "Address to split",
-                Command::Peek => "Address to peek",
-            };
-            let mut commands = div().flex().gap_2().p_2().items_center();
-            for (label, mode) in [
-                ("New tab", Command::Open),
-                ("Split", Command::Split),
-                ("Peek", Command::Peek),
-            ] {
-                commands = commands.child(button(label, label).on_click(cx.listener(
-                    move |this, _: &ClickEvent, window, cx| this.choose(mode, window, cx),
-                )));
-            }
-            commands = commands.child(
-                div()
-                    .id("command-input")
-                    .track_focus(&self.focus)
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .rounded_md()
-                    .px_2()
-                    .py_1()
-                    .bg(rgb(0x33434a))
-                    .child(if self.input.is_empty() {
-                        placeholder.to_owned()
-                    } else {
-                        self.input.clone()
-                    })
-                    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                        this.choose(this.command, window, cx);
-                    })),
-            );
-            if view.len() > 1 {
-                commands = commands.child(self.action_button(
-                    "unsplit",
-                    "Exit Split",
-                    Action::ExitSplit,
-                    cx,
-                ));
-            }
-            if active_tab.is_some() {
-                commands = commands
-                    .child(self.action_button("detach", "Flechinha", Action::Detach, cx))
-                    .child(self.action_button("close-tab", "Close tab", Action::Close, cx));
-            }
             let mut pages = div().flex().size_full().overflow_hidden();
             for (index, tab) in view.iter().enumerate() {
                 let pane = self.pane(Owner::Tab(self.id.clone()), tab.clone(), &mut images, cx);
@@ -584,7 +400,7 @@ impl Render for Shell {
                 };
                 pages = pages.child(div().h_full().w(relative(width)).child(pane));
             }
-            let mut page_area = div().relative().flex_1().min_h_0().child(pages);
+            let mut page_area = div().relative().flex_1().min_h_0().min_w_0().child(pages);
             if let Some(peek) = state.model.peeks.get(&self.id) {
                 page_area = page_area.child(deferred(
                     div()
@@ -628,14 +444,14 @@ impl Render for Shell {
                         ))),
                 ));
             }
-            main = main.child(commands).child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .flex()
-                    .child(sidebar)
-                    .child(page_area),
-            );
+            let sidebar = self.sidebar(core, current, cx);
+            let mut body = div().flex_1().min_h_0().relative().flex();
+            if core.sidebar_visible(&self.id) {
+                body = body.child(sidebar).child(page_area);
+            } else {
+                body = body.child(page_area).child(sidebar);
+            }
+            main = main.child(body);
         }
         if !state.status.is_empty() {
             main = main.child(div().p_2().child(state.status.clone()));
@@ -656,6 +472,46 @@ impl Render for Shell {
             );
         }
         drop(state);
+        if let Overlay::History(panel) = &mut self.overlay {
+            panel.refresh(&self.state.borrow().history);
+        }
+        let overlay = match &self.overlay {
+            Overlay::None => None,
+            Overlay::Command(bar) => Some(self.command_panel(bar, cx)),
+            Overlay::History(panel) => Some(self.history_panel(panel, cx)),
+            Overlay::Archive(input) => Some(self.archive_panel(input, cx)),
+            Overlay::Folder(id, input) => Some(self.folder_panel(id.as_ref(), input, cx)),
+            Overlay::TabActions(id) => Some(self.tab_actions_panel(id, cx)),
+        };
+        if let Some(panel) = overlay {
+            let archive = matches!(self.overlay, Overlay::Archive(_));
+            main = main.child(deferred(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .occlude()
+                    .bg(gpui::rgba(0x00000088))
+                    .child(div().absolute().inset_0().on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                            this.dismiss_overlay(window, cx);
+                            cx.stop_propagation();
+                        }),
+                    ))
+                    .child(
+                        div()
+                            .relative()
+                            .flex()
+                            .justify_center()
+                            .pt_10()
+                            .px_4()
+                            .h_full()
+                            .pb_4()
+                            .when(archive, |frame| frame.justify_end().pt_4())
+                            .child(panel.when(archive, |drawer| drawer.h_full().w(px(420.)))),
+                    ),
+            ));
+        }
         for (tab, retired) in std::mem::replace(&mut self.images, images) {
             for image in retired {
                 if !self
@@ -671,7 +527,27 @@ impl Render for Shell {
     }
 }
 
-fn button(
+pub(crate) fn overlay_panel() -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .min_h_0()
+        .max_h_full()
+        .self_start()
+        .w(px(560.))
+        .max_w_full()
+        .occlude()
+        .gap_2()
+        .p_3()
+        .text_sm()
+        .rounded_xl()
+        .border_1()
+        .border_color(rgb(0x405863))
+        .bg(rgb(0x1d2a32))
+        .shadow_lg()
+}
+
+pub(crate) fn button(
     id: impl Into<gpui::ElementId>,
     name: impl Into<gpui::SharedString>,
 ) -> gpui::Stateful<Div> {

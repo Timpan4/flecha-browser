@@ -3,8 +3,11 @@
 use std::borrow::Cow;
 use std::fmt;
 use std::path::Path;
+use std::sync::Arc;
 
-use rusqlite::{Connection, OpenFlags, Row, Transaction, TransactionBehavior, params};
+use rusqlite::{
+    Connection, OpenFlags, OptionalExtension as _, Row, Transaction, TransactionBehavior, params,
+};
 use url::Url;
 
 /// The number of entries requested per read by Flecha's History page.
@@ -100,6 +103,15 @@ impl From<rusqlite::Error> for HistoryError {
 /// Owns one SQLite connection. A private session can use [`Self::in_memory`].
 pub struct HistoryStore {
     db: Connection,
+    title_epoch: Arc<()>,
+}
+
+/// Identifies a visit that can receive title updates from its live browser.
+pub struct RecordedVisit {
+    id: i64,
+    url: Url,
+    visited_at_ms: i64,
+    title_epoch: Arc<()>,
 }
 
 impl HistoryStore {
@@ -116,7 +128,10 @@ impl HistoryStore {
         if mode != "wal" {
             return Err(HistoryError::WalUnavailable);
         }
-        Ok(Self { db })
+        Ok(Self {
+            db,
+            title_epoch: Arc::new(()),
+        })
     }
 
     /// Creates an empty store with both its main database and temporary data in memory.
@@ -124,7 +139,10 @@ impl HistoryStore {
         let mut db = Connection::open_in_memory()?;
         db.pragma_update(None, "temp_store", "MEMORY")?;
         initialize_schema(&mut db)?;
-        Ok(Self { db })
+        Ok(Self {
+            db,
+            title_epoch: Arc::new(()),
+        })
     }
 
     /// Records one HTTP or HTTPS navigation at a Unix timestamp in milliseconds.
@@ -135,14 +153,75 @@ impl HistoryStore {
         title: &str,
         visited_at_ms: i64,
     ) -> Result<bool, HistoryError> {
+        Ok(self.record_navigation(url, title, visited_at_ms)?.is_some())
+    }
+
+    /// Records a visit and returns its handle for subsequent title changes.
+    pub fn record_navigation(
+        &mut self,
+        url: &str,
+        title: &str,
+        visited_at_ms: i64,
+    ) -> Result<Option<RecordedVisit>, HistoryError> {
         let Some(clean_url) = history_url(url) else {
-            return Ok(false);
+            return Ok(None);
         };
         let tx = self
             .db
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let cleaned_title = clean_title(url, &clean_url, title);
-        insert_visit(&tx, &clean_url, cleaned_title.as_ref(), visited_at_ms)?;
+        let id = insert_visit(&tx, &clean_url, cleaned_title.as_ref(), visited_at_ms)?;
+        tx.commit()?;
+        Ok(Some(RecordedVisit {
+            id,
+            url: clean_url,
+            visited_at_ms,
+            title_epoch: self.title_epoch.clone(),
+        }))
+    }
+
+    /// Changes the title of an existing visit without recording a new navigation.
+    pub fn update_visit_title(
+        &mut self,
+        visit: &RecordedVisit,
+        title: &str,
+    ) -> Result<bool, HistoryError> {
+        // SQLite can reuse a deleted rowid, even for the same URL and timestamp.
+        if !Arc::ptr_eq(&visit.title_epoch, &self.title_epoch) {
+            return Ok(false);
+        }
+        let title = clean_title(visit.url.as_str(), &visit.url, title);
+        let folded = title.to_lowercase();
+        let tx = self
+            .db
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let url_id: Option<i64> = tx
+            .query_row(
+                "UPDATE visits SET title = ?1, title_folded = ?2
+             WHERE id = ?3 AND visited_at_ms = ?4 AND title != ?1
+               AND url_id = (SELECT id FROM urls WHERE url = ?5)
+             RETURNING url_id",
+                params![
+                    title.as_ref(),
+                    folded,
+                    visit.id,
+                    visit.visited_at_ms,
+                    visit.url.as_str()
+                ],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(url_id) = url_id else {
+            return Ok(false);
+        };
+        tx.execute(
+            "UPDATE urls SET title = ?2, title_folded = ?3
+             WHERE id = ?1 AND ?4 = (
+                 SELECT id FROM visits WHERE url_id = ?1
+                 ORDER BY visited_at_ms DESC, id DESC LIMIT 1
+             )",
+            params![url_id, title.as_ref(), folded, visit.id],
+        )?;
         tx.commit()?;
         Ok(true)
     }
@@ -199,10 +278,14 @@ impl HistoryStore {
         let Some(url) = history_url(url) else {
             return Ok(false);
         };
-        Ok(self
+        let removed = self
             .db
             .execute("DELETE FROM urls WHERE url = ?1", [url.as_str()])?
-            != 0)
+            != 0;
+        if removed {
+            self.title_epoch = Arc::new(());
+        }
+        Ok(removed)
     }
 
     /// Removes visits at or after the given Unix timestamp in milliseconds.
@@ -236,12 +319,14 @@ impl HistoryStore {
             [cutoff_ms],
         )?;
         tx.commit()?;
+        self.title_epoch = Arc::new(());
         Ok(())
     }
 
     /// Removes every URL and visit.
     pub fn clear_all(&mut self) -> Result<(), HistoryError> {
         self.db.execute("DELETE FROM urls", [])?;
+        self.title_epoch = Arc::new(());
         Ok(())
     }
 
@@ -305,7 +390,7 @@ fn insert_visit(
     url: &Url,
     title: &str,
     visited_at_ms: i64,
-) -> rusqlite::Result<()> {
+) -> rusqlite::Result<i64> {
     let url = url.as_str();
     let title_folded = title.to_lowercase();
     let id: i64 = tx.prepare_cached(
@@ -324,8 +409,7 @@ fn insert_visit(
     tx.prepare_cached(
         "INSERT INTO visits (url_id, visited_at_ms, title, title_folded) VALUES (?1, ?2, ?3, ?4)",
     )?
-    .execute(params![id, visited_at_ms, title, title_folded.as_str()])?;
-    Ok(())
+    .insert(params![id, visited_at_ms, title, title_folded.as_str()])
 }
 
 fn read_entry(row: &Row<'_>) -> rusqlite::Result<HistoryEntry> {

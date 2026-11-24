@@ -1,5 +1,10 @@
+mod command_bar;
+mod history_view;
 mod model;
 mod popup;
+mod shortcuts;
+mod sidebar;
+mod text_field;
 mod verify;
 mod view;
 
@@ -11,14 +16,17 @@ use std::rc::Rc;
 use anyhow::{Context as _, Result, ensure};
 use flecha_cef::{Engine, Event, Owner, Runtime, Viewport};
 use flecha_core::{
-    SpaceId, TabId, WindowId,
+    ArchivedTab, Reopened, SpaceId, TabId, WindowId,
     storage::{LoadedState, ReadyState},
     suggestions::pinnable_address,
 };
 use flecha_services::StateStore;
 use gpui::{App, Bounds, WindowBounds, WindowHandle, WindowOptions, px, size};
 
+use history_view::{ClearRange, History};
 use model::{Model, now};
+use shortcuts::Navigation;
+use sidebar::SidebarAction;
 use view::Shell;
 
 pub struct Options {
@@ -29,7 +37,7 @@ pub struct Options {
 pub fn start(
     cx: &mut App,
     runtime: &mut Runtime,
-    profile: PathBuf,
+    cef_profile: PathBuf,
     store: StateStore,
     mut loaded: LoadedState,
     options: Options,
@@ -38,9 +46,13 @@ pub fn start(
     let ready = loaded.apply_recovery(|write| store.write(write))?;
     let model = Model::new(ready.state.take());
     let initial = options.initial;
+    let profile = cef_profile
+        .parent()
+        .context("CEF data has no profile directory")?;
     let controller = Rc::new(RefCell::new(Controller {
         model,
-        engine: Engine::new(profile, model::tab_id),
+        history: History::open(profile),
+        engine: Engine::new(cef_profile, model::tab_id),
         store,
         snapshots: loaded,
         windows: BTreeMap::new(),
@@ -73,27 +85,39 @@ pub fn start(
 #[derive(Clone)]
 enum Action {
     Open(String),
+    Navigate(String),
+    Browser(Navigation),
     Select(TabId),
     Split(TabId),
     SplitNew(String),
     ExitSplit,
     Peek(String),
+    PeekTab(TabId),
     Promote,
     ClosePeek,
     Detach,
+    DetachTab(TabId),
     Return,
     Close,
+    CloseTab(TabId),
     /// The window's close button: the window closes for good, or the app quits with
     /// its last Flecha window (patches 0059 and 0062).
     CloseWindow,
     Switch(SpaceId),
     NewSpace,
     Isolate,
+    Sidebar(SidebarAction),
+    Reopen,
+    RestoreArchive(ArchivedTab),
+    ClearArchive,
+    DeleteHistory(String),
+    ClearHistory(ClearRange),
     Quit,
 }
 
 struct Controller {
     model: Model,
+    history: History,
     engine: Engine,
     store: StateStore,
     snapshots: LoadedState,
@@ -135,13 +159,21 @@ impl Controller {
             Action::Open(url) => {
                 self.model.open(window, url, true)?;
             }
+            Action::Navigate(url) => self.navigate_tab(window, url)?,
+            Action::Browser(navigation) => {
+                self.browser_navigation(window, navigation);
+                return Ok(());
+            }
             Action::Select(id) => {
-                self.model
-                    .core
-                    .activate(&id, window, Some(now()))
-                    .removed
-                    .iter()
-                    .for_each(|id| self.engine.close(id));
+                let change = self.model.core.activate(&id, window, Some(now()));
+                for id in change.removed {
+                    self.engine.close(&id);
+                }
+                if let Some(destination) = change.result.filter(|destination| destination != window)
+                {
+                    self.model.core.focus_window(&destination);
+                    self.front = Some(destination);
+                }
             }
             Action::Split(right) => {
                 if let Some(left) = self.model.active(window).cloned() {
@@ -169,6 +201,18 @@ impl Controller {
                 }
                 return Ok(());
             }
+            Action::PeekTab(id) => {
+                let Some(tab) = self.model.core.tab(&id) else {
+                    return Ok(());
+                };
+                if let Some(old) = self
+                    .model
+                    .peek(window.clone(), tab.url.clone(), Some(&id))?
+                {
+                    self.engine.close(&old);
+                }
+                return Ok(());
+            }
             Action::Promote => {
                 let tab = self.model.promote(window)?;
                 self.reconcile_partition(&tab);
@@ -183,12 +227,16 @@ impl Controller {
             }
             Action::Detach => {
                 if let Some(tab) = self.model.active(window).cloned() {
-                    let detached = self.model.detach(window, &tab)?;
-                    self.engine
-                        .transfer(&tab, detached.tab, Owner::Flechinha(detached.window));
-                    for removed in detached.removed {
-                        self.engine.close(&removed);
-                    }
+                    return self.act(window, Action::DetachTab(tab));
+                }
+            }
+            Action::DetachTab(tab) => {
+                let detached = self.model.detach(window, &tab)?;
+                self.history.forget(&tab);
+                self.engine
+                    .transfer(&tab, detached.tab, Owner::Flechinha(detached.window));
+                for removed in detached.removed {
+                    self.engine.close(&removed);
                 }
             }
             Action::Return => {
@@ -241,10 +289,13 @@ impl Controller {
                     return self.act(window, Action::ClosePeek);
                 }
                 if let Some(tab) = self.model.active(window).cloned() {
-                    self.engine.close(&tab);
-                    for removed in self.model.core.close_tab(&tab, now()).removed {
-                        self.engine.close(&removed);
-                    }
+                    return self.act(window, Action::CloseTab(tab));
+                }
+            }
+            Action::CloseTab(tab) => {
+                self.engine.close(&tab);
+                for removed in self.model.core.close_tab(&tab, now()).removed {
+                    self.engine.close(&removed);
                 }
             }
             Action::Switch(space) => {
@@ -283,6 +334,30 @@ impl Controller {
                 for tab in self.model.close_space_transients(&id) {
                     self.engine.close(&tab);
                 }
+            }
+            Action::Sidebar(action) => self.sidebar_action(window, action),
+            Action::Reopen => {
+                let change = self.model.core.reopen_last(model::tab_id(), now());
+                for id in change.removed {
+                    self.engine.close(&id);
+                }
+                if let Some(Reopened::Window(window)) = change.result {
+                    self.front = Some(window);
+                }
+            }
+            Action::RestoreArchive(entry) => {
+                self.model
+                    .core
+                    .restore_archived(&entry, window, model::tab_id(), now());
+            }
+            Action::ClearArchive => self.model.core.clear_archive(),
+            Action::DeleteHistory(url) => {
+                self.history.remove(&url)?;
+                return Ok(());
+            }
+            Action::ClearHistory(range) => {
+                self.history.clear(range, now())?;
+                return Ok(());
             }
         }
         self.update_visibility();
@@ -365,12 +440,15 @@ impl Controller {
             }
             match message.event {
                 Event::Address(address) => {
-                    if let Some((tab, durable)) = self.model.tab_mut(id)
-                        && tab.url != address
-                    {
-                        tab.url = address;
-                        save |= durable;
-                        changed = true;
+                    if let Some((tab, durable)) = self.model.tab_mut(id) {
+                        if durable {
+                            self.history.begin(&message.key, &address);
+                        }
+                        if tab.url != address {
+                            tab.url = address;
+                            save |= durable;
+                            changed = true;
+                        }
                     }
                 }
                 Event::Title(title) => {
@@ -378,6 +456,10 @@ impl Controller {
                         && tab.title != title
                     {
                         tab.title = title;
+                        if durable && let Err(error) = self.history.title(&message.key, &tab.title)
+                        {
+                            self.status = error.to_string();
+                        }
                         save |= durable;
                         changed = true;
                     }
@@ -395,17 +477,19 @@ impl Controller {
                     changed = true;
                 }
                 Event::ClosedByPage => {
+                    self.history.forget(id);
                     if let Err(error) = self.page_closed(id) {
                         self.fail(error, cx);
                     }
                     changed = true;
                 }
-                Event::Loaded { .. }
-                | Event::LoadFailed { .. }
-                | Event::Created(_)
-                | Event::Closed => {}
+                Event::Loaded { url, .. } => self.history.loaded(id, &url),
+                Event::LoadFailed { url, .. } => self.history.failed(id, &url),
+                Event::Closed => self.history.forget(id),
+                Event::Created(_) => {}
             }
         }
+        changed |= self.finish_history();
         if save && let Err(error) = self.save() {
             self.fail(error, cx);
         }

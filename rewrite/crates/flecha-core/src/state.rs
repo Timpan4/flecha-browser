@@ -669,17 +669,47 @@ impl BrowserState {
                 removed,
             };
         }
-        let Some((index, entry)) = newest_tab else {
+        let Some((index, _)) = newest_tab else {
             return TabChange::unchanged(None);
         };
+        let window = self.focused_window().id.clone();
+        let restored = self.restore_archive_at(index, &window, new_tab_id.clone(), now);
+        TabChange::unchanged(restored.then_some(Reopened::Tab(new_tab_id)))
+    }
+
+    /// Restore one matching entry into the window's current Space.
+    pub fn restore_archived(
+        &mut self,
+        entry: &ArchivedTab,
+        window: &WindowId,
+        new_tab_id: TabId,
+        now: EpochMillis,
+    ) -> bool {
+        self.archive
+            .iter()
+            .position(|archived| archived == entry)
+            .is_some_and(|index| self.restore_archive_at(index, window, new_tab_id, now))
+    }
+
+    pub fn clear_archive(&mut self) {
+        self.archive.clear();
+    }
+
+    fn restore_archive_at(
+        &mut self,
+        index: usize,
+        window: &WindowId,
+        new_tab_id: TabId,
+        now: EpochMillis,
+    ) -> bool {
+        let entry = &self.archive[index];
         let mut tab = Tab::new(entry.url.clone(), now);
         tab.title.clone_from(&entry.title);
-        let window = self.focused_window().id.clone();
-        if !self.open_today(new_tab_id.clone(), tab, &window, None, true) {
-            return TabChange::unchanged(None);
+        if !self.open_today(new_tab_id, tab, window, None, true) {
+            return false;
         }
         self.archive.remove(index);
-        TabChange::unchanged(Some(Reopened::Tab(new_tab_id)))
+        true
     }
 
     pub fn tab_ids(&self, window: &WindowId, space: &SpaceId) -> Option<Vec<&TabId>> {
@@ -1512,6 +1542,39 @@ impl BrowserState {
             title: tab.title,
             closed_at,
         })
+    }
+}
+
+#[cfg(test)]
+mod archive_tests {
+    use super::*;
+
+    #[test]
+    fn individual_archive_restore_selects_the_requested_record_and_clear_keeps_open_tabs() {
+        let window = WindowId::new("main");
+        let mut core = BrowserState::new(SpaceId::new("space"), window.clone());
+        let url = "https://example.test/";
+        for (id, title, closed_at) in [("first", "First title", 1), ("second", "Second title", 2)] {
+            let id = TabId::new(id);
+            let mut tab = Tab::new(url, 0);
+            tab.title = title.into();
+            assert!(core.open_today(id.clone(), tab, &window, None, true));
+            assert_eq!(core.close_tab(&id, closed_at).result, CloseTab::Archived);
+        }
+        let older = core.archive()[1].clone();
+        let restored = TabId::new("restored");
+        assert!(!core.restore_archived(&older, &WindowId::new("missing"), restored.clone(), 3));
+        assert_eq!(core.archive().len(), 2);
+        assert!(core.restore_archived(&older, &window, restored.clone(), 3));
+        assert_eq!(core.tab(&restored).unwrap().title, "First title");
+        assert_eq!(core.archive()[0].title, "Second title");
+        assert_eq!(
+            core.focused_window().visible_tabs(),
+            std::slice::from_ref(&restored)
+        );
+        core.clear_archive();
+        assert!(core.archive().is_empty());
+        assert!(core.tab(&restored).is_some());
     }
 }
 

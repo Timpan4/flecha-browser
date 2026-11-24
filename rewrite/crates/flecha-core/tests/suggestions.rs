@@ -8,6 +8,92 @@ use flecha_core::{Environment, SearchEngine};
 use serde_json::{Value, json};
 
 #[test]
+fn whitespace_and_format_characters_around_credential_separator_stay_local() {
+    let engine = SearchEngine::Google;
+    for userinfo in ["user", "user:pass"] {
+        for separator in [
+            "@\u{FEFF}",
+            "@\u{FEFF}\t",
+            "@\t\u{FEFF}",
+            "@\u{FEFF}\u{200A}",
+            "@\u{FEFF}\u{00A0}",
+            "@\u{FEFF}\u{3000}",
+            "@\u{200A}",
+            "@\u{2009}",
+            "@\u{00A0}",
+            "@\u{3000}",
+            "@\u{202F}",
+            "@\u{2028}",
+            "@\t",
+            "@ ",
+            "@\u{85}\u{200B}",
+            "\u{FEFF}\u{2009}@\u{2060}\u{202F}",
+        ] {
+            for host in ["host.example", "localhost", "127.0.0.1", "[::1]"] {
+                for suffix in ["", ":8080", "/path", ":8080/path"] {
+                    let input = format!("{userinfo}{separator}{host}{suffix}");
+                    assert_eq!(
+                        resolve_input(&input, engine),
+                        InputResolution::Invalid,
+                        "{input:?}"
+                    );
+                    assert!(engine.suggestion_url(&input).is_none(), "{input:?}");
+                }
+            }
+        }
+    }
+    for separator in ["@ ", " @", "@\u{feff}"] {
+        let input = format!("user{separator}intranet:8080");
+        assert_eq!(resolve_input(&input, engine), InputResolution::Invalid);
+        assert!(engine.suggestion_url(&input).is_none());
+    }
+}
+
+#[test]
+fn ordinary_at_sign_phrases_still_search() {
+    let engine = SearchEngine::Google;
+    for query in [
+        "rust @ 2026",
+        "dinner @ 7pm",
+        "lunch @ 12",
+        "price @ 5%",
+        "tweet @ someone",
+        "meet @ noon tomorrow",
+        "contact@ example",
+        "weather @ stockholm",
+    ] {
+        assert_eq!(
+            resolve_input(query, engine),
+            InputResolution::Search(engine.search_url(query)),
+            "{query:?}"
+        );
+    }
+}
+
+#[test]
+fn developer_aliases_do_not_send_rejected_arguments_to_either_search() {
+    let engine = SearchEngine::Google;
+    for query in [
+        "mdn user:pass@\u{feff}host.example",
+        "mdn user:pass@host.example",
+        "mdn user@ \u{feff}localhost",
+        "mdn https:///private",
+        "so mdn user@ host.example",
+    ] {
+        assert!(
+            developer_suggestions(query, None, &[], 0).is_empty(),
+            "{query:?}"
+        );
+        assert_eq!(
+            resolve_input(query, engine),
+            InputResolution::Invalid,
+            "{query:?}"
+        );
+        assert!(engine.suggestion_url(query).is_none(), "{query:?}");
+    }
+}
+
+#[test]
 fn obscured_explicit_addresses_and_nel_in_hosts_stay_local() {
     let engine = SearchEngine::Google;
     for input in [
@@ -614,4 +700,62 @@ fn jwt_privacy_decodes_percent_escaped_fullwidth_percent_as_an_escape() {
     let token = format!("{header}%EF%BC%852E{payload}%EF%BC%852Esignature");
     assert!(!suggestable(&token));
     assert!(!suggestable(&format!("note {token}")));
+}
+
+#[test]
+fn padded_credentials_with_single_label_hosts_and_tails_stay_local() {
+    for query in [
+        "user@ intranet/private",
+        "user @intranet/private",
+        "user@\u{feff}intranet/private",
+        "user@\u{feff}intranet",
+        "user@\u{200b}intranet",
+        "user@ intranet?token=x",
+        "user@ intranet#x",
+        "user@ intranet./x",
+        "admin@ nas/share/secret",
+        "hello user@ host.example/private",
+        "hello user@ intranet/private",
+        "notes user@ 10.0.0.1/admin",
+        "hello user@ localhost:8080/x",
+        "hello user@ intranet:8080/x",
+        "mdn user@ intranet/private",
+        "mdn user@\u{feff}intranet/private",
+        "mdn user@\u{feff}intranet",
+    ] {
+        assert_eq!(
+            resolve_input(query, SearchEngine::Google),
+            InputResolution::Invalid,
+            "{query:?}"
+        );
+        assert!(
+            SearchEngine::Google.suggestion_url(query).is_none(),
+            "{query:?}"
+        );
+        assert!(
+            developer_suggestions(query, None, &[], 0).is_empty(),
+            "{query:?}"
+        );
+    }
+
+    for query in [
+        "lunch @ noon?",
+        "anyone free @ noon?",
+        "dinner @ 7pm?",
+        "is it raining @ stockholm?",
+        "meet @ 7/8",
+        "apples @ $2/lb",
+        "rate @ 5%/yr",
+        "who is free @ 3pm/4pm",
+    ] {
+        assert_eq!(
+            resolve_input(query, SearchEngine::Google),
+            InputResolution::Search(SearchEngine::Google.search_url(query)),
+            "{query:?}"
+        );
+    }
+    assert!(
+        !developer_suggestions("mdn lunch @ noon?", None, &[], 0).is_empty(),
+        "mdn alias should work for ordinary question phrases"
+    );
 }
