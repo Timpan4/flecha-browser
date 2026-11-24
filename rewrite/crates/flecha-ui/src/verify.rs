@@ -95,6 +95,9 @@ enum Command {
     MenuRow {
         label: String,
     },
+    /// Makes the shell handle page clipboard edits as it does on Wayland, to check them on a
+    /// display whose compositor gives GPUI no input serial.
+    ShellClipboard,
     /// Makes the next shared-texture import fail, to check the switch to CPU copies.
     RejectNextSharedTexture,
 }
@@ -249,6 +252,10 @@ impl Command {
                         up,
                     );
                 }
+                return Ok(Value::Null);
+            }
+            Self::ShellClipboard => {
+                state.shell_clipboard = true;
                 return Ok(Value::Null);
             }
             Self::Clipboard { text } => {

@@ -234,6 +234,7 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let shell_clipboard = self.shell_clipboard(window);
         let Overlay::ContextMenu(request) = &self.overlay else {
             return;
         };
@@ -266,7 +267,9 @@ impl Shell {
                 cx.write_to_clipboard(ClipboardItem::new_string(url.clone()));
                 None
             }
-            Item::Edit(FrameEdit::Paste) if let Some(text) = crate::clipboard::text(cx) => {
+            Item::Edit(FrameEdit::Paste)
+                if shell_clipboard && let Some(text) = crate::clipboard::text(cx) =>
+            {
                 // Dismissing gives the page its focus back before the text arrives.
                 self.dismiss_overlay(window, cx);
                 self.state.borrow().engine.paste_text(&id.key.tab, &text);
@@ -278,7 +281,8 @@ impl Shell {
                     FrameEdit::Copy => context.can_copy,
                     FrameEdit::Cut => context.can_cut,
                     FrameEdit::Paste | FrameEdit::SelectAll => false,
-                } && !context.selection_text.is_empty();
+                } && shell_clipboard
+                    && !context.selection_text.is_empty();
                 let state = self.state.borrow();
                 if copied {
                     // Chromium's Copy and Cut would take the clipboard from the shell. See

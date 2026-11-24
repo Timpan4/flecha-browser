@@ -1449,6 +1449,14 @@ async function verifyClipboard() {
   const clipboard = async text => (await app.command('clipboard', text === undefined ? {} : { text })).text;
   const sentinel = 'flecha-clipboard-sentinel';
 
+  const center = selector => page('', `(() => {
+    const box = field('${selector}').getBoundingClientRect();
+    return [box.x + box.width / 2, box.y + box.height / 2];
+  })()`);
+
+  // Wayland's handling everywhere, since headless weston gives GPUI no input serial.
+  await app.command('shell_clipboard');
+
   assert.equal(await clipboard(sentinel), sentinel, `GPUI's ${backend} clipboard did not keep a fixture string`);
 
   // Each target starts empty, focused and with its caret at the end.
@@ -1503,12 +1511,24 @@ async function verifyClipboard() {
   assert.equal(await page('', 'window.editKeys'), 2, 'a copy or cut with text also reached the page as a keystroke');
   pass(`${backend}: Ctrl+C copied input and page selections and Ctrl+X cut textarea text to GPUI's clipboard without Chromium's own copy`);
 
+  // Selections the read cannot tie to a focused field fail closed: Chromium copies a password's
+  // mask from them.
+  assert.equal(await copy('c', `
+    shadowPassword.value = 'flecha-shadow-secret';
+    shadowPassword.focus();
+    shadowPassword.select()`), false, 'Ctrl+C read a password in a closed shadow root');
+  assert.equal(await clipboard(), sentinel, 'Ctrl+C put a hidden password mask on the clipboard');
+  assert.equal(await copy('c', `${select('#password', 'flecha-blur-secret')}; document.activeElement.blur()`), false,
+    'Ctrl+C read a blurred password selection');
+  assert.equal(await clipboard(), sentinel, 'Ctrl+C put a blurred password mask on the clipboard');
+  await poll('the held Ctrl+C keystrokes to reach the page', async () => (await page('', 'window.editKeys')) === 4);
+  assert.equal(await copy('c', select('#email', 'flecha@copy.test')), true, 'Ctrl+C read no email field');
+  await poll('the copied email on the clipboard', async () => (await clipboard()) === 'flecha@copy.test');
+  pass(`${backend}: Ctrl+C refused hidden or blurred password selections and copied an email field`);
+
   // The page menu opens on a right-click that CEF receives, with the field's selection intact.
   const menu = async (selector, label) => {
-    const [x, y] = await page('', `(() => {
-      const box = field('${selector}').getBoundingClientRect();
-      return [box.x + box.width / 2, box.y + box.height / 2];
-    })()`);
+    const [x, y] = await center(selector);
 
     await app.command('click', { tab, x, y, right: true });
 
@@ -1543,6 +1563,22 @@ async function verifyClipboard() {
   await app.command('key', { keystroke: 'escape' });
   assert.equal(await clipboard(), sentinel, 'the page menu put a password on the clipboard');
   pass(`${backend}: the page menu pasted from, copied to and cut to GPUI's clipboard, and refused to copy or cut a password`);
+
+  // A cross-site frame takes pasted text, but the selection read cannot see into it, so Copy
+  // fails closed and leaves the keystroke to Chromium.
+  await clipboard('flecha-frame-paste');
+  await page(`field('#frame').focus(); field('#frame').contentWindow.postMessage('focus', '*')`);
+  await poll('the frame to take focus', async () => (await page('', 'document.activeElement.id')) === 'frame');
+  await press('v');
+  await poll('the frame field to receive the pasted text', async () => {
+    const value = site.probe('frame-value');
+    await page(`field('#frame').contentWindow.postMessage('report', '*')`);
+
+    return (await value) === 'flecha-frame-paste';
+  });
+  assert.equal(await copy('c', `field('#frame').contentWindow.postMessage('select', '*')`), false, 'Ctrl+C read into a cross-site frame');
+  assert.equal(await clipboard(), sentinel, 'Ctrl+C in a cross-site frame wrote the clipboard');
+  pass(`${backend}: Ctrl+V pasted into a cross-site frame, and Ctrl+C there left the clipboard to Chromium`);
 
   await app.quit();
 }

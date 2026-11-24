@@ -77,6 +77,7 @@ export async function fixture(handle = () => false) {
   // A cookie and a localStorage entry named by the caller, so a scan of the profile on disk
   // can look for that name. Max-Age makes the cookie one a persistent jar writes to disk.
   const jar = /^[a-z0-9_]+$/.exec(new URL(request.url, 'http://localhost').searchParams.get('jar') ?? '')?.[0];
+  const clipboardFrame = new URL(request.url, 'http://localhost').searchParams.has('frame');
   const inJar = jar !== undefined && (request.headers.cookie ?? '').split('; ').includes(`${jar}=1`);
 
   if (jar && path === '/jar/set') {
@@ -132,7 +133,25 @@ export async function fixture(handle = () => false) {
       <input id="password" type="password" aria-label="Password">
       <textarea id="area" aria-label="Notes"></textarea>
       <div id="editable" contenteditable="true">x</div>
+      <input id="email" type="email" aria-label="Email">
+      <div id="host"></div>
+      ${clipboardFrame ? '' : `<iframe id="frame" src="http://localhost:${request.socket.localPort}/clipboard?frame=1"></iframe>`}
       <script>
+        // A password the selection read cannot see into.
+        const shadow = document.querySelector('#host').attachShadow({ mode: 'closed' });
+        shadow.innerHTML = '<input type="password" aria-label="Hidden password">';
+        window.shadowPassword = shadow.querySelector('input');
+        // The cross-site frame focuses and reports its field when its parent asks.
+        addEventListener('message', event => {
+          const field = document.querySelector('#text');
+          if (event.data === 'focus') field.focus();
+          if (event.data === 'select') {
+            field.value = 'flecha-frame-copy';
+            field.focus();
+            field.select();
+          }
+          if (event.data === 'report') fetch('/probe/frame-value?value=' + encodeURIComponent(field.value));
+        });
         window.pastes = 0;
         addEventListener('paste', () => window.pastes++, true);
         // Ctrl+C and Ctrl+X that reached the page as keystrokes.

@@ -243,6 +243,9 @@ struct Controller {
     ready: bool,
     quitting: bool,
     verify: bool,
+    /// Set by the verify harness: the shell handles page clipboard edits on every display, so a
+    /// display without a Wayland input serial can still check them.
+    shell_clipboard: bool,
     failure: Rc<RefCell<Option<anyhow::Error>>>,
     status: Status,
 }
@@ -334,6 +337,7 @@ impl Controller {
             ready: false,
             quitting: false,
             verify,
+            shell_clipboard: false,
             failure,
             status: Status::default(),
         };

@@ -1,12 +1,15 @@
 //! Copy, Cut and Paste in web pages through GPUI's clipboard.
 //!
-//! Chromium's own clipboard cannot reach the desktop when GPUI owns the focused window, as on
-//! Wayland, so the shell reads and writes the clipboard for the page. See `flecha_cef`'s
-//! clipboard module for the page side.
+//! On Wayland, Chromium's own clipboard cannot reach the desktop while GPUI owns the focused
+//! window, so the shell reads and writes the clipboard for the page. See `flecha_cef`'s
+//! clipboard module for the page side. Elsewhere Chromium's clipboard works and keeps rich
+//! content and the page's clipboard events, so the shell leaves page edits to Chromium. On X11
+//! it has to: once a page script makes Chromium the clipboard owner, a GPUI read waits on
+//! Chromium on the thread they share, and a shell paste would stall.
 
 use flecha_cef::{BrowserKey, ClipboardEdit};
 use flecha_surface::input;
-use gpui::{App, ClipboardItem, Keystroke};
+use gpui::{App, ClipboardItem, Keystroke, Window};
 
 use crate::Controller;
 use crate::view::Shell;
@@ -46,6 +49,18 @@ pub(crate) fn text(cx: &App) -> Option<String> {
 }
 
 impl Shell {
+    /// Whether the shell, not Chromium, handles page clipboard edits in `window`.
+    pub(crate) fn shell_clipboard(&self, window: &Window) -> bool {
+        #[cfg(target_os = "linux")]
+        let wayland = flecha_surface::ozone_platform(window) == "wayland";
+        #[cfg(not(target_os = "linux"))]
+        let wayland = {
+            let _ = window;
+            false
+        };
+        wayland || self.state.borrow().shell_clipboard
+    }
+
     /// Runs a clipboard shortcut for the focused page. Returns `true` when the shell took the
     /// key, which then must not reach the page now. Copy and Cut hold it back until the page's
     /// selection is read: with no copyable text, such as nothing selected or a password field,
@@ -55,11 +70,15 @@ impl Shell {
         &self,
         focused: Option<&BrowserKey>,
         stroke: &Keystroke,
+        window: &Window,
         cx: &App,
     ) -> bool {
         let (Some(key), Some(edit)) = (focused, shortcut(stroke)) else {
             return false;
         };
+        if !self.shell_clipboard(window) {
+            return false;
+        }
         let engine = &self.state.borrow().engine;
         let edit = match edit {
             PageClipboard::Paste => {

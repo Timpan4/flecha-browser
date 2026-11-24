@@ -407,7 +407,7 @@ impl Shell {
                 _ => {}
             }
             cx.stop_propagation();
-        } else if !altgr && self.page_clipboard_key(focused.as_ref(), stroke, cx) {
+        } else if !altgr && self.page_clipboard_key(focused.as_ref(), stroke, window, cx) {
             self.consumed_keys.insert(stroke.key.clone());
             cx.stop_propagation();
         } else {

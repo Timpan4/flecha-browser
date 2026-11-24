@@ -2,11 +2,10 @@
 //!
 //! Under offscreen rendering Chromium has no window with keyboard focus, and on Wayland the
 //! compositor serves clipboard reads and writes only to the focused client. Chromium's own
-//! Copy, Cut and Paste therefore never reach the desktop clipboard there. On X11 they do, but a
-//! Chromium-owned clipboard stalls the shell's reads, which run on the thread Chromium needs to
-//! answer them. The shell owns the focused window, so it reads and writes the clipboard and the
-//! engine moves the text in and out of the page: pasted text is committed as typed input, and
-//! copied text is read from the page's selection through an internal CDP call.
+//! Copy, Cut and Paste therefore never reach the desktop clipboard there. The shell owns the
+//! focused window, so it reads and writes the clipboard and the engine moves the text in and
+//! out of the page: pasted text is committed as typed input, and copied text is read from the
+//! page's selection through an internal CDP call.
 
 use cef::*;
 
@@ -45,12 +44,17 @@ const READ_SELECTION: &str = r#"(() => {
     if (!doc) return null;
     element = doc.activeElement;
   }
-  if (element?.localName === 'input' && element.type === 'password') return null;
-  if (element?.localName === 'input' || element?.localName === 'textarea') {
+  const field = element?.localName === 'input' || element?.localName === 'textarea';
+  if (field && element.type === 'password') return null;
+  if (field) {
     const { selectionStart: start, selectionEnd: end } = element;
     if (start !== null && end !== null && start !== end) return element.value.slice(start, end);
   }
-  return doc.getSelection()?.toString() ?? null;
+  const selection = doc.getSelection();
+  // A collapsed selection with text lies inside a text control. Unless it is the focused field
+  // checked above, it may be a password field's: blurred, or in a closed shadow root.
+  if (!selection || (selection.isCollapsed && !field)) return null;
+  return selection.toString();
 })()"#;
 
 impl Engine {
@@ -75,8 +79,8 @@ impl Engine {
     /// held back, so a page that binds the key still sees it. Returns `false` when the read
     /// could not be sent; `unread` is dropped then.
     ///
-    /// Chromium's own Copy and Cut never run here: on X11 they make Chromium the clipboard
-    /// owner, and the shell's next read then waits on Chromium on the thread they share.
+    /// Chromium's own Copy and Cut never run here: were Chromium the clipboard owner, the
+    /// shell's next read would wait on Chromium on the thread they share.
     pub fn copy_selection(
         &self,
         tab: &flecha_core::TabId,
