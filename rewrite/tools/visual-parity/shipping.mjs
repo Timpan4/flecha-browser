@@ -28,7 +28,7 @@ fs.mkdirSync(path.join(site, 'fonts'), { recursive: true });
 const { build } = createRequire(path.join(root, 'package.json'))('esbuild');
 // The bundles build.mjs makes, without the hub: fixture.js provides window.flecha and friends.
 await build({
-  entryPoints: { app: path.join(ui, 'app.ts'), settings: path.join(ui, 'settings.ts'), flechinha: path.join(ui, 'flechinha.ts') },
+  entryPoints: { app: path.join(ui, 'app.ts'), settings: path.join(ui, 'settings.ts'), flechinha: path.join(ui, 'flechinha.ts'), historyPage: path.join(shell, 'historyPage.ts') },
   external: ['./tabsPane.js', './vsrPane.js'],
   bundle: true,
   format: 'esm',
@@ -37,7 +37,7 @@ await build({
   logLevel: 'warning',
 });
 for (const file of fs.readdirSync(ui)) if (file.endsWith('.css')) fs.copyFileSync(path.join(ui, file), path.join(site, file));
-for (const file of ['shell.css', 'settings-shell.css']) fs.copyFileSync(path.join(shell, file), path.join(site, file));
+for (const file of ['shell.css', 'settings-shell.css', 'history.css']) fs.copyFileSync(path.join(shell, file), path.join(site, file));
 fs.copyFileSync(
   path.join(root, 'node_modules/@fontsource-variable/jetbrains-mono/files/jetbrains-mono-latin-wght-normal.woff2'),
   path.join(site, 'fonts/jetbrains-mono.woff2'),
@@ -56,12 +56,14 @@ fs.writeFileSync(
 );
 fs.writeFileSync(path.join(site, 'settings.html'), page(fs.readFileSync(path.join(shell, 'settings.html'), 'utf8'), 'settings.js'));
 fs.writeFileSync(path.join(site, 'flechinha.html'), page(fs.readFileSync(path.join(ui, 'flechinha.html'), 'utf8'), 'flechinha.js'));
+fs.writeFileSync(path.join(site, 'history.html'), page(fs.readFileSync(path.join(shell, 'history.html'), 'utf8'), 'historyPage.js'));
 
 // Each surface the rewrite captures, at the size of its capture.
 const surfaces = [
   ['sidebar', 'window.html', [1278, 1024]],
   ['command-bar', 'window.html', [1278, 1024]],
   ['settings', 'settings.html', [1278, 1024]],
+  ['history', 'history.html', [1278, 1024]],
   ['zoom', 'window.html', [1278, 1024]],
   ['context-menu', 'window.html', [1278, 1024]],
   ['downloads', 'window.html', [1278, 1024]],
@@ -115,5 +117,14 @@ if (captures) {
     const target = path.join(out, `${surface}.png`);
     execFileSync('magick', ['montage', ...pairs.flat(), '-tile', '2x2', '-geometry', '+8+8', '-pointsize', '20', '-background', '#888888', target]);
     process.stdout.write(`paired ${target}\n`);
+  }
+  // Chromium draws its own find bar in the shipping browser, so there is no shell markup to
+  // render: the rewrite's capture stands alone, checked against the token table instead.
+  for (const surface of ['find']) {
+    const shots = ['light', 'dark'].map((theme) => ['-label', `Rewrite ${theme} (shipping: Chromium-native)`, path.join(captures, `visual-${surface}-${theme}.png`)]);
+    if (shots.some(([, , file]) => !fs.existsSync(file))) continue;
+    const target = path.join(out, `${surface}.png`);
+    execFileSync('magick', ['montage', ...shots.flat(), '-tile', '2x1', '-geometry', '+8+8', '-pointsize', '20', '-background', '#888888', target]);
+    process.stdout.write(`labelled ${target}\n`);
   }
 }

@@ -725,8 +725,10 @@ impl Render for Shell {
                     div()
                         .absolute()
                         .inset_0()
-                        .child(card)
+                        // The page paints over the bar's shadow, as the shipping Peek's native
+                        // page sits above the sidebar page that draws the bar.
                         .child(bar)
+                        .child(card)
                         .with_animation(
                             "peek-open",
                             Animation::new(tokens::MEDIUM).with_easing(ease),

@@ -26,8 +26,21 @@
   };
   const inert = stub(true);
   const settled = stub(false);
+  const fallback = (target) => new Proxy(target, { get: (object, key) => object[key] ?? inert[key] });
+  // The four pages the rewrite's fixture visited, newest first, for the History page.
+  const visited = ['open', 'split', 'peek', 'opener'].map((path, index) => ({
+    id: String(index),
+    url: `http://127.0.0.1:36811/${path}`,
+    title: `Flecha fixture /${path}`,
+    lastVisitTime: Date.now() - index * 60_000,
+    visitCount: 1,
+  }));
   // incognito.ts reads this flag directly; the fixture is a normal window.
-  const chrome = new Proxy({ extension: { inIncognitoContext: false } }, { get: (target, key) => target[key] ?? inert[key] });
+  const chrome = fallback({
+    extension: { inIncognitoContext: false },
+    history: fallback({ search: () => Promise.resolve(visited) }),
+    runtime: fallback({ getURL: (path) => `chrome-extension://fixture${path}` }),
+  });
   Object.defineProperty(window, 'chrome', { value: chrome, configurable: true, writable: true });
 
   const listeners = {};

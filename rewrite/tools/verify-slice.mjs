@@ -190,49 +190,50 @@ function paneMismatch(path, geometry, ratio, colors) {
 
   const pixel = (x, y) => pixels.readUIntBE((y * width + x) * 3, 3);
   const [left, right] = colors.map(color => Number.parseInt(color.slice(1), 16));
-  // The Dark and Light palettes' sidebars (flecha-ui/src/theme.rs). The default
+  // The default Space's tint in Dark and Light (flecha-ui/src/theme.rs). The default
   // System theme follows the desktop's appearance, which GPUI reads as Light on
   // this session's private bus, where no desktop portal answers.
-  const sidebars = [0x202a30, 0xe4e9ed];
-  // The sidebar's first row starts below the command bar. Its padding
-  // leaves this entire row solid, so both chrome edges come from the
-  // screenshot independently of the page layout.
+  const sidebars = [0x2f3746, 0xcdd9f7];
+  // The page area sits kFlechaGap in from the window's top, right and bottom and flush with
+  // the docked sidebar (patch 0010); split panes keep kFlechaSplitGap between them and share
+  // the rest by the ratio (patch 0019).
+  const pageGap = 8;
+  const splitGap = 8;
+  // Each card's page shadow (patch 0041: 4px down, 14px blur) shades its neighbour's edge.
+  // GPUI's blur fades out by about twice its radius, so pane colours are exact only past that.
+  const shadow = 4 + 2 * 14;
   const [windowX, windowY, windowWidth, windowHeight] = geometry;
-  const origin = Math.max(0, windowX);
-  const end = Math.min(width, windowX + windowWidth);
-  const bottom = Math.min(height, windowY + windowHeight);
-  let top = Math.max(0, windowY);
+  const middle = windowY + Math.floor(windowHeight / 2);
 
-  while (top < bottom && !sidebars.includes(pixel(origin, top))) top++;
+  if (!sidebars.includes(pixel(windowX + 2, middle))) return 'could not locate the sidebar';
 
-  if (top >= bottom) return 'could not locate the sidebar';
+  let pageLeft = windowX;
 
-  const sidebar = pixel(origin, top);
+  while (pageLeft < windowX + windowWidth && pixel(pageLeft, middle) !== left) pageLeft++;
 
-  let edge = origin;
+  if (pageLeft >= windowX + windowWidth) return 'could not locate the left pane';
 
-  while (edge < end && pixel(edge, top) === sidebar) edge++;
-
-  if (edge >= end) return 'could not locate the page area';
-
-  // The split has no gutters or borders. A fractional boundary can
-  // rasterize either way in the single column it crosses.
-  const boundary = edge + (windowX + windowWidth - edge) * ratio;
-  const leftEnd = Math.floor(boundary);
-  const rightStart = Math.ceil(boundary);
+  const pageTop = windowY + pageGap;
+  const pageBottom = windowY + windowHeight - pageGap;
+  const pageRight = windowX + windowWidth - pageGap;
+  // Fractional edges rasterize either way in the one column or row they cross.
+  const leftEnd = pageLeft + (pageRight - pageLeft - splitGap) * ratio;
+  const rightStart = leftEnd + splitGap;
+  const inside = (x, y, x0, x1) => x >= x0 - 1 && x < x1 + 1 && y >= pageTop - 1 && y < pageBottom + 1;
+  const solid = (x, y, x0, x1) => x >= x0 + shadow && x < x1 - shadow && y >= pageTop + shadow && y < pageBottom - shadow;
 
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const actual = pixel(x, y);
-      let matches = actual !== left && actual !== right;
+      const where = `in ${width}×${height}, panes ${pageLeft}–${leftEnd.toFixed(1)} and ${rightStart.toFixed(1)}–${pageRight}, rows ${pageTop}–${pageBottom}`;
 
-      if (y >= top && y < bottom && x >= edge && x < end) {
-        matches = x < leftEnd ? actual === left : x >= rightStart ? actual === right : actual === left || actual === right;
-      }
+      if (actual === left && !inside(x, y, pageLeft, leftEnd)) return `left pane colour outside its pane at (${x}, ${y}) ${where}`;
 
-      if (!matches) {
-        return `unexpected #${actual.toString(16)} at (${x}, ${y}) in ${width}×${height}, page starts at (${edge}, ${top}) and splits at ${boundary}`;
-      }
+      if (actual === right && !inside(x, y, rightStart, pageRight)) return `right pane colour outside its pane at (${x}, ${y}) ${where}`;
+
+      if (solid(x, y, pageLeft, leftEnd) && actual !== left) return `unexpected #${actual.toString(16)} at (${x}, ${y}) in the left pane ${where}`;
+
+      if (solid(x, y, rightStart, pageRight) && actual !== right) return `unexpected #${actual.toString(16)} at (${x}, ${y}) in the right pane ${where}`;
     }
   }
 }
@@ -360,26 +361,22 @@ async function nativeContextMenu(app) {
 
   assert(Number.isFinite(x) && Number.isFinite(y), 'missing page marker');
 
-  const histogram = path => execFileSync('magick', [path, '-format', '%c', 'histogram:info:'], { encoding: 'utf8' });
-  // The menu's border (theme.rs border, Dark or Light): Theme::System follows Xvfb's Light
-  // appearance. Only a colour the window did not already show marks the menu.
-  const shownBefore = histogram(join(out, 'open.png'));
-  const borders = ['#405863', '#B4C2CC'].filter(color => !shownBefore.includes(color));
+  // The menu opens at the click, over the page's yellow marker. A point inside it, past its 8px
+  // corner radius and 5px padding, shows `--surface` (ui/tokens.css:51, 107) while it is open:
+  // Theme::System follows Xvfb's Light appearance, Dark is accepted too.
+  const probe = [x + 20, y + 12];
+  const pixel = path => execFileSync('magick', [path, '-format', `%[hex:p{${probe[0]},${probe[1]}}]`, 'info:'], { encoding: 'utf8' }).trim().slice(0, 6).toUpperCase();
+  const surfaces = ['FFFFFF', '161E2B'];
 
-  assert(borders.length, 'the window already shows both menu border colours');
+  assert.equal(pixel(join(out, 'open.png')), 'FFCC49', 'the menu probe is not on the page marker');
   execFileSync(x11Driver, ['right-click', x + 1, y + 1]);
   await app.present();
   await captureUntil('page-context-menu', 'root', path =>
-    borders.some(color => histogram(path).includes(color)) ? undefined : 'the menu border is missing');
+    surfaces.includes(pixel(path)) ? undefined : `the menu surface is missing (${pixel(path)})`);
   execFileSync(x11Driver, ['key', 'Escape']);
   await app.present();
-  await captureUntil('page-context-menu-dismissed', 'root', path => {
-    const colors = histogram(path);
-
-    if (borders.some(color => colors.includes(color))) return 'menu border is still visible';
-
-    if (!colors.includes('#FFCC49')) return 'page is missing';
-  });
+  await captureUntil('page-context-menu-dismissed', 'root', path =>
+    pixel(path) === 'FFCC49' ? undefined : `the page marker is still covered (${pixel(path)})`);
   pass('right-click opened the GPUI page menu and Escape dismissed it');
 }
 
@@ -655,7 +652,7 @@ async function openTab(app, path) {
 // or a tab switch ends it. Xvfb runs no window manager, so the native fullscreen request has
 // no effect here and the window keeps its size.
 async function pageFullscreen(app, main, other) {
-  const sidebars = ['#202A30', '#E4E9ED'];
+  const sidebars = ['#2F3746', '#CDD9F7'];
   const page = ['#147A70', '#FFCC49'];
   const tab = await openTab(app, '/fullscreen');
   const histogram = path => execFileSync('magick', [path, '-format', '%c', 'histogram:info:'], { encoding: 'utf8' });
@@ -834,7 +831,7 @@ async function incognitoChecks(app, main) {
   assert(Object.values(running.core.tabs).every(tab => !tab.url.includes(privateJar)),
     'an incognito tab reached the regular state');
   await app.present(first.window);
-  await capture('incognito', ['#2A2338', '#147A70'], 'Flecha Incognito');
+  await capture('incognito', ['#323645', '#147A70'], 'Flecha Incognito');
   pass('the incognito window drew its violet sidebar beside the page');
 
   const closed = await app.command('close_window', { window: first.window });
