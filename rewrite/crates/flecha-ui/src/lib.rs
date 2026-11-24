@@ -244,6 +244,8 @@ struct Controller {
     session_dir: PathBuf,
     snapshots: LoadedState,
     windows: BTreeMap<WindowId, WindowHandle<Shell>>,
+    /// Where each window shows its pages, even while it shows none.
+    page_areas: BTreeMap<WindowId, Viewport>,
     /// The window opened before CEF started, until a main window takes it over.
     first_window: Option<gpui::AnyWindowHandle>,
     front: Option<WindowId>,
@@ -337,6 +339,7 @@ impl Controller {
             store,
             snapshots,
             windows: BTreeMap::new(),
+            page_areas: BTreeMap::new(),
             first_window: None,
             front: None,
             ready: false,
@@ -723,6 +726,10 @@ impl Controller {
         Ok(())
     }
 
+    fn page_area(&mut self, window: WindowId, viewport: Viewport) {
+        self.page_areas.insert(window, viewport);
+    }
+
     fn fail(&mut self, error: anyhow::Error, cx: &mut App) {
         *self.failure.borrow_mut() = Some(error);
         self.quitting = true;
@@ -936,6 +943,7 @@ fn sync_windows(controller: &Shared, cx: &mut App) -> Result<()> {
             {
                 let mut state = controller.borrow_mut();
                 state.windows.remove(id);
+                state.page_areas.remove(id);
                 state.sleep.window_activation(id, false);
             }
             let _ = handle.update(cx, |_, window, _| window.remove_window());
@@ -1074,6 +1082,29 @@ mod tests {
         assert!(controller.model.flechinhas.is_empty());
         let active = controller.model.active(&regular).unwrap();
         assert_eq!(controller.model.core.tab(active).unwrap().url, URL);
+    }
+
+    #[test]
+    fn open_in_flecha_brings_back_the_regular_window_an_incognito_one_outlived() {
+        let profile = tempfile::tempdir().unwrap();
+        let (mut controller, regular) = controller(&profile);
+        controller
+            .act(&regular, Action::NewIncognitoWindow)
+            .unwrap();
+        let private = controller.front.clone().unwrap();
+        controller.act(&regular, Action::CloseWindow).unwrap();
+        assert!(controller.model.regular_closed());
+
+        controller.relaunch(Some(LINK)).unwrap();
+        let mini = controller.model.flechinhas.keys().next().unwrap().clone();
+        controller.act(&mini, Action::Return).unwrap();
+
+        assert!(controller.model.flechinhas.is_empty());
+        assert!(!controller.model.regular_closed());
+        assert_eq!(controller.front.as_ref(), Some(&regular));
+        let active = controller.model.active(&regular).unwrap();
+        assert_eq!(controller.model.core.tab(active).unwrap().url, URL);
+        assert!(controller.model.is_incognito(&private));
     }
 
     #[test]

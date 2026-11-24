@@ -79,7 +79,7 @@ impl Palette {
             divider: rgb(0xcfd8df),
             text: rgb(0x1a2227),
             text_secondary: rgb(0x34434d),
-            muted: rgb(0x5a6973),
+            muted: rgb(0x4a5862),
             accent: rgb(0xc4daf0),
             accent_strong: rgb(0x1f6fb5),
             selection: rgb(0xb5d3f3),
@@ -141,6 +141,44 @@ mod tests {
         WindowAppearance::Dark,
         WindowAppearance::VibrantDark,
     ];
+
+    /// WCAG 2.x contrast ratio.
+    fn contrast(a: Rgba, b: Rgba) -> f32 {
+        let luminance = |color: Rgba| {
+            let linear = |c: f32| {
+                if c <= 0.03928 {
+                    c / 12.92
+                } else {
+                    ((c + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * linear(color.r) + 0.7152 * linear(color.g) + 0.0722 * linear(color.b)
+        };
+        let (a, b) = (luminance(a), luminance(b));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    #[test]
+    fn light_muted_text_reads_on_every_light_background() {
+        let light = Palette::light();
+        for (name, background) in [
+            ("background", light.background),
+            ("page", light.page),
+            ("sidebar", light.sidebar),
+            ("panel", light.panel),
+            ("surface", light.surface),
+            ("inset", light.inset),
+            ("accent", light.accent),
+            ("selection", light.selection),
+            ("hover", light.hover),
+            ("row", light.row),
+            ("destructive", light.destructive),
+        ] {
+            // WCAG AA for body text.
+            let ratio = contrast(light.muted, background);
+            assert!(ratio >= 4.5, "muted on {name} is {ratio:.2}:1");
+        }
+    }
 
     #[test]
     fn dark_and_light_ignore_the_system_appearance() {

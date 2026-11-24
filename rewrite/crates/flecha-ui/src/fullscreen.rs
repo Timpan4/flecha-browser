@@ -53,6 +53,37 @@ impl PageFullscreen {
     }
 }
 
+/// A window's native fullscreen on behalf of its page. The window manager applies a request
+/// later, so the page may leave fullscreen before the window has entered it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum NativeFullscreen {
+    /// Flecha holds no native fullscreen. Native fullscreen the user chose stays theirs.
+    #[default]
+    Idle,
+    /// Flecha asked for native fullscreen and the window has not entered it yet.
+    Requested,
+    /// The window is in native fullscreen because Flecha asked.
+    Held,
+}
+
+impl NativeFullscreen {
+    /// The next state, from whether the page wants fullscreen and whether the window is in it,
+    /// and whether to toggle the window's native fullscreen now.
+    pub(crate) fn next(self, wanted: bool, window_fullscreen: bool) -> (Self, bool) {
+        match (self, wanted, window_fullscreen) {
+            (Self::Idle, true, false) => (Self::Requested, true),
+            (Self::Idle, _, _) => (Self::Idle, false),
+            (Self::Requested, true, true) => (Self::Held, false),
+            // The page left before the window entered: undo the entry once it lands.
+            (Self::Requested, false, true) | (Self::Held, false, true) => (Self::Idle, true),
+            (Self::Requested, _, false) => (Self::Requested, false),
+            // The user already took the window out of native fullscreen.
+            (Self::Held, false, false) => (Self::Idle, false),
+            (Self::Held, true, _) => (Self::Held, false),
+        }
+    }
+}
+
 /// Whether a window whose page is in fullscreen keeps its sidebar. A sidebar the user hid stays
 /// hidden.
 pub(crate) fn keeps_sidebar(settings: &Settings, sidebar_visible: bool) -> bool {
@@ -139,6 +170,54 @@ mod tests {
             "asked a gone browser to exit: {hidden:?}"
         );
         assert!(pages.0.is_empty());
+    }
+
+    /// Runs renders of (page wants fullscreen, window is fullscreen) and returns the window's
+    /// toggles and the final state.
+    fn native(renders: &[(bool, bool)]) -> (Vec<bool>, NativeFullscreen) {
+        let mut state = NativeFullscreen::Idle;
+        let toggles = renders
+            .iter()
+            .map(|&(wanted, window)| {
+                let (next, toggle) = state.next(wanted, window);
+                state = next;
+                toggle
+            })
+            .collect();
+        (toggles, state)
+    }
+
+    #[test]
+    fn a_late_native_entry_after_the_page_left_is_undone() {
+        // Enter, Esc before the window manager answers, then the entry lands.
+        let (toggles, state) = native(&[(true, false), (false, false), (false, true)]);
+        assert_eq!(toggles, [true, false, true]);
+        assert_eq!(state, NativeFullscreen::Idle);
+        // Nothing more once the exit lands.
+        assert_eq!(state.next(false, false), (NativeFullscreen::Idle, false));
+    }
+
+    #[test]
+    fn native_fullscreen_follows_the_page_without_repeating_requests() {
+        let (toggles, state) = native(&[(true, false), (true, false), (true, true), (false, true)]);
+        assert_eq!(toggles, [true, false, false, true]);
+        assert_eq!(state, NativeFullscreen::Idle);
+        // The exit has not landed yet: no second toggle.
+        assert_eq!(state.next(false, true), (NativeFullscreen::Idle, false));
+    }
+
+    #[test]
+    fn native_fullscreen_the_user_chose_or_left_stays_theirs() {
+        let (toggles, _) = native(&[(true, true), (false, true)]);
+        assert_eq!(toggles, [false, false], "toggled the user's fullscreen");
+        let (toggles, state) =
+            native(&[(true, false), (true, true), (true, false), (false, false)]);
+        assert_eq!(
+            toggles,
+            [true, false, false, false],
+            "re-entered after the user left"
+        );
+        assert_eq!(state, NativeFullscreen::Idle);
     }
 
     #[test]

@@ -444,17 +444,22 @@ impl Model {
     }
 
     /// A Flechinha's page goes back to the focused window of its own kind: an incognito page
-    /// to an incognito window (patch 0032), any other to a regular one.
+    /// to an incognito window (patch 0032), any other to a regular one. A regular page brings
+    /// back the regular window that closed while incognito windows stayed open.
     pub fn return_page(&mut self, window: &WindowId) -> Result<(WindowId, TabId)> {
-        let partition = &self
+        let partition = self
             .flechinhas
             .get(window)
             .context("no Flechinha to return")?
-            .partition;
-        let destination = self
-            .focused_window_for(partition)
-            .context("no window to return the page to")?
+            .partition
             .clone();
+        let destination = if !partition.is_incognito() && self.regular_closed {
+            self.open_regular_window()?
+        } else {
+            self.focused_window_for(&partition)
+                .context("no window to return the page to")?
+                .clone()
+        };
         let page = self
             .flechinhas
             .remove(window)

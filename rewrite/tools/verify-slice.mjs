@@ -458,7 +458,13 @@ async function managerFocus(app, left, right) {
 
   // The fifth tab in the centered GPUI Settings panel on the Xvfb fixture.
   execFileSync(x11Driver, ['click', Math.round(x + width / 2 + 5), y + 105]);
-  await capture('tabs-spaces-manager', ['#73B4E4']);
+  // The selected Settings tab's accent (theme.rs accent_strong), Dark or Light: Theme::System
+  // follows Xvfb's Light appearance.
+  await captureUntil('tabs-spaces-manager', 'root', path => {
+    const histogram = execFileSync('magick', [path, '-format', '%c', 'histogram:info:'], { encoding: 'utf8' });
+
+    return ['#73B4E4', '#1F6FB5'].some(color => histogram.includes(color)) ? undefined : 'the Tabs & Spaces tab is not selected';
+  });
 
   execFileSync(x11Driver, ['key', 'q']);
   execFileSync(x11Driver, ['chord', 'Control_L', 'a']);

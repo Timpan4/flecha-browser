@@ -63,9 +63,7 @@ pub(crate) struct Shell {
     pub(crate) consumed_keys: BTreeSet<String>,
     images: BTreeMap<TabId, Vec<Arc<RenderImage>>>,
     title: String,
-    /// The window went native fullscreen for its page, so leaving page fullscreen undoes it.
-    /// Native fullscreen the user chose stays.
-    page_made_fullscreen: bool,
+    native_fullscreen: crate::fullscreen::NativeFullscreen,
     _activation: Subscription,
     _appearance: Subscription,
 }
@@ -118,7 +116,7 @@ impl Shell {
             consumed_keys: BTreeSet::new(),
             images: BTreeMap::new(),
             title: String::new(),
-            page_made_fullscreen: false,
+            native_fullscreen: Default::default(),
             _activation: activation,
             _appearance: appearance,
         }
@@ -229,15 +227,36 @@ impl Shell {
         focused
     }
 
+    /// Records where this window shows pages, so an agent's background page takes that size
+    /// while the window shows none.
+    fn page_area_probe(&self) -> impl IntoElement {
+        let (state, id) = (self.state.clone(), self.id.clone());
+        canvas(
+            |_, _, _| (),
+            move |area, (), window, cx| {
+                let screen = window
+                    .display(cx)
+                    .map_or(window.bounds(), |display| display.bounds());
+                let viewport = Viewport::new(area, window.bounds(), screen, window.scale_factor());
+                let (state, id) = (state.clone(), id.clone());
+                cx.defer(move |_| state.borrow_mut().page_area(id, viewport));
+            },
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+    }
+
     /// Puts the window in native fullscreen while its page is in HTML fullscreen, and takes it
-    /// out afterwards unless the user had made it fullscreen first.
+    /// out afterwards unless the user had made it fullscreen first. GPUI redraws a window whose
+    /// bounds change, as a native fullscreen change does, so a late entry is undone here too.
     fn sync_native_fullscreen(&mut self, page_fullscreen: bool, window: &mut Window) {
-        if page_fullscreen {
-            if !self.page_made_fullscreen && !window.is_fullscreen() {
-                window.toggle_fullscreen();
-                self.page_made_fullscreen = true;
-            }
-        } else if std::mem::take(&mut self.page_made_fullscreen) && window.is_fullscreen() {
+        let (next, toggle) = self
+            .native_fullscreen
+            .next(page_fullscreen, window.is_fullscreen());
+        self.native_fullscreen = next;
+        if toggle {
             window.toggle_fullscreen();
         }
     }
@@ -496,7 +515,13 @@ impl Render for Shell {
                 };
                 pages = pages.child(div().h_full().w(relative(width)).child(pane));
             }
-            let mut page_area = div().relative().flex_1().min_h_0().min_w_0().child(pages);
+            let mut page_area = div()
+                .relative()
+                .flex_1()
+                .min_h_0()
+                .min_w_0()
+                .child(pages)
+                .child(self.page_area_probe());
             if let Some(peek) = state.model.peeks.get(&self.id) {
                 page_area = page_area.child(deferred(
                     div()

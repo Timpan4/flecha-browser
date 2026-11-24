@@ -169,6 +169,23 @@ assert(!JSON.parse(text(await tool('list_tabs'))).some(tab => tab.id === tabId))
 
 pass('close_tab closed the agent tab');
 
+// With the launch's page closed the window shows no page; an agent tab takes the size of
+// the window's page area.
+const launched = tabs.find(tab => tab.url === `${site.base}/open`).id;
+
+assert.equal(text(await tool('close_tab', { tabId: launched })), 'ok');
+
+assert.deepEqual(JSON.parse(text(await tool('list_tabs'))), [], 'the window still has tabs');
+
+const fromEmpty = JSON.parse(text(await tool('open_tab', { url: `${site.base}/peek` })));
+const emptyReady = await tool('wait_for', { tabId: fromEmpty.tabId, selector: '#marker', timeoutMs: 20000 });
+
+assert.equal(text(emptyReady), 'ready', JSON.stringify(emptyReady));
+
+assert.equal(text(await tool('evaluate', { tabId: fromEmpty.tabId, expression: 'innerWidth > 0 && innerHeight > 0' })), 'true');
+
+pass('open_tab from a window showing no page loaded a page agents can drive');
+
 // Ctrl+Q quits; the bridge must stop with the app.
 execFileSync('cc', [
   '-std=c17', '-Wall', '-Wextra', '-Werror', 'spikes/gpui-cef-compositor/x11-input.c',

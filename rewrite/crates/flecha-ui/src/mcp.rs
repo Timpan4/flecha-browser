@@ -103,6 +103,10 @@ fn closing() -> ToolError {
     ToolError("Flecha is closing".into())
 }
 
+fn no_page_area() -> ToolError {
+    ToolError("Flecha shows no window to size the agent's tab by. Open a window first.".into())
+}
+
 fn unexpected() -> ToolError {
     ToolError("Flecha answered another request".into())
 }
@@ -774,11 +778,16 @@ impl Controller {
     }
 
     fn agent_open(&mut self, input: &str) -> ToolResult<TabId> {
+        if self.ready && self.agent_viewport().is_none() {
+            return Err(no_page_area());
+        }
         let id = agent::state::open_agent_tab(&mut self.model.core, model::tab_id(), input, now())?;
         self.agent_changed()?;
-        // A page to settle on; without a page on screen to size it by, the first tool that
-        // needs it reports that.
-        let _ = self.agent_browser(&id);
+        if let Err(error) = self.agent_browser(&id) {
+            self.close_tab(&id);
+            self.agent_changed()?;
+            return Err(error);
+        }
         Ok(id)
     }
 
@@ -820,11 +829,7 @@ impl Controller {
             self.engine.thaw_tab(tab);
             return Ok(self.engine.host(tab).and_then(|_| self.engine.key(tab)));
         }
-        let viewport = self.agent_viewport().ok_or_else(|| {
-            ToolError(
-                "Flecha shows no page to size the agent's tab by. Open a window first.".into(),
-            )
-        })?;
+        let viewport = self.agent_viewport().ok_or_else(no_page_area)?;
         let partition = self
             .model
             .partition(tab)
@@ -844,12 +849,18 @@ impl Controller {
         }
     }
 
-    /// The size of the page the user sees, for a page no window shows.
+    /// The size of the page the user sees, for a page no window shows: the focused regular
+    /// window's page, else where that window would show one.
     fn agent_viewport(&self) -> Option<Viewport> {
         let focused = &self.model.core.focused_window().id;
         self.model
             .active(focused)
             .and_then(|tab| self.engine.viewport(tab))
+            .or_else(|| {
+                (!self.model.regular_closed())
+                    .then(|| self.page_areas.get(focused).copied())
+                    .flatten()
+            })
             .or_else(|| {
                 self.engine
                     .ids()
@@ -1095,11 +1106,12 @@ mod tests {
     }
 
     #[test]
-    fn page_tools_without_a_page_to_size_by_fail_instead_of_waiting() {
+    fn without_a_window_to_size_by_tools_fail_instead_of_waiting() {
         let profile = tempfile::tempdir().unwrap();
         let (mut controller, regular) = controller(&profile);
         let kept = open(&mut controller, &regular, REGULAR);
         controller.ready = true;
+        let tabs = controller.model.core.open_tabs().len();
 
         let answer = tool(
             &mut controller,
@@ -1107,7 +1119,51 @@ mod tests {
             json!({ "tabId": kept.as_str(), "expression": "1" }),
         );
         assert!(failed(&answer));
-        assert!(text(&answer).contains("no page to size"), "{answer}");
+        assert!(text(&answer).contains("no window to size"), "{answer}");
+
+        let opened = tool(
+            &mut controller,
+            "open_tab",
+            json!({ "url": "example.org/agent" }),
+        );
+        assert!(
+            failed(&opened),
+            "open_tab claimed a page it can't show: {opened}"
+        );
+        assert!(text(&opened).contains("no window to size"), "{opened}");
+        assert_eq!(controller.model.core.open_tabs().len(), tabs);
+    }
+
+    #[test]
+    fn an_empty_window_sizes_the_agents_tab_by_its_page_area() {
+        let profile = tempfile::tempdir().unwrap();
+        let (mut controller, regular) = controller(&profile);
+        let area = Viewport::new(
+            gpui::Bounds::new(
+                gpui::point(gpui::px(240.), gpui::px(0.)),
+                gpui::size(gpui::px(1040.), gpui::px(800.)),
+            ),
+            gpui::Bounds::new(
+                gpui::point(gpui::px(0.), gpui::px(0.)),
+                gpui::size(gpui::px(1280.), gpui::px(800.)),
+            ),
+            gpui::Bounds::new(
+                gpui::point(gpui::px(0.), gpui::px(0.)),
+                gpui::size(gpui::px(1920.), gpui::px(1080.)),
+            ),
+            1.0,
+        );
+        assert!(controller.agent_viewport().is_none());
+
+        controller.page_area(regular.clone(), area);
+        assert!(controller.agent_viewport() == Some(area));
+
+        // A closed regular window sizes nothing.
+        controller
+            .act(&regular, Action::NewIncognitoWindow)
+            .unwrap();
+        controller.act(&regular, Action::CloseWindow).unwrap();
+        assert!(controller.agent_viewport().is_none());
     }
 
     #[test]
