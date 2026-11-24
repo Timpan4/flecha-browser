@@ -85,7 +85,6 @@ const statusPages = {
       const tone = context.createOscillator();
       tone.connect(context.destination);
       tone.start();
-      window.stopTone = () => tone.stop();
     });
   </script>`],
 };
@@ -1680,13 +1679,6 @@ async function tabStatus(app, main, left) {
     ? 'hovering the split row did not swap its split mark for the row actions'
     : undefined);
   pass('a tab in a split showed the split mark, and hovering its row swapped the mark for the row actions');
-
-  after = app.events.length;
-  await app.command('script', { tab: audioTab, source: 'window.stopTone()' });
-  await app.wait('the page to stop being audible', event =>
-    event.type === 'audible' && event.tab === audioTab && !event.audible, after, stepTimeoutMs);
-  assert.equal((await browser(audioTab)).audible, false);
-  pass('stopping the tone cleared the audible state without a navigation');
 
   // Closing a pinned tab closes its page, whatever happens to the pin.
   click([closeX, windowY + splitCentre]);

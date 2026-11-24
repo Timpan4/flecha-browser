@@ -2,7 +2,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, VecDeque};
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 
 use cef::{rc::Rc as _, *};
 use flecha_surface::{Frame as SurfaceFrame, SurfaceTarget};
@@ -74,9 +74,8 @@ pub(crate) struct Slot {
     /// copies, and the render handler ignores shared textures until then.
     pub import_failure: RefCell<Option<anyhow::Error>>,
     pub ime: Ime,
-    /// Alloy owns one loopback capture stream per browser. Its start callback runs off the UI thread.
-    pub audio_stream: Arc<AtomicBool>,
-    reported_audible: Cell<bool>,
+    /// Whether the page became audible since its document loaded ([`crate::Engine::is_audible`]).
+    pub audible: Cell<bool>,
     delivery: Cell<Option<Delivery>>,
 }
 
@@ -109,8 +108,7 @@ impl Slot {
             shares_textures: Cell::new(false),
             import_failure: RefCell::new(None),
             ime: Ime::default(),
-            audio_stream: Arc::default(),
-            reported_audible: Cell::new(false),
+            audible: Cell::new(false),
             delivery: Cell::new(None),
         }
     }
@@ -175,9 +173,9 @@ impl Slot {
         });
     }
 
-    pub fn report_audio_change(&self) {
-        let audible = self.audio_stream.load(Ordering::Relaxed);
-        if self.stage.get() == Stage::Live && self.reported_audible.replace(audible) != audible {
+    /// Records whether the page is audible, and tells the shell when that changes.
+    fn set_audible(&self, audible: bool) {
+        if !self.retired.get() && self.audible.replace(audible) != audible {
             self.emit(Event::Audible(audible));
         }
     }
@@ -457,8 +455,10 @@ wrap_load_handler! {
             &self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, _transition_type: TransitionType,
         ) {
             let Some(frame) = frame.filter(|frame| frame.is_main() != 0) else { return };
-            self.slot.committed_navigation.fetch_add(1, Ordering::SeqCst);
+            self.slot.committed_navigation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             self.slot.ime.reset_document();
+            // A new document. CEF reports when a page becomes audible, never when it stops.
+            self.slot.set_audible(false);
             context_menu::cancel(&self.slot);
             if self.slot.dialogs.cancel() {
                 self.slot.emit(Event::DialogChanged);
@@ -499,18 +499,13 @@ wrap_load_handler! {
 }
 
 wrap_audio_handler! {
-    struct Audio { stream: Arc<AtomicBool> }
+    struct Audio { slot: Rc<Slot> }
     impl AudioHandler {
+        // Alloy requests parameters when a page becomes audible. Its loopback capture mutes
+        // the source (CEF 8127, CefAudioLoopbackStreamCreator). Declining preserves playback.
         fn audio_parameters(&self, _browser: Option<&mut Browser>, _params: Option<&mut AudioParameters>) -> i32 {
-            1
-        }
-
-        fn on_audio_stream_started(&self, _browser: Option<&mut Browser>, _params: Option<&AudioParameters>, _channels: i32) {
-            self.stream.store(true, Ordering::Relaxed);
-        }
-
-        fn on_audio_stream_stopped(&self, _browser: Option<&mut Browser>) {
-            self.stream.store(false, Ordering::Relaxed);
+            self.slot.set_audible(true);
+            0
         }
     }
 }
@@ -572,7 +567,7 @@ pub(crate) fn client(slot: Rc<Slot>) -> Client {
         PageHandlers {
             display: Display::new(slot.clone()),
             load: Load::new(slot.clone()),
-            audio: Audio::new(slot.audio_stream.clone()),
+            audio: Audio::new(slot.clone()),
             find: find::handler(slot.clone()),
             context_menu: context_menu::handler(slot.clone()),
             js_dialog: dialogs::JsDialogs::new(slot.clone()),
