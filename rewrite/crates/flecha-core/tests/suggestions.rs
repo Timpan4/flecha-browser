@@ -719,7 +719,7 @@ fn padded_credentials_with_single_label_hosts_and_tails_stay_local() {
     ] {
         assert_eq!(
             resolve_input(query, SearchEngine::Google),
-            Target::Invalid,
+            InputResolution::Invalid,
             "{query:?}"
         );
         assert!(

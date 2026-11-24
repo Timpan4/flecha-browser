@@ -59,7 +59,10 @@ fn has_credentials(input: &str) -> bool {
         None => {
             !userinfo.contains(['/', '?', '#'])
                 && (has_tail || !userinfo.contains(is_js_whitespace))
-                && (!separator.as_str().chars().any(char::is_whitespace)
+                && (!separator
+                    .as_str()
+                    .chars()
+                    .any(|ch| ch != '\u{FEFF}' && is_js_whitespace(ch))
                     || has_tail
                     || starts_with_host(destination))
         }
