@@ -14,8 +14,10 @@ use flecha_adblock::AdBlocker;
 use flecha_boosts::Boosts;
 use flecha_core::TabId;
 
+use crate::context_menu::ContextMenuEvent;
 use crate::devtools::{DevToolsEvent, Internal};
 use crate::downloads::{DownloadEvent, Downloads};
+use crate::find::FindEvent;
 use crate::permissions::{PermissionPrompt, Permissions};
 
 pub(crate) struct Services {
@@ -25,6 +27,8 @@ pub(crate) struct Services {
     pub download_events: Mailbox<DownloadEvent>,
     pub permissions: RefCell<Permissions>,
     pub permission_events: Mailbox<Option<PermissionPrompt>>,
+    pub context_menu_events: RefCell<VecDeque<ContextMenuEvent>>,
+    pub find_events: RefCell<VecDeque<FindEvent>>,
     pub devtools_events: Mailbox<DevToolsEvent>,
     /// The next CDP message id. CDP ids are positive 32-bit integers.
     pub devtools_next: Cell<i32>,
@@ -44,6 +48,8 @@ impl Services {
             download_events: Mailbox::default(),
             permissions: RefCell::new(Permissions::default()),
             permission_events: Mailbox::default(),
+            context_menu_events: RefCell::default(),
+            find_events: RefCell::default(),
             devtools_events: Mailbox::default(),
             devtools_next: Cell::new(1),
             devtools_internal: RefCell::new(BTreeMap::new()),
