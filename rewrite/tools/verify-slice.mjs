@@ -19,7 +19,7 @@ const stepTimeoutMs = 10_000;
 const shippingTrace = readFileSync(new URL('./slice-ts-replay.jsonl', import.meta.url), 'utf8')
   .trim().split('\n').map(line => JSON.parse(line));
 
-assert(['slice', 'open', 'focus', 'popups', 'adblock', 'incognito', 'fullscreen', 'break-restore'].includes(mode), 'unknown slice check');
+assert(['slice', 'open', 'focus', 'popups', 'adblock', 'incognito', 'fullscreen', 'break-restore', 'visual'].includes(mode), 'unknown slice check');
 
 const easylist = '[Adblock Plus 2.0]\n! Title: EasyList\n/fixture-ad$xmlhttprequest\n';
 const easyprivacy = '[Adblock Plus 2.0]\n! Title: EasyPrivacy\n/fixture-tracker$xmlhttprequest\n';
@@ -1211,6 +1211,115 @@ async function closeWithPopup(app) {
   pass(`closing the last Flecha window with a popup and a beforeunload page open closed all ${open.liveBrowsers} CEF browsers and quit`);
 }
 
+/**
+ * Captures each chrome surface in Light and Dark for the visual parity pass: the sidebar with
+ * pinned, folder, favorite and Today tabs, then each overlay over it. Captures land beside the
+ * run's logs as `visual-<surface>-<theme>.png`, cropped to the window.
+ */
+async function visualParity(app, left) {
+  for (const path of ['/split', '/peek', '/opener']) {
+    const opened = await app.command('open', { url: base + path });
+    await app.loaded(active(opened).activeTabId, path);
+  }
+
+  let state = await app.command('new_folder', { name: 'Reading' });
+  const space = win(state).activeSpaceId;
+  const records = state.core.spaces.find(candidate => candidate.id === space).pinnedFlat;
+  const folder = records.find(record => record.name === 'Reading').id;
+  const [newest, second, third] = active(state).today;
+  await app.command('pin', { tab: third, folder });
+  await app.command('pin', { tab: second });
+  await app.command('favorite', { tab: left });
+  await app.command('new_space');
+  await app.command('switch', { space });
+  state = await app.command('select', { tab: newest });
+  assert.equal(active(state).activeTabId, newest);
+
+  const shot = async (name, window = 'Flecha') => {
+    await app.present();
+    // GPUI's animations (popovers rise in --medium, 200ms) settle before the capture.
+    await delay(400);
+    await app.present();
+    const [x, y, width, height] = execFileSync(x11Driver, ['geometry', window], { encoding: 'utf8' })
+      .trim().split(' ').map(Number);
+    const full = join(out, `${name}-root.png`);
+    execFileSync('magick', ['import', '-window', 'root', full]);
+    const cropped = join(out, `${name}.png`);
+    execFileSync('magick', [full, '-crop', `${width}x${height}+${x}+${y}`, '+repage', cropped]);
+    // isolated-run.sh binds FLECHA_VISUAL_OUT here; the scratch directory goes when the run passes.
+    if (existsSync('/mnt/visual')) copyFileSync(cropped, join('/mnt/visual', `${name}.png`));
+  };
+  const geometry = () => execFileSync(x11Driver, ['geometry', 'Flecha'], { encoding: 'utf8' })
+    .trim().split(' ').map(Number);
+  const key = (...keys) => execFileSync(x11Driver, keys.length > 1 ? ['chord', ...keys] : ['key', keys[0]]);
+  const click = (x, y) => execFileSync(x11Driver, ['click', Math.round(x), Math.round(y)]);
+
+  for (const theme of ['light', 'dark']) {
+    await app.command('theme', { theme });
+    execFileSync(x11Driver, ['focus', 'Flecha']);
+    const [x, y, width, height] = geometry();
+    // Away from the sidebar's controls, so no row shows its hover state.
+    click(x + width - 40, y + height - 40);
+    await shot(`visual-sidebar-${theme}`);
+
+    key('Control_L', 'l');
+    await shot(`visual-command-bar-${theme}`);
+    key('Escape');
+
+    key('Control_L', 'comma');
+    await shot(`visual-settings-${theme}`);
+    key('Escape');
+
+    key('Control_L', 'h');
+    await shot(`visual-history-${theme}`);
+    key('Escape');
+
+    key('Control_L', 'f');
+    await shot(`visual-find-${theme}`);
+    key('Escape');
+
+    key('Control_L', 'equal');
+    await shot(`visual-zoom-${theme}`);
+    key('Control_L', '0');
+
+    execFileSync(x11Driver, ['right-click', x + width - 200, y + 200]);
+    await shot(`visual-context-menu-${theme}`);
+    key('Escape');
+
+    // The footer's Downloads button: the sidebar's left and bottom padding, then half the
+    // 28px icon button (ui/styles.css:32, 136).
+    click(x + 10 + 14, y + height - 8 - 14);
+    await shot(`visual-downloads-${theme}`);
+    key('Escape');
+
+    // The address's site controls button: right of the 36px address, inside its 4px padding
+    // and the sidebar's 6px (ui/styles.css:32, 177-178, 203).
+    click(x + 260 - 6 - 4 - 13, y + 10 + 28 + 8 + 18);
+    await shot(`visual-site-controls-${theme}`);
+    key('Escape');
+
+    await app.command('peek', { url: base + '/peek' });
+    await shot(`visual-peek-${theme}`);
+    await app.command('close_peek');
+
+    await app.command('split', { url: base + '/split' });
+    await shot(`visual-split-${theme}`);
+    await app.command('close');
+    await app.command('select', { tab: newest });
+
+    const [{ window: mini }] = (await app.command('detach')).flechinhas;
+    await shot(`visual-flechinha-${theme}`, 'Flechinha');
+    const returned = await app.command('return', { window: mini });
+    await app.command('select', { tab: active(returned).activeTabId });
+  }
+
+  const { window: incognito } = await openIncognito(app);
+  await app.command('open', { url: base + '/open', window: incognito });
+  await shot('visual-incognito-dark', 'Flecha Incognito');
+  await app.command('close_window', { window: incognito });
+  pass('captured each chrome surface in Light and Dark');
+}
+
 const apps = [];
 
 function launch(name, fixturePort) {
@@ -1329,6 +1438,9 @@ async function verifySlice() {
     await incognitoChecks(app, main);
   } else if (mode === 'fullscreen') {
     await pageFullscreen(app, main, left);
+  } else if (mode === 'visual') {
+    await visualParity(app, left);
+    await app.quit();
   } else if (mode !== 'open') {
     const publicUrl = base.replace('127.0.0.1', 'localtest.me') + '/open';
     const attempted = await app.command('peek', { url: publicUrl });

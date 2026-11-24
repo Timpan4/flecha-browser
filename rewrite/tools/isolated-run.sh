@@ -56,6 +56,13 @@ if [[ $backend == wayland ]]; then
   done
 fi
 
+# The visual mode keeps its captures: the scratch directory is pruned when the run passes.
+visual=()
+if [[ -n ${FLECHA_VISUAL_OUT:-} ]]; then
+  mkdir -p -- "$FLECHA_VISUAL_OUT"
+  visual=(--bind "$FLECHA_VISUAL_OUT" /mnt/visual)
+fi
+
 cc -std=c17 -Wall -Wextra -Werror "$rewrite/tools/pidfd-run.c" -o "$scratch/pidfd-run"
 # The shipping Chromium native harness supplies the watchdog. The command
 # runs as PID 1: its exit makes the kernel reap the private namespace.
@@ -74,6 +81,7 @@ exec "$scratch/pidfd-run" "${FLECHA_HARNESS_TIMEOUT_MS:-600000}" "$scratch" \
   --ro-bind "$rewrite/spikes/gpui-cef-compositor/x11-input.c" /mnt/work/spikes/gpui-cef-compositor/x11-input.c \
   --ro-bind-try "$binary" /mnt/work/target/debug/flecha \
   --ro-bind "$runtime" /mnt/cef --bind "$scratch" /mnt/scratch --chdir /mnt/work \
+  "${visual[@]}" \
   "${node_mount[@]}" --clearenv --setenv PATH /mnt/bin:/usr/bin:/bin \
   bash -c 'ip link set lo up && exec setpriv --bounding-set=-all --inh-caps=-all --ambient-caps=-all \
     bash /mnt/work/tools/isolated-session.sh "$@"' launcher \
