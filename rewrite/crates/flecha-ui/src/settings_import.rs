@@ -258,7 +258,20 @@ impl Controller {
             .incognito
             .as_ref()
             .into_iter()
-            .flat_map(|incognito| incognito.state.windows().iter().map(|window| &window.id))
+            .flat_map(|incognito| {
+                incognito
+                    .state
+                    .windows()
+                    .iter()
+                    .map(|window| &window.id)
+                    .chain(
+                        incognito
+                            .state
+                            .closed_windows()
+                            .iter()
+                            .map(|closed| &closed.window.id),
+                    )
+            })
             .chain(
                 self.model
                     .flechinhas
@@ -289,7 +302,17 @@ impl Controller {
             .incognito
             .as_ref()
             .into_iter()
-            .flat_map(|incognito| incognito.state.open_tabs().into_keys())
+            .flat_map(|incognito| {
+                incognito.state.open_tabs().into_keys().chain(
+                    incognito.state.closed_windows().iter().flat_map(|closed| {
+                        closed
+                            .window
+                            .spaces
+                            .values()
+                            .flat_map(|space| space.today.iter())
+                    }),
+                )
+            })
             .chain(
                 self.model
                     .peeks
@@ -312,7 +335,16 @@ impl Controller {
                     .map(|popup| &popup.page.id),
             )
             .chain(self.engine.ids().filter(|id| !self.is_regular_page(id)))
-            .any(|id| next.tab(id).is_some());
+            .any(|id| {
+                next.tab(id).is_some()
+                    || next.closed_windows().iter().any(|closed| {
+                        closed
+                            .window
+                            .spaces
+                            .values()
+                            .any(|space| space.today.contains(id))
+                    })
+            });
         ensure!(
             !private_tab_collision,
             "Close incognito windows before importing a state that reuses an open incognito tab ID"
