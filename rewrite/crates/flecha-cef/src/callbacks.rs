@@ -351,6 +351,9 @@ wrap_life_span_handler! {
             let closed = self.slot.created(browser.identifier());
             if !closed {
                 dialogs::register(&self.slot, browser.identifier());
+                if let Some(host) = browser.host() {
+                    host.set_windowless_frame_rate(self.slot.viewport.get().frame_rate());
+                }
             }
             self.slot.browser.replace(Some(browser.clone()));
             // The engine closed this popup, or its opener left, while CEF was creating it.

@@ -1,6 +1,6 @@
 use cef::{
-    BrowserHost, CursorType, ImplBrowserHost as _, KeyEvent, KeyEventType, MouseButtonType,
-    MouseEvent, sys::cef_event_flags_t as Flags,
+    BrowserHost, CursorType, ImplBrowser as _, ImplBrowserHost as _, KeyEvent, KeyEventType,
+    MouseButtonType, MouseEvent, sys::cef_event_flags_t as Flags,
 };
 use std::cell::Cell;
 
@@ -136,23 +136,41 @@ struct Wheel {
     precise: bool,
 }
 
-/// The fraction of a pixel that earlier scroll events reported but CEF has not received.
+/// The fraction of a pixel that earlier touchpad scroll events reported but CEF has not received,
+/// scoped to the browser that received them.
 #[derive(Default)]
-pub struct ScrollCarry(Cell<Point<f32>>);
+pub struct ScrollCarry(Cell<(i32, Point<f32>)>);
 
 impl ScrollCarry {
-    fn wheel(&self, delta: ScrollDelta) -> Wheel {
-        let (delta, precise) = match delta {
-            ScrollDelta::Pixels(delta) => (point(f32::from(delta.x), f32::from(delta.y)), true),
-            ScrollDelta::Lines(delta) => (delta * PIXELS_PER_LINE, false),
-        };
-        let total = delta + self.0.get();
-        let sent = point(total.x.round(), total.y.round());
-        self.0.set(total - sent);
-        Wheel {
-            dx: sent.x as i32,
-            dy: sent.y as i32,
-            precise,
+    fn wheel(&self, target: i32, delta: ScrollDelta) -> Wheel {
+        match delta {
+            ScrollDelta::Lines(delta) => {
+                self.0.set((target, Point::default()));
+                let scaled = delta * PIXELS_PER_LINE;
+                Wheel {
+                    dx: scaled.x.round() as i32,
+                    dy: scaled.y.round() as i32,
+                    precise: false,
+                }
+            }
+            ScrollDelta::Pixels(delta) => {
+                let (prev_target, prev_carry) = self.0.get();
+                let carry = if prev_target == target {
+                    prev_carry
+                } else {
+                    Point::default()
+                };
+                let total = point(f32::from(delta.x), f32::from(delta.y)) + carry;
+                // Truncate toward zero so the remainder stays strictly inside (-1, 1) and a
+                // subsequent zero-delta event on that axis never oscillates ±1 px.
+                let sent = point(total.x.trunc(), total.y.trunc());
+                self.0.set((target, total - sent));
+                Wheel {
+                    dx: sent.x as i32,
+                    dy: sent.y as i32,
+                    precise: true,
+                }
+            }
         }
     }
 }
@@ -163,7 +181,8 @@ pub fn scroll(
     origin: Point<Pixels>,
     carry: &ScrollCarry,
 ) {
-    let wheel = carry.wheel(scroll.delta);
+    let target = host.browser().map_or(0, |browser| browser.identifier());
+    let wheel = carry.wheel(target, scroll.delta);
     if wheel.dx == 0 && wheel.dy == 0 {
         return;
     }
@@ -264,7 +283,7 @@ mod tests {
         // GPUI's Linux backends report a notch as 3 lines (gpui_linux `SCROLL_LINES`).
         let carry = ScrollCarry::default();
         assert_eq!(
-            carry.wheel(ScrollDelta::Lines(point(0., -3.))),
+            carry.wheel(1, ScrollDelta::Lines(point(0., -3.))),
             Wheel {
                 dx: 0,
                 dy: -120,
@@ -276,10 +295,29 @@ mod tests {
     #[test]
     fn touchpad_pixels_stay_precise_and_keep_their_fractions() {
         let carry = ScrollCarry::default();
-        let pixels = |y| ScrollDelta::Pixels(point(px(0.), px(y)));
-        let sent: Vec<_> = (0..4).map(|_| carry.wheel(pixels(0.25)).dy).collect();
-        assert_eq!(sent, [0, 1, 0, 0]);
-        assert!(carry.wheel(pixels(0.25)).precise);
-        assert_eq!(carry.wheel(pixels(-1.25)).dy, -1);
+        let pixels = |x, y| ScrollDelta::Pixels(point(px(x), px(y)));
+        let sent: Vec<_> = (0..4)
+            .map(|_| carry.wheel(1, pixels(0., 0.25)).dy)
+            .collect();
+        assert_eq!(sent, [0, 0, 0, 1]);
+        assert!(carry.wheel(1, pixels(0., 0.25)).precise);
+        assert_eq!(carry.wheel(1, pixels(0., -1.25)).dy, -1);
+
+        // A 0.5 px movement followed by zero-delta events on that axis must not oscillate.
+        assert_eq!(carry.wheel(1, pixels(0.5, 0.)).dx, 0);
+        let horizontal: Vec<_> = (0..3).map(|_| carry.wheel(1, pixels(0., -2.)).dx).collect();
+        assert_eq!(horizontal, [0, 0, 0]);
+
+        // Touchpad carry must not leak into a wheel notch or across split panes.
+        assert_eq!(
+            carry.wheel(1, ScrollDelta::Lines(point(0., -3.))),
+            Wheel {
+                dx: 0,
+                dy: -120,
+                precise: false
+            }
+        );
+        assert_eq!(carry.wheel(1, pixels(0.75, 0.)).dx, 0);
+        assert_eq!(carry.wheel(2, pixels(0.5, 0.)).dx, 0);
     }
 }
