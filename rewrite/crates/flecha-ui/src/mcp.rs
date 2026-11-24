@@ -1604,7 +1604,11 @@ mod tests {
         // As a desktop launch: the test profile is otherwise isolated.
         controller.isolated = false;
         controller.sync_agents();
-        assert_eq!(controller.agents.endpoint(), None, "agents are off by default");
+        assert_eq!(
+            controller.agents.endpoint(),
+            None,
+            "agents are off by default"
+        );
         assert_eq!(controller.agents.token(), None);
 
         let enable = |controller: &mut Controller, enabled| {
@@ -1616,7 +1620,10 @@ mod tests {
                 .unwrap();
         };
         enable(&mut controller, true);
-        let port = controller.agents.port().expect("the switch started the bridge");
+        let port = controller
+            .agents
+            .port()
+            .expect("the switch started the bridge");
         let old = controller.agents.token().unwrap();
         assert!(http(port, Some(&format!("Bearer {old}"))).starts_with("HTTP/1.1 200"));
 
@@ -1628,7 +1635,11 @@ mod tests {
 
         enable(&mut controller, false);
         assert_eq!(controller.agents.endpoint(), None);
-        assert_eq!(controller.agents.token(), None, "Settings shows no token while off");
+        assert_eq!(
+            controller.agents.token(),
+            None,
+            "Settings shows no token while off"
+        );
         assert!(
             TcpStream::connect(("127.0.0.1", port)).is_err(),
             "the switch left the server listening"
