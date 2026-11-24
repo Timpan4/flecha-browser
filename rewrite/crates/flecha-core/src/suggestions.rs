@@ -921,3 +921,61 @@ pub fn display_url(url: &str) -> String {
     let address = address.strip_prefix("www.").unwrap_or(address);
     address.strip_suffix('/').unwrap_or(address).into()
 }
+
+pub struct VisitedPage<'a> {
+    pub url: &'a str,
+    pub title: &'a str,
+    pub weight: u64,
+}
+
+pub struct InlineCompletion {
+    pub text: String,
+    pub url: String,
+    pub title: Option<String>,
+}
+
+pub fn inline_completion<'a>(
+    typed: &str,
+    visited: impl IntoIterator<Item = VisitedPage<'a>>,
+) -> Option<InlineCompletion> {
+    if typed.is_empty() || typed.contains(is_js_whitespace) || typed.contains("://") {
+        return None;
+    }
+    let lower = typed.to_lowercase();
+    let mut best = None;
+    for page in visited {
+        let Ok(url) = Url::parse(page.url) else {
+            continue;
+        };
+        if !matches!(url.scheme(), "http" | "https") {
+            continue;
+        }
+        let authority = &url[url::Position::BeforeHost..url::Position::AfterPort];
+        let host = authority.strip_prefix("www.").unwrap_or(authority);
+        let full = display_url(page.url);
+        let root = full == host;
+        let rank = (root, page.weight);
+        let (text, url, title) = if host.starts_with(&lower) {
+            (
+                host,
+                format!("{}://{authority}/", url.scheme()),
+                root.then_some(page.title),
+            )
+        } else if full.starts_with(&lower) {
+            (full.as_str(), page.url.into(), Some(page.title))
+        } else {
+            continue;
+        };
+        if text.len() > lower.len() && best.as_ref().is_none_or(|(old, _)| rank > *old) {
+            best = Some((
+                rank,
+                InlineCompletion {
+                    text: text.into(),
+                    url,
+                    title: title.filter(|title| !title.is_empty()).map(str::to_owned),
+                },
+            ));
+        }
+    }
+    best.map(|(_, completion)| completion)
+}

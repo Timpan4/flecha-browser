@@ -37,6 +37,16 @@ impl TextField {
         &self.text
     }
 
+    pub(crate) fn at_end(&self) -> bool {
+        self.cursor == self.text.len() && self.anchor == self.cursor
+    }
+
+    pub(crate) fn append_selected(&mut self, suffix: &str) {
+        self.anchor = self.text.len();
+        self.text.push_str(suffix);
+        self.cursor = self.text.len();
+    }
+
     fn selection(&self) -> Range<usize> {
         self.cursor.min(self.anchor)..self.cursor.max(self.anchor)
     }

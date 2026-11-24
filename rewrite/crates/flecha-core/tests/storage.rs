@@ -10,6 +10,16 @@ use serde_json::{Value, json};
 const V2: &str = include_str!("fixtures/chromium-v2.json");
 
 #[test]
+fn a_disabled_suggestion_preference_survives_restart() {
+    let mut state = migrate_legacy(V2).unwrap();
+    assert_eq!(state.settings.search_suggest_enabled, None);
+    state.settings.search_suggest_enabled = Some(false);
+    let restored = decode(&encode(&state).unwrap()).unwrap();
+    assert_eq!(restored.settings.search_suggest_enabled, Some(false));
+    assert_eq!(restored.settings.search_engine, SearchEngine::Kagi);
+}
+
+#[test]
 fn saved_surrogates_are_replaced_per_code_unit_without_losing_archive_entries() {
     let cases = [
         (r"Cut \ud83d", "Cut �"),

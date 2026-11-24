@@ -235,7 +235,13 @@ impl Shell {
             .flex()
             .flex_col()
             .gap_3()
-            .child(section("Search engine").child(search))
+            .child(section("Search engine").child(search).child(self.toggle(
+                "search-suggestions",
+                "Autocomplete searches and URLs",
+                settings.search_suggestions_enabled(),
+                |settings, enabled| settings.search_suggest_enabled = Some(enabled),
+                cx,
+            )))
             .child(appearance)
             .child(tabs)
             .child(ad_block)

@@ -386,6 +386,23 @@ async function sidebarFocus(app, left) {
   execFileSync(x11Driver, ['click', 95, 227]);
   await waitForSelection(app, left, 'sidebar selected pane A');
   await keyDelivery(app, { A: left, B: right }, 'z', 'sidebar select', 'A');
+
+  const ready = site.probe('command-keys-ready');
+  await app.command('script', { tab: left, source: `
+    window.commandKeys = [];
+    addEventListener('keydown', event => {
+      if (['ArrowDown', 'Escape'].includes(event.key)) window.commandKeys.push(event.key);
+    });
+    fetch('/probe/command-keys-ready?value=ready');
+  ` });
+  assert.equal(await ready, 'ready');
+  execFileSync(x11Driver, ['chord', 'Control_L', 'l']);
+  execFileSync(x11Driver, ['key', 'Down']);
+  execFileSync(x11Driver, ['key', 'Escape']);
+  const commandKeys = site.probe('command-keys');
+  await app.command('script', { tab: left, source: `fetch('/probe/command-keys?value=' + JSON.stringify(window.commandKeys));` });
+  assert.deepEqual(JSON.parse(await commandKeys), [], 'command bar keys reached pane A');
+  await keyDelivery(app, { A: left, B: right }, 'u', 'command bar dismissed', 'A');
 }
 
 async function cookie(app, expected, op = 'open') {
