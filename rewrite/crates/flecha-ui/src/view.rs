@@ -84,6 +84,8 @@ pub(crate) struct Shell {
     pub(crate) consumed_keys: BTreeSet<String>,
     pressed_button: Rc<Cell<Option<MouseButton>>>,
     pub(crate) hovered_tab_row: Option<TabId>,
+    /// Whether the agent's folder shows its tabs (`agentFolderOpen` in ui/app.ts:463).
+    pub(crate) agent_folder_open: bool,
     pub(crate) tab_drag: Option<crate::tab_drag::TabDrag>,
     images: BTreeMap<TabId, Vec<Arc<RenderImage>>>,
     /// Site icons drawn by the current frame, so the next one can free those it no longer
@@ -154,6 +156,7 @@ impl Shell {
             consumed_keys: BTreeSet::new(),
             pressed_button: Rc::new(Cell::new(None)),
             hovered_tab_row: None,
+            agent_folder_open: true,
             tab_drag: None,
             images: BTreeMap::new(),
             favicons_drawn: RefCell::default(),
@@ -841,6 +844,15 @@ impl Render for Shell {
                 .size_full()
                 .gap(px(tokens::SPLIT_GAP))
                 .child(self.page_area_probe());
+            if view.is_empty()
+                && let Some(space) = core.space(active_space)
+            {
+                pages = pages.child(self.empty_page(&state, space, cx).with_animation(
+                    "empty-state-fade",
+                    Animation::new(tokens::MEDIUM).with_easing(ease),
+                    |page, delta| page.opacity(delta),
+                ));
+            }
             for (index, tab) in view.iter().enumerate() {
                 let pane = self.pane(Owner::Tab(self.id.clone()), tab.clone(), &mut images, cx);
                 let ratio = current

@@ -7,7 +7,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { createWriteStream, readFileSync, writeFileSync } from 'node:fs';
+import { createWriteStream, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -25,6 +25,14 @@ const env = { ...process.env };
 delete env.FLECHA_LAUNCHER;
 
 delete env.FLECHA_PROFILE;
+
+// Agents stay off until Settings lets them in, as in the shell, so the profile starts with
+// the switch on. The state file holds its JSON as a string.
+mkdirSync(join(profile, 'session'), { recursive: true });
+writeFileSync(
+  join(profile, 'session', 'state.json'),
+  JSON.stringify(JSON.stringify({ version: 3, tabs: {}, spaces: [{ id: 'agents' }], agent: { enabled: true } })),
+);
 
 const child = spawn('./target/debug/flecha', ['--profile', profile, '--open', `${site.base}/open`], { env });
 const log = createWriteStream(join(out, 'desktop.log'));

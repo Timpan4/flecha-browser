@@ -4,6 +4,7 @@ mod command_bar;
 mod context_menu;
 mod dialogs;
 mod downloads_view;
+mod empty_page;
 mod favicons;
 mod find_bar;
 mod fullscreen;
@@ -52,6 +53,7 @@ use flecha_core::{
     suggestions::pinnable_address,
 };
 use flecha_services::StateStore;
+use flecha_services::local_servers::{LocalServer, LocalServerWatch};
 use gpui::{App, AppContext as _, Bounds, WindowBounds, WindowHandle, WindowOptions, px, size};
 
 use boosts::ProfileBoosts;
@@ -296,6 +298,15 @@ struct Controller {
     held: BTreeMap<flecha_cef::BrowserKey, clipboard::Hold>,
     failure: Rc<RefCell<Option<anyhow::Error>>>,
     status: Status,
+    /// The profile directory: the agent token and the history live in it.
+    profile: PathBuf,
+    /// `--verify` or the isolated launcher: no agent bridge, whatever Settings say.
+    isolated: bool,
+    /// The dev servers on this machine, and the scan that finds them.
+    local_servers: Vec<LocalServer>,
+    local_watch: Option<LocalServerWatch>,
+    /// "Jump back in" on the empty page.
+    top_sites: empty_page::TopSites,
 }
 
 /// The status line. Regular windows share one; each incognito session has its own, so what goes
@@ -394,6 +405,13 @@ impl Controller {
             held: BTreeMap::new(),
             failure,
             status: Status::default(),
+            profile: profile.clone(),
+            isolated,
+            local_servers: Vec::new(),
+            local_watch: LocalServerWatch::spawn()
+                .inspect_err(|error| eprintln!("local servers: could not start the scan: {error}"))
+                .ok(),
+            top_sites: empty_page::TopSites::default(),
         };
         state.permissions.restore(&mut state.engine);
         state.sync_adblock();
@@ -431,18 +449,7 @@ impl Controller {
         }
         state.engine.set_boosts(state.boosts().clone());
         state.sync_download_config();
-        // Agents reach a desktop launch only: --verify and the isolated launcher keep the
-        // profile closed to them. A bridge that can't start leaves the browser working.
-        if !isolated {
-            match state.agents.start(&profile) {
-                Ok(()) => eprintln!(
-                    "agent bridge: {} (bearer token in {})",
-                    state.agents.endpoint().unwrap_or_default(),
-                    mcp::token_path(&profile).display()
-                ),
-                Err(error) => eprintln!("agent bridge: could not start: {error:#}"),
-            }
-        }
+        state.sync_agents();
         Ok(state)
     }
 
@@ -1026,6 +1033,9 @@ impl Controller {
         changed |= self.engine.take_reopened();
         changed |= self.sweep_fullscreen();
         changed |= self.serve_agents();
+        changed |= self.agents.status_changed(Instant::now());
+        changed |= self.poll_local_servers();
+        changed |= self.refresh_top_sites(Instant::now());
         changed |= self.finish_history();
         changed |= self.drain_downloads();
         changed |= self.poll_permissions();
