@@ -47,7 +47,10 @@ const READ_SELECTION: &str = r#"(cut) => {
     if (!doc) return null;
     element = doc.activeElement;
   }
-  const field = element?.localName === 'input' || element?.localName === 'textarea';
+  // Only a text control holds the selection when focused. Any other focused element, such as
+  // a checkbox, leaves it where it was, which may be a blurred password field.
+  const typed = ['text', 'search', 'url', 'tel', 'email', 'number', 'password'];
+  const field = element?.localName === 'textarea' || (element?.localName === 'input' && typed.includes(element.type));
   if (field && element.type === 'password') return null;
   const selection = doc.getSelection();
   let range = null;

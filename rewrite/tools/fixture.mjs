@@ -135,6 +135,7 @@ export async function fixture(handle = () => false) {
       <textarea id="area2" aria-label="More notes"></textarea>
       <div id="editable" contenteditable="true">x</div>
       <input id="email" type="email" aria-label="Email">
+      <input id="check" type="checkbox" aria-label="Remember me">
       <div id="host"></div>
       ${clipboardFrame ? '' : `<iframe id="frame" src="http://localhost:${request.socket.localPort}/clipboard?frame=1"></iframe>`}
       <script>

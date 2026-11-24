@@ -1653,10 +1653,17 @@ async function verifyClipboard() {
   assert.equal(await copy('c', `${select('#password', 'flecha-blur-secret')}; document.activeElement.blur()`), false,
     'Ctrl+C read a blurred password selection');
   assert.equal(await clipboard(), sentinel, 'Ctrl+C put a blurred password mask on the clipboard');
-  await poll('the held Ctrl+C keystrokes to reach the page', async () => (await page('', 'window.editKeys')) === 4);
+  const checkbox = `${select('#password', 'flecha-check-secret')}; field('#check').focus()`;
+
+  assert.equal(await copy('c', checkbox), false, 'Ctrl+C read a password selection behind a focused checkbox');
+  assert.equal(await clipboard(), sentinel, 'Ctrl+C put a password mask behind a focused checkbox on the clipboard');
+  assert.equal(await copy('x', checkbox), false, 'Ctrl+X read a password selection behind a focused checkbox');
+  assert.equal(await clipboard(), sentinel, 'Ctrl+X put a password mask behind a focused checkbox on the clipboard');
+  assert.equal(await page('', `field('#password').value`), 'flecha-check-secret', 'Ctrl+X deleted a password behind a focused checkbox');
+  await poll('the held Ctrl+C and Ctrl+X keystrokes to reach the page', async () => (await page('', 'window.editKeys')) === 6);
   assert.equal(await copy('c', select('#email', 'flecha@copy.test')), true, 'Ctrl+C read no email field');
   assert.equal(await clipboard(), 'flecha@copy.test', 'Ctrl+C did not copy the email field');
-  pass(`${backend}: Ctrl+C refused hidden or blurred password selections and copied an email field`);
+  pass(`${backend}: Ctrl+C and Ctrl+X refused hidden or blurred password selections, and Ctrl+C copied an email field`);
 
   // The page menu opens on a right-click that CEF receives, with the field's selection intact.
   // A row label no menu has tells an open menu from none.
