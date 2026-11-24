@@ -308,7 +308,7 @@ fn suggestions_for(
                 title: &entry.title,
                 weight: entry.visit_count,
             });
-            suggestions::inline_completion(text, candidates.chain(visited)).map(|completion| {
+            suggestions::inline_completion(text, candidates.chain(visited)).inspect(|completion| {
                 let target = tabs
                     .into_iter()
                     .find(|&(id, tab)| Some(id) != current && tab.url == completion.url)
@@ -330,7 +330,6 @@ fn suggestions_for(
                     score: COMPLETION_SCORE,
                     recency: 0,
                 });
-                completion
             })
         })
         .flatten();
