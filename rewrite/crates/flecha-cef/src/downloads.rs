@@ -236,6 +236,18 @@ struct Waiting {
 struct Item {
     control: Option<Rc<dyn Control>>,
     browser: Weak<Slot>,
+    /// The shell cancelled it before its controls came; they cancel it when they do.
+    cancel_pending: bool,
+}
+
+impl Item {
+    fn new(browser: Weak<Slot>) -> Self {
+        Self {
+            control: None,
+            browser,
+            cancel_pending: false,
+        }
+    }
 }
 
 /// Work to do once the downloads borrow ends, since CEF may call back synchronously.
@@ -263,6 +275,31 @@ pub(crate) struct Downloads {
 
 fn same(browser: &Weak<Slot>, slot: &Slot) -> bool {
     std::ptr::eq(browser.as_ptr(), slot)
+}
+
+/// `path` with its folder resolved (`.`, `..` and symbolic links), so two spellings of one file
+/// compare equal. A folder that can't be resolved, such as one that doesn't exist, is kept.
+fn resolved(path: &Path) -> PathBuf {
+    let folder = path
+        .parent()
+        .and_then(|folder| std::fs::canonicalize(folder).ok());
+    match (folder, path.file_name()) {
+        (Some(folder), Some(name)) => folder.join(name),
+        _ => path.to_owned(),
+    }
+}
+
+/// Whether a download in progress saves to `target`, however either path is spelled.
+fn reserved(list: &DownloadList, target: &Path) -> bool {
+    if list.reserves(target, Platform::current()) {
+        return true;
+    }
+    let wanted = resolved(target);
+    list.reserves(&wanted, Platform::current())
+        || list.iter().any(|row| {
+            matches!(row.state(), State::InProgress | State::Paused)
+                && resolved(row.path()) == wanted
+        })
 }
 
 impl Downloads {
@@ -302,10 +339,7 @@ impl Downloads {
 
     /// CEF is about to save it: from here on, closing its browser cancels it.
     fn saving(&mut self, handle: DownloadHandle, browser: Weak<Slot>) {
-        self.items.entry(handle).or_insert(Item {
-            control: None,
-            browser,
-        });
+        self.items.entry(handle).or_insert(Item::new(browser));
     }
 
     pub fn before(
@@ -464,14 +498,31 @@ impl Downloads {
                 ));
                 acts
             }
-            None => {
-                self.saving(handle, browser.clone());
-                vec![
-                    Act::Proceed(waiting.proceed, path.clone()),
-                    Act::Emit(browser, DownloadEvent::Started { handle, id, path }),
-                ]
-            }
+            None => self.proceed(handle, id, waiting, path),
         }
+    }
+
+    /// Continues a recorded download. `Started` goes out first: CEF can report the download's
+    /// first update from inside the continue call.
+    fn proceed(
+        &mut self,
+        handle: DownloadHandle,
+        id: DownloadId,
+        waiting: Waiting,
+        path: PathBuf,
+    ) -> Vec<Act> {
+        self.saving(handle, waiting.browser.clone());
+        vec![
+            Act::Emit(
+                waiting.browser,
+                DownloadEvent::Started {
+                    handle,
+                    id,
+                    path: path.clone(),
+                },
+            ),
+            Act::Proceed(waiting.proceed, path),
+        ]
     }
 
     /// Saves where the person chose, or keeps a held download.
@@ -496,7 +547,7 @@ impl Downloads {
                     return Err(DownloadError::InvalidPath(target));
                 };
                 // Another prompt may have been answered with this path since this one was asked.
-                if self.list.reserves(&target, Platform::current()) {
+                if reserved(&self.list, &target) {
                     self.waiting.insert(handle, waiting);
                     return Err(DownloadError::PathInUse(target));
                 }
@@ -536,18 +587,7 @@ impl Downloads {
                     self.waiting.insert(handle, waiting);
                     return Err(error.into());
                 }
-                self.saving(handle, waiting.browser.clone());
-                Ok(vec![
-                    Act::Proceed(waiting.proceed, decided.clone()),
-                    Act::Emit(
-                        waiting.browser,
-                        DownloadEvent::Started {
-                            handle,
-                            id,
-                            path: decided,
-                        },
-                    ),
-                ])
+                Ok(self.proceed(handle, id, waiting, decided))
             }
         }
     }
@@ -574,9 +614,23 @@ impl Downloads {
             }
             return Ok(acts);
         }
-        let (id, control) = self.live(handle)?;
+        let id = self
+            .list
+            .id_for_cef(handle.0)
+            .ok_or(DownloadError::Unknown(handle))?;
+        let item = self
+            .items
+            .get_mut(&handle)
+            .ok_or(DownloadError::Unknown(handle))?;
         self.list.cancel(id)?;
-        Ok(vec![Act::CancelItem(control)])
+        match item.control.clone() {
+            Some(control) => Ok(vec![Act::CancelItem(control)]),
+            // CEF brings an item's controls with its first update.
+            None => {
+                item.cancel_pending = true;
+                Ok(Vec::new())
+            }
+        }
     }
 
     pub fn pause(&mut self, handle: DownloadHandle) -> Result<Vec<Act>, DownloadError> {
@@ -628,6 +682,7 @@ impl Downloads {
         let Some(handle) = handle else {
             return acts;
         };
+        let mut cancel = None;
         if ended {
             self.forget(handle);
             if let Some(Item {
@@ -638,12 +693,15 @@ impl Downloads {
                 acts.push(Act::Release(held));
             }
         } else {
-            let item = self.items.entry(handle).or_insert(Item {
-                control: None,
-                browser: browser.clone(),
-            });
-            if let Some(previous) = item.control.replace(control) {
+            let item = self
+                .items
+                .entry(handle)
+                .or_insert_with(|| Item::new(browser.clone()));
+            if let Some(previous) = item.control.replace(control.clone()) {
                 acts.push(Act::Release(previous));
+            }
+            if std::mem::take(&mut item.cancel_pending) {
+                cancel = Some(control);
             }
         }
         if state == SnapshotState::Cancelled
@@ -666,6 +724,7 @@ impl Downloads {
         {
             acts.push(Act::Emit(browser, DownloadEvent::Updated { handle, id }));
         }
+        acts.extend(cancel.map(Act::CancelItem));
         acts
     }
 
@@ -1650,5 +1709,162 @@ mod tests {
         let list = services.downloads.borrow().list.clone();
         assert_eq!(list.get(id).unwrap().state(), State::Cancelled);
         assert!(services.downloads.borrow().is_idle());
+    }
+
+    /// Continues the way CEF can: its first update for the download arrives from inside the
+    /// continue call.
+    struct UpdatesAtOnce {
+        slot: Rc<Slot>,
+        id: u32,
+        log: Log,
+    }
+
+    impl Proceed for UpdatesAtOnce {
+        fn proceed(self: Box<Self>, path: &Path) {
+            let item = Rc::new(FakeItem(self.log.clone()));
+            reported(
+                &self.slot,
+                self.id,
+                report(SnapshotState::InProgress, 1, 10, path),
+                item,
+            );
+        }
+    }
+
+    #[test]
+    fn started_reaches_the_shell_before_an_update_cef_sends_while_continuing() {
+        let slot = crate::tests::slot("tab");
+        let services = crate::services::of(&slot);
+        let log = Log::default();
+        let url = "https://files.example/a.pdf";
+        let updates_at_once = |id| {
+            Box::new(UpdatesAtOnce {
+                slot: slot.clone(),
+                id,
+                log: log.clone(),
+            })
+        };
+        let started_then_updated = |events: Vec<DownloadEvent>| {
+            assert!(
+                matches!(events[..], [DownloadEvent::Started { handle, .. }, DownloadEvent::Updated { handle: updated, .. }] if handle == updated),
+                "{events:?}"
+            );
+        };
+
+        // Saved at once to the decided path.
+        services.downloads.borrow_mut().config = downloads(false).config;
+        offered(&slot, 1, offer(0, url, url), updates_at_once(1), |_| false);
+        started_then_updated(drain(&services));
+
+        // Saved where the person chose.
+        services.downloads.borrow_mut().config = downloads(true).config;
+        offered(&slot, 2, offer(0, url, url), updates_at_once(2), |_| false);
+        let handle = ask_handle(&drain(&services)[0]);
+        let chosen = folder().join("chosen.pdf");
+        command(&services, |downloads| {
+            downloads.accept(handle, Some(chosen))
+        })
+        .unwrap();
+        started_then_updated(drain(&services));
+    }
+
+    #[test]
+    fn cancelling_before_cefs_first_update_cancels_once_the_controls_come() {
+        let slot = crate::tests::slot("tab");
+        let services = crate::services::of(&slot);
+        services.downloads.borrow_mut().config = downloads(false).config;
+        let log = Log::default();
+        let url = "https://files.example/a.pdf";
+        offered(
+            &slot,
+            3,
+            offer(0, url, url),
+            Reentrant::boxed(&services, &log),
+            |_| false,
+        );
+        let Some(DownloadEvent::Started { handle, id, path }) = drain(&services).pop() else {
+            panic!("a safe download starts at once");
+        };
+
+        command(&services, |downloads| downloads.cancel(handle)).unwrap();
+        let cancels = || {
+            log.borrow()
+                .iter()
+                .filter(|line| *line == "item cancel")
+                .count()
+        };
+        assert_eq!(
+            cancels(),
+            0,
+            "nothing to cancel with before CEF's first update"
+        );
+
+        let item = || Rc::new(FakeItem(log.clone()));
+        reported(
+            &slot,
+            3,
+            report(SnapshotState::InProgress, 1, 10, &path),
+            item(),
+        );
+        assert_eq!(cancels(), 1, "the first controls cancel it");
+        reported(
+            &slot,
+            3,
+            report(SnapshotState::InProgress, 2, 10, &path),
+            item(),
+        );
+        assert_eq!(cancels(), 1, "and only once");
+        reported(
+            &slot,
+            3,
+            report(SnapshotState::Cancelled, 2, 10, &path),
+            item(),
+        );
+        let list = services.downloads.borrow().list.clone();
+        assert_eq!(list.get(id).unwrap().state(), State::Cancelled);
+        assert!(services.downloads.borrow().is_idle());
+    }
+
+    #[test]
+    fn a_path_in_use_is_found_however_it_is_spelled() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = root.path().join("Downloads");
+        std::fs::create_dir(&folder).unwrap();
+        let mut downloads = downloads(true);
+        let log = Log::default();
+        let url = "https://files.example/a.txt";
+        before(&mut downloads, &log, offer(1, url, url), Weak::new());
+        before(&mut downloads, &log, offer(2, url, url), Weak::new());
+        settle(
+            downloads
+                .accept(DownloadHandle(1), Some(folder.join("picked.txt")))
+                .unwrap(),
+        );
+
+        let mut spellings = vec![folder.join("..").join("Downloads").join("picked.txt")];
+        #[cfg(unix)]
+        {
+            let link = root.path().join("link");
+            std::os::unix::fs::symlink(&folder, &link).unwrap();
+            spellings.push(link.join("picked.txt"));
+        }
+        for spelling in spellings {
+            assert_eq!(
+                downloads
+                    .accept(DownloadHandle(2), Some(spelling.clone()))
+                    .err(),
+                Some(DownloadError::PathInUse(spelling))
+            );
+        }
+        let other = folder.join("other.txt");
+        settle(
+            downloads
+                .accept(DownloadHandle(2), Some(other.clone()))
+                .unwrap(),
+        );
+        assert_eq!(
+            log.borrow().last(),
+            Some(&format!("continue {}", other.display()))
+        );
     }
 }

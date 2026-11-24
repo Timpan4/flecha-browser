@@ -345,6 +345,21 @@ impl PermissionManager {
         }
     }
 
+    /// Every saved decision in one partition, by origin and kind. One-time answers are left out.
+    pub fn saved_decisions<'a>(
+        &'a self,
+        partition: &Partition,
+    ) -> impl Iterator<Item = (&'a Origin, PermissionKind, Verdict)> + use<'a> {
+        self.grants(partition)
+            .into_iter()
+            .flat_map(|grants| grants.iter())
+            .flat_map(|(origin, decided)| {
+                decided
+                    .iter()
+                    .map(move |(&kind, &verdict)| (origin, kind, verdict))
+            })
+    }
+
     /// The site panel's setter. `Ask` forgets the saved decision. The setting replaces any
     /// one-time answer for those kinds, and queued requests it decides complete now.
     pub fn set_setting(

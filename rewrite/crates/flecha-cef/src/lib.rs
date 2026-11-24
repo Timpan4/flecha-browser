@@ -148,6 +148,9 @@ enum Frozen {
 struct PersistentContext {
     handle: RequestContext,
     ready: Rc<Cell<bool>>,
+    /// Whether its content settings hold the saved permission decisions, which they must
+    /// before a browser opens in it.
+    reconciled: bool,
 }
 
 pub struct Engine {
@@ -270,28 +273,63 @@ impl Engine {
         Ok(())
     }
 
+    /// The partition's request context once it is ready and its permission settings are
+    /// reconciled, which happens once per context, before its first browser.
     fn context(&mut self, partition: &Partition) -> Result<Option<RequestContext>> {
-        if *partition == Partition::Shared {
-            return cef::request_context_get_global_context()
-                .map(Some)
-                .context("get shared CEF request context");
-        }
         if !self.contexts.contains_key(partition) {
-            let settings = RequestContextSettings {
-                cache_path: path_string(&self.profile.join(partition.directory()))?,
-                persist_session_cookies: 1,
-                ..Default::default()
+            let context = if *partition == Partition::Shared {
+                PersistentContext {
+                    handle: cef::request_context_get_global_context()
+                        .context("get shared CEF request context")?,
+                    // CEF initializes the global context before the app's first callback.
+                    ready: Rc::new(Cell::new(true)),
+                    reconciled: false,
+                }
+            } else {
+                let settings = RequestContextSettings {
+                    cache_path: path_string(&self.profile.join(partition.directory()))?,
+                    persist_session_cookies: 1,
+                    ..Default::default()
+                };
+                let ready = Rc::new(Cell::new(false));
+                let mut handler =
+                    callbacks::ContextReady::new(ready.clone(), self.contexts_changed.clone());
+                let handle = request_context_create_context(Some(&settings), Some(&mut handler))
+                    .context("create isolated CEF request context")?;
+                PersistentContext {
+                    handle,
+                    ready,
+                    reconciled: false,
+                }
             };
-            let ready = Rc::new(Cell::new(false));
-            let mut handler =
-                callbacks::ContextReady::new(ready.clone(), self.contexts_changed.clone());
-            let handle = request_context_create_context(Some(&settings), Some(&mut handler))
-                .context("create isolated CEF request context")?;
-            self.contexts
-                .insert(partition.clone(), PersistentContext { handle, ready });
+            self.contexts.insert(partition.clone(), context);
         }
-        let context = &self.contexts[partition];
-        Ok(context.ready.get().then(|| context.handle.clone()))
+        let services = self.popups.services.clone();
+        let Some(context) = self
+            .contexts
+            .get_mut(partition)
+            .filter(|context| context.ready.get())
+        else {
+            return Ok(None);
+        };
+        if !context.reconciled {
+            permissions::reconcile(
+                &services,
+                &permissions::partition(partition),
+                &context.handle,
+            )?;
+            context.reconciled = true;
+        }
+        Ok(Some(context.handle.clone()))
+    }
+
+    /// The request contexts browsers can open in, with their permission partitions.
+    fn permission_contexts(&self) -> Vec<(flecha_permissions::Partition, RequestContext)> {
+        self.contexts
+            .iter()
+            .filter(|(_, context)| context.reconciled)
+            .map(|(partition, context)| (permissions::partition(partition), context.handle.clone()))
+            .collect()
     }
 
     pub fn contexts_changed(&self) -> bool {
