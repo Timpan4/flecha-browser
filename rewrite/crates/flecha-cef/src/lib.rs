@@ -11,6 +11,8 @@ mod find;
 mod identity;
 mod permissions;
 mod popup;
+#[cfg(target_os = "linux")]
+mod printing;
 mod pump;
 mod runtime;
 mod services;
@@ -644,6 +646,19 @@ impl Engine {
     pub fn reload(&self, tab: &TabId) {
         if let Some(browser) = self.browser(tab) {
             browser.reload();
+        }
+    }
+
+    pub fn print(&self, tab: &TabId) -> Result<()> {
+        let host = self.host(tab).context("The page has closed")?;
+        #[cfg(target_os = "linux")]
+        {
+            self.print_for_portal(tab, &host)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            host.print();
+            Ok(())
         }
     }
 

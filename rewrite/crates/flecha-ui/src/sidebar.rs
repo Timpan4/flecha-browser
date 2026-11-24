@@ -635,11 +635,15 @@ impl Shell {
             .map_or(ConnectionSecurity::Unknown, |(tab, url)| {
                 state.engine.connection_security(tab, url)
             });
-        let insecure = security == ConnectionSecurity::CertificateError
-            || url.is_some_and(|url| url.starts_with("http:") && !is_dev_url(url));
+        let insecure_tls = matches!(
+            security,
+            ConnectionSecurity::CertificateError | ConnectionSecurity::InsecureContent
+        );
+        let insecure =
+            insecure_tls || url.is_some_and(|url| url.starts_with("http:") && !is_dev_url(url));
         let kind = match url {
             None => "search",
-            Some(_) if security == ConnectionSecurity::CertificateError => "unlocked",
+            Some(_) if insecure_tls => "unlocked",
             Some(_) if security == ConnectionSecurity::VerifiedHttps => "lock",
             Some(url) if is_dev_url(url) => "code",
             Some(url) if url.starts_with("http:") => "unlocked",

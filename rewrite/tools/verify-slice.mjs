@@ -419,6 +419,8 @@ async function browserDialogs(app) {
   pass('CEF alert, confirm and prompt waited for GPUI and received the chosen result');
 
   let after = app.events.length;
+  const uploadCancelled = site.probe('upload-cancelled', stepTimeoutMs);
+  uploadCancelled.catch(() => {});
   await app.command('script', {
     tab,
     source: `{
@@ -426,6 +428,7 @@ async function browserDialogs(app) {
       const upload = document.createElement('input');
       upload.type = 'file';
       document.body.append(upload);
+      upload.addEventListener('cancel', () => fetch('/probe/upload-cancelled?value=cancelled'), { once: true });
       draft.addEventListener('click', () => upload.showPicker(), { once: true });
     }`,
   });
@@ -433,16 +436,20 @@ async function browserDialogs(app) {
   await dialog(tab, after);
   await app.present();
   key('Escape');
-  pass('an upload opened the CEF file-dialog path under the isolated X11 session');
+  assert.equal(await uploadCancelled, 'cancelled');
+  pass('an upload reached the GPUI picker and cancellation returned to the web page');
 
   await clickElement(app, tab, 'input:not([type=file])', ['#147A70', '#FFCC49'], 'dialog-unload-gesture');
   after = app.events.length;
   close();
   await dialog(tab, after);
   await app.present();
+  close();
+  await app.present();
+  assert((await app.command('snapshot')).core.tabs[tab], 'A second close bypassed beforeunload');
   key('Escape');
   await app.present();
-  assert((await app.command('snapshot')).core.tabs[tab], 'Stay closed a beforeunload tab');
+  assert((await app.command('snapshot')).core.tabs[tab], 'Choosing Stay should keep the beforeunload tab open');
   after = app.events.length;
   close();
   await dialog(tab, after);
@@ -475,7 +482,7 @@ async function rejectInvalidCertificate(app) {
   const cert = join(out, 'test-tls.pem');
 
   execFileSync('openssl', [
-    'req', '-x509', '-newkey', 'rsa', '-noenc', '-config', '/dev/null', '-subj', '/CN=127.0.0.1',
+    'req', '-x509', '-newkey', 'rsa', '-nodes', '-config', '/dev/null', '-subj', '/CN=127.0.0.1',
     '-addext', 'subjectAltName=IP:127.0.0.1', '-keyout', key, '-out', cert,
   ], { stdio: 'ignore' });
   let requested = false;
@@ -1955,6 +1962,14 @@ async function verifySlice() {
       await browserDialogs(popups);
       await popups.command('select', { tab });
       await popups.present();
+      const beforePrint = popups.events.length;
+      execFileSync(x11Driver, ['chord', 'Control_L', 'p']);
+
+      const printed = await popups.wait('CEF to render a PDF for the print dialog', event =>
+        event.type === 'print_ready' && event.tab === tab, beforePrint, stepTimeoutMs);
+
+      assert.equal(printed.pdf, true);
+      pass('Ctrl+P rendered the active page to a PDF for the Linux print portal');
       execFileSync(x11Driver, ['chord', 'Control_L', 'u']);
 
       const source = await poll('View Source to open a new tab', async () => {

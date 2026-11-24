@@ -8,6 +8,7 @@ use anyhow::{Context as _, Result, ensure};
 use cef::{CefString, ImplBrowserHost as _};
 use flecha_cef::{
     DownloadConfig, DownloadEvent, DownloadHandle, DownloadMessage, IncognitoSession, Owner,
+    Partition,
 };
 use flecha_core::{EpochMillis, Settings, TabId, WindowId};
 use flecha_downloads::{
@@ -57,7 +58,7 @@ pub(crate) struct Downloads {
     attention: BTreeSet<WindowId>,
     attempted_picker: BTreeSet<DownloadHandle>,
     picking: Option<DownloadHandle>,
-    retries: BTreeMap<TabId, Vec<String>>,
+    retries: BTreeMap<TabId, Vec<(Partition, String)>>,
     config_error: Option<String>,
 }
 
@@ -353,18 +354,29 @@ impl Controller {
             "Download belongs to another session"
         );
         let url = self.engine.downloads().retry(id)?;
-        let tab = if let Some((_, tab)) = self.model.keyboard_pane(window) {
+        let partition = self
+            .engine
+            .download_partition(id)
+            .context("Download is no longer available")?;
+        let destination = self.window_for_partition(window, &partition)?;
+        let tab = if let Some((_, tab)) = self.model.keyboard_pane(&destination)
+            && self.model.partition(tab).as_ref() == Some(&partition)
+        {
             tab.clone()
         } else {
-            let tab = self.model.open(window, "about:blank".into(), true)?;
+            let tab = self.model.open(&destination, "about:blank".into(), true)?;
+            self.update_visibility();
             self.save()?;
             tab
         };
+        if &destination != window {
+            self.front = Some(destination);
+        }
         self.downloads
             .retries
             .entry(tab.clone())
             .or_default()
-            .push(url);
+            .push((partition, url));
         self.start_download_retries(&tab);
         Ok(())
     }
@@ -374,8 +386,10 @@ impl Controller {
             && let Some(host) = self.engine.host(tab)
             && let Some(urls) = self.downloads.retries.remove(tab)
         {
-            for url in urls {
-                host.start_download(Some(&CefString::from(url.as_str())));
+            for (partition, url) in urls {
+                if self.engine.partition(tab) == Some(&partition) {
+                    host.start_download(Some(&CefString::from(url.as_str())));
+                }
             }
         }
     }

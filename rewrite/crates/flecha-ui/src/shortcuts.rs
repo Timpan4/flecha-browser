@@ -1,5 +1,4 @@
 use anyhow::{Context as _, Result};
-use cef::ImplBrowserHost as _;
 use flecha_cef::{PageZoom, zoom_percentage};
 use flecha_core::{
     BrowserState, TabId, WindowId,
@@ -471,16 +470,7 @@ impl Shell {
         let action = match shortcut {
             Shortcut::Find if !self.overlay.is_open() => return self.open_find(window, cx),
             Shortcut::Zoom(action) if !self.overlay.is_open() => return self.zoom(action, cx),
-            Shortcut::Print if !self.overlay.is_open() => {
-                let Some(key) = self.active_browser() else {
-                    return false;
-                };
-                if let Some(host) = self.state.borrow().engine.host(&key.tab) {
-                    host.print();
-                    return true;
-                }
-                return false;
-            }
+            Shortcut::Print if !self.overlay.is_open() => Action::Print,
             Shortcut::ViewSource if !self.overlay.is_open() => Action::ViewSource,
             Shortcut::DevTools if !self.overlay.is_open() => {
                 let Some(key) = self.active_browser() else {

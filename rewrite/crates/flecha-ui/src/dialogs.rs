@@ -234,17 +234,25 @@ impl Shell {
                 port,
                 realm,
                 proxy,
+                https,
             } => {
                 let target = if host.contains(':') && !host.starts_with('[') {
                     format!("[{host}]:{port}")
                 } else {
                     format!("{host}:{port}")
                 };
-                let message = if realm.is_empty() {
+                let mut message = if realm.is_empty() {
                     target
                 } else {
                     format!("{target}\n{realm}")
                 };
+                if !https {
+                    message.push_str(if *proxy {
+                        "\nEncryption for this proxy could not be verified."
+                    } else {
+                        "\nThis connection does not encrypt your password."
+                    });
+                }
                 (
                     if *proxy {
                         "Sign in to proxy"

@@ -47,6 +47,7 @@ pub enum DialogKind {
         port: i32,
         realm: String,
         proxy: bool,
+        https: bool,
     },
     File {
         mode: FileMode,
@@ -191,10 +192,12 @@ fn live_slot(identifier: i32) -> Option<Rc<Slot>> {
 }
 
 wrap_task! {
-    struct AuthTask { browser: i32, kind: DialogKind, callback: AuthCallback }
+    struct AuthTask { browser: i32, committed: u64, kind: DialogKind, callback: AuthCallback }
     impl Task {
         fn execute(&self) {
-            if let Some(slot) = live_slot(self.browser) {
+            if let Some(slot) = live_slot(self.browser).filter(|slot| {
+                slot.committed_navigation.load(std::sync::atomic::Ordering::SeqCst) == self.committed
+            }) {
                 enqueue(&slot, self.kind.clone(), Answer::Auth(self.callback.clone()));
             } else {
                 self.callback.cancel();
@@ -208,6 +211,8 @@ pub(crate) struct AuthChallenge {
     pub port: i32,
     pub realm: String,
     pub proxy: bool,
+    pub https: bool,
+    pub committed: u64,
 }
 
 pub(crate) fn authenticate(
@@ -220,14 +225,17 @@ pub(crate) fn authenticate(
         port,
         realm,
         proxy,
+        https,
+        committed,
     } = challenge;
     let kind = DialogKind::Auth {
         host,
         port,
         realm,
         proxy,
+        https,
     };
-    let mut task = AuthTask::new(browser.identifier(), kind, callback.clone());
+    let mut task = AuthTask::new(browser.identifier(), committed, kind, callback.clone());
     post_task(ThreadId::UI, Some(&mut task))
 }
 
@@ -238,11 +246,48 @@ pub(crate) fn certificate_error(browser: &Browser, url: &CefString) {
     }
 }
 
+pub(crate) fn new_navigation(browser: &Browser) {
+    if let Some(slot) = live_slot(browser.identifier())
+        && slot.certificate_error.take().is_some()
+    {
+        slot.emit(crate::Event::SecurityChanged);
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ConnectionSecurity {
     Unknown,
     VerifiedHttps,
     CertificateError,
+    InsecureContent,
+}
+
+fn ssl_security(ssl: &Sslstatus) -> Option<ConnectionSecurity> {
+    use cef::sys::{_cef_sslstatus_t, cef_cert_status_t, cef_is_cert_status_error};
+
+    type GetFlags = unsafe extern "C" fn(*mut _cef_sslstatus_t) -> u32;
+    type CheckCertFlags = unsafe extern "C" fn(u32) -> i32;
+    let raw = ssl.get_raw();
+    // CEF returns bitmasks. The generated bindings use repr(u32) enums whose Rust
+    // discriminants cover single flags only. Call with the same C ABI and integer
+    // representation so combinations never become invalid Rust enum values.
+    let (cert_error, content_flags) = unsafe {
+        let cert: GetFlags = std::mem::transmute((*raw).get_cert_status?);
+        let content: GetFlags = std::mem::transmute((*raw).get_content_status?);
+        let check: CheckCertFlags = std::mem::transmute(
+            cef_is_cert_status_error as unsafe extern "C" fn(cef_cert_status_t) -> i32,
+        );
+        (check(cert(raw)), content(raw))
+    };
+    Some(if cert_error != 0 {
+        ConnectionSecurity::CertificateError
+    } else if ssl.is_secure_connection() == 0 {
+        ConnectionSecurity::Unknown
+    } else if content_flags != SslContentStatus::NORMAL_CONTENT.get_raw() {
+        ConnectionSecurity::InsecureContent
+    } else {
+        ConnectionSecurity::VerifiedHttps
+    })
 }
 
 impl Engine {
@@ -265,13 +310,7 @@ impl Engine {
         let Some(ssl) = entry.sslstatus() else {
             return ConnectionSecurity::Unknown;
         };
-        if is_cert_status_error(ssl.cert_status()) != 0 {
-            ConnectionSecurity::CertificateError
-        } else if ssl.is_secure_connection() != 0 {
-            ConnectionSecurity::VerifiedHttps
-        } else {
-            ConnectionSecurity::Unknown
-        }
+        ssl_security(&ssl).unwrap_or(ConnectionSecurity::Unknown)
     }
 
     pub fn pending_dialog(&self, tab: &TabId) -> Option<DialogRequest> {
@@ -307,9 +346,16 @@ impl Engine {
 
     /// Ask CEF to close a live tab after any beforeunload confirmation.
     pub fn request_tab_close(&self, tab: &TabId) -> bool {
-        if self.pending_dialog(tab).is_some() {
+        let Some(session) = self.browsers.get(tab) else {
             return false;
+        };
+        let queue = session.slot.dialogs.0.borrow();
+        if !queue.is_empty() {
+            return queue
+                .iter()
+                .any(|dialog| matches!(dialog.request.kind, DialogKind::BeforeUnload { .. }));
         }
+        drop(queue);
         let Some(host) = self.host(tab) else {
             return false;
         };

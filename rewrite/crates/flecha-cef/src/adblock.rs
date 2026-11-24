@@ -197,10 +197,22 @@ wrap_resource_request_handler! {
 }
 
 wrap_request_handler! {
-    pub(crate) struct Requests { filter: ResourceRequestHandler }
+    pub(crate) struct Requests { filter: ResourceRequestHandler, committed_navigation: Arc<AtomicU64> }
     impl RequestHandler {
+        fn on_before_browse(
+            &self, browser: Option<&mut Browser>, frame: Option<&mut Frame>,
+            _request: Option<&mut Request>, _gesture: i32, _redirect: i32,
+        ) -> i32 {
+            if frame.is_some_and(|frame| frame.is_main() != 0)
+                && let Some(browser) = browser
+            {
+                dialogs::new_navigation(browser);
+            }
+            0
+        }
+
         fn auth_credentials(
-            &self, browser: Option<&mut Browser>, _origin: Option<&CefString>, proxy: i32,
+            &self, browser: Option<&mut Browser>, origin: Option<&CefString>, proxy: i32,
             host: Option<&CefString>, port: i32, realm: Option<&CefString>,
             scheme: Option<&CefString>, callback: Option<&mut AuthCallback>,
         ) -> i32 {
@@ -213,6 +225,8 @@ wrap_request_handler! {
                 port,
                 realm: dialogs::text(realm),
                 proxy: proxy != 0,
+                https: proxy == 0 && dialogs::text(origin).starts_with("https:"),
+                committed: self.committed_navigation.load(Ordering::SeqCst),
             }, callback)
         }
 
@@ -237,8 +251,8 @@ wrap_request_handler! {
     }
 }
 
-pub(crate) fn handler(io: Io) -> RequestHandler {
-    Requests::new(Filter::new(io))
+pub(crate) fn handler(io: Io, committed_navigation: Arc<AtomicU64>) -> RequestHandler {
+    Requests::new(Filter::new(io), committed_navigation)
 }
 
 /// The page registry that holds ad hiding's adopted style sheets.

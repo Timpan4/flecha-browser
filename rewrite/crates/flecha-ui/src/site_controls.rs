@@ -361,11 +361,15 @@ impl Shell {
 fn site_header(origin: Option<&str>, connection: ConnectionSecurity, status: Option<&str>) -> Div {
     let palette = palette();
     let inset = px(tokens::SITE_INSET);
-    let insecure = connection == ConnectionSecurity::CertificateError
-        || origin.is_some_and(|url| url.starts_with("http:") && !is_dev_url(url));
+    let insecure = matches!(
+        connection,
+        ConnectionSecurity::CertificateError | ConnectionSecurity::InsecureContent
+    ) || origin.is_some_and(|url| url.starts_with("http:") && !is_dev_url(url));
     let security = origin.map(|url| {
         if connection == ConnectionSecurity::CertificateError {
             "Certificate could not be verified"
+        } else if connection == ConnectionSecurity::InsecureContent {
+            "Some content loaded over an insecure connection"
         } else if connection == ConnectionSecurity::VerifiedHttps {
             "Secure connection"
         } else if is_dev_url(url) {

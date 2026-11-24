@@ -50,6 +50,7 @@ pub(crate) struct Slot {
     pub menu: context_menu::Menu,
     pub dialogs: dialogs::Dialogs,
     pub certificate_error: RefCell<Option<String>>,
+    pub committed_navigation: Arc<AtomicU64>,
     /// Popups this browser has asked CEF for that CEF hasn't created yet, by popup ID.
     pub opening: RefCell<BTreeMap<i32, Rc<Slot>>>,
     /// For a popup still being created: its opener and its popup ID there.
@@ -88,6 +89,7 @@ impl Slot {
             menu: context_menu::Menu::default(),
             dialogs: dialogs::Dialogs::default(),
             certificate_error: RefCell::new(None),
+            committed_navigation: Arc::new(AtomicU64::new(0)),
             opening: RefCell::new(BTreeMap::new()),
             origin: RefCell::new(None),
             identifier: Cell::new(None),
@@ -383,6 +385,7 @@ wrap_load_handler! {
             &self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, _transition_type: TransitionType,
         ) {
             let Some(frame) = frame.filter(|frame| frame.is_main() != 0) else { return };
+            self.slot.committed_navigation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             context_menu::cancel(&self.slot);
             if self.slot.dialogs.cancel() {
                 self.slot.emit(Event::DialogChanged);
@@ -403,14 +406,6 @@ wrap_load_handler! {
                 let url = CefString::from(&frame.url()).to_string();
                 if !self.slot.retired.get() {
                     let host = browser.and_then(|browser| browser.host());
-                    if host.as_ref()
-                        .and_then(|host| host.visible_navigation_entry())
-                        .filter(|entry| CefString::from(&entry.url()).to_string() == url)
-                        .and_then(|entry| entry.sslstatus())
-                        .is_some_and(|ssl| ssl.is_secure_connection() != 0 && is_cert_status_error(ssl.cert_status()) == 0)
-                    {
-                        self.slot.certificate_error.take();
-                    }
                     crate::adblock::hide_ads(&self.slot, host, frame, &url);
                     boosts::page_loaded(&services::of(&self.slot), frame, &url);
                 }
@@ -437,6 +432,8 @@ struct PageHandlers {
     context_menu: ContextMenuHandler,
     js_dialog: JsdialogHandler,
     file_dialog: DialogHandler,
+    #[cfg(target_os = "linux")]
+    print: PrintHandler,
 }
 
 wrap_client! {
@@ -460,6 +457,10 @@ wrap_client! {
         fn context_menu_handler(&self) -> Option<ContextMenuHandler> { Some(self.page.context_menu.clone()) }
         fn jsdialog_handler(&self) -> Option<JsdialogHandler> { Some(self.page.js_dialog.clone()) }
         fn dialog_handler(&self) -> Option<DialogHandler> { Some(self.page.file_dialog.clone()) }
+        #[cfg(target_os = "linux")]
+        fn print_handler(&self) -> Option<PrintHandler> {
+            Some(self.page.print.clone())
+        }
     }
 }
 
@@ -472,7 +473,7 @@ pub(crate) fn client(slot: Rc<Slot>) -> Client {
     OsrClient::new(
         Osr::new(slot.clone()),
         Life::new(slot.clone()),
-        adblock::handler(io),
+        adblock::handler(io, slot.committed_navigation.clone()),
         downloads::handler(slot.clone()),
         permissions::handler(slot.clone()),
         PageHandlers {
@@ -481,6 +482,8 @@ pub(crate) fn client(slot: Rc<Slot>) -> Client {
             find: find::handler(slot.clone()),
             context_menu: context_menu::handler(slot.clone()),
             js_dialog: dialogs::JsDialogs::new(slot.clone()),
+            #[cfg(target_os = "linux")]
+            print: crate::printing::LinuxPrinting::new(),
             file_dialog: dialogs::FileDialogs::new(slot),
         },
     )

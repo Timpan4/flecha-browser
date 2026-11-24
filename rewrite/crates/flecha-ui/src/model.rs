@@ -514,7 +514,7 @@ impl Model {
     }
 
     /// The request context a new page in this window's Space browses in.
-    fn window_partition(&self, window: &WindowId, space: &SpaceId) -> Partition {
+    pub(crate) fn window_partition(&self, window: &WindowId, space: &SpaceId) -> Partition {
         match &self.incognito {
             Some(incognito) if incognito.state.window(window).is_some() => incognito.partition(),
             _ => self.space_partition(space),

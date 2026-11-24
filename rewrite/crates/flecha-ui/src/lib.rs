@@ -13,6 +13,8 @@ mod mcp;
 mod model;
 mod permissions_view;
 mod popup;
+#[cfg(target_os = "linux")]
+mod printing;
 mod settings_view;
 mod shortcuts;
 mod sidebar;
@@ -38,7 +40,7 @@ use flecha_adblock::{
     load_cached_rules,
 };
 use flecha_boosts::Boosts;
-use flecha_cef::{Engine, Event, IncognitoSession, Owner, Runtime, Viewport};
+use flecha_cef::{Engine, Event, IncognitoSession, Owner, Partition, Runtime, Viewport};
 use flecha_core::{
     ArchivedTab, Reopened, SpaceId, TabId, WindowId,
     storage::{LoadedState, ReadyState},
@@ -168,6 +170,7 @@ enum Action {
     OpenContext(TabId, String, context_menu::Destination),
     Navigate(String),
     Browser(Navigation),
+    Print,
     ViewSource,
     Download(flecha_cef::DownloadHandle, DownloadCommand),
     ClearDownloads,
@@ -480,8 +483,14 @@ impl Controller {
             }
             Action::Navigate(url) => self.navigate_tab(window, url)?,
             Action::Browser(navigation) => return self.browser_navigation(window, navigation),
+            Action::Print => {
+                if let Some((_, tab)) = self.model.keyboard_pane(window) {
+                    self.engine.print(tab)?;
+                }
+                return Ok(());
+            }
             Action::ViewSource => {
-                let Some((owner, tab)) = self.model.keyboard_pane(window) else {
+                let Some((_, tab)) = self.model.keyboard_pane(window) else {
                     return Ok(());
                 };
                 let Some(address) = self.engine.url(tab).filter(|url| {
@@ -492,21 +501,18 @@ impl Controller {
                     return Ok(());
                 };
                 let partition = self
-                    .model
+                    .engine
                     .partition(tab)
+                    .cloned()
                     .context("The source page has closed")?;
-                let source = format!("view-source:{address}");
-                if matches!(owner, Owner::Tab(_) | Owner::Peek(_)) {
-                    if let Some(peek) = self.model.peeks.remove(window) {
-                        self.engine.close(&peek.id);
-                    }
-                    self.model.open(window, source, true)?;
-                } else {
-                    self.front = Some(self.model.open_window_page(
-                        model::tab_id(),
-                        source,
-                        &partition,
-                    )?);
+                let destination = self.window_for_partition(window, &partition)?;
+                if let Some(peek) = self.model.peeks.remove(&destination) {
+                    self.engine.close(&peek.id);
+                }
+                self.model
+                    .open(&destination, format!("view-source:{address}"), true)?;
+                if &destination != window {
+                    self.front = Some(destination);
                 }
             }
             Action::Download(handle, command) => return self.manage_download(handle, command),
@@ -737,6 +743,56 @@ impl Controller {
         self.save()
     }
 
+    fn window_for_partition(
+        &mut self,
+        requested: &WindowId,
+        partition: &Partition,
+    ) -> Result<WindowId> {
+        if let Some(window) = self
+            .model
+            .state(requested)
+            .and_then(|state| state.window(requested))
+            && self
+                .model
+                .window_partition(requested, &window.active_space_id)
+                == *partition
+        {
+            return Ok(requested.clone());
+        }
+        if partition.is_incognito() {
+            return self
+                .model
+                .focused_window_for(partition)
+                .cloned()
+                .context("The incognito session has ended");
+        }
+        if let Some(window) = self.model.regular_windows().iter().find(|window| {
+            self.model
+                .window_partition(&window.id, &window.active_space_id)
+                == *partition
+        }) {
+            return Ok(window.id.clone());
+        }
+        let space = match partition {
+            Partition::Shared => self
+                .model
+                .core
+                .spaces()
+                .iter()
+                .find(|space| !space.isolated),
+            Partition::Isolated(id) => self.model.core.space(id).filter(|space| space.isolated),
+            Partition::Incognito(_) => None,
+        }
+        .context("No Space uses this page's request context")?
+        .id
+        .clone();
+        let window = self.model.open_regular_window()?;
+        for tab in self.model.core.switch_space(&window, &space).removed {
+            self.engine.close(&tab);
+        }
+        Ok(window)
+    }
+
     /// Activates a tab from `window`, bringing forward the window that shows it. Returns the
     /// pages the activation removed, whose browsers the caller closes.
     fn select(&mut self, window: &WindowId, id: &TabId) -> Result<Vec<TabId>> {
@@ -907,6 +963,8 @@ impl Controller {
         changed |= self.poll_toolbars();
         self.poll_page_overlays(cx);
         self.poll_clipboard(cx);
+        #[cfg(target_os = "linux")]
+        self.poll_print_jobs(cx);
         self.poll_sidebars(cx);
         if self.ready && !self.quitting {
             changed |= self.poll_sleep(Instant::now());
@@ -1134,6 +1192,32 @@ mod tests {
         let controller = Controller::open_test_profile(profile.path()).unwrap();
         let window = controller.model.core.focused_window().id.clone();
         (controller, window)
+    }
+
+    #[test]
+    fn a_page_action_uses_a_window_in_its_original_request_context() {
+        let profile = tempfile::tempdir().unwrap();
+        let (mut state, window) = controller(&profile);
+        let isolated = model::space_id();
+        assert!(state.model.core.add_space(isolated.clone()));
+        state.model.core.set_isolated(&isolated, true);
+        assert!(state.model.core.switch_space(&window, &isolated).result);
+
+        let shared = state
+            .window_for_partition(&window, &Partition::Shared)
+            .unwrap();
+        assert_ne!(shared, window);
+        let shared_space = &state.model.core.window(&shared).unwrap().active_space_id;
+        assert_eq!(
+            state.model.window_partition(&shared, shared_space),
+            Partition::Shared
+        );
+        assert_eq!(
+            state
+                .window_for_partition(&shared, &Partition::Isolated(isolated))
+                .unwrap(),
+            window
+        );
     }
 
     #[test]
