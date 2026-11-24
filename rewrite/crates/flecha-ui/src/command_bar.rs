@@ -19,7 +19,7 @@ use gpui::{
     div, prelude::FluentBuilder as _, rgb,
 };
 
-use crate::settings_view::SettingsTab;
+use crate::settings_view::{RESTORE_BEFORE_IMPORT, SettingsTab};
 use crate::text_field::TextField;
 use crate::view::{Overlay, Shell, button, overlay_panel};
 use crate::{Action, Controller, now};
@@ -65,6 +65,7 @@ enum Target {
     Address(String),
     Search(String),
     Copy(String),
+    RestoreBeforeImport,
 }
 
 struct Suggestion {
@@ -343,6 +344,33 @@ fn suggestions_for(
 }
 
 impl CommandMatches {
+    fn for_window(state: &Controller, window: &WindowId, text: &str, may_complete: bool) -> Self {
+        let mut matches = Self::new(
+            &state.model.core,
+            state.history.store(),
+            state.model.active(window),
+            text,
+            may_complete,
+        );
+        if let Some(score) = restore_action_score(text)
+            && state.store.has_before_import()
+        {
+            let rank = matches.rows.partition_point(|row| row.score >= score);
+            matches.rows.insert(
+                rank,
+                Suggestion {
+                    target: Target::RestoreBeforeImport,
+                    label: RESTORE_BEFORE_IMPORT.into(),
+                    detail: String::new(),
+                    kind: "Action",
+                    score,
+                    recency: 0,
+                },
+            );
+        }
+        matches
+    }
+
     fn new(
         core: &BrowserState,
         history: Option<&HistoryStore>,
@@ -397,15 +425,28 @@ impl CommandMatches {
     }
 }
 
+fn restore_action_score(text: &str) -> Option<u16> {
+    let query = trim_input(text).to_lowercase();
+    let label = RESTORE_BEFORE_IMPORT.to_lowercase();
+    let keywords = "undo restore revert backup import flecha electron state";
+    // Action matching and scores from chromium/shell/{ui/app.ts,lib/commandBar.ts}.
+    (query.encode_utf16().count() >= 2
+        && query.split_whitespace().all(|prefix| {
+            label
+                .split_whitespace()
+                .chain(keywords.split_whitespace())
+                .any(|word| word.starts_with(prefix))
+        }))
+    .then_some(if label.starts_with(&query) {
+        1400
+    } else {
+        1250
+    })
+}
+
 impl CommandBar {
     fn refresh_matches(&mut self, state: &Controller, window: &WindowId, may_complete: bool) {
-        self.matches = CommandMatches::new(
-            &state.model.core,
-            state.history.store(),
-            state.model.active(window),
-            &self.typed,
-            may_complete,
-        );
+        self.matches = CommandMatches::for_window(state, window, &self.typed, may_complete);
         self.show_selected_completion();
         self.scroll.scroll_to_item(0);
     }
@@ -450,13 +491,7 @@ impl Shell {
                 tab.map_or_else(String::new, |tab| tab.url.clone()),
                 tab.is_some(),
             );
-            let matches = CommandMatches::new(
-                &state.model.core,
-                state.history.store(),
-                state.model.active(&self.id),
-                input.text(),
-                false,
-            );
+            let matches = CommandMatches::for_window(&state, &self.id, input.text(), false);
             CommandBar {
                 mode,
                 typed: input.text().into(),
@@ -585,6 +620,10 @@ impl Shell {
             return;
         }
         let url = match target {
+            Target::RestoreBeforeImport => {
+                self.open_restore_before_import(window, cx);
+                return;
+            }
             Target::Copy(text) => {
                 cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
                 self.dismiss_overlay(window, cx);
@@ -679,6 +718,37 @@ mod tests {
     use super::*;
     use flecha_core::{Placement, SpaceId};
     use gpui::Keystroke;
+
+    #[test]
+    fn restore_action_is_offered_for_a_matching_query_only_when_a_backup_exists()
+    -> anyhow::Result<()> {
+        let profile = tempfile::tempdir()?;
+        let state = Controller::open_test_profile(profile.path())?;
+        let command = |query| {
+            let window = &state.model.core.focused_window().id;
+            CommandMatches::for_window(&state, window, query, false)
+                .rows
+                .into_iter()
+                .find(|row| row.target == Target::RestoreBeforeImport)
+        };
+        assert!(command("restore spaces").is_none());
+        state
+            .store
+            .write(&flecha_core::storage::set_aside_before_import(
+                &state.model.core,
+            )?)?;
+        assert!(command("s").is_none());
+        assert!(command("restore tabs").is_none());
+        assert_eq!(
+            command("restore spaces").unwrap().label,
+            RESTORE_BEFORE_IMPORT
+        );
+        assert_eq!(
+            command("revert import").unwrap().label,
+            RESTORE_BEFORE_IMPORT
+        );
+        Ok(())
+    }
 
     #[test]
     fn candidates_rank_local_sources_and_deduplicate_history() {
