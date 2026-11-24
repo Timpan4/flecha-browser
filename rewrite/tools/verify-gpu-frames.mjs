@@ -159,6 +159,7 @@ const active = snapshot => {
 };
 
 const app = launch();
+
 const browserOf = (tab, since = 0) => app.wait(`the browser for ${tab}`,
   event => event.type === 'created' && event.tab === tab, since);
 
