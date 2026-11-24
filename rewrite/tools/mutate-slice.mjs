@@ -37,7 +37,7 @@ const mutations = {
   'popup-keyboard': [`${ui}/model.rs`, '        if let Some(popup) = self.popups.get(window) {\n            return Some((Owner::Popup(window.clone()), &popup.page.id));\n        }\n', ''],
   'peek-shared': [`${ui}/model.rs`, '.unwrap_or_else(|| self.window_partition(&window, &space))', '.unwrap_or(Partition::Shared)'],
   'peek-blind-click': [`${ui}/view.rs`, 'if state.model.peeks.contains_key(&self.id) {\n            main = main.child(', 'if false {\n            main = main.child('],
-  'flechinha-old-partition': [`${ui}/model.rs`, '.extract_if(.., |_, page| page.from_regular_space(space)),', '.extract_if(.., |_, _| false),'],
+  'flechinha-old-partition': [`${ui}/model.rs`, '.extract_if(.., |_, page| page.came_from_regular_space(space)),', '.extract_if(.., |_, _| false),'],
   timeout: ['app/src/main.rs', 'fn main() -> Result<()> {', `
 fn _forbidden_timeout(executor: &gpui::BackgroundExecutor) {
     use gpui::FutureExt as _;
