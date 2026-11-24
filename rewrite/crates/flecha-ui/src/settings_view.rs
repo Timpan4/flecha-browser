@@ -266,10 +266,8 @@ impl Shell {
         let palette = palette();
         // The panes in the order and under the headings of settings.html:19-34, with the icon
         // and colour each has there.
-        let groups: [(
-            Option<&'static str>,
-            &[(SettingsTab, &'static str, &'static str)],
-        ); 3] = [
+        type Pane = (SettingsTab, &'static str, &'static str);
+        let groups: [(Option<&'static str>, &[Pane]); 3] = [
             (
                 None,
                 &[
