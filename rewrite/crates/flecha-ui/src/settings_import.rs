@@ -176,12 +176,14 @@ impl Controller {
             self.model.core = previous;
             return Err(error.context("Save imported state"));
         }
+        self.sync_engine_settings(&previous.settings);
         if replace {
             for id in self.engine.ids() {
                 self.history.forget(id);
             }
             // Exports can reuse both tab and window IDs for unrelated pages.
             self.engine.close_all();
+            self.sleep.clear_pages(&mut self.engine);
             self.model.peeks.clear();
             self.model.flechinhas.clear();
             self.model.popups.clear();

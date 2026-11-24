@@ -1,4 +1,4 @@
-use cef::{ImplBrowser as _, ImplBrowserHost as _, ImplFrame as _};
+use anyhow::{Context as _, Result};
 use flecha_core::{
     BrowserState, TabId, WindowId,
     shortcuts::{self, Keybindings, Platform},
@@ -17,6 +17,16 @@ pub(crate) enum Navigation {
     Forward,
     Reload,
     HardReload,
+    Stop,
+}
+
+#[derive(Clone, Copy, Default, Eq, PartialEq)]
+pub(crate) struct Toolbar {
+    pub(crate) back: bool,
+    pub(crate) forward: bool,
+    pub(crate) loading: bool,
+    pub(crate) available: bool,
+    blocked: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -170,20 +180,58 @@ fn tab_for_shortcut(
 }
 
 impl Controller {
-    pub(crate) fn browser_navigation(&self, window: &WindowId, action: Navigation) {
+    pub(crate) fn poll_toolbars(&mut self) -> bool {
+        let mut changed = false;
+        while let Some(message) = self.engine.next_devtools_event() {
+            if matches!(
+                message.event,
+                flecha_cef::DevToolsEvent::Result { success: false, .. }
+            ) {
+                self.status = "Could not reload the page without its cache.".into();
+                changed = true;
+            }
+        }
+        self.toolbars
+            .retain(|id, _| self.model.core.window(id).is_some());
+        for window in self.model.core.windows() {
+            let next =
+                self.model
+                    .keyboard_pane(&window.id)
+                    .map_or_else(Toolbar::default, |(_, tab)| Toolbar {
+                        back: self.engine.can_go_back(tab),
+                        forward: self.engine.can_go_forward(tab),
+                        loading: self.engine.is_loading(tab),
+                        available: self.engine.key(tab).is_some(),
+                        blocked: self.engine.blocked_count(tab),
+                    });
+            if let Some(current) = self.toolbars.get_mut(&window.id) {
+                changed |= *current != next;
+                *current = next;
+            } else {
+                self.toolbars.insert(window.id.clone(), next);
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    pub(crate) fn browser_navigation(&self, window: &WindowId, action: Navigation) -> Result<()> {
         let Some((_, id)) = self.model.keyboard_pane(window) else {
-            return;
-        };
-        let Some(browser) = self.engine.host(id).and_then(|host| host.browser()) else {
-            return;
+            return Ok(());
         };
         match action {
-            Navigation::Back if browser.can_go_back() != 0 => browser.go_back(),
-            Navigation::Forward if browser.can_go_forward() != 0 => browser.go_forward(),
-            Navigation::Reload => browser.reload(),
-            Navigation::HardReload => browser.reload_ignore_cache(),
+            Navigation::Back if self.engine.can_go_back(id) => self.engine.go_back(id),
+            Navigation::Forward if self.engine.can_go_forward(id) => self.engine.go_forward(id),
+            Navigation::Reload => self.engine.reload(id),
+            Navigation::Stop if self.engine.is_loading(id) => self.engine.stop_load(id),
+            Navigation::HardReload if self.engine.key(id).is_some() => {
+                self.engine
+                    .send_devtools_message(id, "Page.reload", Some(r#"{"ignoreCache":true}"#))
+                    .context("Reload without cache")?;
+            }
             _ => {}
         }
+        Ok(())
     }
 
     pub(crate) fn navigate_tab(&mut self, window: &WindowId, url: String) -> anyhow::Result<()> {
@@ -193,18 +241,10 @@ impl Controller {
         };
         if let Some((tab, _)) = self.model.tab_mut(&id)
             && tab.url != url
+            && !self.engine.navigate(&id, &url)
         {
-            if let Some(frame) = self
-                .engine
-                .host(&id)
-                .and_then(|host| host.browser())
-                .and_then(|browser| browser.main_frame())
-            {
-                frame.load_url(Some(&cef::CefString::from(url.as_str())));
-            } else {
-                tab.title.clone_from(&url);
-                tab.url = url;
-            }
+            tab.title.clone_from(&url);
+            tab.url = url;
         }
         Ok(())
     }
@@ -254,6 +294,7 @@ impl Shell {
                 Overlay::History(_) | Overlay::Archive(_) => self.drawer_key(stroke, cx),
                 Overlay::Folder(..) => self.folder_key(stroke, window, cx),
                 Overlay::Settings(_) => self.settings_key(stroke, cx),
+                Overlay::Downloads(_) => self.downloads_key(stroke, cx),
                 _ => {}
             }
             cx.stop_propagation();
@@ -290,6 +331,16 @@ impl Shell {
             }
             Shortcut::Escape if self.state.borrow().model.peeks.contains_key(&self.id) => {
                 Action::ClosePeek
+            }
+            Shortcut::Escape
+                if self
+                    .state
+                    .borrow()
+                    .model
+                    .keyboard_pane(&self.id)
+                    .is_some_and(|(_, id)| self.state.borrow().engine.is_loading(id)) =>
+            {
+                Action::Browser(Navigation::Stop)
             }
             Shortcut::Close => {
                 self.dismiss_overlay(window, cx);
