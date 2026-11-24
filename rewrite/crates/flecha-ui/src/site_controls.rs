@@ -184,15 +184,15 @@ impl Shell {
         if let Some(error) = state.permissions.error() {
             return panel.child(format!("Saved permissions are read-only. {error:#}"));
         }
-        if !site.origin.is_potentially_trustworthy() {
-            return panel.child("This origin cannot request site permissions.");
-        }
         if let Some(error) = state.permissions.save_error() {
             panel = panel.child(
                 div().flex().flex_col()
                     .child(format!("Permission changes are active in this session. Could not save them. {error:#}"))
                     .child(self.action_button("retry-permission-save", "Retry save", Action::RetryPermissionSave, cx)),
             );
+        }
+        if !site.origin.is_potentially_trustworthy() {
+            return panel.child("This origin cannot request site permissions.");
         }
         let permissions = state.site_permissions(&site);
         for kind in PermissionKind::ALL {

@@ -12,6 +12,12 @@ use crate::{Controller, model::now};
 
 const INTERVAL: Duration = Duration::from_millis(EVALUATE_EVERY.unsigned_abs());
 
+/// Automatic freeze and discard stay off until `flecha-cef` reports audible and
+/// capturing tabs, detects unsaved form input, and keeps tab history across a
+/// discard. The shipping browser never sleeps such tabs (`shell/tabSleep.ts:4-7`),
+/// and a discard here would drop that state.
+const AUTOMATIC_SLEEP: bool = false;
+
 pub(crate) struct TabSleep {
     last_evaluation: Instant,
     sampled_at: Instant,
@@ -94,7 +100,7 @@ impl Controller {
     }
 
     pub(crate) fn poll_sleep(&mut self, instant: Instant) -> bool {
-        if !self.sleep.due(instant, self.verify) {
+        if !AUTOMATIC_SLEEP || !self.sleep.due(instant, self.verify) {
             return false;
         }
         let active_use = self.note_shown_tabs(instant);
