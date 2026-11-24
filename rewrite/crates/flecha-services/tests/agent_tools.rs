@@ -678,3 +678,63 @@ async fn tools_run_over_http() {
         "MCP error -32602: Input validation error: Invalid arguments for tool wait_for: Too small: expected number to be >=0 at timeoutMs"
     );
 }
+
+#[tokio::test]
+async fn each_tool_tells_the_sidebar_what_it_does_in_the_shells_words() {
+    let (browser, mine, ..) = browser();
+    let cases = [
+        ("list_tabs", json!({}), None, "listing tabs"),
+        (
+            "open_tab",
+            json!({ "url": "example.org" }),
+            None,
+            "opening a tab",
+        ),
+        (
+            "navigate",
+            json!({ "url": "https://example.org/a" }),
+            Some(&mine),
+            "opening https://example.org/a",
+        ),
+        ("navigate", json!({ "action": "back" }), Some(&mine), "back"),
+        ("read_page", json!({}), Some(&mine), "reading the page"),
+        (
+            "click",
+            json!({ "selector": "#go" }),
+            Some(&mine),
+            "clicking #go",
+        ),
+        (
+            "type",
+            json!({ "text": "x" }),
+            Some(&mine),
+            "typing into the page",
+        ),
+        (
+            "press_key",
+            json!({ "key": "Enter" }),
+            Some(&mine),
+            "pressing Enter",
+        ),
+        (
+            "evaluate",
+            json!({ "expression": "1" }),
+            Some(&mine),
+            "running JavaScript",
+        ),
+        (
+            "wait_for",
+            json!({ "selector": "#ready", "timeoutMs": 0 }),
+            Some(&mine),
+            "waiting for #ready",
+        ),
+    ];
+    for (tool, mut arguments, tab, action) in cases {
+        if tab.is_some() {
+            arguments["tabId"] = json!(mine.as_str());
+        }
+        run(&browser, tool, arguments).await;
+        let last = browser.stats.activity.lock().unwrap().last().cloned();
+        assert_eq!(last, Some((tab.cloned(), action.to_owned())), "{tool}");
+    }
+}
