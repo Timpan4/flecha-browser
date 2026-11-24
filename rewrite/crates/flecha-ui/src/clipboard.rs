@@ -16,7 +16,7 @@
 use std::collections::VecDeque;
 
 use cef::BrowserHost;
-use flecha_cef::{BrowserKey, ClipboardEdit, MenuFrame};
+use flecha_cef::{BrowserKey, ClipboardEdit, ImeEdit, MenuFrame};
 use flecha_surface::input;
 use gpui::{App, ClipboardItem, Keystroke, Window};
 
@@ -65,6 +65,7 @@ pub(crate) enum Held {
         repeat: bool,
         altgr: bool,
     },
+    Ime(ImeEdit),
     /// A paste from the keyboard, with its key.
     Paste(Keystroke),
     /// A paste from the page menu, delivered only if its frame is still focused.
@@ -83,6 +84,16 @@ pub(crate) enum Held {
 pub(crate) struct Hold {
     reading: bool,
     queue: VecDeque<Held>,
+}
+
+impl Hold {
+    pub(crate) fn push(&mut self, input: Held) {
+        self.queue.push_back(input);
+    }
+
+    pub(crate) fn discard_ime(&mut self) {
+        self.queue.retain(|input| !matches!(input, Held::Ime(_)));
+    }
 }
 
 /// Gives the page a whole key the shell took. The shell swallows the real release.
@@ -156,7 +167,7 @@ impl Controller {
         let Some(hold) = self.held.get_mut(key) else {
             return false;
         };
-        hold.queue.push_back(input);
+        hold.push(input);
         true
     }
 
@@ -248,7 +259,8 @@ impl Controller {
                 up,
                 repeat,
                 altgr,
-            } => input::key(&host, &stroke, up, repeat, altgr),
+            } => self.send_page_key(key, &stroke, up, repeat, altgr),
+            Held::Ime(edit) => self.engine.ime_edit(key, edit),
             Held::Paste(stroke) => match text(cx) {
                 Some(text) => {
                     self.engine.paste_text(&key.tab, &text);
