@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { once, EventEmitter } from 'node:events';
 import { copyFileSync, createWriteStream, existsSync, readdirSync, readFileSync, renameSync, utimesSync } from 'node:fs';
 import { join, relative } from 'node:path';
@@ -879,6 +879,96 @@ async function tabStatus(app, main, left) {
   await poll('the mark to unmute the page', async () =>
     (await tab(audioTab)).muted === undefined && !(await browser(audioTab)).muted);
   pass('clicking the audio mark muted the page in CEF and the saved tab, and clicking again unmuted it');
+
+  // The split mark (ui/app.ts:574-576) sits where the close button shows on hover, and hovering
+  // the row hides it (ui/styles.css:660-683). The audio row is drawn alone and in a split, each
+  // time with the pointer on the page beside the sidebar and then on the row's title. A row is
+  // 32px tall (ui/styles.css:6), and its icon and title end where the 20px audio mark
+  // (ui/styles.css:2174) begins.
+  const rowHeight = 32;
+  const titleWidth = Math.round(mark[0] - windowX - 20);
+  const click =([x, y]) => execFileSync(x11Driver, ['click', Math.round(x), Math.round(y)]);
+  const awayPoint = [windowX + sidebarWidth + 40, windowY + windowHeight - 40];
+  const titlePoint = centre => [windowX + titleWidth / 2, windowY + centre];
+
+  const rowBand = (name, path, centre) => {
+    const band = join(out, `${name}-row.png`);
+    execFileSync('magick', [path, '-crop', `${sidebarWidth}x${rowHeight}+0+${centre - rowHeight / 2}`, '+repage', band]);
+
+    return band;
+  };
+
+  const differing = (a, b) => Number(spawnSync('magick', ['compare', '-metric', 'AE', a, b, 'null:'], { encoding: 'utf8' })
+    .stderr.split(' ')[0]);
+
+  const shot = async (name, check) => {
+    await app.present(main);
+    await captureUntil(name, 'root', path => check(crop(name, path)));
+  };
+
+  const aloneCentre = Math.round(mark[1] - windowY);
+  let alone;
+  let aloneHovered;
+
+  click(awayPoint);
+  await shot('split-alone', path => {
+    alone = rowBand('split-alone', path, aloneCentre);
+  });
+  click(titlePoint(aloneCentre));
+  await shot('split-alone-hover', path => {
+    aloneHovered = rowBand('split-alone-hover', path, aloneCentre);
+
+    return differing(alone, aloneHovered) ? undefined : 'the row shows no actions on hover';
+  });
+
+  // The close button is the right end of what hovering the row shows.
+  const actions = execFileSync('magick', [
+    alone, aloneHovered, '-compose', 'difference', '-composite',
+    '-separate', '-evaluate-sequence', 'max', '-threshold', '0', '-format', '%@', 'info:',
+  ], { encoding: 'utf8' }).trim();
+
+  const [, actionsWidth, , actionsX] = /^(\d+)x(\d+)\+(\d+)\+(\d+)$/.exec(actions).map(Number);
+  // Half the close button's 13px icon (ui/styles.css:648) in from that end.
+  const closeX = windowX + actionsX + actionsWidth - 13 / 2;
+
+  const titleOnly = join(out, 'split-title.png');
+  execFileSync('magick', [alone, '-crop', `${titleWidth}x${rowHeight}+0+0`, '+repage', titleOnly]);
+
+  // The split's new tab can move the row, so it is found again by its icon and title.
+  const findRow = path => {
+    const search = spawnSync('magick', ['compare', '-metric', 'AE', '-subimage-search', path, titleOnly, 'null:'],
+      { encoding: 'utf8' }).stderr;
+
+    const [, offset] = /@ \d+,(\d+)/.exec(search) ?? [];
+
+    return offset === undefined ? undefined : Number(offset) + rowHeight / 2;
+  };
+
+  await app.command('split', { url: base + '/split' });
+  await app.command('select', { tab: audioTab });
+  click(awayPoint);
+  let splitCentre;
+  let split;
+
+  await shot('split-joined', path => {
+    splitCentre = findRow(path);
+
+    if (splitCentre === undefined) return 'the audio row is not in the sidebar';
+    split = rowBand('split-joined', path, splitCentre);
+
+    if (!differing(split, aloneHovered)) return 'the row still shows its hover actions';
+
+    return differing(split, alone) ? undefined : 'the split row shows no split mark';
+  });
+  click(titlePoint(splitCentre));
+  await shot('split-joined-hover', path => differing(rowBand('split-joined-hover', path, splitCentre), aloneHovered)
+    ? 'hovering the split row did not swap its split mark for the row actions'
+    : undefined);
+  pass('a tab in a split showed the split mark, and hovering its row swapped the mark for the row actions');
+
+  click([closeX, windowY + splitCentre]);
+  await poll('the close button under the split mark to close the tab', async () => !(await tab(audioTab)));
+  pass('the close button under the split mark closed the tab');
 }
 
 // Incognito windows: one in-memory cookie jar per session, kept apart from the regular one,
