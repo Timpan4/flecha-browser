@@ -12,6 +12,7 @@ mod icons;
 mod incognito;
 mod mcp;
 mod model;
+mod page_input;
 mod permissions_view;
 mod popup;
 #[cfg(target_os = "linux")]

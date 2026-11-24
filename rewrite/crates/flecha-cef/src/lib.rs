@@ -10,6 +10,7 @@ mod downloads;
 mod favicon;
 mod find;
 mod identity;
+mod ime;
 mod permissions;
 mod popup;
 #[cfg(target_os = "linux")]
@@ -53,6 +54,7 @@ pub use favicon::{FAVICON_SIZE, Favicon, FaviconBitmap};
 pub use find::{FindEvent, FindResult};
 use identity::Generations;
 pub use identity::{BrowserKey, IncognitoSession, Owner, Partition};
+pub use ime::{Ime, ImeEdit};
 pub use permissions::{PermissionEvent, PermissionPrompt};
 pub use popup::{Disposition, Opened};
 use popup::{Pending, Popups};
@@ -93,8 +95,7 @@ pub enum Event {
     FaviconUrls(Vec<String>),
     /// The browser started (`true`) or finished loading ([`Engine::is_loading`]).
     Loading(bool),
-    /// The page became audible (`true`), or a new document replaced the audible one
-    /// ([`Engine::is_audible`]).
+    /// The page's audio stream started or stopped ([`Engine::is_audible`]).
     Audible(bool),
 }
 
@@ -554,8 +555,8 @@ impl Engine {
     }
 
     pub fn focused(&self, tab: &TabId, focused: bool) {
-        if let Some(host) = self.host(tab) {
-            host.set_focus(i32::from(focused));
+        if let Some(session) = self.browsers.get(tab) {
+            session.slot.set_page_focus(focused);
         }
     }
 
@@ -569,6 +570,7 @@ impl Engine {
         if session.hidden == visible {
             session.hidden = !visible;
             if !visible {
+                session.slot.set_page_focus(false);
                 session.slot.set_status(None);
             }
             if let Some(host) = self.host(tab) {
@@ -599,6 +601,11 @@ impl Engine {
         }
         self.discarded.retain(|_, page| page.partition != partition);
         self.contexts.remove(&partition);
+        self.popups
+            .services
+            .favicons
+            .borrow_mut()
+            .retain(|result| result.partition != partition);
         self.end_download_session(session);
         let ephemeral = permissions::partition(&partition);
         self.edit_permissions(|manager| ((), manager.clear_partition(&ephemeral)));
@@ -614,6 +621,7 @@ impl Engine {
             return;
         };
         if from != &to || session.owner != owner {
+            session.slot.set_page_focus(false);
             if session.slot.finding.get() {
                 find::stop(&session.slot, true);
             }
@@ -707,12 +715,14 @@ impl Engine {
             .is_some_and(|browser| browser.is_loading() != 0)
     }
 
-    /// Whether the tab's page has played sound since its document loaded. CEF reports only when
-    /// a page becomes audible, so this stays set until the next document or browser.
+    /// Whether CEF is capturing the page's audio. Alloy keeps the stream open through short gaps.
     pub fn is_audible(&self, tab: &TabId) -> bool {
-        self.browsers
-            .get(tab)
-            .is_some_and(|session| session.slot.audible.get())
+        self.browsers.get(tab).is_some_and(|session| {
+            session
+                .slot
+                .audio_stream
+                .load(std::sync::atomic::Ordering::Relaxed)
+        })
     }
 
     /// Whether CEF has the tab's page muted now, by the shell or by tab sleep.
@@ -759,6 +769,7 @@ impl Engine {
         let key = slot.key.borrow().clone();
         self.generations.retire(&key);
         slot.retired.set(true);
+        slot.set_page_focus(false);
         find::forget(slot);
         context_menu::cancel(slot);
         slot.dialogs.cancel();
@@ -863,6 +874,11 @@ impl Engine {
 
     pub fn next_event(&mut self) -> Option<BrowserEvent> {
         self.adopt_popups();
+        if self.events.borrow().is_empty() {
+            for session in self.browsers.values() {
+                session.slot.report_audio_change();
+            }
+        }
         loop {
             let next = self.events.borrow_mut().pop_front();
             let Some(message) = next else {

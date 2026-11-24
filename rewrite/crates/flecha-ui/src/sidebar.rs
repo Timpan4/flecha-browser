@@ -155,7 +155,7 @@ impl Controller {
     }
 }
 
-// Shipping's #edge, --floating-sidebar-inset and peek animation (ui/s.css).
+// Shipping's #edge, --floating-sidebar-inset and peek animation (ui/styles.css).
 const SIDEBAR_EDGE: f32 = 8.;
 const FLOATING_INSET: f32 = 10.;
 const PEEK_DELAY: Duration = Duration::from_millis(300);
@@ -913,7 +913,7 @@ impl Shell {
                     dispatch(&this.state, &this.id, action.clone(), cx);
                 }))
                 .child(self.site_icon(
-                    rows.state.tab_favicon(id),
+                    rows.state.tab_favicon(&self.id, id),
                     &tab.url,
                     (
                         tokens::FAVORITE_ICON,
@@ -1249,7 +1249,7 @@ impl Shell {
                 spinner(SharedString::from(format!("spinner-{}", id.as_str()))).into_any_element()
             } else {
                 self.site_icon(
-                    rows.state.tab_favicon(id),
+                    rows.state.tab_favicon(&self.id, id),
                     &tab.url,
                     (
                         tokens::FAVICON,

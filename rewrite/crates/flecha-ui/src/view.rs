@@ -296,12 +296,16 @@ impl Shell {
         }
 
         let focused = browser.filter(|_| {
-            self.browser_dialog.is_none()
+            !self.overlay.is_open()
+                && self.browser_dialog.is_none()
                 && window.is_window_active()
                 && self.page_focus.is_focused(window)
         });
         if self.focused_browser != focused {
-            let state = self.state.borrow();
+            if self.focused_browser.is_some() && window.is_window_active() {
+                window.reset_ime();
+            }
+            let mut state = self.state.borrow_mut();
             // A transfer can leave the previous browser live in another window.
             if let Some(old) = self.focused_browser.take()
                 && state.engine.key(&old.tab).as_ref() == Some(&old)
@@ -310,12 +314,12 @@ impl Shell {
                     Some(Owner::Tab(id) | Owner::Peek(id) | Owner::Flechinha(id) | Owner::Popup(id)) if id == &self.id
                 )
             {
-                state.engine.focused(&old.tab, false);
-            }
-            if let Some(browser) = &focused {
-                state.engine.focused(&browser.tab, true);
+                state.blur_page(&old);
             }
             self.focused_browser = focused.clone();
+        }
+        if let Some(browser) = &focused {
+            self.state.borrow().engine.focused(&browser.tab, true);
         }
         focused
     }
@@ -384,9 +388,9 @@ impl Shell {
         up: bool,
         repeat: bool,
         character_input: bool,
-    ) {
+    ) -> bool {
         let Some(key) = focused else {
-            return;
+            return false;
         };
         let altgr = character_input && stroke.modifiers.control && stroke.modifiers.alt;
         let mut state = self.state.borrow_mut();
@@ -397,12 +401,10 @@ impl Shell {
             repeat,
             altgr,
         };
-        if state.hold(&key, held) {
-            return;
+        if !state.hold(&key, held) {
+            state.send_page_key(&key, stroke, up, repeat, altgr);
         }
-        if let Some(host) = state.engine.host(&key.tab) {
-            input::key(&host, stroke, up, repeat, altgr);
-        }
+        true
     }
 
     fn pane(
@@ -448,8 +450,26 @@ impl Shell {
                     let origin = origin.clone();
                     let owner = owner.clone();
                     let id = id.clone();
+                    let page_input = self
+                        .focused_browser
+                        .as_ref()
+                        .filter(|browser| browser.tab == id)
+                        .map(|browser| (browser.clone(), self.page_focus.clone(), self.id.clone()));
                     move |pane, (), window, cx| {
                         origin.set(pane.origin);
+                        if let Some((browser, focus, window_id)) = &page_input {
+                            window.handle_input(
+                                focus,
+                                crate::page_input::PageInput {
+                                    state: state.clone(),
+                                    window: window_id.clone(),
+                                    browser: browser.clone(),
+                                    focus: focus.clone(),
+                                    bounds: pane,
+                                },
+                                cx,
+                            );
+                        }
                         #[cfg(target_os = "linux")]
                         state.borrow().engine.follow_window_device(
                             flecha_surface::SurfaceTarget::for_window(window),

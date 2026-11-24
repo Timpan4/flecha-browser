@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use flecha_cef::{Favicon, FaviconBitmap, Partition};
-use flecha_core::TabId;
+use flecha_core::{Placement, TabId, WindowId};
 use gpui::RenderImage;
 
 use crate::Controller;
@@ -94,6 +94,13 @@ impl Favicons {
         self.images.retain(|key, _| referenced.contains(key));
         self.failed.retain(|key| referenced.contains(key));
     }
+
+    pub(crate) fn clear_partition(&mut self, partition: &Partition) {
+        self.images.retain(|(owner, _), _| owner != partition);
+        self.failed.retain(|(owner, _)| owner != partition);
+        self.downloading.retain(|(owner, _)| owner != partition);
+        self.declared.retain(|_, (owner, _)| owner != partition);
+    }
 }
 
 /// GPUI's image from straight-alpha BGRA pixels.
@@ -103,10 +110,26 @@ fn render_image(bitmap: FaviconBitmap) -> Option<RenderImage> {
 }
 
 impl Controller {
-    /// The tab's own icon, as its partition downloaded it.
-    pub(crate) fn tab_favicon(&self, id: &TabId) -> Option<Arc<RenderImage>> {
-        let url = self.model.tab(id)?.favicon.as_deref()?;
-        self.favicons.image(&self.model.partition(id)?, url)
+    /// Favorites are shown in every Space. Their icon must come from the viewing Space.
+    pub(crate) fn favicon_partition(&self, window: &WindowId, id: &TabId) -> Option<Partition> {
+        if self.model.core.locate(id) == Some(Placement::Favorite) {
+            let space = &self.model.core.window(window)?.active_space_id;
+            return Some(self.model.window_partition(window, space));
+        }
+        self.model.partition(id)
+    }
+
+    pub(crate) fn tab_favicon(&self, window: &WindowId, id: &TabId) -> Option<Arc<RenderImage>> {
+        let tab = self.model.tab(id)?;
+        let partition = self.favicon_partition(window, id)?;
+        let own = tab
+            .favicon
+            .as_deref()
+            .and_then(|url| self.favicons.image(&partition, url));
+        if own.is_none() && self.model.partition(id).as_ref() != Some(&partition) {
+            return self.site_favicon(&partition, &tab.url);
+        }
+        own
     }
 
     /// The icon of a tab in `partition` on the same site as `url`, for addresses with no tab of
@@ -266,6 +289,106 @@ mod tests {
     }
 
     #[test]
+    fn closing_the_last_incognito_window_drops_its_favicon_cache_immediately() {
+        let profile = tempfile::tempdir().unwrap();
+        let mut controller = Controller::open_test_profile(profile.path()).unwrap();
+        let first = controller.model.open_incognito_window();
+        let last = controller.model.open_incognito_window();
+        let partition = Partition::Incognito(controller.model.incognito_session(&last).unwrap());
+        let url = "https://example.test/icon.png";
+        let failed = "https://example.test/failed.png";
+        let pending = "https://example.test/pending.png";
+        let tab = controller
+            .model
+            .open(&last, "https://example.test/".into(), true)
+            .unwrap();
+        controller.favicons.store(result(url, Some(bitmap())));
+        for (url, image) in [(url, Some(bitmap())), (failed, None)] {
+            controller.favicons.store(Favicon {
+                partition: partition.clone(),
+                url: url.into(),
+                image,
+            });
+        }
+        controller
+            .favicons
+            .downloading
+            .insert(key(&partition, pending));
+        controller
+            .favicons
+            .declared
+            .insert(tab.clone(), (partition.clone(), vec![pending.into()]));
+
+        controller.close_incognito_window(&first);
+        assert!(controller.favicons.image(&partition, url).is_some());
+        controller.close_incognito_window(&last);
+        assert!(controller.favicons.image(&partition, url).is_none());
+        assert!(
+            !controller
+                .favicons
+                .failed
+                .contains(&key(&partition, failed))
+        );
+        assert!(
+            !controller
+                .favicons
+                .downloading
+                .contains(&key(&partition, pending))
+        );
+        assert!(!controller.favicons.declared.contains_key(&tab));
+        assert!(controller.favicons.image(&Partition::Shared, url).is_some());
+    }
+
+    #[test]
+    fn a_favorite_uses_the_viewing_spaces_favicon_partition() {
+        let profile = tempfile::tempdir().unwrap();
+        let mut controller = Controller::open_test_profile(profile.path()).unwrap();
+        let window = controller.model.core.focused_window().id.clone();
+        let favorite = controller
+            .model
+            .open(&window, "https://example.test/".into(), true)
+            .unwrap();
+        controller
+            .act(
+                &window,
+                crate::Action::Sidebar(crate::sidebar::SidebarAction::Favorite(favorite.clone())),
+            )
+            .unwrap();
+        let url = "https://example.test/icon.png";
+        controller.model.tab_mut(&favorite).unwrap().0.favicon = Some(url.into());
+        controller.favicons.store(result(url, Some(bitmap())));
+        let shared = controller.tab_favicon(&window, &favorite).unwrap();
+
+        let isolated = crate::model::space_id();
+        assert!(controller.model.core.add_space(isolated.clone()));
+        controller.model.core.set_isolated(&isolated, true);
+        assert!(
+            controller
+                .model
+                .core
+                .switch_space(&window, &isolated)
+                .result
+        );
+        let partition = Partition::Isolated(isolated);
+        assert_eq!(
+            controller.favicon_partition(&window, &favorite),
+            Some(partition.clone())
+        );
+        assert!(controller.tab_favicon(&window, &favorite).is_none());
+        controller.favicons.store(Favicon {
+            partition: partition.clone(),
+            url: url.into(),
+            image: Some(bitmap()),
+        });
+        let isolated = controller.tab_favicon(&window, &favorite).unwrap();
+        assert_eq!(
+            isolated.id,
+            controller.favicons.image(&partition, url).unwrap().id
+        );
+        assert_ne!(isolated.id, shared.id);
+    }
+
+    #[test]
     fn declared_icons_settle_on_the_first_that_downloads() {
         let mut favicons = Favicons::default();
         let shared = Partition::Shared;
@@ -416,7 +539,7 @@ mod tests {
         controller.favicons_stale();
         controller.sweep_favicons();
         assert!(
-            controller.tab_favicon(&tab).is_some(),
+            controller.tab_favicon(&window, &tab).is_some(),
             "a referenced icon stays"
         );
         assert!(
