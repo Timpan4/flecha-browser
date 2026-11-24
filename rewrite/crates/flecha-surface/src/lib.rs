@@ -312,13 +312,14 @@ fn paint(frame: Frame, bounds: Bounds<Pixels>, window: &mut gpui::Window) {
             device,
             source_uv,
             ..
-        } => match window.surface_device() {
-            Some(gpu) if gpu.device == device => {
+        } => {
+            if window
+                .surface_device()
+                .is_some_and(|gpu| gpu.device == device)
+            {
                 window.paint_texture_surface(bounds, view, source_uv);
             }
-            Some(_) => eprintln!("CEF texture frame dropped: it belongs to another wgpu device"),
-            None => eprintln!("CEF texture frame dropped: the window has no wgpu device"),
-        },
+        }
         FrameStorage::Image(image) => {
             if let Err(error) =
                 window.paint_image(bounds, bounds, Default::default(), image, 0, false)
