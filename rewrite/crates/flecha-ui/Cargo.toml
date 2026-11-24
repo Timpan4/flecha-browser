@@ -23,6 +23,7 @@ flecha-services.workspace = true
 flecha-surface.workspace = true
 futures.workspace = true
 gpui.workspace = true
+open = "5"
 reqwest = { version = "0.13.5", default-features = false, features = ["charset", "rustls", "system-proxy"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

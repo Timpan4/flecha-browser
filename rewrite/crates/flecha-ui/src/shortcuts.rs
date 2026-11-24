@@ -1,4 +1,5 @@
 use anyhow::{Context as _, Result};
+use cef::ImplBrowserHost as _;
 use flecha_cef::{PageZoom, zoom_percentage};
 use flecha_core::{
     BrowserState, TabId, WindowId,
@@ -45,6 +46,8 @@ enum Shortcut {
     Find,
     Zoom(PageZoom),
     DevTools,
+    Print,
+    ViewSource,
     Cycle(bool),
     Select(usize),
     History,
@@ -96,6 +99,8 @@ impl Bindings {
             ("f5", Shortcut::Browser(Navigation::Reload)),
             ("secondary-q", Shortcut::Quit),
             ("escape", Shortcut::Escape),
+            ("secondary-p", Shortcut::Print),
+            ("secondary-u", Shortcut::ViewSource),
             // Chromium's IDC_NEW_WINDOW, which shipping leaves to Chromium (`ui/app.ts`).
             ("secondary-n", Shortcut::NewWindow),
             // Chromium's IDC_NEW_INCOGNITO_WINDOW, which the shipping menu shows (`ui/app.ts`).
@@ -375,6 +380,15 @@ impl Shell {
         self.bindings
             .refresh(&self.state.borrow().model.core.settings.keybindings);
         let stroke = &event.keystroke;
+        if self.browser_dialog.is_some()
+            && self.bindings.action(stroke) != Some(Shortcut::Close)
+            && self.bindings.action(stroke) != Some(Shortcut::Quit)
+        {
+            self.browser_dialog_key(stroke, window, cx);
+            self.consumed_keys.insert(stroke.key.clone());
+            cx.stop_propagation();
+            return;
+        }
         let altgr =
             event.prefer_character_input && stroke.modifiers.control && stroke.modifiers.alt;
         let settings_open = matches!(self.overlay, Overlay::Settings(_));
@@ -399,6 +413,8 @@ impl Shell {
                         | Shortcut::SettingsTab(_)
                         | Shortcut::Find
                         | Shortcut::DevTools
+                        | Shortcut::Print
+                        | Shortcut::ViewSource
                 ) {
                 true
             } else {
@@ -450,6 +466,17 @@ impl Shell {
         let action = match shortcut {
             Shortcut::Find if !self.overlay.is_open() => return self.open_find(window, cx),
             Shortcut::Zoom(action) if !self.overlay.is_open() => return self.zoom(action, cx),
+            Shortcut::Print if !self.overlay.is_open() => {
+                let Some(key) = self.active_browser() else {
+                    return false;
+                };
+                if let Some(host) = self.state.borrow().engine.host(&key.tab) {
+                    host.print();
+                    return true;
+                }
+                return false;
+            }
+            Shortcut::ViewSource if !self.overlay.is_open() => Action::ViewSource,
             Shortcut::DevTools if !self.overlay.is_open() => {
                 let Some(key) = self.active_browser() else {
                     return false;

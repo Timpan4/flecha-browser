@@ -886,7 +886,9 @@ impl crate::Engine {
     /// Drops a finished, cancelled or interrupted row. The file stays on disk.
     pub fn remove_download(&self, id: DownloadId) -> Result<(), DownloadError> {
         let mut downloads = self.services().downloads.borrow_mut();
-        downloads.list.remove(id).map(drop).map_err(Into::into)
+        downloads.list.remove(id)?;
+        downloads.incognito.remove(&id);
+        Ok(())
     }
 
     /// `clearDownloads`: drops every row started after `since` that isn't progressing.

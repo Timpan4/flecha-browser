@@ -60,6 +60,8 @@ wrap_app! {
         ) {
             if let Some(command_line) = command_line {
                 command_line.append_switch(Some(&"no-startup-window".into()));
+                // Route HTTP challenges to GetAuthCredentials in the windowless shell.
+                command_line.append_switch(Some(&"disable-chrome-login-prompt".into()));
                 if process_type.is_none()
                     && let Some(open) = self.open.borrow().as_deref()
                 {

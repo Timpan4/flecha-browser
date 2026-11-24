@@ -2,6 +2,7 @@ mod boosts;
 mod clipboard;
 mod command_bar;
 mod context_menu;
+mod dialogs;
 mod downloads_view;
 mod find_bar;
 mod fullscreen;
@@ -166,7 +167,10 @@ enum Action {
     OpenContext(TabId, String, context_menu::Destination),
     Navigate(String),
     Browser(Navigation),
+    ViewSource,
     Download(flecha_cef::DownloadHandle, DownloadCommand),
+    ClearDownloads,
+    RetryDownload(flecha_downloads::DownloadId),
     ResolvePermission(
         flecha_permissions::RequestId,
         flecha_permissions::PromptOutcome,
@@ -197,6 +201,7 @@ enum Action {
     NewSpace,
     Isolate,
     Sidebar(SidebarAction),
+    ResizeSidebar(flecha_core::SidebarWidth),
     Reopen,
     RestoreArchive(ArchivedTab),
     ClearArchive,
@@ -252,6 +257,7 @@ struct Controller {
     session_dir: PathBuf,
     snapshots: LoadedState,
     windows: BTreeMap<WindowId, WindowHandle<Shell>>,
+    sidebar_deadlines: BTreeMap<WindowId, Instant>,
     /// Where each window shows its pages, even while it shows none.
     page_areas: BTreeMap<WindowId, Viewport>,
     /// The window opened before CEF started, until a main window takes it over.
@@ -352,6 +358,7 @@ impl Controller {
             store,
             snapshots,
             windows: BTreeMap::new(),
+            sidebar_deadlines: BTreeMap::new(),
             page_areas: BTreeMap::new(),
             first_window: None,
             front: None,
@@ -471,7 +478,38 @@ impl Controller {
             }
             Action::Navigate(url) => self.navigate_tab(window, url)?,
             Action::Browser(navigation) => return self.browser_navigation(window, navigation),
+            Action::ViewSource => {
+                let Some((owner, tab)) = self.model.keyboard_pane(window) else {
+                    return Ok(());
+                };
+                let Some(address) = self.engine.url(tab).filter(|url| {
+                    ["https:", "http:", "file:"]
+                        .iter()
+                        .any(|scheme| url.starts_with(scheme))
+                }) else {
+                    return Ok(());
+                };
+                let partition = self
+                    .model
+                    .partition(tab)
+                    .context("The source page has closed")?;
+                let source = format!("view-source:{address}");
+                if matches!(owner, Owner::Tab(_) | Owner::Peek(_)) {
+                    if let Some(peek) = self.model.peeks.remove(window) {
+                        self.engine.close(&peek.id);
+                    }
+                    self.model.open(window, source, true)?;
+                } else {
+                    self.front = Some(self.model.open_window_page(
+                        model::tab_id(),
+                        source,
+                        &partition,
+                    )?);
+                }
+            }
             Action::Download(handle, command) => return self.manage_download(handle, command),
+            Action::ClearDownloads => return self.clear_completed_downloads(window),
+            Action::RetryDownload(id) => return self.retry_download(window, id),
             Action::ResolvePermission(request, outcome) => {
                 return self.resolve_permission(request, outcome);
             }
@@ -619,7 +657,12 @@ impl Controller {
                     return self.act(window, Action::CloseTab(tab));
                 }
             }
-            Action::CloseTab(tab) => self.close_tab(&tab),
+            Action::CloseTab(tab) => {
+                if self.model.active(window) == Some(&tab) && self.engine.request_tab_close(&tab) {
+                    return Ok(());
+                }
+                self.close_tab(&tab);
+            }
             Action::Switch(space) => {
                 self.model
                     .core
@@ -658,6 +701,7 @@ impl Controller {
                 }
             }
             Action::Sidebar(action) => self.sidebar_action(window, action),
+            Action::ResizeSidebar(width) => self.model.core.settings.sidebar_width = width,
             Action::Reopen => {
                 let state = self
                     .model
@@ -834,10 +878,17 @@ impl Controller {
                     }
                     changed = true;
                 }
-                Event::Loaded { url, .. } => self.history.loaded(id, &url),
-                Event::LoadFailed { url, .. } => self.history.failed(id, &url),
+                Event::Loaded { url, .. } => {
+                    self.history.loaded(id, &url);
+                    changed = true;
+                }
+                Event::LoadFailed { url, .. } => {
+                    self.history.failed(id, &url);
+                    changed = true;
+                }
+                Event::SecurityChanged | Event::DialogChanged => changed = true,
                 Event::Closed => self.history.forget(id),
-                Event::Created(_) => {}
+                Event::Created(_) => self.start_download_retries(id),
                 Event::Fullscreen(fullscreen) => {
                     self.page_fullscreen(&message.key, fullscreen);
                     changed = true;
@@ -853,6 +904,7 @@ impl Controller {
         changed |= self.poll_toolbars();
         self.poll_page_overlays(cx);
         self.poll_clipboard(cx);
+        self.poll_sidebars(cx);
         if self.ready && !self.quitting {
             changed |= self.poll_sleep(Instant::now());
         }
@@ -976,6 +1028,8 @@ fn sync_windows(controller: &Shared, cx: &mut App) -> Result<()> {
             {
                 let mut state = controller.borrow_mut();
                 state.windows.remove(id);
+                state.sidebar_deadlines.remove(id);
+                state.forget_download_window(id);
                 state.page_areas.remove(id);
                 state.sleep.window_activation(id, false);
             }

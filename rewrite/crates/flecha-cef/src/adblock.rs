@@ -14,7 +14,7 @@ use flecha_adblock::{
 };
 
 use crate::callbacks::Slot;
-use crate::{devtools, services};
+use crate::{devtools, dialogs, services};
 
 /// What the IO thread may touch for one browser.
 #[derive(Clone)]
@@ -199,6 +199,33 @@ wrap_resource_request_handler! {
 wrap_request_handler! {
     pub(crate) struct Requests { filter: ResourceRequestHandler }
     impl RequestHandler {
+        fn auth_credentials(
+            &self, browser: Option<&mut Browser>, _origin: Option<&CefString>, proxy: i32,
+            host: Option<&CefString>, port: i32, realm: Option<&CefString>,
+            scheme: Option<&CefString>, callback: Option<&mut AuthCallback>,
+        ) -> i32 {
+            let (Some(browser), Some(host), Some(callback)) = (browser, host, callback) else { return 0 };
+            if !dialogs::text(scheme).eq_ignore_ascii_case("basic") {
+                return 0;
+            }
+            dialogs::authenticate(browser, dialogs::AuthChallenge {
+                host: host.to_string(),
+                port,
+                realm: dialogs::text(realm),
+                proxy: proxy != 0,
+            }, callback)
+        }
+
+        fn on_certificate_error(
+            &self, browser: Option<&mut Browser>, _error: Errorcode, url: Option<&CefString>,
+            _ssl: Option<&mut Sslinfo>, _callback: Option<&mut Callback>,
+        ) -> i32 {
+            if let (Some(browser), Some(url)) = (browser, url) {
+                dialogs::certificate_error(browser, url);
+            }
+            0
+        }
+
         fn resource_request_handler(
             &self, _browser: Option<&mut Browser>, _frame: Option<&mut Frame>,
             _request: Option<&mut Request>, _is_navigation: ::std::os::raw::c_int,

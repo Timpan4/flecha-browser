@@ -16,6 +16,7 @@ pub(crate) struct TextField {
     cursor: usize,
     anchor: usize,
     multiline: bool,
+    masked: bool,
 }
 
 impl TextField {
@@ -27,6 +28,14 @@ impl TextField {
             cursor,
             anchor,
             multiline: false,
+            masked: false,
+        }
+    }
+
+    pub(crate) fn password() -> Self {
+        Self {
+            masked: true,
+            ..Self::default()
         }
     }
 
@@ -85,7 +94,7 @@ impl TextField {
                         self.replace(&text);
                     }
                 }
-                "c" | "x" if self.anchor != self.cursor => {
+                "c" | "x" if !self.masked && self.anchor != self.cursor => {
                     cx.write_to_clipboard(ClipboardItem::new_string(
                         self.text[self.selection()].to_owned(),
                     ));
@@ -230,17 +239,25 @@ impl TextField {
         let start = selection.start.clamp(line.start, line.end);
         let end = selection.end.clamp(line.start, line.end);
         let has_caret = line.contains(&self.cursor) || self.cursor == line.end;
+        let display = |range| {
+            let text: &str = &self.text[range];
+            if self.masked {
+                "•".repeat(text.graphemes(true).count())
+            } else {
+                text.to_owned()
+            }
+        };
         let selected = div()
             .flex_shrink_0()
             .bg(palette().focus)
-            .child(self.text[start..end].to_owned());
+            .child(display(start..end));
         div()
             .flex()
             .items_center()
             .flex_shrink_0()
             .min_h(px(16.))
             .whitespace_nowrap()
-            .child(self.text[line.start..start].to_owned())
+            .child(display(line.start..start))
             .when(has_caret && self.cursor == start, |line| {
                 line.child(caret())
             })
@@ -248,7 +265,7 @@ impl TextField {
             .when(has_caret && self.cursor != start, |line| {
                 line.child(caret())
             })
-            .child(self.text[end..line.end].to_owned())
+            .child(display(end..line.end))
     }
 }
 
