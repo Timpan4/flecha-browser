@@ -132,6 +132,7 @@ export async function fixture(handle = () => false) {
       <input id="text" aria-label="Text">
       <input id="password" type="password" aria-label="Password">
       <textarea id="area" aria-label="Notes"></textarea>
+      <textarea id="area2" aria-label="More notes"></textarea>
       <div id="editable" contenteditable="true">x</div>
       <input id="email" type="email" aria-label="Email">
       <div id="host"></div>
@@ -141,23 +142,49 @@ export async function fixture(handle = () => false) {
         const shadow = document.querySelector('#host').attachShadow({ mode: 'closed' });
         shadow.innerHTML = '<input type="password" aria-label="Hidden password">';
         window.shadowPassword = shadow.querySelector('input');
-        // The cross-site frame focuses and reports its field when its parent asks.
+        // The cross-site frame edits its fields when its parent asks, and reports its state
+        // under the probe label the parent sends.
+        const fields = {
+          text: document.querySelector('#text'),
+          password: document.querySelector('#password'),
+          area: document.querySelector('#area'),
+        };
         addEventListener('message', event => {
-          const field = document.querySelector('#text');
-          if (event.data === 'focus') field.focus();
-          if (event.data === 'select') {
-            field.value = 'flecha-frame-copy';
+          const [command, label] = event.data;
+          if (command === 'focus') fields.text.focus();
+          if (command === 'clear-area') {
+            fields.area.value = '';
+            fields.area.focus();
+          }
+          if (command === 'select' || command === 'select-password') {
+            const field = command === 'select' ? fields.text : fields.password;
+            field.value = command === 'select' ? 'flecha-frame-copy' : 'flecha-frame-secret';
             field.focus();
             field.select();
           }
-          if (event.data === 'report') fetch('/probe/frame-value?value=' + encodeURIComponent(field.value));
+          if (command !== 'report') return;
+          const active = document.activeElement;
+          const box = fields.area.getBoundingClientRect();
+          const state = {
+            active: active?.id ?? null,
+            selection: [active?.selectionStart ?? null, active?.selectionEnd ?? null],
+            text: fields.text.value,
+            password: fields.password.value,
+            area: fields.area.value,
+            areaCenter: [box.x + box.width / 2, box.y + box.height / 2],
+            editKeys: window.editKeys,
+          };
+          fetch('/probe/' + label + '?value=' + encodeURIComponent(JSON.stringify(state)));
         });
         window.pastes = 0;
         addEventListener('paste', () => window.pastes++, true);
-        // Ctrl+C and Ctrl+X that reached the page as keystrokes.
+        // Ctrl+C and Ctrl+X that reached the page as keystrokes. Chromium's own copy would make
+        // it the X11 clipboard owner, and GPUI's next read would then wait on it.
         window.editKeys = 0;
         addEventListener('keydown', event => {
-          if (event.ctrlKey && ['c', 'x'].includes(event.key)) window.editKeys++;
+          if (!event.ctrlKey || !['c', 'x'].includes(event.key)) return;
+          window.editKeys++;
+          event.preventDefault();
         }, true);
       </script>`,
     '/fullscreen': `
@@ -195,7 +222,17 @@ export async function fixture(handle = () => false) {
   return {
     server,
     base: `http://127.0.0.1:${server.address().port}`,
-    probe: name => new Promise(resolve => pending.set(name, resolve)),
+    // A probe the page never sends rejects after `timeoutMs`, when given.
+    probe: (name, timeoutMs) => new Promise((resolve, reject) => {
+      pending.set(name, resolve);
+
+      if (timeoutMs === undefined) return;
+      setTimeout(() => {
+        if (pending.get(name) !== resolve) return;
+        pending.delete(name);
+        reject(new Error(`no ${name} probe within ${timeoutMs} ms`));
+      }, timeoutMs).unref();
+    }),
     requests,
   };
 }

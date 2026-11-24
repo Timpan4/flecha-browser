@@ -64,12 +64,13 @@ impl Shell {
     /// Runs a clipboard shortcut for the focused page. Returns `true` when the shell took the
     /// key, which then must not reach the page now. Copy and Cut hold it back until the page's
     /// selection is read: with no copyable text, such as nothing selected or a password field,
-    /// the page gets the whole keystroke after all. Paste without clipboard text, and a copy or
-    /// cut the engine could not start, leave the key to the page.
+    /// the page gets the whole keystroke after all, with its repeat flag. Paste without
+    /// clipboard text, and a copy or cut the engine could not start, leave the key to the page.
     pub(crate) fn page_clipboard_key(
         &self,
         focused: Option<&BrowserKey>,
         stroke: &Keystroke,
+        repeat: bool,
         window: &Window,
         cx: &App,
     ) -> bool {
@@ -79,20 +80,26 @@ impl Shell {
         if !self.shell_clipboard(window) {
             return false;
         }
-        let engine = &self.state.borrow().engine;
         let edit = match edit {
             PageClipboard::Paste => {
-                return text(cx).is_some_and(|text| engine.paste_text(&key.tab, &text));
+                // The platform read can block, so it runs before the controller is borrowed.
+                let Some(text) = text(cx) else {
+                    return false;
+                };
+                return self.state.borrow().engine.paste_text(&key.tab, &text);
             }
             PageClipboard::Copy => ClipboardEdit::Copy,
             PageClipboard::Cut => ClipboardEdit::Cut,
         };
         let stroke = stroke.clone();
-        engine.copy_selection(&key.tab, edit, move |host| {
-            for up in [false, true] {
-                input::key(host, &stroke, up, false, false);
-            }
-        })
+        // The shell swallows the real key release, so the page gets both halves here.
+        self.state
+            .borrow()
+            .engine
+            .copy_selection(&key.tab, edit, move |host| {
+                input::key(host, &stroke, false, repeat, false);
+                input::key(host, &stroke, true, false, false);
+            })
     }
 }
 

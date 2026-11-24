@@ -271,33 +271,36 @@ impl Shell {
             Item::Edit(FrameEdit::Paste)
                 if shell_clipboard && let Some(text) = crate::clipboard::text(cx) =>
             {
+                let focused = self.state.borrow().engine.context_menu_frame_focused(&id);
                 // Dismissing gives the page its focus back before the text arrives.
                 self.dismiss_overlay(window, cx);
-                self.state.borrow().engine.paste_text(&id.key.tab, &text);
+                if focused {
+                    self.state.borrow().engine.paste_text(&id.key.tab, &text);
+                }
                 return;
             }
             Item::Edit(action) => {
                 let context = &request.context;
-                let copied = match action {
-                    FrameEdit::Copy => context.can_copy,
-                    FrameEdit::Cut => context.can_cut,
-                    FrameEdit::Paste | FrameEdit::SelectAll => false,
-                } && shell_clipboard
-                    && !context.selection_text.is_empty();
-                let state = self.state.borrow();
-                if copied {
-                    // Chromium's Copy and Cut would take the clipboard from the shell. See
-                    // `Engine::copy_selection`.
-                    cx.write_to_clipboard(ClipboardItem::new_string(
-                        context.selection_text.clone(),
-                    ));
-                    if action == FrameEdit::Cut {
-                        state.engine.context_menu_delete(&id);
-                    } else {
-                        state.engine.dismiss_context_menu(&id);
+                let engine = &self.state.borrow().engine;
+                // Chromium's Copy and Cut would take the clipboard from the shell. See
+                // `Engine::copy_selection`.
+                match action {
+                    FrameEdit::Copy
+                        if shell_clipboard
+                            && context.can_copy
+                            && !context.selection_text.is_empty() =>
+                    {
+                        cx.write_to_clipboard(ClipboardItem::new_string(
+                            context.selection_text.clone(),
+                        ));
+                        engine.dismiss_context_menu(&id);
                     }
-                } else {
-                    state.engine.context_menu_edit(&id, action);
+                    // The selection may have changed since the menu opened, so the cut reads
+                    // it again and deletes what it read.
+                    FrameEdit::Cut if shell_clipboard && context.can_cut => {
+                        engine.context_menu_cut(&id);
+                    }
+                    _ => engine.context_menu_edit(&id, action),
                 }
                 None
             }

@@ -270,21 +270,27 @@ impl Command {
                     .map_err(|_| anyhow::anyhow!("not a keystroke"))?;
                 let handle = *state.windows.get(window).context("no GPUI window")?;
                 // The shell borrows the controller this command holds, and dispatching renders
-                // the shell, so neither may be held here.
+                // the shell, so neither may be held here. The deferred dispatch replies.
                 cx.defer(move |cx| {
-                    let _ = gpui::AppContext::update_window(cx, handle.into(), |_, window, cx| {
-                        window.dispatch_keystroke(keystroke, cx);
-                    });
+                    let sent =
+                        gpui::AppContext::update_window(cx, handle.into(), |_, window, cx| {
+                            window.dispatch_keystroke(keystroke, cx);
+                        });
+                    reply(seq, sent.map(|()| Value::Null));
                 });
                 return Ok(Value::Null);
             }
             Self::MenuRow { label } => {
                 let handle = *state.windows.get(window).context("no GPUI window")?;
-                let row = handle.read_with(cx, |shell, _| shell.context_menu_row(&label))??;
+                // Deferred and replied to like Key. The row is looked up in the same update
+                // that uses it, so it belongs to the menu that is open then.
                 cx.defer(move |cx| {
-                    let _ = handle.update(cx, |shell, window, cx| {
+                    let used = handle.update(cx, |shell, window, cx| {
+                        let row = shell.context_menu_row(&label)?;
                         shell.use_context_menu(row, window, cx);
+                        anyhow::Ok(Value::Null)
                     });
+                    reply(seq, used.and_then(|used| used));
                 });
                 return Ok(Value::Null);
             }
@@ -365,19 +371,26 @@ pub(super) fn install(controller: &Shared, cx: &mut App) {
                 let id = request
                     .window
                     .unwrap_or_else(|| state.model.core.focused_window().id.clone());
+                let deferred = matches!(
+                    request.command,
+                    Command::Key { .. } | Command::MenuRow { .. }
+                );
                 match request.command.run(&mut state, &id, cx, request.seq) {
-                    Ok(result) => {
-                        emit(json!({ "type": "reply", "seq": request.seq, "result": result }))
-                    }
-                    Err(error) => emit(
-                        json!({ "type": "reply", "seq": request.seq, "error": error.to_string() }),
-                    ),
+                    Ok(_) if deferred => {}
+                    result => reply(request.seq, result),
                 }
                 cx.refresh_windows();
             });
         }
     })
     .detach();
+}
+
+fn reply(seq: u64, result: Result<Value>) {
+    emit(match result {
+        Ok(result) => json!({ "type": "reply", "seq": seq, "result": result }),
+        Err(error) => json!({ "type": "reply", "seq": seq, "error": error.to_string() }),
+    });
 }
 
 fn emit(value: Value) {

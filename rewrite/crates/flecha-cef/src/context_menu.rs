@@ -157,23 +157,32 @@ impl Engine {
         });
     }
 
-    /// Deletes the selection in the menu's frame without touching the clipboard, for a cut the
-    /// shell copied itself, and closes the menu.
-    pub fn context_menu_delete(&self, id: &ContextMenuId) {
-        self.in_menu_frame(id, |frame| frame.del());
+    /// Whether the menu's frame still has focus. Typed input, such as a shell paste, and the
+    /// shell's selection read go to the focused frame, so a page that moves focus while the menu
+    /// is open would otherwise redirect them.
+    pub fn context_menu_frame_focused(&self, id: &ContextMenuId) -> bool {
+        self.menu_frame(id)
+            .is_some_and(|frame| frame.is_focused() != 0)
+    }
+
+    /// Cuts the selection to the shell's clipboard, reading and deleting it in one step as the
+    /// answer to [`Engine::copy_selection`], and closes the menu. It does nothing when the menu's
+    /// frame has lost focus or the read finds no text it may copy.
+    pub fn context_menu_cut(&self, id: &ContextMenuId) {
+        if self.context_menu_frame_focused(id) {
+            self.copy_selection(&id.key.tab, crate::ClipboardEdit::Cut, |_| {});
+        }
+        self.dismiss_context_menu(id);
+    }
+
+    fn menu_frame(&self, id: &ContextMenuId) -> Option<Frame> {
+        let slot = self.menu_slot(id)?;
+        let frame = slot.menu.pending.borrow().as_ref()?.frame.clone();
+        (frame.is_valid() != 0).then_some(frame)
     }
 
     fn in_menu_frame(&self, id: &ContextMenuId, edit: impl FnOnce(&Frame)) {
-        let Some(slot) = self.menu_slot(id) else {
-            return;
-        };
-        let frame = slot
-            .menu
-            .pending
-            .borrow()
-            .as_ref()
-            .map(|pending| pending.frame.clone());
-        if let Some(frame) = frame.filter(|frame| frame.is_valid() != 0) {
+        if let Some(frame) = self.menu_frame(id) {
             edit(&frame);
         }
         self.dismiss_context_menu(id);
