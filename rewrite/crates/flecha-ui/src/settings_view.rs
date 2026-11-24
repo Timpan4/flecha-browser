@@ -9,6 +9,8 @@ mod shortcuts;
 #[path = "settings_tabs.rs"]
 mod tabs;
 
+pub(crate) use import::RESTORE_BEFORE_IMPORT;
+
 use anyhow::Result;
 use flecha_core::Settings;
 use gpui::{
@@ -101,6 +103,7 @@ impl SettingsPanel {
             self.tab = tab;
             self.field = None;
             self.message = None;
+            self.import.confirm_restore = false;
             self.scroll = ScrollHandle::new();
             if tab == SettingsTab::TabsSpaces {
                 self.manager.focus_search();

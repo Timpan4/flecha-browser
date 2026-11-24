@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { once, EventEmitter } from 'node:events';
-import { createWriteStream, readFileSync, renameSync } from 'node:fs';
+import { copyFileSync, createWriteStream, readFileSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -444,6 +444,30 @@ async function managerFocus(app, left, right) {
   await keyDelivery(app, { A: left }, 'g', 'Tabs & Spaces dismissed', 'A');
 }
 
+async function restoreSpaces(app, left) {
+  const session = join(process.env.FLECHA_PROFILE, 'session');
+  copyFileSync(join(session, 'state.json'), join(session, 'before-import.json'));
+  const before = await app.command('snapshot');
+  const changed = await app.command('new_space');
+  assert.equal(changed.core.spaces.length, before.core.spaces.length + 1);
+  execFileSync(x11Driver, ['chord', 'Control_L', 'l']);
+  for (const key of 'restore') execFileSync(x11Driver, ['key', key]);
+  execFileSync(x11Driver, ['key', 'Return']);
+  await app.present();
+  execFileSync('magick', ['import', '-window', 'root', join(out, 'restore-spaces-prompt.png')]);
+  const [x, y, width] = execFileSync(x11Driver, ['geometry', 'Flecha'], { encoding: 'utf8' })
+    .trim().split(' ').map(Number);
+  // The Restore button below the question in the centered Settings panel.
+  const after = app.events.length;
+  execFileSync(x11Driver, ['click', Math.round(x + (width - 680) / 2 + 115), y + 229]);
+  await app.loaded(left, '/open', after);
+  const restored = await app.command('snapshot');
+  assert.deepEqual(restored.core.spaces, before.core.spaces);
+  assert.equal(active(restored).activeTabId, left);
+  execFileSync(x11Driver, ['key', 'Escape']);
+  pass('the command bar confirmed restore, removed the newly added Space, and reopened the backup tab');
+}
+
 async function cookie(app, expected, op = 'open') {
   const after = app.events.length;
   const snapshot = await app.command(op, { url: base + '/cookie/check' });
@@ -793,6 +817,7 @@ try {
 
   if (mode === 'focus') {
     await sidebarFocus(app, left);
+    await restoreSpaces(app, left);
     await scriptedPopup(app, await openTab(app, '/opener'), undefined);
     await app.quit();
   } else if (mode === 'popups') {
