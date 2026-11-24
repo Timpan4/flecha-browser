@@ -451,6 +451,7 @@ fn decided_target(url: &str, list: &DownloadList, platform: Platform) -> TargetD
                 suggested_name: None,
             },
             settings: &settings(false),
+            last_prompt_folder: list.last_prompt_folder(),
             save_as: false,
             max_name_length: Some(EXT4_NAME_MAX),
             started: started(),

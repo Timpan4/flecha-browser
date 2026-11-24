@@ -300,6 +300,9 @@ pub(crate) struct Downloads {
     last_handle: u32,
     /// The rows incognito sessions recorded, until their session ends and the row can go.
     incognito: BTreeMap<DownloadId, IncognitoSession>,
+    /// Where each incognito session last answered a save dialog. It lives as long as the session
+    /// and never becomes the regular folder.
+    prompt_folders: BTreeMap<IncognitoSession, PathBuf>,
 }
 
 fn same(browser: &Weak<Slot>, slot: &Slot) -> bool {
@@ -361,6 +364,15 @@ impl Downloads {
             .and_then(|((partition, _), _)| partition.as_ref()?.incognito_session())
     }
 
+    /// Where a save dialog for `session` starts. An incognito session starts from the regular
+    /// answer until it gives its own.
+    fn prompt_folder(&self, session: Option<IncognitoSession>) -> Option<&Path> {
+        session
+            .and_then(|session| self.prompt_folders.get(&session))
+            .map(PathBuf::as_path)
+            .or_else(|| self.list.last_prompt_folder())
+    }
+
     fn session(&self, event: &DownloadEvent) -> Option<IncognitoSession> {
         event
             .id()
@@ -371,6 +383,7 @@ impl Downloads {
     /// Drops the rows of an ended incognito session; the files stay on disk. A row still
     /// running stays until closing its browser has cancelled it.
     fn end_session(&mut self, session: IncognitoSession) {
+        self.prompt_folders.remove(&session);
         let list = &mut self.list;
         self.incognito.retain(|id, owner| {
             *owner != session || matches!(list.remove(*id), Err(ListError::NotAllowed { .. }))
@@ -445,6 +458,7 @@ impl Downloads {
                     suggested_name: offer.suggested_name,
                 },
                 settings: &config.settings,
+                last_prompt_folder: self.prompt_folder(self.handle_session(handle)),
                 save_as: false,
                 max_name_length,
                 started: offer.started,
@@ -608,8 +622,13 @@ impl Downloads {
                     return Err(DownloadError::PathInUse(target));
                 }
                 if let Some(folder) = target.parent() {
-                    // The next save dialog starts where this one was answered.
-                    self.list.downloads_folder_changed(folder);
+                    // The next save dialog of the same profile starts where this one was answered.
+                    match self.handle_session(handle) {
+                        Some(session) => {
+                            self.prompt_folders.insert(session, folder.to_owned());
+                        }
+                        None => self.list.downloads_folder_changed(folder),
+                    }
                 }
                 let https_first = self
                     .config
@@ -1823,6 +1842,57 @@ mod tests {
         services.downloads.borrow_mut().end_session(session);
         assert_eq!(rows(&services), [regular_id]);
         assert!(services.downloads.borrow().incognito.is_empty());
+    }
+
+    #[test]
+    fn an_incognito_save_dialog_answer_never_becomes_the_regular_folder() {
+        let [regular, private] = <[_; 2]>::try_from(crate::tests::slots(&["regular", "private"]))
+            .unwrap_or_else(|_| unreachable!());
+        let session = IncognitoSession::new(1);
+        regular.partition.replace(Some(Partition::Shared));
+        private
+            .partition
+            .replace(Some(Partition::Incognito(session)));
+        let services = crate::services::of(&regular);
+        services.downloads.borrow_mut().config = downloads(true).config;
+        let log = Log::default();
+        let url = "https://files.example/a.txt";
+        let suggested = |slot: &Rc<Slot>, id| {
+            offered(
+                slot,
+                id,
+                offer(0, url, url),
+                Reentrant::boxed(&services, &log),
+                |_| false,
+            );
+            match drain(&services).pop() {
+                Some(DownloadEvent::AskPath {
+                    handle, suggested, ..
+                }) => (handle, suggested),
+                other => panic!("expected AskPath, got {other:?}"),
+            }
+        };
+
+        let (handle, _) = suggested(&private, 1);
+        let chosen = folder().join("private-choice");
+        command(&services, |downloads| {
+            downloads.accept(handle, Some(chosen.join("a.txt")))
+        })
+        .unwrap();
+        assert_eq!(
+            suggested(&private, 2).1.parent(),
+            Some(chosen.as_path()),
+            "the session starts its next dialog where it answered the last one"
+        );
+        assert_eq!(
+            suggested(&regular, 1).1.parent(),
+            Some(folder().as_path()),
+            "a regular dialog starts in the incognito session's folder"
+        );
+        assert_eq!(services.downloads.borrow().list.last_prompt_folder(), None);
+
+        services.downloads.borrow_mut().end_session(session);
+        assert!(services.downloads.borrow().prompt_folders.is_empty());
     }
 
     #[cfg(unix)]
