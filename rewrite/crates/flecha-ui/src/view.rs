@@ -1158,6 +1158,7 @@ impl Render for Shell {
         if let Some(drag) = self.sidebar_drag_layer() {
             main = main.child(deferred(drag));
         }
+        self.prune_split_drag();
         if let Some(drag) = self.split_drag_layer() {
             main = main.child(deferred(drag));
         }

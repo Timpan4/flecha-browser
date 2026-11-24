@@ -454,17 +454,20 @@ impl Downloads {
             .filter_map(|url| Url::parse(url).ok())
             .collect();
         let initiator = offer.initiator.and_then(|url| Url::parse(url).ok());
-        // The address the tab asked for comes before where it redirected, so a redirect onto
-        // another request's address leaves that request for its own download.
+        // Match only the address the tab actually requested (falling back to `url` only when
+        // CEF leaves `original_url` empty), so a redirect from A to B never consumes B's Save As.
         let save_as = browser.upgrade().is_some_and(|slot| {
             let tab = slot.key.borrow().tab.clone();
-            [offer.original_url, offer.url].into_iter().any(|url| {
-                self.save_as
-                    .iter()
-                    .position(|(asked, wanted)| *asked == tab && wanted == url)
-                    .map(|index| self.save_as.remove(index))
-                    .is_some()
-            })
+            let requested = if !offer.original_url.is_empty() {
+                offer.original_url
+            } else {
+                offer.url
+            };
+            self.save_as
+                .iter()
+                .position(|(asked, wanted)| *asked == tab && wanted == requested)
+                .map(|index| self.save_as.remove(index))
+                .is_some()
         });
         #[cfg(unix)]
         let max_name_length = flecha_downloads::name_max(&config.settings.folder);

@@ -111,6 +111,17 @@ impl Shell {
         Some((window.active_space_id.clone(), pair))
     }
 
+    /// Cancels an active divider drag as soon as another split or Space comes to the front.
+    pub(crate) fn prune_split_drag(&mut self) {
+        if self
+            .split_drag
+            .as_ref()
+            .is_some_and(|drag| drag.split != self.shown_split())
+        {
+            self.split_drag = None;
+        }
+    }
+
     /// The share a drag of the shown split has reached, before it is saved.
     pub(crate) fn dragged_split_ratio(&self) -> Option<f64> {
         self.split_drag
