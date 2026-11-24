@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { once, EventEmitter } from 'node:events';
 import { copyFileSync, createWriteStream, existsSync, readdirSync, readFileSync, renameSync, utimesSync } from 'node:fs';
+import { createServer as createHttpsServer } from 'node:https';
 import { join, relative } from 'node:path';
 import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -397,6 +398,182 @@ async function nativeContextMenu(app) {
   await captureUntil('page-context-menu-dismissed', 'root', path =>
     pixel(path) === 'FFCC49' ? undefined : `the page marker is still covered (${pixel(path)})`);
   pass('right-click opened the GPUI page menu and Escape dismissed it');
+}
+
+async function browserDialogs(app) {
+  const tab = await openTab(app, '/unload');
+  execFileSync(x11Driver, ['focus', 'Flecha']);
+  const key = name => execFileSync(x11Driver, ['key', name]);
+  const close = () => execFileSync(x11Driver, ['chord', 'Control_L', 'w']);
+
+  const dialog = (tab, after) => app.wait('CEF browser dialog', event =>
+    event.type === 'dialog_changed' && event.tab === tab, after, stepTimeoutMs);
+
+  const scriptDialog = async (label, expression, keys, expected) => {
+    const reply = site.probe(label, stepTimeoutMs);
+    reply.catch(() => {});
+    const after = app.events.length;
+    await app.command('script', {
+      tab,
+      source: `fetch('/probe/${label}?value=' + encodeURIComponent(String(${expression})))`,
+    });
+    await dialog(tab, after);
+    await app.present();
+    keys.forEach(key);
+    assert.equal(await reply, expected);
+  };
+
+  await scriptDialog('js-alert', "alert('Flecha alert')", ['Return'], 'undefined');
+  await scriptDialog('js-confirm', "confirm('Flecha confirm')", ['Escape'], 'false');
+  await scriptDialog('js-prompt-default', "prompt('Flecha prompt', 'default')", ['Return'], 'default');
+  await scriptDialog('js-prompt-edit', "prompt('Flecha prompt', 'default')", ['z', 'Return'], 'z');
+  pass('CEF alert, confirm and prompt waited for GPUI and received the chosen result');
+
+  let after = app.events.length;
+  const uploadCancelled = site.probe('upload-cancelled', stepTimeoutMs);
+  uploadCancelled.catch(() => {});
+  await app.command('script', {
+    tab,
+    source: `{
+      const draft = document.querySelector('input');
+      const upload = document.createElement('input');
+      upload.type = 'file';
+      document.body.append(upload);
+      upload.addEventListener('cancel', () => fetch('/probe/upload-cancelled?value=cancelled'), { once: true });
+      draft.addEventListener('click', () => upload.showPicker(), { once: true });
+    }`,
+  });
+  await clickElement(app, tab, 'input[aria-label=Draft]', ['#147A70', '#FFCC49'], 'dialog-upload-gesture');
+  await dialog(tab, after);
+  await app.present();
+  key('Escape');
+  assert.equal(await uploadCancelled, 'cancelled');
+  pass('an upload reached the GPUI picker and cancellation returned to the web page');
+
+  await clickElement(app, tab, 'input:not([type=file])', ['#147A70', '#FFCC49'], 'dialog-unload-gesture');
+  after = app.events.length;
+  close();
+  await dialog(tab, after);
+  await app.present();
+  close();
+  await app.present();
+  assert((await app.command('snapshot')).core.tabs[tab], 'A second close bypassed beforeunload');
+  key('Escape');
+  await app.present();
+  assert((await app.command('snapshot')).core.tabs[tab], 'Choosing Stay should keep the beforeunload tab open');
+  after = app.events.length;
+  close();
+  await dialog(tab, after);
+  await app.present();
+  key('Return');
+  await app.wait('beforeunload tab closure', event =>
+    event.type === 'closed_by_page' && event.tab === tab, after, stepTimeoutMs);
+  pass('beforeunload Stay kept the tab and Leave closed it');
+
+  after = app.events.length;
+  const auth = active(await app.command('open', { url: base + '/basic-auth' })).activeTabId;
+  await dialog(auth, after);
+  await app.present();
+  ['u', 'Tab', 'p', 'Return'].forEach(key);
+  await app.loaded(auth, '/basic-auth', after);
+  pass('an HTTP Basic challenge received the username and masked password entered in GPUI');
+
+  after = app.events.length;
+  await app.command('script', { tab: auth, source: "confirm('Close me')" });
+  await dialog(auth, after);
+  await app.present();
+  close();
+  await app.wait('tab closure with a pending dialog', event =>
+    event.type === 'closed' && event.tab === auth, after, stepTimeoutMs);
+  pass('closing a tab dismissed its pending modal and closed the CEF browser');
+}
+
+async function rejectInvalidCertificate(app) {
+  const key = join(out, 'test-tls.key');
+  const cert = join(out, 'test-tls.pem');
+
+  execFileSync('openssl', [
+    'req', '-x509', '-newkey', 'rsa', '-nodes', '-config', '/dev/null', '-subj', '/CN=127.0.0.1',
+    '-addext', 'subjectAltName=IP:127.0.0.1', '-keyout', key, '-out', cert,
+  ], { stdio: 'ignore' });
+  let requested = false;
+
+  const server = createHttpsServer({ key: readFileSync(key), cert: readFileSync(cert) }, (_, response) => {
+    requested = true;
+    response.end('untrusted fixture');
+  });
+
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+
+  try {
+    const url = `https://127.0.0.1:${server.address().port}/untrusted`;
+    const after = app.events.length;
+    const tab = active(await app.command('open', { url })).activeTabId;
+
+    await app.wait('CEF certificate error', event =>
+      event.type === 'security_changed' && event.tab === tab, after, stepTimeoutMs);
+    await app.wait('the untrusted load to fail', event =>
+      event.type === 'load_failed' && event.tab === tab && event.url === url, after, stepTimeoutMs);
+    assert.equal(requested, false, 'the request reached the untrusted HTTPS server');
+    pass('CEF reported the untrusted certificate and cancelled the HTTPS request');
+  } finally {
+    server.close();
+  }
+}
+
+async function sidebarResizeAndReveal(app, tab) {
+  const width = (await app.command('snapshot')).core.sidebarWidth;
+
+  const [x, y, , height] = execFileSync(x11Driver, ['geometry', 'Flecha'], { encoding: 'utf8' })
+    .trim().split(' ').map(Number);
+
+  const middle = y + Math.floor(height / 2);
+  const move = clientX => execFileSync(x11Driver, ['move', x + clientX, middle]);
+
+  const sidebar = path => {
+    const pixel = execFileSync('magick', [path, '-format', `%[hex:p{${x + 20},${middle}}]`, 'info:'], { encoding: 'utf8' });
+
+    return ['CDD9F7', '2F3746'].includes(pixel.trim().slice(0, 6).toUpperCase());
+  };
+
+  const pageWidth = async label => {
+    const reply = site.probe(label, stepTimeoutMs);
+    reply.catch(() => {});
+    await app.command('script', { tab, source: `fetch('/probe/${label}?value=' + innerWidth)` });
+
+    return Number(await reply);
+  };
+
+  const originalPage = await pageWidth('before-sidebar-drag');
+  execFileSync(x11Driver, ['press', x + width - 2, middle]);
+
+  try {
+    move(width + 38);
+    await app.present();
+    assert.equal((await app.command('snapshot')).core.sidebarWidth, width, 'sidebar width saved before release');
+    assert.equal(await pageWidth('during-sidebar-drag'), originalPage - 40, 'the page did not resize while dragging');
+  } finally {
+    execFileSync(x11Driver, ['release']);
+  }
+
+  await poll('the sidebar width to save', async () => (await app.command('snapshot')).core.sidebarWidth === width + 40);
+  const saved = JSON.parse(JSON.parse(readFileSync(join(process.env.FLECHA_PROFILE, 'session', 'state.json'), 'utf8')));
+  assert.equal(saved.sidebarWidth, width + 40);
+  pass('drag resized the CEF viewport live and persisted the new width on mouse up');
+
+  execFileSync(x11Driver, ['chord', 'Control_L', 's']);
+  await app.present();
+  await captureUntil('sidebar-collapsed', 'root', path => sidebar(path) ? 'sidebar stayed docked' : undefined);
+  const unoccluded = await pageWidth('collapsed-sidebar-width');
+  move(2);
+  await app.present();
+  await captureUntil('sidebar-hover-reveal', 'root', path => sidebar(path) ? undefined : 'floating sidebar missing');
+  assert.equal(await pageWidth('floating-sidebar-width'), unoccluded, 'the floating sidebar resized the page');
+  move(width + 80);
+  await captureUntil('sidebar-hover-leave', 'root', path => sidebar(path) ? 'floating sidebar stayed open' : undefined);
+  execFileSync(x11Driver, ['chord', 'Control_L', 's']);
+  pass('the collapsed sidebar revealed over the page at the left edge and hid when the pointer left');
 }
 
 async function quickWins(app) {
@@ -1151,6 +1328,21 @@ async function incognitoChecks(app, main) {
   assert.equal(readFileSync(savedFile, 'utf8'), downloadBody);
   assert(!downloaded[main].some(privateDownload), 'a regular window lists the incognito download');
   pass('a download from the incognito window saved its file and was listed in that window only');
+
+  execFileSync(x11Driver, ['focus', 'Flecha Incognito']);
+
+  const [, , , downloadWindowHeight] = execFileSync(x11Driver, ['geometry', 'Flecha Incognito'], { encoding: 'utf8' })
+    .trim().split(' ').map(Number);
+
+  await app.present(first.window);
+  await captureUntil('incognito-downloads', 'Flecha Incognito', path => {
+    // Inside the dark popover's left padding just above its 46px bottom inset.
+    const color = execFileSync('magick', [path, '-format', `%[hex:p{12,${downloadWindowHeight - 60}}]`, 'info:'], { encoding: 'utf8' });
+
+    return color.trim().toUpperCase().startsWith('161E2B') ? undefined : 'Downloads did not open automatically';
+  });
+  execFileSync(x11Driver, ['key', 'Escape']);
+  pass('a new incognito download opened its Downloads popover');
   await app.command('select', { tab: grantTab, window: first.window });
 
   const running = await app.command('snapshot');
@@ -1424,6 +1616,10 @@ async function scriptedPopup(app, opener, cookie) {
 
   const closing = app.events.length;
   await app.command('script', { tab: popup.tab, source: 'window.close()' });
+  await app.wait('the popup beforeunload dialog', event =>
+    event.type === 'dialog_changed' && event.tab === popup.tab, closing, stepTimeoutMs);
+  await app.present(popup.window);
+  await app.command('key', { window: popup.window, keystroke: 'enter' });
   await app.wait('the popup to close itself', event => event.type === 'closed_by_page' && event.tab === popup.tab, closing);
   const closed = await app.command('snapshot');
 
@@ -1461,6 +1657,15 @@ async function flechinhaLinks(app) {
   const closing = app.events.length;
 
   await app.command('script', { tab: popup.tab, source: 'window.close()' });
+
+  const result = await app.wait('the Flechinha popup to close or ask before leaving', event =>
+    ['dialog_changed', 'closed_by_page'].includes(event.type) && event.tab === popup.tab, closing, stepTimeoutMs);
+
+  if (result.type === 'dialog_changed') {
+    await app.present(popup.window);
+    await app.command('key', { window: popup.window, keystroke: 'enter' });
+  }
+
   await app.wait('the Flechinha popup to close itself', event =>
     event.type === 'closed_by_page' && event.tab === popup.tab, closing);
   await app.wait('focus to return to the Flechinha', event => event.type === 'activated' && event.window === mini, closing);
@@ -1906,7 +2111,9 @@ async function verifySlice() {
 
     while (Date.now() <= returned.core.tabs[moved].lastActive) await delay(0);
     const closeStartedAt = Date.now();
-    const closed = await app.command('close');
+    await app.command('close');
+    await app.wait('CEF closure of returned tab', event => event.type === 'closed_by_page' && event.tab === moved);
+    const closed = await app.command('snapshot');
     assert(!closed.core.tabs[moved]);
     assert.deepEqual(closed.core.archive.slice(1), returned.core.archive, 'closing did not add a fresh archive entry');
     const entry = closed.core.archive[0];
@@ -1914,7 +2121,6 @@ async function verifySlice() {
     assert(returned.core.archive.every(old => entry.closedAt > old.closedAt), 'new archive entry does not have a later close time');
     assert(entry.closedAt >= closeStartedAt, 'archive timestamp predates the close command');
     compareShipping('close', closed, names);
-    await app.wait('CEF closure of returned tab', event => event.type === 'closed' && event.tab === moved);
     pass('closed the returned tab, added a new archive entry, and matched the shipping TS trace');
 
     const after = app.events.length;
@@ -1992,6 +2198,35 @@ async function verifySlice() {
     if (dragged) {
       assert.deepEqual((await popups.command('snapshot')).core, dragged);
       pass('tab drag order, placements and split survived an isolated restart');
+      await popups.command('switch', { space: shared });
+      const tab = await openTab(popups, '/browser-tools');
+      execFileSync(x11Driver, ['focus', 'Flecha']);
+      await sidebarResizeAndReveal(popups, tab);
+      await browserDialogs(popups);
+      await popups.command('select', { tab });
+      await popups.present();
+      const beforePrint = popups.events.length;
+      execFileSync(x11Driver, ['chord', 'Control_L', 'p']);
+
+      const printed = await popups.wait('CEF to render a PDF for the print dialog', event =>
+        event.type === 'print_ready' && event.tab === tab, beforePrint, stepTimeoutMs);
+
+      assert.equal(printed.pdf, true);
+      pass('Ctrl+P rendered the active page to a PDF for the Linux print portal');
+      execFileSync(x11Driver, ['chord', 'Control_L', 'u']);
+
+      const source = await poll('View Source to open a new tab', async () => {
+        const state = await popups.command('snapshot');
+        const selected = active(state).activeTabId;
+
+        return state.core.tabs[selected]?.url === 'view-source:' + base + '/browser-tools' && selected;
+      });
+
+      assert.notEqual(source, tab);
+      await popups.wait('the source tab to display its page', event =>
+        event.type === 'loaded' && event.tab === source && event.status === 200, 0, stepTimeoutMs);
+      pass('Ctrl+U opened and loaded a view-source tab for the active page');
+      await rejectInvalidCertificate(popups);
     }
 
     await popupChecks(popups);

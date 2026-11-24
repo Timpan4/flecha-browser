@@ -2,6 +2,7 @@ mod boosts;
 mod clipboard;
 mod command_bar;
 mod context_menu;
+mod dialogs;
 mod downloads_view;
 mod find_bar;
 mod fullscreen;
@@ -12,6 +13,8 @@ mod mcp;
 mod model;
 mod permissions_view;
 mod popup;
+#[cfg(target_os = "linux")]
+mod printing;
 mod settings_view;
 mod shell_menu;
 mod shortcuts;
@@ -39,7 +42,7 @@ use flecha_adblock::{
     load_cached_rules,
 };
 use flecha_boosts::Boosts;
-use flecha_cef::{Engine, Event, IncognitoSession, Owner, Runtime, Viewport};
+use flecha_cef::{Engine, Event, IncognitoSession, Owner, Partition, Runtime, Viewport};
 use flecha_core::{
     ArchivedTab, Reopened, SpaceId, TabId, WindowId,
     storage::{LoadedState, ReadyState},
@@ -171,7 +174,11 @@ enum Action {
     OpenContext(TabId, String, context_menu::Destination),
     Navigate(String),
     Browser(Navigation),
+    Print,
+    ViewSource,
     Download(flecha_cef::DownloadHandle, DownloadCommand),
+    ClearDownloads,
+    RetryDownload(flecha_downloads::DownloadId),
     ResolvePermission(
         flecha_permissions::RequestId,
         flecha_permissions::PromptOutcome,
@@ -206,6 +213,7 @@ enum Action {
     NewSpace,
     Isolate,
     Sidebar(SidebarAction),
+    ResizeSidebar(flecha_core::SidebarWidth),
     Reopen,
     RestoreArchive(ArchivedTab),
     ClearArchive,
@@ -262,6 +270,7 @@ struct Controller {
     session_dir: PathBuf,
     snapshots: LoadedState,
     windows: BTreeMap<WindowId, WindowHandle<Shell>>,
+    sidebar_deadlines: BTreeMap<WindowId, Instant>,
     /// Where each window shows its pages, even while it shows none.
     page_areas: BTreeMap<WindowId, Viewport>,
     /// The window opened before CEF started, until a main window takes it over.
@@ -363,6 +372,7 @@ impl Controller {
             store,
             snapshots,
             windows: BTreeMap::new(),
+            sidebar_deadlines: BTreeMap::new(),
             page_areas: BTreeMap::new(),
             first_window: None,
             front: None,
@@ -482,7 +492,41 @@ impl Controller {
             }
             Action::Navigate(url) => self.navigate_tab(window, url)?,
             Action::Browser(navigation) => return self.browser_navigation(window, navigation),
+            Action::Print => {
+                if let Some((_, tab)) = self.model.keyboard_pane(window) {
+                    self.engine.print(tab)?;
+                }
+                return Ok(());
+            }
+            Action::ViewSource => {
+                let Some((_, tab)) = self.model.keyboard_pane(window) else {
+                    return Ok(());
+                };
+                let Some(address) = self.engine.url(tab).filter(|url| {
+                    ["https:", "http:", "file:"]
+                        .iter()
+                        .any(|scheme| url.starts_with(scheme))
+                }) else {
+                    return Ok(());
+                };
+                let partition = self
+                    .engine
+                    .partition(tab)
+                    .cloned()
+                    .context("The source page has closed")?;
+                let destination = self.window_for_partition(window, &partition)?;
+                if let Some(peek) = self.model.peeks.remove(&destination) {
+                    self.engine.close(&peek.id);
+                }
+                self.model
+                    .open(&destination, format!("view-source:{address}"), true)?;
+                if &destination != window {
+                    self.front = Some(destination);
+                }
+            }
             Action::Download(handle, command) => return self.manage_download(handle, command),
+            Action::ClearDownloads => return self.clear_completed_downloads(window),
+            Action::RetryDownload(id) => return self.retry_download(window, id),
             Action::ResolvePermission(request, outcome) => {
                 return self.resolve_permission(request, outcome);
             }
@@ -635,7 +679,12 @@ impl Controller {
                     return self.act(window, Action::CloseTab(tab));
                 }
             }
-            Action::CloseTab(tab) => self.close_tab(&tab),
+            Action::CloseTab(tab) => {
+                if self.model.active(window) == Some(&tab) && self.engine.request_tab_close(&tab) {
+                    return Ok(());
+                }
+                self.close_tab(&tab);
+            }
             Action::Switch(space) => {
                 self.model
                     .core
@@ -674,6 +723,7 @@ impl Controller {
                 }
             }
             Action::Sidebar(action) => self.sidebar_action(window, action),
+            Action::ResizeSidebar(width) => self.model.core.settings.sidebar_width = width,
             Action::Reopen => {
                 let state = self
                     .model
@@ -704,6 +754,56 @@ impl Controller {
         }
         self.update_visibility();
         self.save()
+    }
+
+    fn window_for_partition(
+        &mut self,
+        requested: &WindowId,
+        partition: &Partition,
+    ) -> Result<WindowId> {
+        if let Some(window) = self
+            .model
+            .state(requested)
+            .and_then(|state| state.window(requested))
+            && self
+                .model
+                .window_partition(requested, &window.active_space_id)
+                == *partition
+        {
+            return Ok(requested.clone());
+        }
+        if partition.is_incognito() {
+            return self
+                .model
+                .focused_window_for(partition)
+                .cloned()
+                .context("The incognito session has ended");
+        }
+        if let Some(window) = self.model.regular_windows().iter().find(|window| {
+            self.model
+                .window_partition(&window.id, &window.active_space_id)
+                == *partition
+        }) {
+            return Ok(window.id.clone());
+        }
+        let space = match partition {
+            Partition::Shared => self
+                .model
+                .core
+                .spaces()
+                .iter()
+                .find(|space| !space.isolated),
+            Partition::Isolated(id) => self.model.core.space(id).filter(|space| space.isolated),
+            Partition::Incognito(_) => None,
+        }
+        .context("No Space uses this page's request context")?
+        .id
+        .clone();
+        let window = self.model.open_regular_window()?;
+        for tab in self.model.core.switch_space(&window, &space).removed {
+            self.engine.close(&tab);
+        }
+        Ok(window)
     }
 
     /// Activates a tab from `window`, bringing forward the window that shows it. Returns the
@@ -850,10 +950,17 @@ impl Controller {
                     }
                     changed = true;
                 }
-                Event::Loaded { url, .. } => self.history.loaded(id, &url),
-                Event::LoadFailed { url, .. } => self.history.failed(id, &url),
+                Event::Loaded { url, .. } => {
+                    self.history.loaded(id, &url);
+                    changed = true;
+                }
+                Event::LoadFailed { url, .. } => {
+                    self.history.failed(id, &url);
+                    changed = true;
+                }
+                Event::SecurityChanged | Event::DialogChanged => changed = true,
                 Event::Closed => self.history.forget(id),
-                Event::Created(_) => {}
+                Event::Created(_) => self.start_download_retries(id),
                 Event::Fullscreen(fullscreen) => {
                     self.page_fullscreen(&message.key, fullscreen);
                     changed = true;
@@ -875,6 +982,9 @@ impl Controller {
         }
         self.poll_page_overlays(cx);
         self.poll_clipboard(cx);
+        #[cfg(target_os = "linux")]
+        self.poll_print_jobs(cx);
+        self.poll_sidebars(cx);
         if self.ready && !self.quitting {
             changed |= self.poll_sleep(Instant::now());
         }
@@ -998,6 +1108,8 @@ fn sync_windows(controller: &Shared, cx: &mut App) -> Result<()> {
             {
                 let mut state = controller.borrow_mut();
                 state.windows.remove(id);
+                state.sidebar_deadlines.remove(id);
+                state.forget_download_window(id);
                 state.page_areas.remove(id);
                 state.sleep.window_activation(id, false);
             }
@@ -1106,6 +1218,32 @@ mod tests {
         let controller = Controller::open_test_profile(profile.path()).unwrap();
         let window = controller.model.core.focused_window().id.clone();
         (controller, window)
+    }
+
+    #[test]
+    fn a_page_action_uses_a_window_in_its_original_request_context() {
+        let profile = tempfile::tempdir().unwrap();
+        let (mut state, window) = controller(&profile);
+        let isolated = model::space_id();
+        assert!(state.model.core.add_space(isolated.clone()));
+        state.model.core.set_isolated(&isolated, true);
+        assert!(state.model.core.switch_space(&window, &isolated).result);
+
+        let shared = state
+            .window_for_partition(&window, &Partition::Shared)
+            .unwrap();
+        assert_ne!(shared, window);
+        let shared_space = &state.model.core.window(&shared).unwrap().active_space_id;
+        assert_eq!(
+            state.model.window_partition(&shared, shared_space),
+            Partition::Shared
+        );
+        assert_eq!(
+            state
+                .window_for_partition(&shared, &Partition::Isolated(isolated))
+                .unwrap(),
+            window
+        );
     }
 
     #[test]

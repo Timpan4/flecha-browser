@@ -25,11 +25,13 @@ use crate::window_chrome::{TitleBar, close_control, resize_edges};
 use crate::{Action, Shared, dispatch};
 use crate::{
     command_bar::{CommandBar, SuggestionClient},
+    dialogs::BrowserDialog,
     downloads_view::DownloadsPanel,
     find_bar::FindSession,
     history_view::HistoryPanel,
     settings_view::SettingsPanel,
     shortcuts::Bindings,
+    sidebar::SidebarInteraction,
     text_field::TextField,
 };
 
@@ -66,6 +68,8 @@ pub(crate) struct Shell {
     selected_pane: Option<(Owner, TabId)>,
     focused_browser: Option<BrowserKey>,
     pub(crate) overlay: Overlay,
+    pub(crate) browser_dialog: Option<BrowserDialog>,
+    pub(crate) sidebar_interaction: SidebarInteraction,
     /// Where the sidebar's menu button was last drawn, for the window menu to drop from.
     pub(crate) menu_button: Rc<Cell<gpui::Bounds<Pixels>>>,
     /// The left button went down on a title bar's empty room; the next drag moves the window.
@@ -112,8 +116,11 @@ impl Shell {
                 .window_activation(&this.id, active);
             if active {
                 this.state.borrow_mut().model.focus_window(&this.id);
+                cx.notify();
             } else {
                 this.consumed_keys.clear();
+                this.finish_sidebar_resize(None, cx);
+                this.hide_floating_sidebar(cx);
                 this.cancel_tab_drag(window, cx);
             }
             let _ = this.sync_page_focus(window, cx);
@@ -130,6 +137,8 @@ impl Shell {
             selected_pane: None,
             focused_browser: None,
             overlay: Overlay::None,
+            browser_dialog: None,
+            sidebar_interaction: SidebarInteraction::default(),
             menu_button: Rc::default(),
             moving: false,
             find: None,
@@ -188,6 +197,7 @@ impl Shell {
                 self.page_focus.focus(window, cx);
             }
             let _ = self.sync_page_focus(window, cx);
+            self.sidebar_pointer(window, cx);
             cx.notify();
         }
     }
@@ -248,15 +258,21 @@ impl Shell {
         }
         if self.selected_pane != selection || find_left || menu_left {
             self.selected_pane = selection;
-            if self.selected_pane.is_some() && !self.overlay.is_open() {
+            if self.selected_pane.is_some()
+                && !self.overlay.is_open()
+                && self.browser_dialog.is_none()
+            {
                 self.page_focus.focus(window, cx);
             } else {
                 self.focus.focus(window, cx);
             }
         }
 
-        let focused =
-            browser.filter(|_| window.is_window_active() && self.page_focus.is_focused(window));
+        let focused = browser.filter(|_| {
+            self.browser_dialog.is_none()
+                && window.is_window_active()
+                && self.page_focus.is_focused(window)
+        });
         if self.focused_browser != focused {
             let state = self.state.borrow();
             // A transfer can leave the previous browser live in another window.
@@ -571,6 +587,8 @@ impl Render for Shell {
         self.bindings
             .refresh(&self.state.borrow().model.core.settings.keybindings);
         self.sync_command_preferences(cx);
+        self.sync_browser_dialog(window, cx);
+        self.sync_downloads_panel(window, cx);
         let _ = self.sync_page_focus(window, cx);
         let popup_title = (self.state.borrow().model.popups.get(&self.id))
             .map(|popup| popup.page.tab.title.clone());
@@ -613,7 +631,10 @@ impl Render for Shell {
             }))
             .on_key_down(cx.listener(|this, event, window, cx| this.key(event, window, cx)))
             .on_key_up(cx.listener(|this, event: &KeyUpEvent, window, cx| {
-                if this.consumed_keys.remove(&event.keystroke.key) || this.overlay.is_open() {
+                if this.consumed_keys.remove(&event.keystroke.key)
+                    || this.overlay.is_open()
+                    || this.browser_dialog.is_some()
+                {
                     cx.stop_propagation();
                     return;
                 }
@@ -621,6 +642,7 @@ impl Render for Shell {
                 this.page_key(focused, &event.keystroke, true, false, false);
             }))
             .child(self.pointer_button_probe())
+            .child(self.sidebar_input(cx))
             .child(div().absolute().size_0().track_focus(&self.page_focus))
             .child(div().absolute().size_0().track_focus(&self.focus));
         let mut images = BTreeMap::new();
@@ -905,12 +927,15 @@ impl Render for Shell {
                 .pb(px(tokens::PAGE_GAP))
                 .when(!docked, |area| area.pl(px(tokens::PAGE_GAP)))
                 .child(pages);
-            let sidebar = self.sidebar(&state, current, title_bar, window, cx);
             let mut body = div().flex_1().min_h_0().relative().flex();
             if docked {
-                body = body.child(sidebar).child(page_area);
+                body = body
+                    .child(self.sidebar(&state, current, title_bar, window, cx))
+                    .child(page_area);
             } else {
-                body = body.child(page_area).child(sidebar);
+                body = body
+                    .child(page_area)
+                    .child(self.floating_sidebar(&state, current, title_bar, window, cx));
             }
             main = main.child(body);
         }
@@ -946,7 +971,7 @@ impl Render for Shell {
                     ),
             );
         }
-        let sidebar_width = state.model.core.settings.sidebar_width.pixels() as f32;
+        let sidebar_width = self.sidebar_width(&state);
         let docked = state
             .model
             .state(&self.id)
@@ -1083,6 +1108,12 @@ impl Render for Shell {
         }
         if let Overlay::Menu(menu) = &self.overlay {
             main = main.child(self.menu_panel(menu, cx));
+        }
+        if let Some(drag) = self.sidebar_drag_layer() {
+            main = main.child(deferred(drag));
+        }
+        if let Some(dialog) = self.browser_dialog_panel(cx) {
+            main = main.child(deferred(dialog).with_priority(1));
         }
         for (tab, retired) in std::mem::replace(&mut self.images, images) {
             for image in retired {

@@ -1,14 +1,16 @@
 use std::time::{Duration, Instant};
 
+use flecha_cef::ConnectionSecurity;
 use flecha_core::{
-    BrowserState, Device, FolderId, PinnedKey, PinnedNode, Placement, SpaceId, TabId, WindowId,
-    shortcuts,
+    BrowserState, Device, FolderId, PinnedKey, PinnedNode, Placement, SidebarWidth, SpaceId, TabId,
+    WindowId, shortcuts,
 };
 use gpui::{
-    Animation, AnimationExt as _, AnyElement, ClickEvent, ClipboardItem, Context, Div, FontWeight,
-    HoverListenerMode, InteractiveElement as _, IntoElement as _, MouseButton, MouseDownEvent,
-    ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _, Transformation,
-    Window, canvas, div, percentage, prelude::FluentBuilder as _, px, relative,
+    Animation, AnimationExt as _, AnyElement, App, ClickEvent, ClipboardItem, Context,
+    DispatchPhase, Div, FontWeight, HoverListenerMode, InteractiveElement as _, IntoElement,
+    MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _,
+    Pixels, SharedString, StatefulInteractiveElement as _, Styled as _, Transformation, Window,
+    canvas, div, percentage, prelude::FluentBuilder as _, px, relative,
 };
 use uuid::Uuid;
 
@@ -152,7 +154,286 @@ impl Controller {
     }
 }
 
+// Shipping's #edge, --floating-sidebar-inset and peek animation (ui/styles.css).
+const SIDEBAR_EDGE: f32 = 8.;
+const FLOATING_INSET: f32 = 10.;
+const PEEK_DELAY: Duration = Duration::from_millis(300);
+const PEEK_IN: Duration = Duration::from_millis(180);
+const PEEK_OUT: Duration = Duration::from_millis(160);
+
+impl Controller {
+    pub(crate) fn poll_sidebars(&self, cx: &mut App) {
+        let now = Instant::now();
+        for (id, deadline) in &self.sidebar_deadlines {
+            if *deadline <= now
+                && let Some(handle) = self.windows.get(id).copied()
+            {
+                cx.defer(move |cx| {
+                    let _ = handle.update(cx, |shell, _, cx| shell.advance_sidebar_hide(now, cx));
+                });
+            }
+        }
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct SidebarInteraction {
+    peek: bool,
+    leaving: bool,
+    drag: Option<SidebarDrag>,
+}
+
+struct SidebarDrag {
+    start_x: Pixels,
+    start_width: SidebarWidth,
+    width: SidebarWidth,
+}
+
+impl SidebarDrag {
+    fn at(&self, x: Pixels) -> SidebarWidth {
+        SidebarWidth::clamp(self.start_width.pixels() + f64::from(x - self.start_x))
+            .unwrap_or(self.width)
+    }
+}
+
 impl Shell {
+    pub(crate) fn sidebar_width(&self, state: &Controller) -> f32 {
+        self.sidebar_interaction
+            .drag
+            .as_ref()
+            .map_or(state.model.core.settings.sidebar_width, |drag| drag.width)
+            .pixels() as f32
+    }
+
+    pub(crate) fn sidebar_pointer(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if self.sidebar_interaction.drag.is_some() {
+            return;
+        }
+        let state = self.state.borrow();
+        let collapsed = state
+            .model
+            .state(&self.id)
+            .is_some_and(|core| !core.sidebar_visible(&self.id));
+        let fullscreen = state.fullscreen_pane(&self.id).is_some();
+        let width = self.sidebar_width(&state);
+        drop(state);
+        if !collapsed || fullscreen {
+            self.hide_floating_sidebar(cx);
+            return;
+        }
+        let mouse = window.mouse_position();
+        let within_height = mouse.y >= px(0.) && mouse.y < window.viewport_size().height;
+        let hover_width = if self.sidebar_interaction.peek {
+            width + FLOATING_INSET
+        } else {
+            SIDEBAR_EDGE
+        };
+        if within_height
+            && mouse.x >= px(0.)
+            && mouse.x < px(hover_width)
+            && !self.overlay.is_open()
+            && self.browser_dialog.is_none()
+        {
+            self.state.borrow_mut().sidebar_deadlines.remove(&self.id);
+            if !self.sidebar_interaction.peek || self.sidebar_interaction.leaving {
+                self.sidebar_interaction.peek = true;
+                self.sidebar_interaction.leaving = false;
+                cx.notify();
+            }
+        } else {
+            self.leave_floating_sidebar();
+        }
+    }
+
+    fn leave_floating_sidebar(&self) {
+        if !self.sidebar_interaction.peek
+            || self.sidebar_interaction.drag.is_some()
+            || self.overlay.is_open()
+            || self.browser_dialog.is_some()
+        {
+            return;
+        }
+        self.state
+            .borrow_mut()
+            .sidebar_deadlines
+            .entry(self.id.clone())
+            .or_insert_with(|| Instant::now() + PEEK_DELAY);
+    }
+
+    fn advance_sidebar_hide(&mut self, now: Instant, cx: &mut Context<Self>) {
+        let mut state = self.state.borrow_mut();
+        let Some(deadline) = state
+            .sidebar_deadlines
+            .get_mut(&self.id)
+            .filter(|deadline| **deadline <= now)
+        else {
+            return;
+        };
+        if self.overlay.is_open()
+            || self.browser_dialog.is_some()
+            || self.sidebar_interaction.drag.is_some()
+        {
+            state.sidebar_deadlines.remove(&self.id);
+            if std::mem::take(&mut self.sidebar_interaction.leaving) {
+                cx.notify();
+            }
+        } else if self.sidebar_interaction.leaving {
+            drop(state);
+            self.hide_floating_sidebar(cx);
+        } else {
+            *deadline = now + PEEK_OUT;
+            self.sidebar_interaction.leaving = true;
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn hide_floating_sidebar(&mut self, cx: &mut Context<Self>) {
+        let hover = &mut self.sidebar_interaction;
+        hover.leaving = false;
+        if std::mem::take(&mut hover.peek) {
+            self.state.borrow_mut().sidebar_deadlines.remove(&self.id);
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn floating_sidebar(
+        &self,
+        state: &Controller,
+        current: &flecha_core::Window,
+        title_bar: TitleBar,
+        window: &Window,
+        cx: &Context<Self>,
+    ) -> Div {
+        if !self.sidebar_interaction.peek {
+            let palette = palette();
+            let controls_room = (
+                tokens::WINDOW_CONTROLS_WIDTH,
+                tokens::WINDOW_CONTROLS_PAD_LEFT,
+            );
+            return div()
+                .absolute()
+                .top(px(tokens::SIDEBAR_PAD_TOP))
+                .left(px(tokens::SIDEBAR_PAD_LEFT))
+                .occlude()
+                .flex()
+                .items_center()
+                .gap(px(tokens::TOOLBAR_GAP))
+                .rounded(px(tokens::RADIUS_SM))
+                .bg(palette.tint)
+                .shadow(palette.shadow_row())
+                .children(self.window_controls(title_bar, controls_room, window, cx))
+                .child(self.toolbar_button(
+                    "sidebar-toggle",
+                    "sidebar",
+                    "Show sidebar",
+                    Action::Sidebar(SidebarAction::Toggle),
+                    cx,
+                ))
+                .when(!state.model.peeks.contains_key(&self.id), |bar| {
+                    bar.children(self.zoom_badge(cx))
+                });
+        }
+
+        let mut float = div()
+            .absolute()
+            .left_0()
+            .top_0()
+            .bottom_0()
+            .w(px(SIDEBAR_EDGE));
+        if self.sidebar_interaction.peek {
+            let slide = self.sidebar_width(state) + FLOATING_INSET;
+            let leaving = self.sidebar_interaction.leaving;
+            float = float.child(
+                self.sidebar(state, current, title_bar, window, cx)
+                    .absolute()
+                    .left(px(FLOATING_INSET))
+                    .top(px(FLOATING_INSET))
+                    .bottom(px(FLOATING_INSET))
+                    .rounded(px(tokens::WINDOW_RADIUS - FLOATING_INSET))
+                    .shadow(palette().shadow_pop())
+                    .occlude()
+                    .with_animation(
+                        if leaving {
+                            "sidebar-slide-out"
+                        } else {
+                            "sidebar-slide-in"
+                        },
+                        Animation::new(if leaving { PEEK_OUT } else { PEEK_IN })
+                            .with_easing(tokens::ease),
+                        move |card, delta| {
+                            card.ml(px(-slide * if leaving { delta } else { 1. - delta }))
+                        },
+                    ),
+            );
+        }
+        float
+    }
+
+    pub(crate) fn sidebar_input(&self, cx: &Context<Self>) -> impl IntoElement {
+        let shell = cx.entity();
+        canvas(
+            |_, _, _| (),
+            move |_, (), window, _| {
+                let view = shell.clone();
+                window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+                    if phase != DispatchPhase::Capture {
+                        return;
+                    }
+                    view.update(cx, |this, cx| {
+                        if let Some(drag) = &mut this.sidebar_interaction.drag {
+                            if event.pressed_button == Some(MouseButton::Left) {
+                                drag.width = drag.at(event.position.x);
+                                cx.notify();
+                            } else {
+                                this.finish_sidebar_resize(Some(event.position.x), cx);
+                            }
+                            cx.stop_propagation();
+                        } else {
+                            this.sidebar_pointer(window, cx);
+                        }
+                    });
+                });
+                let view = shell.clone();
+                window.on_mouse_event(move |_: &MouseExitEvent, phase, _, cx| {
+                    if phase == DispatchPhase::Capture {
+                        view.update(cx, |this, _| this.leave_floating_sidebar());
+                    }
+                });
+                let view = shell.clone();
+                window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
+                    if phase == DispatchPhase::Capture && event.button == MouseButton::Left {
+                        view.update(cx, |this, cx| {
+                            if this.sidebar_interaction.drag.is_some() {
+                                this.finish_sidebar_resize(Some(event.position.x), cx);
+                                this.sidebar_pointer(window, cx);
+                                cx.stop_propagation();
+                            }
+                        });
+                    }
+                });
+            },
+        )
+        .absolute()
+        .size_0()
+    }
+
+    pub(crate) fn finish_sidebar_resize(&mut self, x: Option<Pixels>, cx: &mut Context<Self>) {
+        if let Some(drag) = self.sidebar_interaction.drag.take() {
+            let width = x.map_or(drag.width, |x| drag.at(x));
+            if width != drag.start_width {
+                dispatch(&self.state, &self.id, Action::ResizeSidebar(width), cx);
+            }
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn sidebar_drag_layer(&self) -> Option<Div> {
+        self.sidebar_interaction
+            .drag
+            .as_ref()
+            .map(|_| div().absolute().inset_0().occlude().cursor_col_resize())
+    }
+
     /// `#sidebar` (ui/styles.css:25-36) and what it holds, in the shipping order: the toolbar,
     /// the address, Favorites, the Space's name, its pinned and Today tabs, and the footer.
     pub(crate) fn sidebar(
@@ -169,30 +450,11 @@ impl Shell {
         let palette = palette();
         let incognito = state.model.is_incognito(&self.id);
         let toggle = Action::Sidebar(SidebarAction::Toggle);
+        let docked = core.sidebar_visible(&self.id);
         let controls_room = (
             tokens::WINDOW_CONTROLS_WIDTH,
             tokens::WINDOW_CONTROLS_PAD_LEFT,
         );
-        if !core.sidebar_visible(&self.id) {
-            // The shipping shell has no control here: its sidebar comes back by shortcut or menu.
-            return div()
-                .absolute()
-                .top(px(tokens::SIDEBAR_PAD_TOP))
-                .left(px(tokens::SIDEBAR_PAD_LEFT))
-                .occlude()
-                .flex()
-                .items_center()
-                .gap(px(tokens::TOOLBAR_GAP))
-                .rounded(px(tokens::RADIUS_SM))
-                .bg(palette.tint)
-                .shadow(palette.shadow_row())
-                // The window keeps its controls while the sidebar is hidden.
-                .children(self.window_controls(title_bar, controls_room, window, cx))
-                .child(self.toolbar_button("sidebar-toggle", "sidebar", "Show sidebar", toggle, cx))
-                .when(!state.model.peeks.contains_key(&self.id), |bar| {
-                    bar.children(self.zoom_badge(cx))
-                });
-        }
         let Some(space) = core.space(&current.active_space_id) else {
             return div();
         };
@@ -289,9 +551,10 @@ impl Shell {
             .downloads
             .count(state.model.incognito_session(&self.id));
         div()
+            .relative()
             .flex()
             .flex_col()
-            .w(px(state.model.core.settings.sidebar_width.pixels() as f32))
+            .w(px(self.sidebar_width(state)))
             .flex_shrink_0()
             .min_h_0()
             .pt(px(tokens::SIDEBAR_PAD_TOP))
@@ -319,7 +582,11 @@ impl Shell {
                             self.toolbar_button(
                                 "sidebar-toggle",
                                 "sidebar",
-                                "Hide sidebar",
+                                if docked {
+                                    "Hide sidebar"
+                                } else {
+                                    "Pin sidebar"
+                                },
                                 toggle,
                                 cx,
                             )
@@ -373,6 +640,32 @@ impl Shell {
                     title_bar,
                     cx,
                 ),
+            )
+            .child(
+                div()
+                    .id("sidebar-resize")
+                    .aria_label("Resize sidebar")
+                    .absolute()
+                    .right_0()
+                    .top_0()
+                    .bottom_0()
+                    .w(px(tokens::SIDEBAR_PAD_RIGHT))
+                    .occlude()
+                    .cursor_col_resize()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                            let width = this.state.borrow().model.core.settings.sidebar_width;
+                            this.state.borrow_mut().sidebar_deadlines.remove(&this.id);
+                            this.sidebar_interaction.drag = Some(SidebarDrag {
+                                start_x: event.position.x,
+                                start_width: width,
+                                width,
+                            });
+                            cx.stop_propagation();
+                            cx.notify();
+                        }),
+                    ),
             )
             .child(self.urlbar(state, &rows, toolbar.loading, cx))
             .when(!incognito, |sidebar| {
@@ -435,9 +728,22 @@ impl Shell {
             .and_then(|id| rows.core.tab(id))
             .map(|tab| tab.url.as_str())
             .filter(|url| *url != "about:blank");
-        let insecure = url.is_some_and(|url| url.starts_with("http:") && !is_dev_url(url));
+        let security = rows
+            .active
+            .zip(url)
+            .map_or(ConnectionSecurity::Unknown, |(tab, url)| {
+                state.engine.connection_security(tab, url)
+            });
+        let insecure_tls = matches!(
+            security,
+            ConnectionSecurity::CertificateError | ConnectionSecurity::InsecureContent
+        );
+        let insecure =
+            insecure_tls || url.is_some_and(|url| url.starts_with("http:") && !is_dev_url(url));
         let kind = match url {
             None => "search",
+            Some(_) if insecure_tls => "unlocked",
+            Some(_) if security == ConnectionSecurity::VerifiedHttps => "lock",
             Some(url) if is_dev_url(url) => "code",
             Some(url) if url.starts_with("http:") => "unlocked",
             Some(_) => "globe",

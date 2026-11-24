@@ -25,6 +25,8 @@ pub(crate) struct Services {
     pub boosts: RefCell<Boosts>,
     pub downloads: RefCell<Downloads>,
     pub download_events: Mailbox<DownloadEvent>,
+    #[cfg(target_os = "linux")]
+    pub print_jobs: Mailbox<std::io::Result<std::fs::File>>,
     pub permissions: RefCell<Permissions>,
     pub permission_events: Mailbox<Option<PermissionPrompt>>,
     pub context_menu_events: RefCell<VecDeque<ContextMenuEvent>>,
@@ -48,6 +50,8 @@ impl Services {
             boosts: RefCell::new(Boosts::new()),
             downloads: RefCell::new(Downloads::default()),
             download_events: Mailbox::default(),
+            #[cfg(target_os = "linux")]
+            print_jobs: Mailbox::default(),
             permissions: RefCell::new(Permissions::default()),
             permission_events: Mailbox::default(),
             context_menu_events: RefCell::default(),

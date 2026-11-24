@@ -23,6 +23,7 @@ flecha-services.workspace = true
 flecha-surface.workspace = true
 futures.workspace = true
 gpui.workspace = true
+open = "5"
 reqwest = { version = "0.13.5", default-features = false, features = ["charset", "rustls", "system-proxy"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -30,6 +31,9 @@ tempfile = "3.27.0"
 tokio = { version = "1", features = ["time"] }
 unicode-segmentation = "1"
 uuid = { version = "1", features = ["v4"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ashpd = { version = "0.13.13", default-features = false, features = ["async-io", "print"] }
 
 [dev-dependencies]
 flecha-services = { workspace = true, features = ["test-support"] }
