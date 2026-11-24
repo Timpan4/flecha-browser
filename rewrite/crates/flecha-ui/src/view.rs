@@ -10,24 +10,28 @@ use flecha_surface::{Frame, input, surface};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     Animation, AnimationExt as _, AnyElement, App, ClickEvent, Context, Corners, Div, ElementId,
-    FocusHandle, FontWeight, InteractiveElement as _, IntoElement, KeyUpEvent, MouseButton,
-    MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, ParentElement as _,
-    Pixels, Render, RenderImage, ScrollEvent, StatefulInteractiveElement as _, Styled as _,
-    Subscription, Transformation, Window, canvas, deferred, div, percentage, px, relative, svg,
+    FocusHandle, FontWeight, HoverListenerMode, InteractiveElement as _, IntoElement, KeyUpEvent,
+    MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection,
+    ObjectFit, ParentElement as _, Pixels, Render, RenderImage, ScrollEvent, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Transformation, Window, canvas,
+    deferred, div, percentage, px, relative, svg,
 };
 
 use crate::icons::icon;
+use crate::shortcuts::Navigation;
 use crate::theme::{DEFAULT_TINT, Palette, palette};
 use crate::tokens::{self, ease};
 use crate::window_chrome::{TitleBar, close_control, resize_edges};
 use crate::{Action, Shared, dispatch};
 use crate::{
     command_bar::{CommandBar, SuggestionClient},
+    dialogs::BrowserDialog,
     downloads_view::DownloadsPanel,
     find_bar::FindSession,
     history_view::HistoryPanel,
     settings_view::SettingsPanel,
     shortcuts::Bindings,
+    sidebar::SidebarInteraction,
     text_field::TextField,
 };
 
@@ -64,6 +68,8 @@ pub(crate) struct Shell {
     selected_pane: Option<(Owner, TabId)>,
     focused_browser: Option<BrowserKey>,
     pub(crate) overlay: Overlay,
+    pub(crate) browser_dialog: Option<BrowserDialog>,
+    pub(crate) sidebar_interaction: SidebarInteraction,
     /// Where the sidebar's menu button was last drawn, for the window menu to drop from.
     pub(crate) menu_button: Rc<Cell<gpui::Bounds<Pixels>>>,
     /// The left button went down on a title bar's empty room; the next drag moves the window.
@@ -73,6 +79,8 @@ pub(crate) struct Shell {
     pub(crate) last_suggestion_sent: Option<Instant>,
     pub(crate) bindings: Bindings,
     pub(crate) consumed_keys: BTreeSet<String>,
+    pressed_button: Rc<Cell<Option<MouseButton>>>,
+    pub(crate) hovered_tab_row: Option<TabId>,
     pub(crate) tab_drag: Option<crate::tab_drag::TabDrag>,
     images: BTreeMap<TabId, Vec<Arc<RenderImage>>>,
     /// Site icons drawn by the current frame, so the next one can free those it no longer
@@ -111,8 +119,11 @@ impl Shell {
                 .window_activation(&this.id, active);
             if active {
                 this.state.borrow_mut().model.focus_window(&this.id);
+                cx.notify();
             } else {
                 this.consumed_keys.clear();
+                this.finish_sidebar_resize(None, cx);
+                this.hide_floating_sidebar(cx);
                 this.cancel_tab_drag(window, cx);
             }
             let _ = this.sync_page_focus(window, cx);
@@ -129,6 +140,8 @@ impl Shell {
             selected_pane: None,
             focused_browser: None,
             overlay: Overlay::None,
+            browser_dialog: None,
+            sidebar_interaction: SidebarInteraction::default(),
             menu_button: Rc::default(),
             moving: false,
             find: None,
@@ -136,6 +149,8 @@ impl Shell {
             last_suggestion_sent: None,
             bindings,
             consumed_keys: BTreeSet::new(),
+            pressed_button: Rc::new(Cell::new(None)),
+            hovered_tab_row: None,
             tab_drag: None,
             images: BTreeMap::new(),
             favicons_drawn: RefCell::default(),
@@ -186,6 +201,7 @@ impl Shell {
                 self.page_focus.focus(window, cx);
             }
             let _ = self.sync_page_focus(window, cx);
+            self.sidebar_pointer(window, cx);
             cx.notify();
         }
     }
@@ -246,15 +262,21 @@ impl Shell {
         }
         if self.selected_pane != selection || find_left || menu_left {
             self.selected_pane = selection;
-            if self.selected_pane.is_some() && !self.overlay.is_open() {
+            if self.selected_pane.is_some()
+                && !self.overlay.is_open()
+                && self.browser_dialog.is_none()
+            {
                 self.page_focus.focus(window, cx);
             } else {
                 self.focus.focus(window, cx);
             }
         }
 
-        let focused =
-            browser.filter(|_| window.is_window_active() && self.page_focus.is_focused(window));
+        let focused = browser.filter(|_| {
+            self.browser_dialog.is_none()
+                && window.is_window_active()
+                && self.page_focus.is_focused(window)
+        });
         if self.focused_browser != focused {
             let state = self.state.borrow();
             // A transfer can leave the previous browser live in another window.
@@ -294,6 +316,29 @@ impl Shell {
         .top_0()
         .left_0()
         .size_full()
+    }
+
+    fn pointer_button_probe(&self) -> impl IntoElement {
+        let pressed_button = self.pressed_button.clone();
+        canvas(
+            |_, _, _| (),
+            move |_, (), window, _| {
+                // Capture the native button before GPUI dispatches a pane's hover transition.
+                let motion_button = pressed_button.clone();
+                window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, _| {
+                    if phase.capture() {
+                        motion_button.set(event.pressed_button);
+                    }
+                });
+                window.on_mouse_event(move |event: &MouseExitEvent, phase, _, _| {
+                    if phase.capture() {
+                        pressed_button.set(event.pressed_button);
+                    }
+                });
+            },
+        )
+        .absolute()
+        .size_0()
     }
 
     /// Puts the window in native fullscreen while its page is in HTML fullscreen, and takes it
@@ -344,12 +389,13 @@ impl Shell {
         images: &mut BTreeMap<TabId, Vec<Arc<RenderImage>>>,
         cx: &Context<Self>,
     ) -> Div {
-        let (frames, prompt, writable) = {
+        let (frames, prompt, writable, (cursor, status)) = {
             let state = self.state.borrow();
             (
                 state.engine.frames(&id).unwrap_or_default(),
                 state.engine.pending_permission_prompt(&id),
                 state.permissions.error().is_none(),
+                state.engine.pointer_state(&id),
             )
         };
         let pane_images = [
@@ -364,11 +410,15 @@ impl Shell {
         images.insert(id.clone(), pane_images);
         let state = self.state.clone();
         let origin = Rc::new(Cell::new(gpui::Point::default()));
+        let group = SharedString::new_static("page-pointer");
         let mut element = div()
+            .id(format!("page-viewport-{}", id.as_str()))
+            .group(group.clone())
             .relative()
             .size_full()
             .overflow_hidden()
             .bg(palette().page)
+            .cursor(cursor)
             .child(surface(frames.view, frames.popup))
             .child(
                 canvas(|_, _, _| (), {
@@ -415,7 +465,24 @@ impl Shell {
         }
         element = element
             .on_mouse_move(pointer!(MouseMoveEvent, mouse_move))
-            .on_mouse_exit(pointer!(MouseExitEvent, mouse_exit))
+            .hover_listener_mode(HoverListenerMode::InputModalityIndependent)
+            .on_hover({
+                let (id, origin) = (id.clone(), origin.clone());
+                cx.listener(move |this, hovered: &bool, window, _| {
+                    if !hovered {
+                        let state = this.state.borrow();
+                        state.engine.clear_pointer_status(&id);
+                        if let Some(host) = state.engine.host(&id) {
+                            input::mouse_leave(
+                                &host,
+                                window.mouse_position() - origin.get(),
+                                window.modifiers(),
+                                this.pressed_button.get(),
+                            );
+                        }
+                    }
+                })
+            })
             .on_scroll(pointer!(ScrollEvent, scroll));
         for button in [MouseButton::Left, MouseButton::Middle, MouseButton::Right] {
             let (down_id, down_origin, down_owner) = (id.clone(), origin.clone(), owner.clone());
@@ -468,6 +535,25 @@ impl Shell {
         {
             element = element.child(self.find_panel(find, cx));
         }
+        if let Some(status) = status {
+            element = element.child(
+                div()
+                    .absolute()
+                    .bottom_0()
+                    .left_0()
+                    .max_w_full()
+                    .invisible()
+                    .group_hover(group, |style| style.visible())
+                    .rounded_tr(px(tokens::RADIUS_SM))
+                    .px(px(tokens::SPACE_2))
+                    .py(px(tokens::SPACE_1))
+                    .bg(palette().surface)
+                    .text_color(palette().text_2)
+                    .text_size(px(tokens::TEXT_XS))
+                    .truncate()
+                    .child(status),
+            );
+        }
         div()
             .flex()
             .flex_col()
@@ -505,6 +591,8 @@ impl Render for Shell {
         self.bindings
             .refresh(&self.state.borrow().model.core.settings.keybindings);
         self.sync_command_preferences(cx);
+        self.sync_browser_dialog(window, cx);
+        self.sync_downloads_panel(window, cx);
         let _ = self.sync_page_focus(window, cx);
         let popup_title = (self.state.borrow().model.popups.get(&self.id))
             .map(|popup| popup.page.tab.title.clone());
@@ -526,15 +614,39 @@ impl Render for Shell {
             .when_some(ui_font(cx), |main, font| main.font_family(font))
             .text_size(px(tokens::TEXT_MD))
             .line_height(relative(tokens::LINE_HEIGHT))
+            .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, _, _| {
+                if !matches!(event.button, MouseButton::Navigate(_)) {
+                    this.pressed_button.set(Some(event.button));
+                }
+            }))
+            .capture_any_mouse_up(cx.listener(|this, event: &MouseUpEvent, _, _| {
+                if this.pressed_button.get() == Some(event.button) {
+                    this.pressed_button.set(None);
+                }
+            }))
+            .on_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                let navigation = match event.button {
+                    MouseButton::Navigate(NavigationDirection::Back) => Navigation::Back,
+                    MouseButton::Navigate(NavigationDirection::Forward) => Navigation::Forward,
+                    _ => return,
+                };
+                cx.stop_propagation();
+                dispatch(&this.state, &this.id, Action::Browser(navigation), cx);
+            }))
             .on_key_down(cx.listener(|this, event, window, cx| this.key(event, window, cx)))
             .on_key_up(cx.listener(|this, event: &KeyUpEvent, window, cx| {
-                if this.consumed_keys.remove(&event.keystroke.key) || this.overlay.is_open() {
+                if this.consumed_keys.remove(&event.keystroke.key)
+                    || this.overlay.is_open()
+                    || this.browser_dialog.is_some()
+                {
                     cx.stop_propagation();
                     return;
                 }
                 let focused = this.sync_page_focus(window, cx);
                 this.page_key(focused, &event.keystroke, true, false, false);
             }))
+            .child(self.pointer_button_probe())
+            .child(self.sidebar_input(cx))
             .child(div().absolute().size_0().track_focus(&self.page_focus))
             .child(div().absolute().size_0().track_focus(&self.focus));
         let mut images = BTreeMap::new();
@@ -553,6 +665,8 @@ impl Render for Shell {
                 )
             {
                 body = body.child(self.sidebar(&state, current, TitleBar::Platform, window, cx));
+            } else {
+                self.hovered_tab_row = None;
             }
             let page = self.pane(owner, tab, &mut images, cx);
             main = main.child(body.child(div().flex_1().min_w_0().min_h_0().child(page)));
@@ -806,6 +920,9 @@ impl Render for Shell {
                 ));
             }
             let docked = core.sidebar_visible(&self.id);
+            if !docked {
+                self.hovered_tab_row = None;
+            }
             let page_area = div()
                 .flex_1()
                 .min_h_0()
@@ -815,12 +932,15 @@ impl Render for Shell {
                 .pb(px(tokens::PAGE_GAP))
                 .when(!docked, |area| area.pl(px(tokens::PAGE_GAP)))
                 .child(pages);
-            let sidebar = self.sidebar(&state, current, title_bar, window, cx);
             let mut body = div().flex_1().min_h_0().relative().flex();
             if docked {
-                body = body.child(sidebar).child(page_area);
+                body = body
+                    .child(self.sidebar(&state, current, title_bar, window, cx))
+                    .child(page_area);
             } else {
-                body = body.child(page_area).child(sidebar);
+                body = body
+                    .child(page_area)
+                    .child(self.floating_sidebar(&state, current, title_bar, window, cx));
             }
             main = main.child(body);
         }
@@ -856,7 +976,7 @@ impl Render for Shell {
                     ),
             );
         }
-        let sidebar_width = state.model.core.settings.sidebar_width.pixels() as f32;
+        let sidebar_width = self.sidebar_width(&state);
         let docked = state
             .model
             .state(&self.id)
@@ -993,6 +1113,12 @@ impl Render for Shell {
         }
         if let Overlay::Menu(menu) = &self.overlay {
             main = main.child(self.menu_panel(menu, cx));
+        }
+        if let Some(drag) = self.sidebar_drag_layer() {
+            main = main.child(deferred(drag));
+        }
+        if let Some(dialog) = self.browser_dialog_panel(cx) {
+            main = main.child(deferred(dialog).with_priority(1));
         }
         let drawn = self.favicons_drawn.borrow();
         for image in favicons_before {

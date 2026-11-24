@@ -481,6 +481,15 @@ pub(super) fn drained(live: usize) {
     emit(json!({ "type": "drained", "live": live }));
 }
 
+#[cfg(target_os = "linux")]
+pub(super) fn print_ready(tab: &TabId, file: &std::fs::File) {
+    use std::os::unix::fs::FileExt as _;
+
+    let mut header = [0; b"%PDF-".len()];
+    let pdf = file.read_exact_at(&mut header, 0).is_ok() && header == *b"%PDF-";
+    emit(json!({ "type": "print_ready", "tab": tab, "pdf": pdf }));
+}
+
 pub(super) fn event(message: &BrowserEvent) {
     let tab = &message.key.tab;
     let mut value = match &message.event {
@@ -514,7 +523,9 @@ pub(super) fn event(message: &BrowserEvent) {
         Event::FaviconUrls(urls) => json!({ "type": "favicon_urls", "tab": tab, "urls": urls }),
         Event::Loading(loading) => json!({ "type": "loading", "tab": tab, "loading": loading }),
         Event::Audible(audible) => json!({ "type": "audible", "tab": tab, "audible": audible }),
-        Event::PaintFailed => return,
+        Event::DialogChanged => json!({ "type": "dialog_changed", "tab": tab }),
+        Event::SecurityChanged => json!({ "type": "security_changed", "tab": tab }),
+        Event::PaintFailed | Event::PointerChanged => return,
     };
     value["generation"] = json!(message.key.generation());
     emit(value);

@@ -48,6 +48,12 @@ export async function fixture(handle = () => false) {
 
   if (handle(path, response, request)) return;
 
+  if (path === '/basic-auth' && request.headers.authorization !== 'Basic ' + Buffer.from('u:p').toString('base64')) {
+    response.writeHead(401, { 'WWW-Authenticate': 'Basic realm="Flecha fixture"' }).end();
+
+    return;
+  }
+
   if (path.startsWith('/probe/')) {
     const name = decodeURIComponent(path.slice('/probe/'.length));
     const value = new URL(request.url, 'http://localhost').searchParams.get('value');

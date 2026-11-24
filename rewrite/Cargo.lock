@@ -2261,6 +2261,7 @@ name = "flecha-ui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ashpd",
  "async-compat",
  "async-io",
  "cef",
@@ -2278,6 +2279,7 @@ dependencies = [
  "futures",
  "gpui",
  "image",
+ "open",
  "reqwest",
  "serde",
  "serde_json",

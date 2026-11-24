@@ -314,3 +314,307 @@ index cd9d870..c23ff49 100644
                      // Native views are only composited by the Metal renderer.
                      PrimitiveBatch::NativeViews(_) => {}
                  }
+diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
+--- a/crates/gpui/src/platform.rs
++++ b/crates/gpui/src/platform.rs
+@@ -3193,6 +3193,27 @@
+     /// A cursor indicating that the operation will result in a context menu
+     /// corresponds to the CSS cursor value `context-menu`
+     ContextualMenu,
++
++    /// The application is busy.
++    Wait,
++
++    /// Background work is in progress.
++    Progress,
++
++    /// Help is available.
++    Help,
++
++    /// An item can be moved.
++    Move,
++
++    /// The target can be magnified.
++    ZoomIn,
++
++    /// The target can be made smaller.
++    ZoomOut,
++
++    /// Suppress the pointer over this region.
++    Hidden,
+ }
+
+ /// A clipboard item that should be copied to the clipboard
+diff --git a/crates/gpui_linux/src/linux/platform.rs b/crates/gpui_linux/src/linux/platform.rs
+--- a/crates/gpui_linux/src/linux/platform.rs
++++ b/crates/gpui_linux/src/linux/platform.rs
+@@ -1387,6 +1387,13 @@
+         CursorStyle::DragLink => &["alias"],
+         CursorStyle::DragCopy => &["copy"],
+         CursorStyle::ContextualMenu => &["context-menu"],
++        CursorStyle::Wait => &["wait", "watch"],
++        CursorStyle::Progress => &["progress", "left_ptr_watch"],
++        CursorStyle::Help => &["help", "question_arrow"],
++        CursorStyle::Move => &["move", "fleur"],
++        CursorStyle::ZoomIn => &["zoom-in", "crosshair"],
++        CursorStyle::ZoomOut => &["zoom-out", "crosshair"],
++        CursorStyle::Hidden => &[],
+     }
+ }
+
+diff --git a/crates/gpui_linux/src/linux/x11/client.rs b/crates/gpui_linux/src/linux/x11/client.rs
+--- a/crates/gpui_linux/src/linux/x11/client.rs
++++ b/crates/gpui_linux/src/linux/x11/client.rs
+@@ -2088,6 +2088,9 @@
+     }
+
+     fn get_cursor_icon(&mut self, style: CursorStyle) -> Option<xproto::Cursor> {
++        if style == CursorStyle::Hidden {
++            return self.get_or_create_invisible_cursor();
++        }
+         if let Some(cursor) = self.cursor_cache.get(&style) {
+             return *cursor;
+         }
+diff --git a/crates/gpui_linux/src/linux/wayland.rs b/crates/gpui_linux/src/linux/wayland.rs
+--- a/crates/gpui_linux/src/linux/wayland.rs
++++ b/crates/gpui_linux/src/linux/wayland.rs
+@@ -38,5 +38,12 @@
+         CursorStyle::DragLink => Shape::Alias,
+         CursorStyle::DragCopy => Shape::Copy,
+         CursorStyle::ContextualMenu => Shape::ContextMenu,
++        CursorStyle::Wait => Shape::Wait,
++        CursorStyle::Progress => Shape::Progress,
++        CursorStyle::Help => Shape::Help,
++        CursorStyle::Move => Shape::Move,
++        CursorStyle::ZoomIn => Shape::ZoomIn,
++        CursorStyle::ZoomOut => Shape::ZoomOut,
++        CursorStyle::Hidden => Shape::Default,
+     }
+ }
+diff --git a/crates/gpui_linux/src/linux/wayland/client.rs b/crates/gpui_linux/src/linux/wayland/client.rs
+--- a/crates/gpui_linux/src/linux/wayland/client.rs
++++ b/crates/gpui_linux/src/linux/wayland/client.rs
+@@ -849,32 +849,26 @@
+         let Some(style) = self.cursor_style else {
+             return;
+         };
+-        let serial = self.serial_tracker.get(SerialKind::MouseEnter);
+-        if let Some(cursor_shape_device) = &self.cursor_shape_device {
+-            cursor_shape_device.set_shape(serial.as_raw(), to_shape(style));
+-            return;
+-        }
+-        let Some(focused_window) = self.mouse_focused_window.clone() else {
+-            log::warn!(
+-                "wayland: no focused surface to restore cursor style {:?} after hide; cursor may stay invisible",
+-                style
+-            );
++        self.apply_cursor_style(style);
++    }
++
++    fn apply_cursor_style(&mut self, style: CursorStyle) {
++        let (Some(window), Some(pointer)) = (&self.mouse_focused_window, &self.wl_pointer) else {
+             return;
+         };
+-        let Some(wl_pointer) = self.wl_pointer.clone() else {
+-            log::warn!(
+-                "wayland: no wl_pointer to restore cursor style {:?} after hide; cursor may stay invisible",
+-                style
++        let serial = self.serial_tracker.get(SerialKind::MouseEnter);
++        if style == CursorStyle::Hidden {
++            pointer.set_cursor(serial.as_raw(), None, 0, 0);
++        } else if let Some(cursor_shape_device) = &self.cursor_shape_device {
++            cursor_shape_device.set_shape(serial.as_raw(), to_shape(style));
++        } else {
++            self.cursor.set_icon(
++                pointer,
++                serial.as_raw(),
++                cursor_style_to_icon_names(style),
++                window.primary_output_scale(),
+             );
+-            return;
+-        };
+-        let scale = focused_window.primary_output_scale();
+-        self.cursor.set_icon(
+-            &wl_pointer,
+-            serial.as_raw(),
+-            cursor_style_to_icon_names(style),
+-            scale,
+-        );
++        }
+     }
+ }
+
+@@ -1372,23 +1366,7 @@
+             return;
+         }
+
+-        let serial = state.serial_tracker.get(SerialKind::MouseEnter);
+-        if let Some(cursor_shape_device) = &state.cursor_shape_device {
+-            cursor_shape_device.set_shape(serial.as_raw(), to_shape(style));
+-        } else if let Some(focused_window) = &state.mouse_focused_window {
+-            // cursor-shape-v1 isn't supported, set the cursor using a surface.
+-            let wl_pointer = state
+-                .wl_pointer
+-                .clone()
+-                .expect("window is focused by pointer");
+-            let scale = focused_window.primary_output_scale();
+-            state.cursor.set_icon(
+-                &wl_pointer,
+-                serial.as_raw(),
+-                cursor_style_to_icon_names(style),
+-                scale,
+-            );
+-        }
++        state.apply_cursor_style(style);
+     }
+
+     pub(crate) fn hide_cursor_until_mouse_moves(&self) {
+@@ -2360,7 +2338,7 @@
+ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+     fn event(
+         this: &mut Self,
+-        wl_pointer: &wl_pointer::WlPointer,
++        _wl_pointer: &wl_pointer::WlPointer,
+         event: wl_pointer::Event,
+         _: &(),
+         _: &Connection,
+@@ -2388,17 +2366,7 @@
+                     state.enter_token = None;
+                     state.restore_cursor_after_hide();
+                     if let Some(style) = state.cursor_style {
+-                        if let Some(cursor_shape_device) = &state.cursor_shape_device {
+-                            cursor_shape_device.set_shape(serial, to_shape(style));
+-                        } else {
+-                            let scale = window.primary_output_scale();
+-                            state.cursor.set_icon(
+-                                wl_pointer,
+-                                serial,
+-                                cursor_style_to_icon_names(style),
+-                                scale,
+-                            );
+-                        }
++                        state.apply_cursor_style(style);
+                     }
+                     let modifiers = state.modifiers;
+                     drop(state);
+@@ -2444,26 +2412,8 @@
+                     if window.is_blocked() {
+                         let default_style = CursorStyle::Arrow;
+                         if state.cursor_style != Some(default_style) {
+-                            let serial = state.serial_tracker.get(SerialKind::MouseEnter);
+                             state.cursor_style = Some(default_style);
+-
+-                            if let Some(cursor_shape_device) = &state.cursor_shape_device {
+-                                cursor_shape_device
+-                                    .set_shape(serial.as_raw(), to_shape(default_style));
+-                            } else {
+-                                // cursor-shape-v1 isn't supported, set the cursor using a surface.
+-                                let wl_pointer = state
+-                                    .wl_pointer
+-                                    .clone()
+-                                    .expect("window is focused by pointer");
+-                                let scale = window.primary_output_scale();
+-                                state.cursor.set_icon(
+-                                    &wl_pointer,
+-                                    serial.as_raw(),
+-                                    cursor_style_to_icon_names(default_style),
+-                                    scale,
+-                                );
+-                            }
++                            state.apply_cursor_style(default_style);
+                         }
+                     }
+                     if state
+diff --git a/crates/gpui_windows/src/util.rs b/crates/gpui_windows/src/util.rs
+--- a/crates/gpui_windows/src/util.rs
++++ b/crates/gpui_windows/src/util.rs
+@@ -100,6 +100,10 @@
+     static SIZENWSE: OnceLock<SafeCursor> = OnceLock::new();
+     static SIZENESW: OnceLock<SafeCursor> = OnceLock::new();
+     static NO: OnceLock<SafeCursor> = OnceLock::new();
++    static WAIT: OnceLock<SafeCursor> = OnceLock::new();
++    static PROGRESS: OnceLock<SafeCursor> = OnceLock::new();
++    static HELP: OnceLock<SafeCursor> = OnceLock::new();
++    static MOVE: OnceLock<SafeCursor> = OnceLock::new();
+     let (lock, name) = match style {
+         CursorStyle::IBeam | CursorStyle::IBeamCursorForVerticalLayout => (&IBEAM, IDC_IBEAM),
+         CursorStyle::Crosshair => (&CROSS, IDC_CROSS),
+@@ -115,6 +119,12 @@
+         CursorStyle::ResizeUpLeftDownRight => (&SIZENWSE, IDC_SIZENWSE),
+         CursorStyle::ResizeUpRightDownLeft => (&SIZENESW, IDC_SIZENESW),
+         CursorStyle::OperationNotAllowed => (&NO, IDC_NO),
++        CursorStyle::Wait => (&WAIT, IDC_WAIT),
++        CursorStyle::Progress => (&PROGRESS, IDC_APPSTARTING),
++        CursorStyle::Help => (&HELP, IDC_HELP),
++        CursorStyle::Move => (&MOVE, IDC_SIZEALL),
++        CursorStyle::ZoomIn | CursorStyle::ZoomOut => (&CROSS, IDC_CROSS),
++        CursorStyle::Hidden => return None,
+         _ => (&ARROW, IDC_ARROW),
+     };
+     Some(
+diff --git a/crates/gpui_macos/src/window.rs b/crates/gpui_macos/src/window.rs
+--- a/crates/gpui_macos/src/window.rs
++++ b/crates/gpui_macos/src/window.rs
+@@ -40,8 +40,8 @@
+ use objc2_app_kit::NSFilenamesPboardType;
+ use objc2_app_kit::{
+     NSAlert, NSAlertStyle, NSAppearance, NSAutoresizingMaskOptions, NSBackingStoreType, NSBeep,
+-    NSButton, NSColor, NSDragOperation, NSDraggingContext, NSDraggingImageComponent,
+-    NSDraggingImageComponentIconKey, NSDraggingItem, NSEventModifierFlags, NSEventType,
++    NSButton, NSColor, NSCursor, NSDragOperation, NSDraggingContext, NSDraggingImageComponent,
++    NSDraggingImageComponentIconKey, NSDraggingItem, NSEventModifierFlags, NSEventType, NSImage,
+     NSPasteboardWriting, NSRequestUserAttentionType, NSScreen, NSTrackingArea,
+     NSTrackingAreaOptions, NSView, NSViewLayerContentsRedrawPolicy, NSVisualEffectBlendingMode,
+     NSVisualEffectMaterial, NSVisualEffectState, NSWindow, NSWindowAnimationBehavior,
+@@ -2752,11 +2752,15 @@
+     // SAFETY: Each selector is an `NSCursor` class method returning a cursor.
+     unsafe {
+         match style {
+-            CursorStyle::Arrow => msg_send![class!(NSCursor), arrowCursor],
++            CursorStyle::Arrow | CursorStyle::Wait | CursorStyle::Progress | CursorStyle::Help => {
++                msg_send![class!(NSCursor), arrowCursor]
++            }
+             CursorStyle::IBeam => msg_send![class!(NSCursor), IBeamCursor],
+-            CursorStyle::Crosshair => msg_send![class!(NSCursor), crosshairCursor],
++            CursorStyle::Crosshair | CursorStyle::ZoomIn | CursorStyle::ZoomOut => {
++                msg_send![class!(NSCursor), crosshairCursor]
++            }
+             CursorStyle::ClosedHand => msg_send![class!(NSCursor), closedHandCursor],
+-            CursorStyle::OpenHand => msg_send![class!(NSCursor), openHandCursor],
++            CursorStyle::OpenHand | CursorStyle::Move => msg_send![class!(NSCursor), openHandCursor],
+             CursorStyle::PointingHand => msg_send![class!(NSCursor), pointingHandCursor],
+             CursorStyle::ResizeLeftRight => msg_send![class!(NSCursor), resizeLeftRightCursor],
+             CursorStyle::ResizeUpDown => msg_send![class!(NSCursor), resizeUpDownCursor],
+@@ -2785,6 +2789,15 @@
+             CursorStyle::DragLink => msg_send![class!(NSCursor), dragLinkCursor],
+             CursorStyle::DragCopy => msg_send![class!(NSCursor), dragCopyCursor],
+             CursorStyle::ContextualMenu => msg_send![class!(NSCursor), contextualMenuCursor],
++            CursorStyle::Hidden => {
++                thread_local! {
++                    static HIDDEN: Retained<NSCursor> = {
++                        let image = NSImage::initWithSize(NSImage::alloc(), NSSize::new(1., 1.));
++                        NSCursor::initWithImage_hotSpot(NSCursor::alloc(), &image, NSPoint::ZERO)
++                    };
++                }
++                HIDDEN.with(|cursor| Retained::as_ptr(cursor).cast_mut().cast())
++            }
+         }
+     }
+ }
+diff --git a/crates/gpui_web/src/platform.rs b/crates/gpui_web/src/platform.rs
+--- a/crates/gpui_web/src/platform.rs
++++ b/crates/gpui_web/src/platform.rs
+@@ -590,6 +590,13 @@
+             CursorStyle::DragLink => "alias",
+             CursorStyle::DragCopy => "copy",
+             CursorStyle::ContextualMenu => "context-menu",
++            CursorStyle::Wait => "wait",
++            CursorStyle::Progress => "progress",
++            CursorStyle::Help => "help",
++            CursorStyle::Move => "move",
++            CursorStyle::ZoomIn => "zoom-in",
++            CursorStyle::ZoomOut => "zoom-out",
++            CursorStyle::Hidden => "none",
+         };
+
+         self.last_cursor_css.set(css_cursor);

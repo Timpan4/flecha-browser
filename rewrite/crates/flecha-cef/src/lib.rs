@@ -5,12 +5,15 @@ mod clipboard;
 mod compositor;
 mod context_menu;
 mod devtools;
+mod dialogs;
 mod downloads;
 mod favicon;
 mod find;
 mod identity;
 mod permissions;
 mod popup;
+#[cfg(target_os = "linux")]
+mod printing;
 mod pump;
 mod runtime;
 mod services;
@@ -40,6 +43,9 @@ pub use context_menu::{
     ContextMenuEvent, ContextMenuId, ContextMenuRequest, FrameEdit, MenuContext, MenuFrame,
 };
 pub use devtools::{DevToolsEvent, DevToolsMessage};
+pub use dialogs::{
+    ConnectionSecurity, DialogId, DialogKind, DialogRequest, DialogResponse, FileMode,
+};
 pub use downloads::{
     DownloadConfig, DownloadError, DownloadEvent, DownloadHandle, DownloadMessage,
 };
@@ -61,6 +67,8 @@ pub use zoom::{PageZoom, zoom_percentage};
 /// creating it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
+    SecurityChanged,
+    DialogChanged,
     Created(i32),
     Closed,
     Address(String),
@@ -75,6 +83,7 @@ pub enum Event {
     },
     Paint,
     PaintFailed,
+    PointerChanged,
     Opened(Opened),
     ClosedByPage,
     /// The page entered (`true`) or left HTML fullscreen. With Alloy-style browsers the
@@ -487,6 +496,23 @@ impl Engine {
         }
     }
 
+    pub fn pointer_state(&self, tab: &TabId) -> (gpui::CursorStyle, Option<gpui::SharedString>) {
+        self.browsers
+            .get(tab)
+            .map_or_else(Default::default, |session| {
+                (
+                    flecha_surface::input::cursor_style(session.slot.cursor.get()),
+                    session.slot.status.borrow().clone(),
+                )
+            })
+    }
+
+    pub fn clear_pointer_status(&self, tab: &TabId) {
+        if let Some(session) = self.browsers.get(tab) {
+            session.slot.set_status(None);
+        }
+    }
+
     pub fn host(&self, tab: &TabId) -> Option<BrowserHost> {
         self.browsers
             .get(tab)?
@@ -542,6 +568,9 @@ impl Engine {
         };
         if session.hidden == visible {
             session.hidden = !visible;
+            if !visible {
+                session.slot.set_status(None);
+            }
             if let Some(host) = self.host(tab) {
                 host.was_hidden(i32::from(!visible));
             }
@@ -644,6 +673,19 @@ impl Engine {
         }
     }
 
+    pub fn print(&self, tab: &TabId) -> Result<()> {
+        let host = self.host(tab).context("The page has closed")?;
+        #[cfg(target_os = "linux")]
+        {
+            self.print_for_portal(tab, &host)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            host.print();
+            Ok(())
+        }
+    }
+
     pub fn stop_load(&self, tab: &TabId) {
         if let Some(browser) = self.browser(tab) {
             browser.stop_load();
@@ -732,6 +774,7 @@ impl Engine {
         slot.retired.set(true);
         find::forget(slot);
         context_menu::cancel(slot);
+        slot.dialogs.cancel();
         match slot.stage.get() {
             // CEF already destroyed it. Its queued ClosedByPage now has a retired key.
             Stage::Closed => {}
@@ -889,6 +932,8 @@ mod tests {
         let url = "https://example.test/old";
         for event in callback_samples![
             Event::Created(_) => Event::Created(1),
+            Event::DialogChanged => Event::DialogChanged,
+            Event::SecurityChanged => Event::SecurityChanged,
             Event::Closed => Event::Closed,
             Event::Address(_) => Event::Address(url.into()),
             Event::Title(_) => Event::Title("Old document".into()),
@@ -896,6 +941,7 @@ mod tests {
             Event::LoadFailed { .. } => Event::LoadFailed { url: url.into(), code: -106 },
             Event::Paint => Event::Paint,
             Event::PaintFailed => Event::PaintFailed,
+            Event::PointerChanged => Event::PointerChanged,
             Event::Opened(_) => Event::Opened(Opened {
                 url: url.into(),
                 disposition: Disposition::Popup,

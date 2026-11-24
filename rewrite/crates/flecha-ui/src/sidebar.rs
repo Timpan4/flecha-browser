@@ -1,14 +1,16 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use flecha_cef::ConnectionSecurity;
 use flecha_core::{
-    BrowserState, Device, FolderId, PinnedKey, PinnedNode, Placement, SpaceId, TabId, WindowId,
-    shortcuts,
+    BrowserState, Device, FolderId, PinnedKey, PinnedNode, Placement, SidebarWidth, SpaceId, TabId,
+    WindowId, shortcuts,
 };
 use gpui::{
-    Animation, AnimationExt as _, ClickEvent, Context, Div, FontWeight, InteractiveElement as _,
-    IntoElement as _, MouseButton, MouseDownEvent, ParentElement as _, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Transformation, Window, canvas, div, percentage,
-    prelude::FluentBuilder as _, px, relative,
+    Animation, AnimationExt as _, AnyElement, App, ClickEvent, ClipboardItem, Context,
+    DispatchPhase, Div, FontWeight, HoverListenerMode, InteractiveElement as _, IntoElement,
+    MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _,
+    Pixels, SharedString, StatefulInteractiveElement as _, Styled as _, Transformation, Window,
+    canvas, div, percentage, prelude::FluentBuilder as _, px, relative,
 };
 use uuid::Uuid;
 
@@ -37,6 +39,7 @@ pub(crate) enum SidebarAction {
     ToggleFolder(FolderId, bool),
     RemoveFolder(FolderId),
     TogglePinned(bool),
+    ClearToday,
 }
 
 impl Controller {
@@ -71,6 +74,11 @@ impl Controller {
             }
             SidebarAction::TogglePinned(collapsed) => {
                 core.update_space(&space, None, None, None, Some(collapsed));
+            }
+            SidebarAction::ClearToday => {
+                for id in core.clear_today(window, now()) {
+                    self.engine.close(&id);
+                }
             }
             SidebarAction::Pin(..) | SidebarAction::Favorite(_) | SidebarAction::ToToday(_) => {
                 let (id, placement) = match &action {
@@ -146,7 +154,286 @@ impl Controller {
     }
 }
 
+// Shipping's #edge, --floating-sidebar-inset and peek animation (ui/s.css).
+const SIDEBAR_EDGE: f32 = 8.;
+const FLOATING_INSET: f32 = 10.;
+const PEEK_DELAY: Duration = Duration::from_millis(300);
+const PEEK_IN: Duration = Duration::from_millis(180);
+const PEEK_OUT: Duration = Duration::from_millis(160);
+
+impl Controller {
+    pub(crate) fn poll_sidebars(&self, cx: &mut App) {
+        let now = Instant::now();
+        for (id, deadline) in &self.sidebar_deadlines {
+            if *deadline <= now
+                && let Some(handle) = self.windows.get(id).copied()
+            {
+                cx.defer(move |cx| {
+                    let _ = handle.update(cx, |shell, _, cx| shell.advance_sidebar_hide(now, cx));
+                });
+            }
+        }
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct SidebarInteraction {
+    peek: bool,
+    leaving: bool,
+    drag: Option<SidebarDrag>,
+}
+
+struct SidebarDrag {
+    start_x: Pixels,
+    start_width: SidebarWidth,
+    width: SidebarWidth,
+}
+
+impl SidebarDrag {
+    fn at(&self, x: Pixels) -> SidebarWidth {
+        SidebarWidth::clamp(self.start_width.pixels() + f64::from(x - self.start_x))
+            .unwrap_or(self.width)
+    }
+}
+
 impl Shell {
+    pub(crate) fn sidebar_width(&self, state: &Controller) -> f32 {
+        self.sidebar_interaction
+            .drag
+            .as_ref()
+            .map_or(state.model.core.settings.sidebar_width, |drag| drag.width)
+            .pixels() as f32
+    }
+
+    pub(crate) fn sidebar_pointer(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if self.sidebar_interaction.drag.is_some() {
+            return;
+        }
+        let state = self.state.borrow();
+        let collapsed = state
+            .model
+            .state(&self.id)
+            .is_some_and(|core| !core.sidebar_visible(&self.id));
+        let fullscreen = state.fullscreen_pane(&self.id).is_some();
+        let width = self.sidebar_width(&state);
+        drop(state);
+        if !collapsed || fullscreen {
+            self.hide_floating_sidebar(cx);
+            return;
+        }
+        let mouse = window.mouse_position();
+        let within_height = mouse.y >= px(0.) && mouse.y < window.viewport_size().height;
+        let hover_width = if self.sidebar_interaction.peek {
+            width + FLOATING_INSET
+        } else {
+            SIDEBAR_EDGE
+        };
+        if within_height
+            && mouse.x >= px(0.)
+            && mouse.x < px(hover_width)
+            && !self.overlay.is_open()
+            && self.browser_dialog.is_none()
+        {
+            self.state.borrow_mut().sidebar_deadlines.remove(&self.id);
+            if !self.sidebar_interaction.peek || self.sidebar_interaction.leaving {
+                self.sidebar_interaction.peek = true;
+                self.sidebar_interaction.leaving = false;
+                cx.notify();
+            }
+        } else {
+            self.leave_floating_sidebar();
+        }
+    }
+
+    fn leave_floating_sidebar(&self) {
+        if !self.sidebar_interaction.peek
+            || self.sidebar_interaction.drag.is_some()
+            || self.overlay.is_open()
+            || self.browser_dialog.is_some()
+        {
+            return;
+        }
+        self.state
+            .borrow_mut()
+            .sidebar_deadlines
+            .entry(self.id.clone())
+            .or_insert_with(|| Instant::now() + PEEK_DELAY);
+    }
+
+    fn advance_sidebar_hide(&mut self, now: Instant, cx: &mut Context<Self>) {
+        let mut state = self.state.borrow_mut();
+        let Some(deadline) = state
+            .sidebar_deadlines
+            .get_mut(&self.id)
+            .filter(|deadline| **deadline <= now)
+        else {
+            return;
+        };
+        if self.overlay.is_open()
+            || self.browser_dialog.is_some()
+            || self.sidebar_interaction.drag.is_some()
+        {
+            state.sidebar_deadlines.remove(&self.id);
+            if std::mem::take(&mut self.sidebar_interaction.leaving) {
+                cx.notify();
+            }
+        } else if self.sidebar_interaction.leaving {
+            drop(state);
+            self.hide_floating_sidebar(cx);
+        } else {
+            *deadline = now + PEEK_OUT;
+            self.sidebar_interaction.leaving = true;
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn hide_floating_sidebar(&mut self, cx: &mut Context<Self>) {
+        let hover = &mut self.sidebar_interaction;
+        hover.leaving = false;
+        if std::mem::take(&mut hover.peek) {
+            self.state.borrow_mut().sidebar_deadlines.remove(&self.id);
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn floating_sidebar(
+        &self,
+        state: &Controller,
+        current: &flecha_core::Window,
+        title_bar: TitleBar,
+        window: &Window,
+        cx: &Context<Self>,
+    ) -> Div {
+        if !self.sidebar_interaction.peek {
+            let palette = palette();
+            let controls_room = (
+                tokens::WINDOW_CONTROLS_WIDTH,
+                tokens::WINDOW_CONTROLS_PAD_LEFT,
+            );
+            return div()
+                .absolute()
+                .top(px(tokens::SIDEBAR_PAD_TOP))
+                .left(px(tokens::SIDEBAR_PAD_LEFT))
+                .occlude()
+                .flex()
+                .items_center()
+                .gap(px(tokens::TOOLBAR_GAP))
+                .rounded(px(tokens::RADIUS_SM))
+                .bg(palette.tint)
+                .shadow(palette.shadow_row())
+                .children(self.window_controls(title_bar, controls_room, window, cx))
+                .child(self.toolbar_button(
+                    "sidebar-toggle",
+                    "sidebar",
+                    "Show sidebar",
+                    Action::Sidebar(SidebarAction::Toggle),
+                    cx,
+                ))
+                .when(!state.model.peeks.contains_key(&self.id), |bar| {
+                    bar.children(self.zoom_badge(cx))
+                });
+        }
+
+        let mut float = div()
+            .absolute()
+            .left_0()
+            .top_0()
+            .bottom_0()
+            .w(px(SIDEBAR_EDGE));
+        if self.sidebar_interaction.peek {
+            let slide = self.sidebar_width(state) + FLOATING_INSET;
+            let leaving = self.sidebar_interaction.leaving;
+            float = float.child(
+                self.sidebar(state, current, title_bar, window, cx)
+                    .absolute()
+                    .left(px(FLOATING_INSET))
+                    .top(px(FLOATING_INSET))
+                    .bottom(px(FLOATING_INSET))
+                    .rounded(px(tokens::WINDOW_RADIUS - FLOATING_INSET))
+                    .shadow(palette().shadow_pop())
+                    .occlude()
+                    .with_animation(
+                        if leaving {
+                            "sidebar-slide-out"
+                        } else {
+                            "sidebar-slide-in"
+                        },
+                        Animation::new(if leaving { PEEK_OUT } else { PEEK_IN })
+                            .with_easing(tokens::ease),
+                        move |card, delta| {
+                            card.ml(px(-slide * if leaving { delta } else { 1. - delta }))
+                        },
+                    ),
+            );
+        }
+        float
+    }
+
+    pub(crate) fn sidebar_input(&self, cx: &Context<Self>) -> impl IntoElement {
+        let shell = cx.entity();
+        canvas(
+            |_, _, _| (),
+            move |_, (), window, _| {
+                let view = shell.clone();
+                window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+                    if phase != DispatchPhase::Capture {
+                        return;
+                    }
+                    view.update(cx, |this, cx| {
+                        if let Some(drag) = &mut this.sidebar_interaction.drag {
+                            if event.pressed_button == Some(MouseButton::Left) {
+                                drag.width = drag.at(event.position.x);
+                                cx.notify();
+                            } else {
+                                this.finish_sidebar_resize(Some(event.position.x), cx);
+                            }
+                            cx.stop_propagation();
+                        } else {
+                            this.sidebar_pointer(window, cx);
+                        }
+                    });
+                });
+                let view = shell.clone();
+                window.on_mouse_event(move |_: &MouseExitEvent, phase, _, cx| {
+                    if phase == DispatchPhase::Capture {
+                        view.update(cx, |this, _| this.leave_floating_sidebar());
+                    }
+                });
+                let view = shell.clone();
+                window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
+                    if phase == DispatchPhase::Capture && event.button == MouseButton::Left {
+                        view.update(cx, |this, cx| {
+                            if this.sidebar_interaction.drag.is_some() {
+                                this.finish_sidebar_resize(Some(event.position.x), cx);
+                                this.sidebar_pointer(window, cx);
+                                cx.stop_propagation();
+                            }
+                        });
+                    }
+                });
+            },
+        )
+        .absolute()
+        .size_0()
+    }
+
+    pub(crate) fn finish_sidebar_resize(&mut self, x: Option<Pixels>, cx: &mut Context<Self>) {
+        if let Some(drag) = self.sidebar_interaction.drag.take() {
+            let width = x.map_or(drag.width, |x| drag.at(x));
+            if width != drag.start_width {
+                dispatch(&self.state, &self.id, Action::ResizeSidebar(width), cx);
+            }
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn sidebar_drag_layer(&self) -> Option<Div> {
+        self.sidebar_interaction
+            .drag
+            .as_ref()
+            .map(|_| div().absolute().inset_0().occlude().cursor_col_resize())
+    }
+
     /// `#sidebar` (ui/styles.css:25-36) and what it holds, in the shipping order: the toolbar,
     /// the address, Favorites, the Space's name, its pinned and Today tabs, and the footer.
     pub(crate) fn sidebar(
@@ -163,30 +450,11 @@ impl Shell {
         let palette = palette();
         let incognito = state.model.is_incognito(&self.id);
         let toggle = Action::Sidebar(SidebarAction::Toggle);
+        let docked = core.sidebar_visible(&self.id);
         let controls_room = (
             tokens::WINDOW_CONTROLS_WIDTH,
             tokens::WINDOW_CONTROLS_PAD_LEFT,
         );
-        if !core.sidebar_visible(&self.id) {
-            // The shipping shell has no control here: its sidebar comes back by shortcut or menu.
-            return div()
-                .absolute()
-                .top(px(tokens::SIDEBAR_PAD_TOP))
-                .left(px(tokens::SIDEBAR_PAD_LEFT))
-                .occlude()
-                .flex()
-                .items_center()
-                .gap(px(tokens::TOOLBAR_GAP))
-                .rounded(px(tokens::RADIUS_SM))
-                .bg(palette.tint)
-                .shadow(palette.shadow_row())
-                // The window keeps its controls while the sidebar is hidden.
-                .children(self.window_controls(title_bar, controls_room, window, cx))
-                .child(self.toolbar_button("sidebar-toggle", "sidebar", "Show sidebar", toggle, cx))
-                .when(!state.model.peeks.contains_key(&self.id), |bar| {
-                    bar.children(self.zoom_badge(cx))
-                });
-        }
         let Some(space) = core.space(&current.active_space_id) else {
             return div();
         };
@@ -206,6 +474,7 @@ impl Shell {
 
         let mut tabs = div()
             .id("sidebar-tabs")
+            .group("sidebar-tabs")
             .flex()
             .flex_col()
             .min_h_0()
@@ -248,7 +517,21 @@ impl Shell {
                     .h(px(tokens::TODAY_HEADER))
                     .border_t(px(tokens::TODAY_RULE))
                     .border_color(palette.line)
-                    .child("Today"),
+                    .child("Today")
+                    .child(
+                        text_button("clear-today", "Clear")
+                            .aria_label("Archive today's tabs")
+                            .invisible()
+                            .group_hover("sidebar-tabs", |clear| clear.visible())
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                dispatch(
+                                    &this.state,
+                                    &this.id,
+                                    Action::Sidebar(SidebarAction::ClearToday),
+                                    cx,
+                                );
+                            })),
+                    ),
             )
             .child(if rows.dragging.is_some() {
                 self.tab_section_drop(new_tab, TabZone::Today, cx)
@@ -270,9 +553,10 @@ impl Shell {
             .downloads
             .count(state.model.incognito_session(&self.id));
         div()
+            .relative()
             .flex()
             .flex_col()
-            .w(px(state.model.core.settings.sidebar_width.pixels() as f32))
+            .w(px(self.sidebar_width(state)))
             .flex_shrink_0()
             .min_h_0()
             .pt(px(tokens::SIDEBAR_PAD_TOP))
@@ -300,7 +584,11 @@ impl Shell {
                             self.toolbar_button(
                                 "sidebar-toggle",
                                 "sidebar",
-                                "Hide sidebar",
+                                if docked {
+                                    "Hide sidebar"
+                                } else {
+                                    "Pin sidebar"
+                                },
                                 toggle,
                                 cx,
                             )
@@ -354,6 +642,32 @@ impl Shell {
                     title_bar,
                     cx,
                 ),
+            )
+            .child(
+                div()
+                    .id("sidebar-resize")
+                    .aria_label("Resize sidebar")
+                    .absolute()
+                    .right_0()
+                    .top_0()
+                    .bottom_0()
+                    .w(px(tokens::SIDEBAR_PAD_RIGHT))
+                    .occlude()
+                    .cursor_col_resize()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                            let width = this.state.borrow().model.core.settings.sidebar_width;
+                            this.state.borrow_mut().sidebar_deadlines.remove(&this.id);
+                            this.sidebar_interaction.drag = Some(SidebarDrag {
+                                start_x: event.position.x,
+                                start_width: width,
+                                width,
+                            });
+                            cx.stop_propagation();
+                            cx.notify();
+                        }),
+                    ),
             )
             .child(self.urlbar(state, &rows, toolbar.loading, cx))
             .when(!incognito, |sidebar| {
@@ -416,14 +730,28 @@ impl Shell {
             .and_then(|id| rows.core.tab(id))
             .map(|tab| tab.url.as_str())
             .filter(|url| *url != "about:blank");
-        let insecure = url.is_some_and(|url| url.starts_with("http:") && !is_dev_url(url));
+        let security = rows
+            .active
+            .zip(url)
+            .map_or(ConnectionSecurity::Unknown, |(tab, url)| {
+                state.engine.connection_security(tab, url)
+            });
+        let insecure_tls = matches!(
+            security,
+            ConnectionSecurity::CertificateError | ConnectionSecurity::InsecureContent
+        );
+        let insecure =
+            insecure_tls || url.is_some_and(|url| url.starts_with("http:") && !is_dev_url(url));
         let kind = match url {
             None => "search",
+            Some(_) if insecure_tls => "unlocked",
+            Some(_) if security == ConnectionSecurity::VerifiedHttps => "lock",
             Some(url) if is_dev_url(url) => "code",
             Some(url) if url.starts_with("http:") => "unlocked",
             Some(_) => "globe",
         };
         let group = SharedString::new_static("urlbar");
+        let flashing = state.copy_link_flashes.contains_key(&self.id);
         div()
             .id("urlbar-wrap")
             .group(group.clone())
@@ -450,6 +778,7 @@ impl Shell {
                     .pr(px(tokens::URLBAR_PAD_RIGHT))
                     .cursor_pointer()
                     .aria_label("Open location")
+                    .when(flashing, |address| address.opacity(0.))
                     .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                         this.open_command(Command::EditLocation, window, cx);
                     }))
@@ -471,20 +800,51 @@ impl Shell {
                         }
                     })),
             )
-            .when(state.site_for_window(&self.id).is_some(), |wrap| {
+            .when(rows.active.is_some() && !flashing, |wrap| {
                 wrap.child(
                     tinted_icon_button(
-                        "site-controls",
-                        "sliders",
-                        "Site controls",
+                        "copy-link",
+                        "link",
+                        "Copy link",
                         (tokens::URL_ACTION, tokens::URL_ACTION_ICON),
                         palette.text_3,
                     )
-                    .opacity(0.)
-                    .group_hover(group, |action| action.opacity(1.))
-                    .on_click(cx.listener(
-                        |this, _: &ClickEvent, window, cx| this.toggle_site_controls(window, cx),
-                    )),
+                    .invisible()
+                    .group_hover(group.clone(), |action| action.visible())
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.copy_link(cx))),
+                )
+            })
+            .when(
+                !flashing && state.site_for_window(&self.id).is_some(),
+                |wrap| {
+                    wrap.child(
+                        tinted_icon_button(
+                            "site-controls",
+                            "sliders",
+                            "Site controls",
+                            (tokens::URL_ACTION, tokens::URL_ACTION_ICON),
+                            palette.text_3,
+                        )
+                        .opacity(0.)
+                        .group_hover(group, |action| action.opacity(1.))
+                        .on_click(cx.listener(
+                            |this, _: &ClickEvent, window, cx| {
+                                this.toggle_site_controls(window, cx)
+                            },
+                        )),
+                    )
+                },
+            )
+            .when(flashing, |wrap| {
+                wrap.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child("✓  Link copied"),
                 )
             })
             .when_some(rows.active.filter(|_| loading), |wrap, tab| {
@@ -502,6 +862,23 @@ impl Shell {
                         ),
                 )
             })
+    }
+
+    fn copy_link(&self, cx: &mut Context<Self>) {
+        let mut state = self.state.borrow_mut();
+        let url = state
+            .model
+            .active(&self.id)
+            .and_then(|tab| state.model.tab(tab))
+            .map(|tab| tab.url.clone());
+        let Some(url) = url else { return };
+        cx.write_to_clipboard(ClipboardItem::new_string(url));
+        // The shipping address bar shows the confirmation for 1400ms (ui/app.ts:986).
+        state.copy_link_flashes.insert(
+            self.id.clone(),
+            Instant::now() + Duration::from_millis(1400),
+        );
+        cx.notify();
     }
 
     /// `#favorites` (ui/styles.css:414-457): a grid of four site tiles.
@@ -634,7 +1011,7 @@ impl Shell {
         nodes: &[PinnedNode],
         folder: Option<&FolderId>,
         cx: &Context<Self>,
-    ) -> Vec<Div> {
+    ) -> Vec<AnyElement> {
         let palette = palette();
         nodes
             .iter()
@@ -669,7 +1046,8 @@ impl Shell {
                                 )
                                 .children(self.pinned_rows(rows, children, Some(id), cx)),
                         )
-                    }),
+                    })
+                    .into_any_element(),
             })
             .collect()
     }
@@ -768,7 +1146,7 @@ impl Shell {
         rows: &Rows<'_>,
         space: &flecha_core::WindowSpace,
         cx: &Context<Self>,
-    ) -> Vec<Div> {
+    ) -> Vec<AnyElement> {
         let pair = space
             .split
             .as_ref()
@@ -798,7 +1176,8 @@ impl Shell {
                             .children(
                                 pair.iter()
                                     .map(|id| self.tab_row(rows, id, TabZone::Today, true, cx)),
-                            ),
+                            )
+                            .into_any_element(),
                     )
                 } else {
                     Some(self.tab_row(rows, id, TabZone::Today, false, cx))
@@ -817,12 +1196,13 @@ impl Shell {
         zone: TabZone,
         paired: bool,
         cx: &Context<Self>,
-    ) -> Div {
+    ) -> AnyElement {
         let Some(tab) = rows.core.tab(id) else {
-            return div();
+            return div().into_any_element();
         };
         let selected = rows.active == Some(id);
         let in_split = rows.split.len() > 1 && rows.split.contains(id);
+        let hovered = rows.dragging.is_none() && self.hovered_tab_row.as_ref() == Some(id);
         let select = Action::Select(id.clone());
         let group = SharedString::from(format!("row-{}", id.as_str()));
         let engine = &rows.state.engine;
@@ -850,6 +1230,9 @@ impl Shell {
                 dispatch(&this.state, &this.id, toggle.clone(), cx);
             }))
         });
+        // A pair's actions float over the row's end on hover, so whatever ends the row makes
+        // room for them.
+        let actions_room = px(2. * tokens::ROW_CLOSE + tokens::SPACE_1);
         let pair_marks = paired && (audio.is_some() || boosted);
         let label = div()
             .id(format!("tab-{}", id.as_str()))
@@ -863,8 +1246,8 @@ impl Shell {
             } else {
                 tokens::ROW_GAP
             }))
-            .when(paired && !pair_marks, |label| {
-                pair_actions_room(label, &group)
+            .when(paired && hovered && !pair_marks, |label| {
+                label.pr(actions_room)
             })
             .cursor_pointer()
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
@@ -898,74 +1281,65 @@ impl Shell {
         let row = if paired {
             row.when(pair_marks, |row| {
                 row.child(
-                    pair_actions_room(
-                        div()
-                            .id(format!("marks-{}", id.as_str()))
-                            .flex()
-                            .flex_none()
-                            .items_center(),
-                        &group,
-                    )
-                    .gap(px(tokens::SPACE_1))
-                    .children(audio)
-                    .when(boosted, |marks| marks.child(row_marks(&group, true, false))),
+                    div()
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .gap(px(tokens::SPACE_1))
+                        .when(hovered, |marks| marks.pr(actions_room))
+                        .children(audio)
+                        .when(boosted && !hovered, |marks| {
+                            marks.child(row_marks(true, false))
+                        }),
                 )
             })
         } else {
             row.children(audio)
-                .when(!selected && rows.active.is_some(), |row| {
-                    row.child(
-                        row_action(
-                            &group,
-                            text_button(format!("split-{}", id.as_str()), "Split"),
-                        )
-                        .on_click({
-                            let split = Action::Split(id.clone());
-                            cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                dispatch(&this.state, &this.id, split.clone(), cx);
-                            })
-                        }),
-                    )
+                .when(!hovered && (boosted || in_split), |row| {
+                    row.child(row_marks(boosted, in_split))
                 })
         };
-        let menu = row_action(&group, self.tab_menu_button(id, cx));
-        let close = self.row_action(
-            &group,
-            "close-tab",
-            id.as_str(),
-            ("close", "Close tab"),
-            Action::CloseTab(id.clone()),
-            cx,
-        );
-        let row = if paired {
-            row.child(
-                div()
-                    .absolute()
-                    .right(px(tokens::ROW_PAD_RIGHT))
-                    .top_0()
-                    .bottom_0()
-                    .flex()
-                    .items_center()
-                    .gap(px(tokens::SPACE_1))
-                    .child(menu)
-                    .child(close),
+        row.when(hovered, |row| {
+            let close = Action::CloseTab(id.clone());
+            let close = sized_icon_button(
+                format!("close-tab-{}", id.as_str()),
+                "close",
+                "Close tab",
+                tokens::ROW_CLOSE,
+                tokens::ROW_CLOSE_ICON,
             )
-        } else {
-            row.child(menu)
-                .child(div().relative().flex().flex_none().child(close).when(
-                    boosted || in_split,
-                    |close| {
-                        close.child(
-                            row_marks(&group, boosted, in_split)
-                                .absolute()
-                                .top_0()
-                                .bottom_0()
-                                .right_0(),
-                        )
-                    },
-                ))
-        };
-        row.when_some(rows.dragging, |row, source| {
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                dispatch(&this.state, &this.id, close.clone(), cx);
+            }));
+            let menu = self.tab_menu_button(id, cx);
+            if paired {
+                return row.child(
+                    div()
+                        .absolute()
+                        .right(px(tokens::ROW_PAD_RIGHT))
+                        .top_0()
+                        .bottom_0()
+                        .flex()
+                        .items_center()
+                        .gap(px(tokens::SPACE_1))
+                        .child(menu)
+                        .child(close),
+                );
+            }
+            row.when(!selected && rows.active.is_some(), |row| {
+                let split = Action::Split(id.clone());
+                row.child(
+                    text_button(format!("split-{}", id.as_str()), "Split").on_click(cx.listener(
+                        move |this, _: &ClickEvent, _, cx| {
+                            dispatch(&this.state, &this.id, split.clone(), cx);
+                        },
+                    )),
+                )
+            })
+            .child(menu)
+            .child(close)
+        })
+        .when_some(rows.dragging, |row, source| {
             self.tab_row_drop(
                 row,
                 zone,
@@ -975,6 +1349,21 @@ impl Shell {
                 cx,
             )
         })
+        .id(group)
+        .hover_listener_mode(HoverListenerMode::InputModalityIndependent)
+        .on_hover({
+            let id = id.clone();
+            cx.listener(move |this, hovered: &bool, _, cx| {
+                if *hovered {
+                    this.hovered_tab_row = Some(id.clone());
+                    cx.notify();
+                } else if this.hovered_tab_row.as_ref() == Some(&id) {
+                    this.hovered_tab_row = None;
+                    cx.notify();
+                }
+            })
+        })
+        .into_any_element()
     }
 
     /// `#btn-newtab` (ui/index.html:83, ui/styles.css:704-722): a row in `--text-2` with its
@@ -1345,24 +1734,15 @@ struct Rows<'a> {
     boosted: Vec<&'a str>,
 }
 
-/// Room at the end of a split pair's row for its actions, which float over the row's end on
-/// hover. GPUI applies a hover style that changes layout only to an element with an id.
-fn pair_actions_room(element: gpui::Stateful<Div>, group: &SharedString) -> gpui::Stateful<Div> {
-    element.group_hover(group.clone(), |style| {
-        style.pr(px(2. * tokens::ROW_CLOSE + tokens::SPACE_1))
-    })
-}
-
 /// `.boost-mark` and `.split-badge` (ui/styles.css:652-682, ui/app.ts:575-581): an amber bolt on
-/// a Boosted site and a split mark on a tab in split view, hidden while the pointer is on the
-/// row.
-fn row_marks(group: &SharedString, boosted: bool, in_split: bool) -> Div {
+/// a Boosted site and a split mark on a tab in split view. The row's actions replace them on
+/// hover.
+fn row_marks(boosted: bool, in_split: bool) -> Div {
     let palette = palette();
     div()
         .flex()
         .items_center()
         .gap(px(tokens::ROW_GAP))
-        .group_hover(group.clone(), |marks| marks.opacity(0.))
         .when(boosted, |marks| {
             marks.child(icon("zap", tokens::ROW_BADGE_ICON, palette.amber))
         })

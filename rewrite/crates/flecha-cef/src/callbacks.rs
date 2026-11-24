@@ -6,12 +6,12 @@ use std::sync::atomic::AtomicU64;
 
 use cef::{rc::Rc as _, *};
 use flecha_surface::{Frame as SurfaceFrame, SurfaceTarget};
-use gpui::{Bounds, Pixels, point, px, size};
+use gpui::{Bounds, Pixels, SharedString, point, px, size};
 
 use crate::compositor::{self, Delivery};
 use crate::popup::{self, Popups};
 use crate::{BrowserEvent, BrowserKey, Event, Partition, Viewport};
-use crate::{adblock, boosts, context_menu, downloads, find, permissions, services};
+use crate::{adblock, boosts, context_menu, dialogs, downloads, find, permissions, services};
 
 pub(crate) type Queue = Rc<RefCell<VecDeque<BrowserEvent>>>;
 
@@ -43,11 +43,16 @@ pub(crate) struct Slot {
     pub surface: RefCell<Frames>,
     pub retired: Cell<bool>,
     pub paint_pending: Cell<bool>,
+    pub cursor: Cell<CursorType>,
+    pub status: RefCell<Option<SharedString>>,
     pub events: Queue,
     pub popups: Rc<Popups>,
     pub stage: Cell<Stage>,
     pub finding: Cell<bool>,
     pub menu: context_menu::Menu,
+    pub dialogs: dialogs::Dialogs,
+    pub certificate_error: RefCell<Option<String>>,
+    pub committed_navigation: Arc<AtomicU64>,
     /// Popups this browser has asked CEF for that CEF hasn't created yet, by popup ID.
     pub opening: RefCell<BTreeMap<i32, Rc<Slot>>>,
     /// For a popup still being created: its opener and its popup ID there.
@@ -81,11 +86,16 @@ impl Slot {
             surface: RefCell::new(Frames::default()),
             retired: Cell::new(false),
             paint_pending: Cell::new(false),
+            cursor: Cell::new(CursorType::POINTER),
+            status: RefCell::new(None),
             events,
             popups,
             stage: Cell::new(Stage::Pending),
             finding: Cell::new(false),
             menu: context_menu::Menu::default(),
+            dialogs: dialogs::Dialogs::default(),
+            certificate_error: RefCell::new(None),
+            committed_navigation: Arc::new(AtomicU64::new(0)),
             opening: RefCell::new(BTreeMap::new()),
             origin: RefCell::new(None),
             identifier: Cell::new(None),
@@ -120,6 +130,8 @@ impl Slot {
     /// ends what it was waiting on: its downloads are cancelled and its permission requests
     /// denied.
     pub fn destroyed(&self) {
+        dialogs::unregister(self);
+        self.dialogs.cancel();
         self.browser.take();
         find::forget(self);
         context_menu::cancel(self);
@@ -168,6 +180,13 @@ impl Slot {
     fn paint_changed(&self) {
         if !self.paint_pending.replace(true) {
             self.emit(Event::Paint);
+        }
+    }
+
+    pub fn set_status(&self, status: Option<SharedString>) {
+        if *self.status.borrow() != status {
+            self.status.replace(status);
+            self.emit(Event::PointerChanged);
         }
     }
 
@@ -315,6 +334,9 @@ wrap_life_span_handler! {
         fn on_after_created(&self, browser: Option<&mut Browser>) {
             let Some(browser) = browser else { return };
             let closed = self.slot.created(browser.identifier());
+            if !closed {
+                dialogs::register(&self.slot, browser.identifier());
+            }
             self.slot.browser.replace(Some(browser.clone()));
             // The engine closed this popup, or its opener left, while CEF was creating it.
             if closed && let Some(host) = browser.host() {
@@ -376,6 +398,23 @@ wrap_display_handler! {
             }
         }
 
+        fn on_cursor_change(
+            &self, _browser: Option<&mut Browser>, _cursor: cef::sys::cef_cursor_handle_t,
+            kind: CursorType, _custom: Option<&CursorInfo>,
+        ) -> i32 {
+            if !self.slot.retired.get() && self.slot.cursor.replace(kind) != kind {
+                self.slot.emit(Event::PointerChanged);
+            }
+            1
+        }
+
+        fn on_status_message(&self, _browser: Option<&mut Browser>, value: Option<&CefString>) {
+            if !self.slot.retired.get() {
+                self.slot.set_status(value.map(ToString::to_string)
+                    .filter(|text| !text.is_empty()).map(SharedString::from));
+            }
+        }
+
         fn on_fullscreen_mode_change(&self, _browser: Option<&mut Browser>, fullscreen: i32) {
             if !self.slot.retired.get() {
                 self.slot.emit(Event::Fullscreen(fullscreen != 0));
@@ -399,9 +438,13 @@ wrap_load_handler! {
             &self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, _transition_type: TransitionType,
         ) {
             let Some(frame) = frame.filter(|frame| frame.is_main() != 0) else { return };
+            self.slot.committed_navigation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             // A new document. CEF reports when a page becomes audible, never when it stops.
             self.slot.set_audible(false);
             context_menu::cancel(&self.slot);
+            if self.slot.dialogs.cancel() {
+                self.slot.emit(Event::DialogChanged);
+            }
             let services = services::of(&self.slot);
             // The page this tab's permission requests came from is gone.
             if let Some(identifier) = self.slot.identifier.get() {
@@ -409,6 +452,7 @@ wrap_load_handler! {
             }
             permissions::forget_one_time(&self.slot);
             if !self.slot.retired.get() {
+                self.slot.set_status(None);
                 boosts::page_committed(&services, frame, &CefString::from(&frame.url()).to_string());
             }
         }
@@ -456,6 +500,10 @@ struct PageHandlers {
     audio: AudioHandler,
     find: FindHandler,
     context_menu: ContextMenuHandler,
+    js_dialog: JsdialogHandler,
+    file_dialog: DialogHandler,
+    #[cfg(target_os = "linux")]
+    print: PrintHandler,
 }
 
 wrap_client! {
@@ -478,6 +526,12 @@ wrap_client! {
         fn find_handler(&self) -> Option<FindHandler> { Some(self.page.find.clone()) }
         fn context_menu_handler(&self) -> Option<ContextMenuHandler> { Some(self.page.context_menu.clone()) }
         fn audio_handler(&self) -> Option<AudioHandler> { Some(self.page.audio.clone()) }
+        fn jsdialog_handler(&self) -> Option<JsdialogHandler> { Some(self.page.js_dialog.clone()) }
+        fn dialog_handler(&self) -> Option<DialogHandler> { Some(self.page.file_dialog.clone()) }
+        #[cfg(target_os = "linux")]
+        fn print_handler(&self) -> Option<PrintHandler> {
+            Some(self.page.print.clone())
+        }
     }
 }
 
@@ -490,7 +544,7 @@ pub(crate) fn client(slot: Rc<Slot>) -> Client {
     OsrClient::new(
         Osr::new(slot.clone()),
         Life::new(slot.clone()),
-        adblock::handler(io),
+        adblock::handler(io, slot.committed_navigation.clone()),
         downloads::handler(slot.clone()),
         permissions::handler(slot.clone()),
         PageHandlers {
@@ -498,7 +552,11 @@ pub(crate) fn client(slot: Rc<Slot>) -> Client {
             load: Load::new(slot.clone()),
             audio: Audio::new(slot.clone()),
             find: find::handler(slot.clone()),
-            context_menu: context_menu::handler(slot),
+            context_menu: context_menu::handler(slot.clone()),
+            js_dialog: dialogs::JsDialogs::new(slot.clone()),
+            #[cfg(target_os = "linux")]
+            print: crate::printing::LinuxPrinting::new(),
+            file_dialog: dialogs::FileDialogs::new(slot),
         },
     )
 }

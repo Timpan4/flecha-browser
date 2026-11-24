@@ -1,6 +1,6 @@
 use anyhow::{Context as _, Result, ensure};
 use flecha_adblock::site_host;
-use flecha_cef::Partition;
+use flecha_cef::{ConnectionSecurity, Partition};
 use flecha_core::{Settings, TabId, WindowId, blocks_ads_on, is_site_host};
 use flecha_permissions::{Decision, Origin, PermissionKind, SiteSettings};
 use gpui::{
@@ -136,7 +136,7 @@ impl Shell {
         let mut panel = overlay_panel().p_0().gap_0();
         let Some(site) = state.site_for_window(&self.id) else {
             return panel.child(
-                site_header(None, None, None)
+                site_header(None, None, ConnectionSecurity::Unknown, None)
                     .child(close_site_controls(cx))
                     .child("Site Controls are available on web pages."),
             );
@@ -154,9 +154,20 @@ impl Shell {
                 tokens::FAVICON_LETTER,
             ),
         );
+        let security = state
+            .engine
+            .url(&site.tab)
+            .map_or(ConnectionSecurity::Unknown, |url| {
+                state.engine.connection_security(&site.tab, &url)
+            });
         panel = panel.child(
-            site_header(Some(&origin), Some(site_icon), state.status_for(&self.id))
-                .child(close_site_controls(cx)),
+            site_header(
+                Some(&origin),
+                Some(site_icon),
+                security,
+                state.status_for(&self.id),
+            )
+            .child(close_site_controls(cx)),
         );
         let mut body = div()
             .id("site-controls-body")
@@ -364,15 +375,29 @@ impl Shell {
 
 /// `.site-header` (ui/styles.css:1972-2004): the site's icon, its host, and how the page
 /// connects, worded as ui/app.ts:850-857 words it.
-fn site_header(origin: Option<&str>, icon: Option<AnyElement>, status: Option<&str>) -> Div {
+fn site_header(
+    origin: Option<&str>,
+    icon: Option<AnyElement>,
+    connection: ConnectionSecurity,
+    status: Option<&str>,
+) -> Div {
     let palette = palette();
     let inset = px(tokens::SITE_INSET);
-    let insecure = origin.is_some_and(|url| url.starts_with("http:") && !is_dev_url(url));
+    let insecure = matches!(
+        connection,
+        ConnectionSecurity::CertificateError | ConnectionSecurity::InsecureContent
+    ) || origin.is_some_and(|url| url.starts_with("http:") && !is_dev_url(url));
     let security = origin.map(|url| {
-        if is_dev_url(url) {
+        if connection == ConnectionSecurity::CertificateError {
+            "Certificate could not be verified"
+        } else if connection == ConnectionSecurity::InsecureContent {
+            "Some content loaded over an insecure connection"
+        } else if connection == ConnectionSecurity::VerifiedHttps {
+            "Secure connection"
+        } else if is_dev_url(url) {
             "Local development server"
         } else if url.starts_with("https:") {
-            "HTTPS"
+            "HTTPS status unavailable"
         } else if url.starts_with("http:") {
             "Connection is not secure"
         } else {

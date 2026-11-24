@@ -1,6 +1,9 @@
 #define _POSIX_C_SOURCE 200809L
 #include <X11/Xlib.h>
 #include <X11/extensions/XTest.h>
+#ifdef FLECHA_VERIFY_CURSOR
+#include <X11/extensions/Xfixes.h>
+#endif
 #include <X11/keysym.h>
 #include <limits.h>
 #include <poll.h>
@@ -43,6 +46,27 @@ static int click(Display *display, int x, int y, unsigned int button)
     return XTestFakeButtonEvent(display, button, True, CurrentTime) &&
            XTestFakeButtonEvent(display, button, False, CurrentTime);
 }
+
+#ifdef FLECHA_VERIFY_CURSOR
+static int cursor(Display *display)
+{
+    XFixesCursorImage *image = XFixesGetCursorImage(display);
+    if (image == NULL)
+        return 0;
+
+    size_t length = (size_t)image->width * image->height;
+    int visible = 0;
+    for (size_t i = 0; i < length; i++) {
+        if (image->pixels[i] & 0xff000000UL) {
+            visible = 1;
+            break;
+        }
+    }
+    int ok = printf("%lu %d\n", image->cursor_serial, visible) > 0;
+    XFree(image);
+    return ok;
+}
+#endif
 
 // The one viewable top-level window named `title`, or None.
 static Window named(Display *display, const char *title)
@@ -153,17 +177,29 @@ int main(int argc, char **argv)
     if (display == NULL)
         return EXIT_FAILURE;
     int ok = 0;
-    if (argc == 4 && (strcmp(argv[1], "click") == 0 || strcmp(argv[1], "right-click") == 0)) {
+    if (argc == 4 && (strcmp(argv[1], "press") == 0 || strcmp(argv[1], "move") == 0)) {
         int x = coordinate(argv[2]), y = coordinate(argv[3]);
-        unsigned int button = strcmp(argv[1], "click") == 0 ? 1 : 3;
-        ok = x >= 0 && y >= 0 && click(display, x, y, button);
-    } else if (argc == 4 && (strcmp(argv[1], "press") == 0 || strcmp(argv[1], "move") == 0)) {
-        int x = coordinate(argv[2]), y = coordinate(argv[3]);
-        ok = x >= 0 && y >= 0 && XTestFakeMotionEvent(display, DefaultScreen(display), x, y, CurrentTime);
+        ok = x >= 0 && y >= 0 &&
+             XTestFakeMotionEvent(display, DefaultScreen(display), x, y, CurrentTime);
         if (ok && strcmp(argv[1], "press") == 0)
             ok = XTestFakeButtonEvent(display, 1, True, CurrentTime);
     } else if (argc == 2 && strcmp(argv[1], "release") == 0) {
         ok = XTestFakeButtonEvent(display, 1, False, CurrentTime);
+    } else if (argc == 4 && (strcmp(argv[1], "click") == 0 || strcmp(argv[1], "right-click") == 0 ||
+                            strcmp(argv[1], "back") == 0 || strcmp(argv[1], "forward") == 0)) {
+        int x = coordinate(argv[2]), y = coordinate(argv[3]);
+        unsigned int button = 1;
+        if (strcmp(argv[1], "right-click") == 0)
+            button = 3;
+        else if (strcmp(argv[1], "back") == 0)
+            button = 8;
+        else if (strcmp(argv[1], "forward") == 0)
+            button = 9;
+        ok = x >= 0 && y >= 0 && click(display, x, y, button);
+#ifdef FLECHA_VERIFY_CURSOR
+    } else if (argc == 2 && strcmp(argv[1], "cursor") == 0) {
+        ok = cursor(display);
+#endif
     } else if (argc == 3 && strcmp(argv[1], "key") == 0) {
         ok = tap(display, XStringToKeysym(argv[2]));
     } else if (argc == 4 && strcmp(argv[1], "chord") == 0) {

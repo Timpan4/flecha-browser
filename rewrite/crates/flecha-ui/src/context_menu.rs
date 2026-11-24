@@ -97,7 +97,7 @@ fn items(context: &MenuContext) -> Vec<(Item, bool)> {
 }
 
 impl Controller {
-    fn browser_window(&self, key: &BrowserKey) -> Option<&WindowId> {
+    pub(crate) fn browser_window(&self, key: &BrowserKey) -> Option<&WindowId> {
         if self.engine.key(&key.tab).as_ref() != Some(key) {
             return None;
         }
