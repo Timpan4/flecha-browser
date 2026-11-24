@@ -287,16 +287,15 @@ mod tests {
         assert_eq!(controller.model.partition(&page), Some(session.clone()));
         assert!(controller.model.is_incognito(&mini));
         controller.model.focus_window(&regular);
-        for owner in [Owner::Flechinha(mini.clone())] {
-            assert_eq!(
-                place(&controller.model, &owner, &page, Disposition::BackgroundTab),
-                Place::Tab {
-                    window: private.clone(),
-                    after: None,
-                    activate: false,
-                }
-            );
-        }
+        let owner = Owner::Flechinha(mini.clone());
+        assert_eq!(
+            place(&controller.model, &owner, &page, Disposition::BackgroundTab),
+            Place::Tab {
+                window: private.clone(),
+                after: None,
+                activate: false,
+            }
+        );
         controller.act(&mini, Action::Return).unwrap();
         assert_eq!(controller.model.active(&private), Some(&page));
         assert!(controller.model.core.tab(&page).is_none());
