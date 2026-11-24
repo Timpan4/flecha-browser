@@ -24,10 +24,10 @@ pub struct Compositing {
 }
 
 #[derive(Clone)]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 struct Shared {
     target: SurfaceTarget,
     render_node: PathBuf,
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     ozone: &'static str,
 }
 
@@ -78,6 +78,7 @@ impl Compositing {
 }
 
 /// What a change of GPUI's device means for browsers that share textures.
+#[cfg(target_os = "linux")]
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum DeviceChange {
     None,
@@ -109,6 +110,7 @@ impl Compositor {
     }
 
     /// GPUI's renderer pair for imports, while it is on CEF's GPU.
+    #[cfg(target_os = "linux")]
     pub fn target(&self) -> Option<SurfaceTarget> {
         self.shared
             .borrow()
@@ -154,6 +156,7 @@ impl Compositor {
 
 /// How a browser last delivered a frame, so a change is logged once.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub(crate) enum Delivery {
     SharedTexture,
     CpuCopy,
@@ -214,6 +217,7 @@ mod tests {
         compositor.turn_off("import failed");
         assert!(!compositor.shares_textures());
         // Browsers that already share keep importing on the same GPU.
+        #[cfg(target_os = "linux")]
         assert!(compositor.target().is_some());
     }
 
