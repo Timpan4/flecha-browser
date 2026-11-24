@@ -1043,6 +1043,26 @@ pub(crate) fn tinted_icon_button(
         )
 }
 
+/// `.icon-button` with its glyph turned by `turn` of a full circle, as an open folder turns its
+/// chevron (ui/styles.css:772-774).
+pub(crate) fn turned_icon_button(
+    id: impl Into<gpui::ElementId>,
+    name: &'static str,
+    label: &'static str,
+    turn: f32,
+) -> gpui::Stateful<Div> {
+    let group = gpui::SharedString::new_static("icon-button");
+    square(id, label, tokens::ICON_BUTTON)
+        .group(group.clone())
+        .cursor_pointer()
+        .hover(|style| style.bg(palette().fill_hover))
+        .child(
+            icon(name, tokens::ICON, palette().text_2)
+                .with_transformation(gpui::Transformation::rotate(gpui::percentage(turn)))
+                .group_hover(group, |glyph| glyph.text_color(palette().text)),
+        )
+}
+
 /// An icon button's square without its hover fill, for a disabled one.
 pub(crate) fn icon_square(
     id: impl Into<gpui::ElementId>,

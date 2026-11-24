@@ -7,7 +7,8 @@ use gpui::{
 
 use crate::text_field::TextField;
 use crate::theme::palette;
-use crate::view::{Shell, button};
+use crate::tokens;
+use crate::view::{Shell, icon_button, turned_icon_button};
 
 pub(crate) struct FindSession {
     pub browser: BrowserKey,
@@ -162,7 +163,9 @@ impl Shell {
 
     pub(crate) fn find_panel(&self, find: &FindSession, cx: &Context<Self>) -> Div {
         let step = |id, label, forward| {
-            button(id, label).on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+            // The chevron points right; a quarter turn either way points it up or down.
+            let turn = if forward { 0.25 } else { -0.25 };
+            turned_icon_button(id, "chevron", label, turn).on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                 if let Some(action) = this.find.as_ref().and_then(|find| find.bar.step(forward)) {
                     this.focus.focus(window, cx);
                     this.sync_page_focus(window, cx);
@@ -170,22 +173,22 @@ impl Shell {
                 }
             }))
         };
+        // The shipping find bar is Chromium's own, so this one is drawn as a `.popover`
+        // (ui/styles.css:1010-1022) with `.icon-button`s.
         div()
             .absolute()
-            .top_2()
-            .right_2()
+            .top(px(tokens::SPACE_2))
+            .right(px(tokens::SPACE_2))
             .max_w_full()
             .occlude()
             .flex()
             .items_center()
-            .gap_1()
-            .p_1()
-            .rounded_lg()
-            .border_1()
-            .border_color(palette().surface_line)
+            .gap(px(tokens::SPACE_1))
+            .p(px(tokens::SPACE_1))
+            .rounded(px(tokens::RADIUS_LG))
             .bg(palette().surface)
-            .shadow_lg()
-            .text_sm()
+            .text_color(palette().text)
+            .shadow(palette().shadow_pop())
             .on_any_mouse_down(|_: &MouseDownEvent, _, cx| cx.stop_propagation())
             .on_mouse_up(MouseButton::Left, |_: &MouseUpEvent, _, cx| {
                 cx.stop_propagation()
@@ -213,13 +216,14 @@ impl Shell {
             .child(
                 div()
                     .min_w(px(36.))
-                    .text_xs()
+                    .text_size(px(tokens::TEXT_XS))
+                    .font_family(tokens::MONO)
                     .text_color(palette().text_2)
                     .child(find.bar.count()),
             )
-            .child(step("find-previous", "↑", false))
-            .child(step("find-next", "↓", true))
-            .child(button("find-close", "×").on_click(cx.listener(
+            .child(step("find-previous", "Previous match", false))
+            .child(step("find-next", "Next match", true))
+            .child(icon_button("find-close", "close", "Close find bar").on_click(cx.listener(
                 |this, _: &ClickEvent, window, cx| {
                     this.apply_find(FindAction::Close, window, cx);
                 },
