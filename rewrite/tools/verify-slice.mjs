@@ -1420,8 +1420,21 @@ async function tabStatus(app, main, left) {
     return band;
   };
 
-  const differing = (a, b) => Number(spawnSync('magick', ['compare', '-metric', 'AE', a, b, 'null:'], { encoding: 'utf8' })
-    .stderr.split(' ')[0]);
+  // `magick compare` exits 0 for similar images, 1 for different ones and 2 on an error, and
+  // writes its metric to stderr. Anything else fails the check rather than reading as a match.
+  const compare = (...args) => {
+    const run = spawnSync('magick', ['compare', ...args, 'null:'], { encoding: 'utf8' });
+
+    assert(!run.error && (run.status === 0 || run.status === 1), `magick compare failed: ${run.error ?? run.stderr}`);
+
+    const metric = Number(run.stderr.split(' ')[0]);
+
+    assert(Number.isFinite(metric), `magick compare gave no metric: ${run.stderr}`);
+
+    return { metric, output: run.stderr };
+  };
+
+  const differing = (a, b) => compare('-metric', 'AE', a, b).metric;
 
   const shot = async (name, check) => {
     await app.present(main);
@@ -1432,12 +1445,12 @@ async function tabStatus(app, main, left) {
 
   // Where `part` best matches in `path`, and whether it matches there exactly.
   const search = (path, metric, part) => {
-    const result = spawnSync('magick', ['compare', '-metric', metric, '-subimage-search', path, part, 'null:'],
-      { encoding: 'utf8' }).stderr;
+    const { metric: different, output } = compare('-metric', metric, '-subimage-search', path, part);
+    const [, x, y] = /@ (\d+),(\d+)/.exec(output) ?? [];
 
-    const [, different, x, y] = /^(\S+) .*@ (\d+),(\d+)/.exec(result) ?? [];
+    assert(x !== undefined, `magick compare gave no match location: ${output}`);
 
-    return x === undefined ? undefined : { at: [Number(x), Number(y)], exact: different === '0' };
+    return { at: [Number(x), Number(y)], exact: different === 0 };
   };
 
   // A split pair drawn side by side keeps the speaker in the row's narrower half, and it still

@@ -747,14 +747,15 @@ impl Shell {
         self.navigate_from_overlay(action, window, cx);
     }
 
-    /// A tab result's own icon, or for an address the icon of a regular tab on its site.
+    /// A tab result's own icon, or for an address the icon of a tab on its site in the
+    /// partition of the window's shown tab.
     fn target_icon(&self, target: &Target) -> Option<Arc<gpui::RenderImage>> {
         let state = self.state.borrow();
-        let favicons = &state.favicons;
         match target {
-            Target::Tab(id, _) => favicons.for_tab(state.model.tab(id)?),
+            Target::Tab(id, _) => state.tab_favicon(id),
             Target::Address(url) => {
-                favicons.for_site(state.model.core.open_tabs().into_values(), url)
+                let partition = state.model.partition(state.model.active(&self.id)?)?;
+                state.site_favicon(&partition, url)
             }
             _ => None,
         }

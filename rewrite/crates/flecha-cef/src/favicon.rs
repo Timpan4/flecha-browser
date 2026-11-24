@@ -2,8 +2,9 @@
 //!
 //! The shell asks for an icon URL ([`Engine::download_favicon`]) and gets exactly one
 //! [`Favicon`] back for it ([`Engine::next_favicon`]): the bitmap, or `None` when the download
-//! failed or CEF dropped the request with its browser. Results are keyed by URL, not by tab,
-//! so a result outlives the browser that fetched it.
+//! failed or CEF dropped the request with its browser. Results are keyed by partition and URL,
+//! not by tab, so a result outlives the browser that fetched it. A download sends its
+//! partition's cookies, so its image belongs to that partition alone.
 
 use std::cell::Cell;
 use std::fmt;
@@ -27,6 +28,8 @@ pub const FAVICON_SIZE: u32 = 32;
 /// One download's result.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Favicon {
+    /// The partition whose browser fetched it, with that partition's cookies.
+    pub partition: Partition,
     pub url: String,
     pub image: Option<FaviconBitmap>,
 }
@@ -72,6 +75,7 @@ impl FaviconBitmap {
 /// the request without calling (its browser closed first).
 struct Request {
     services: Rc<Services>,
+    partition: Partition,
     url: String,
     reported: Cell<bool>,
 }
@@ -80,6 +84,7 @@ impl Request {
     fn report(&self, image: Option<FaviconBitmap>) {
         if !self.reported.replace(true) {
             self.services.favicons.borrow_mut().push_back(Favicon {
+                partition: self.partition.clone(),
                 url: self.url.clone(),
                 image,
             });
@@ -126,9 +131,10 @@ fn bitmap(image: &Image, scale: f32) -> Option<FaviconBitmap> {
 
 impl Engine {
     /// Downloads the icon at `url` through `tab`'s browser, or another live browser in
-    /// `partition` when `tab` has none. Favicon downloads send and keep no cookies
-    /// (`download_image` with `is_favicon`). Returns `false` when no browser can fetch it, and
-    /// [`Self::next_favicon`] then reports nothing for it.
+    /// `partition` when `tab` has none. The request carries that partition's cookies: the
+    /// fixture sees them on icon requests, although cef_browser.h:516 says `is_favicon` sends
+    /// none. Returns `false` when no browser can fetch it, and [`Self::next_favicon`] then
+    /// reports nothing for it.
     pub fn download_favicon(&self, tab: &TabId, partition: &Partition, url: &str) -> bool {
         let own = self
             .browsers
@@ -151,6 +157,7 @@ impl Engine {
         };
         let request = Rc::new(Request {
             services: self.popups.services.clone(),
+            partition: partition.clone(),
             url: url.to_owned(),
             reported: Cell::new(false),
         });
@@ -180,6 +187,7 @@ mod tests {
         let services = Rc::new(Services::new());
         let request = Request {
             services: services.clone(),
+            partition: Partition::Shared,
             url: "https://example.test/icon.png".into(),
             reported: Cell::new(false),
         };
@@ -191,6 +199,7 @@ mod tests {
         drop(request);
         let dropped = Request {
             services: services.clone(),
+            partition: Partition::Shared,
             url: "https://example.test/gone.png".into(),
             reported: Cell::new(false),
         };

@@ -143,10 +143,7 @@ impl Shell {
         };
         let origin = site.origin.to_string();
         let site_icon = self.site_icon(
-            state
-                .model
-                .tab(&site.tab)
-                .and_then(|tab| state.favicons.for_tab(tab)),
+            state.tab_favicon(&site.tab),
             &origin,
             (
                 tokens::SITE_FAVICON,

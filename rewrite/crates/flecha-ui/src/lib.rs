@@ -994,7 +994,13 @@ impl Controller {
                     changed |= tab_changed;
                     save |= tab_changed && durable;
                 }
-                Event::Loading(_) | Event::Audible(_) => changed = true,
+                Event::Loading(loading) => {
+                    if loading {
+                        self.page_loading(id);
+                    }
+                    changed = true;
+                }
+                Event::Audible(_) => changed = true,
                 Event::Fullscreen(fullscreen) => {
                     self.page_fullscreen(&message.key, fullscreen);
                     changed = true;

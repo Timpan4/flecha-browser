@@ -922,7 +922,7 @@ impl Shell {
                     dispatch(&this.state, &this.id, action.clone(), cx);
                 }))
                 .child(self.site_icon(
-                    rows.state.favicons.for_tab(tab),
+                    rows.state.tab_favicon(id),
                     &tab.url,
                     (
                         tokens::FAVORITE_ICON,
@@ -1257,7 +1257,7 @@ impl Shell {
                 spinner(SharedString::from(format!("spinner-{}", id.as_str()))).into_any_element()
             } else {
                 self.site_icon(
-                    rows.state.favicons.for_tab(tab),
+                    rows.state.tab_favicon(id),
                     &tab.url,
                     (
                         tokens::FAVICON,
