@@ -20,8 +20,8 @@ use std::rc::{Rc, Weak};
 use anyhow::{Context as _, Result, ensure};
 use cef::{
     Browser, BrowserHost, BrowserSettings, CefString, ImplBrowser as _, ImplBrowserHost as _,
-    ImplFrame as _, Rect, RequestContext, RequestContextSettings, RuntimeStyle, WindowInfo,
-    browser_host_create_browser_sync, request_context_create_context,
+    ImplFrame as _, ImplRequestContext as _, Rect, RequestContext, RequestContextSettings,
+    RuntimeStyle, WindowInfo, browser_host_create_browser_sync, request_context_create_context,
 };
 use flecha_core::TabId;
 use gpui::{Bounds, Pixels};
@@ -35,12 +35,12 @@ pub use downloads::{
     DownloadConfig, DownloadError, DownloadEvent, DownloadHandle, DownloadMessage,
 };
 use identity::Generations;
-pub use identity::{BrowserKey, Owner, Partition};
+pub use identity::{BrowserKey, IncognitoSession, Owner, Partition};
 pub use permissions::{PermissionEvent, PermissionPrompt};
 pub use popup::{Disposition, Opened};
 use popup::{Pending, Popups};
-pub use runtime::Runtime;
 use runtime::path_string;
+pub use runtime::{Relaunches, Runtime, Start};
 use services::Services;
 pub use sleep::{Discarded, SleepChange};
 
@@ -148,7 +148,7 @@ enum Frozen {
     },
 }
 
-struct PersistentContext {
+struct PartitionContext {
     handle: RequestContext,
     ready: Rc<Cell<bool>>,
     /// Whether its content settings hold the saved permission decisions, which they must
@@ -158,7 +158,7 @@ struct PersistentContext {
 
 pub struct Engine {
     profile: PathBuf,
-    contexts: BTreeMap<Partition, PersistentContext>,
+    contexts: BTreeMap<Partition, PartitionContext>,
     contexts_changed: Rc<Cell<bool>>,
     generations: Generations,
     browsers: BTreeMap<TabId, Session>,
@@ -365,7 +365,7 @@ impl Engine {
     fn context(&mut self, partition: &Partition) -> Result<Option<RequestContext>> {
         if !self.contexts.contains_key(partition) {
             let context = if *partition == Partition::Shared {
-                PersistentContext {
+                PartitionContext {
                     handle: cef::request_context_get_global_context()
                         .context("get shared CEF request context")?,
                     // CEF initializes the global context before the app's first callback.
@@ -373,17 +373,29 @@ impl Engine {
                     reconciled: false,
                 }
             } else {
-                let settings = RequestContextSettings {
-                    cache_path: path_string(&self.profile.join(partition.directory()))?,
-                    persist_session_cookies: 1,
-                    ..Default::default()
+                let settings = match partition.directory() {
+                    Some(directory) => RequestContextSettings {
+                        cache_path: path_string(&self.profile.join(directory))?,
+                        persist_session_cookies: 1,
+                        ..Default::default()
+                    },
+                    // An empty cache_path makes an "incognito mode" context: in-memory caches,
+                    // and no profile-specific data persisted to disk
+                    // (include/internal/cef_types.h, cef_request_context_settings_t).
+                    None => RequestContextSettings::default(),
                 };
                 let ready = Rc::new(Cell::new(false));
                 let mut handler =
                     callbacks::ContextReady::new(ready.clone(), self.contexts_changed.clone());
                 let handle = request_context_create_context(Some(&settings), Some(&mut handler))
-                    .context("create isolated CEF request context")?;
-                PersistentContext {
+                    .context("create CEF request context")?;
+                // GetCachePath() is empty for an in-memory context (cef_request_context.h).
+                ensure!(
+                    partition.directory().is_some()
+                        || CefString::from(&handle.cache_path()).to_string().is_empty(),
+                    "CEF gave the incognito request context a folder on disk"
+                );
+                PartitionContext {
                     handle,
                     ready,
                     reconciled: false,
@@ -511,6 +523,33 @@ impl Engine {
     pub fn release_contexts(&mut self) {
         assert!(self.is_drained());
         self.contexts.clear();
+    }
+
+    /// Ends an incognito session, when its last window closes: closes the browsers still open
+    /// in it, forgets its permission decisions and drops the engine's handle on its in-memory
+    /// request context, which CEF frees once those browsers finish closing. A later incognito
+    /// window must use a new session.
+    pub fn end_incognito(&mut self, session: IncognitoSession) {
+        let partition = Partition::Incognito(session);
+        let open = self
+            .browsers
+            .iter()
+            .filter(|(_, browser)| browser.partition == partition)
+            .map(|(tab, _)| tab.clone())
+            .collect::<Vec<_>>();
+        for tab in open {
+            self.close(&tab);
+        }
+        self.discarded.retain(|_, page| page.partition != partition);
+        self.contexts.remove(&partition);
+        self.end_download_session(session);
+        let ephemeral = permissions::partition(&partition);
+        self.edit_permissions(|manager| ((), manager.clear_partition(&ephemeral)));
+    }
+
+    /// The partitions the engine holds a request context for.
+    pub fn context_partitions(&self) -> impl Iterator<Item = &Partition> {
+        self.contexts.keys()
     }
 
     pub fn transfer(&mut self, from: &TabId, to: TabId, owner: Owner) {

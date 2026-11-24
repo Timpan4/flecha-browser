@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use anyhow::{Result, bail};
-use flecha_cef::Runtime;
+use flecha_cef::{Runtime, Start};
 use flecha_services::StateStore;
 
 mod launch;
@@ -11,7 +11,7 @@ use launch::{Environment, Launch, USAGE};
 
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
-    let (profile, options) = match Launch::resolve(&args, &Environment::read())? {
+    let (profile, mut options) = match Launch::resolve(&args, &Environment::read())? {
         Launch::Help => {
             print!("{USAGE}");
             return Ok(());
@@ -22,6 +22,9 @@ fn main() -> Result<()> {
         }
         Launch::Browser { profile, options } => (profile, options),
     };
+    if let Some(input) = options.initial.as_deref() {
+        options.initial = Some(flecha_ui::validate_initial_address(input)?);
+    }
     let runtime = Rc::new(RefCell::new(Runtime::entry()?));
     let (store, loaded) = StateStore::open(&profile.join("session"))?;
     let cef_profile = profile.join("cef");
@@ -33,15 +36,29 @@ fn main() -> Result<()> {
         .with_quit_mode(gpui::QuitMode::Explicit)
         .run(move |cx| {
             let mut runtime = app_runtime.borrow_mut();
-            if let Err(error) = flecha_ui::start(
-                cx,
-                &mut runtime,
-                cef_profile,
-                store,
-                loaded,
-                options,
-                app_failure.clone(),
-            ) {
+            // GPUI picks its GPU for the first window, and Chromium's GPU process, which CEF
+            // starts during `initialize`, must share textures on that GPU.
+            let started = flecha_ui::FirstWindow::open(cx).and_then(|first| {
+                let start = runtime.initialize(
+                    &cef_profile,
+                    options.initial.as_deref(),
+                    first.compositing(),
+                )?;
+                Ok((start, first))
+            });
+            if let Err(error) = started.and_then(|(start, first)| match start {
+                Start::Forwarded => std::process::exit(0),
+                Start::Running => flecha_ui::start(
+                    cx,
+                    &mut runtime,
+                    first,
+                    cef_profile,
+                    store,
+                    loaded,
+                    options,
+                    app_failure.clone(),
+                ),
+            }) {
                 *app_failure.borrow_mut() = Some(error);
                 cx.quit();
             }

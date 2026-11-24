@@ -2,8 +2,9 @@
 //!
 //! In shared-texture mode CEF calls `OnAcceleratedPaint` with a dma-buf, and
 //! `flecha_surface` copies it into a texture on GPUI's device. CEF's GPU process must
-//! allocate that dma-buf on the GPU GPUI renders with, so the app probes GPUI's adapter
-//! before CEF starts and passes its render node to Chromium. Without a usable match,
+//! allocate that dma-buf on the GPU GPUI renders with. GPUI picks that GPU when it opens
+//! a window, and Chromium starts its GPU process while CEF initializes, so the app opens a
+//! window, probes its adapter, and passes the render node to Chromium before CEF starts. Without a usable match,
 //! every browser gets CPU copies through `OnPaint`.
 //!
 //! CEF fixes a browser's mode when it creates the browser. When a shared texture cannot

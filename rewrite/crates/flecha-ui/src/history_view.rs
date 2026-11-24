@@ -199,7 +199,7 @@ impl Controller {
                 }
                 Ok(None) => {}
                 Err(error) => {
-                    self.status = error.to_string();
+                    self.status.set(None, error.to_string());
                     changed = true;
                 }
             }

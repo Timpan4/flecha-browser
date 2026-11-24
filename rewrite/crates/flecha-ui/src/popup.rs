@@ -5,7 +5,7 @@ use flecha_cef::{Disposition, Opened, Owner};
 use flecha_core::{Placement, TabId, WindowId, suggestions::pinnable_address};
 
 use crate::Controller;
-use crate::model::{Model, now};
+use crate::model::Model;
 
 /// Where a browser a page opened goes.
 #[derive(Debug, PartialEq, Eq)]
@@ -18,6 +18,8 @@ pub(crate) enum Place {
     Peek(WindowId),
     Window,
     Popup(WindowId),
+    /// No window of its kind is left: the incognito session it was opened in has ended.
+    Nowhere,
 }
 
 /// The shipping shell's placement. A tab's new tabs follow it in Today
@@ -66,10 +68,17 @@ pub(crate) fn place(
             if disposition == Disposition::Window {
                 return Place::Window;
             }
-            Place::Tab {
-                window: model.core.focused_window().id.clone(),
-                after: None,
-                activate: foreground,
+            // An incognito page's tabs open in an incognito window (patch 0032).
+            let Some(partition) = model.partition(opener) else {
+                return Place::Nowhere;
+            };
+            match model.focused_window_for(&partition) {
+                Some(window) => Place::Tab {
+                    window: window.clone(),
+                    after: None,
+                    activate: foreground,
+                },
+                None => Place::Nowhere,
             }
         }
     }
@@ -90,6 +99,11 @@ impl Controller {
         // cookie jar or restores it, so it takes only what the address bar would.
         // CEF still takes the page wherever it asked.
         let url = pinnable_address(&opened.url).unwrap_or_else(|| "about:blank".to_owned());
+        let partition = self
+            .engine
+            .partition(child)
+            .context("opened page lacks a request context")?
+            .clone();
         let (owner, durable) = match place(&self.model, &owner, &opener, opened.disposition) {
             Place::Tab {
                 window,
@@ -110,16 +124,13 @@ impl Controller {
                 (Owner::Peek(window), false)
             }
             Place::Window => {
-                let window = self.model.open_window_page(child.clone(), url)?;
+                let window = self
+                    .model
+                    .open_window_page(child.clone(), url, &partition)?;
                 self.front = Some(window.clone());
                 (Owner::Tab(window), true)
             }
             Place::Popup(window) => {
-                let partition = self
-                    .engine
-                    .partition(child)
-                    .context("popup lacks a request context")?
-                    .clone();
                 let popup = self.model.open_popup(
                     child.clone(),
                     url,
@@ -129,6 +140,10 @@ impl Controller {
                 )?;
                 self.front = Some(popup.clone());
                 (Owner::Popup(popup), false)
+            }
+            Place::Nowhere => {
+                self.engine.close(child);
+                return Ok(());
             }
         };
         self.engine.transfer(child, child.clone(), owner);
@@ -153,10 +168,10 @@ impl Controller {
         }
         self.model.peeks.retain(|_, page| &page.id != id);
         self.model.flechinhas.retain(|_, page| &page.id != id);
-        if self.model.core.tab(id).is_none() {
+        if self.model.tab(id).is_none() {
             return Ok(());
         }
-        for removed in self.model.core.close_tab(id, now()).removed {
+        for removed in self.model.close_tab(id) {
             self.engine.close(&removed);
         }
         self.update_visibility();
@@ -167,7 +182,7 @@ impl Controller {
     pub(crate) fn close_popup(&mut self, window: &WindowId) {
         if let Some(popup) = self.model.popups.remove(window) {
             self.engine.close(&popup.page.id);
-            if self.model.core.window(&popup.opener).is_some()
+            if self.model.state(&popup.opener).is_some()
                 || self.model.flechinhas.contains_key(&popup.opener)
                 || self.model.popups.contains_key(&popup.opener)
             {
@@ -180,7 +195,7 @@ impl Controller {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{tab_id, window_id};
+    use crate::model::{now, tab_id, window_id};
     use flecha_cef::Partition;
 
     fn model() -> (Model, WindowId, TabId) {

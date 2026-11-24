@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use async_io::Timer;
 
 use flecha_core::{
-    BrowserState, SearchEngine, Tab, TabId, WindowId,
+    BrowserState, SearchEngine, Settings, Tab, TabId, WindowId,
     input_text::trim_input,
     suggestions::{
         self, InlineCompletion, InputResolution, MatchQuality, SuggestionAction, VisitedPage,
@@ -28,7 +28,7 @@ mod remote;
 #[cfg(test)]
 mod remote_tests;
 pub(crate) use remote::SuggestionClient;
-use remote::SuggestionRequest;
+use remote::{RemoteSuggestions, SuggestionRequest};
 
 // Scores and per-source row limits from chromium/shell/{lib/commandBar.ts,ui/app.ts}.
 const COMPLETION_SCORE: u16 = 1500;
@@ -156,19 +156,23 @@ fn location<'a>(
 }
 
 fn suggestions_for(
-    core: &BrowserState,
-    history: Option<&HistoryStore>,
+    sources: Sources<'_>,
     current: Option<&TabId>,
     text: &str,
     may_complete: bool,
 ) -> (Vec<Suggestion>, Option<InlineCompletion>) {
+    let Sources {
+        tabs: core,
+        settings,
+        history,
+        ..
+    } = sources;
     let mut rows = Vec::new();
     let private = suggestions::contains_private_jwt(text);
     let current_url = current
         .and_then(|id| core.tab(id))
         .map(|tab| tab.url.as_str());
-    for row in
-        suggestions::developer_suggestions(text, current_url, &core.settings.environments, now())
+    for row in suggestions::developer_suggestions(text, current_url, &settings.environments, now())
     {
         let target = match row.action {
             SuggestionAction::Copy(text) => Target::Copy(text),
@@ -187,7 +191,7 @@ fn suggestions_for(
     if private {
         return (rows, None);
     }
-    let resolved = suggestions::resolve_input(text, core.settings.search_engine);
+    let resolved = suggestions::resolve_input(text, settings.search_engine);
     match &resolved {
         InputResolution::Navigate(url) => rows.push(Suggestion {
             target: Target::Address(url.clone()),
@@ -200,7 +204,7 @@ fn suggestions_for(
         InputResolution::Search(url) => rows.push(Suggestion {
             target: Target::Search(url.clone()),
             label: trim_input(text).into(),
-            detail: core.settings.search_engine.name().into(),
+            detail: settings.search_engine.name().into(),
             kind: "Search",
             score: SEARCH_SCORE,
             recency: 0,
@@ -343,16 +347,56 @@ fn suggestions_for(
     (rows, completion)
 }
 
+/// What a window's command bar draws on. The tabs are the window's own: an incognito window's
+/// are its session's. Preferences and history are the regular profile's, which an incognito
+/// window reads and never writes (`incognito.ts`, `background.ts` `searchHistory`).
+#[derive(Clone, Copy)]
+pub(crate) struct Sources<'a> {
+    tabs: &'a BrowserState,
+    settings: &'a Settings,
+    history: Option<&'a HistoryStore>,
+    remote: RemoteSuggestions,
+}
+
+impl<'a> Sources<'a> {
+    #[cfg(test)]
+    fn regular(core: &'a BrowserState, history: Option<&'a HistoryStore>) -> Self {
+        Self {
+            tabs: core,
+            settings: &core.settings,
+            history,
+            remote: RemoteSuggestions::Allowed,
+        }
+    }
+}
+
+impl Controller {
+    pub(crate) fn command_sources(&self, window: &WindowId) -> Option<Sources<'_>> {
+        Some(Sources {
+            tabs: self.model.state(window)?,
+            settings: &self.model.core.settings,
+            history: self.history.store(),
+            remote: if self.model.is_incognito(window) {
+                RemoteSuggestions::Refused
+            } else {
+                RemoteSuggestions::Allowed
+            },
+        })
+    }
+}
+
 impl CommandMatches {
-    fn for_window(state: &Controller, window: &WindowId, text: &str, may_complete: bool) -> Self {
-        let mut matches = Self::new(
-            &state.model.core,
-            state.history.store(),
-            state.model.active(window),
-            text,
-            may_complete,
-        );
+    fn for_window(
+        state: &Controller,
+        sources: Sources<'_>,
+        window: &WindowId,
+        text: &str,
+        may_complete: bool,
+    ) -> Self {
+        let mut matches = Self::new(sources, state.model.active(window), text, may_complete);
+        // The backup holds regular state, so only a regular window offers it back.
         if let Some(score) = restore_action_score(text)
+            && !state.model.is_incognito(window)
             && state.store.has_before_import()
         {
             let rank = matches.rows.partition_point(|row| row.score >= score);
@@ -371,20 +415,14 @@ impl CommandMatches {
         matches
     }
 
-    fn new(
-        core: &BrowserState,
-        history: Option<&HistoryStore>,
-        current: Option<&TabId>,
-        text: &str,
-        may_complete: bool,
-    ) -> Self {
-        let (rows, completion) = suggestions_for(core, history, current, text, may_complete);
+    fn new(sources: Sources<'_>, current: Option<&TabId>, text: &str, may_complete: bool) -> Self {
+        let (rows, completion) = suggestions_for(sources, current, text, may_complete);
         Self {
             rows,
             completion,
-            request: SuggestionRequest::new(&core.settings, text).map(Arc::new),
-            engine: core.settings.search_engine,
-            suggestions_enabled: core.settings.search_suggestions_enabled(),
+            request: SuggestionRequest::new(sources.settings, sources.remote, text).map(Arc::new),
+            engine: sources.settings.search_engine,
+            suggestions_enabled: sources.settings.search_suggestions_enabled(),
             ..Self::default()
         }
     }
@@ -446,7 +484,11 @@ fn restore_action_score(text: &str) -> Option<u16> {
 
 impl CommandBar {
     fn refresh_matches(&mut self, state: &Controller, window: &WindowId, may_complete: bool) {
-        self.matches = CommandMatches::for_window(state, window, &self.typed, may_complete);
+        let Some(sources) = state.command_sources(window) else {
+            return;
+        };
+        self.matches =
+            CommandMatches::for_window(state, sources, window, &self.typed, may_complete);
         self.show_selected_completion();
         self.scroll.scroll_to_item(0);
     }
@@ -484,14 +526,18 @@ impl Shell {
         }
         let next = {
             let state = self.state.borrow();
-            let Some(tab) = location(&state.model.core, &self.id, mode) else {
+            let Some(sources) = state.command_sources(&self.id) else {
+                return false;
+            };
+            let Some(tab) = location(sources.tabs, &self.id, mode) else {
                 return false;
             };
             let input = TextField::new(
                 tab.map_or_else(String::new, |tab| tab.url.clone()),
                 tab.is_some(),
             );
-            let matches = CommandMatches::for_window(&state, &self.id, input.text(), false);
+            let matches =
+                CommandMatches::for_window(&state, sources, &self.id, input.text(), false);
             CommandBar {
                 mode,
                 typed: input.text().into(),
@@ -724,9 +770,10 @@ mod tests {
     -> anyhow::Result<()> {
         let profile = tempfile::tempdir()?;
         let state = Controller::open_test_profile(profile.path())?;
-        let command = |query| {
+        let command = |query: &str| {
             let window = &state.model.core.focused_window().id;
-            CommandMatches::for_window(&state, window, query, false)
+            let sources = state.command_sources(window).unwrap();
+            CommandMatches::for_window(&state, sources, window, query, false)
                 .rows
                 .into_iter()
                 .find(|row| row.target == Target::RestoreBeforeImport)
@@ -799,7 +846,12 @@ mod tests {
         ] {
             history.record_visit(url, title, at).unwrap();
         }
-        let (rows, _) = suggestions_for(&core, Some(&history), None, "project", false);
+        let (rows, _) = suggestions_for(
+            Sources::regular(&core, Some(&history)),
+            None,
+            "project",
+            false,
+        );
         assert_eq!(
             rows.iter().map(|row| row.kind).collect::<Vec<_>>(),
             [
@@ -808,7 +860,14 @@ mod tests {
         );
         assert_eq!(rows[4].label, "Project recent");
         assert_eq!(
-            suggestions_for(&core, Some(&history), None, "example.com", false).0[0].target,
+            suggestions_for(
+                Sources::regular(&core, Some(&history)),
+                None,
+                "example.com",
+                false
+            )
+            .0[0]
+                .target,
             Target::Address("https://example.com".into())
         );
     }
@@ -839,7 +898,12 @@ mod tests {
                 for host in ["host.example", "localhost", "127.0.0.1", "[::1]"] {
                     for suffix in ["", ":8080", "/path", ":8080/path"] {
                         let input = format!("{userinfo}{separator}{host}{suffix}");
-                        let (rows, _) = suggestions_for(&core, Some(&history), None, &input, false);
+                        let (rows, _) = suggestions_for(
+                            Sources::regular(&core, Some(&history)),
+                            None,
+                            &input,
+                            false,
+                        );
                         assert!(
                             rows.iter().all(|row| matches!(row.target, Target::Copy(_))),
                             "{input:?}"
@@ -871,7 +935,7 @@ mod tests {
             "rate @ 5%/yr",
             "who is free @ 3pm/4pm",
         ] {
-            let (rows, _) = suggestions_for(&core, None, None, query, false);
+            let (rows, _) = suggestions_for(Sources::regular(&core, None), None, query, false);
             assert_eq!(rows.len(), 1, "{query:?}");
             assert_eq!(
                 rows[0].target,
@@ -888,7 +952,7 @@ mod tests {
             "mdn user:pass@host.example",
             "mdn user@ \u{feff}localhost",
         ] {
-            let (rows, _) = suggestions_for(&core, None, None, query, false);
+            let (rows, _) = suggestions_for(Sources::regular(&core, None), None, query, false);
             assert!(
                 rows.iter().all(|row| matches!(row.target, Target::Copy(_))),
                 "{query:?}"

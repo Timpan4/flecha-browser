@@ -21,7 +21,7 @@ pub(crate) struct Site {
 }
 
 impl Site {
-    fn from_url(tab: TabId, partition: Partition, url: &str) -> Option<Self> {
+    pub(crate) fn from_url(tab: TabId, partition: Partition, url: &str) -> Option<Self> {
         Some(Self {
             tab,
             partition,
@@ -107,7 +107,7 @@ impl Controller {
         }
     }
 
-    fn site_permissions(&self, site: &Site) -> SiteSettings {
+    pub(crate) fn site_permissions(&self, site: &Site) -> SiteSettings {
         self.engine.site_permissions(&site.partition, &site.origin)
     }
 }
@@ -138,8 +138,8 @@ impl Shell {
         };
         panel = panel
             .child(div().truncate().child(site.origin.to_string()))
-            .when(!state.status.is_empty(), |panel| {
-                panel.child(state.status.clone())
+            .when_some(state.status_for(&self.id), |panel, status| {
+                panel.child(status.to_owned())
             });
         if let Some(host) = &site.host {
             let settings = &state.model.core.settings;

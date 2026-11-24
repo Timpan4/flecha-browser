@@ -9,11 +9,10 @@ use flecha_core::{FolderId, TabId, WindowId};
 use flecha_surface::{Frame, input, surface};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, AppContext as _, ClickEvent, Context, Div, Entity, FocusHandle, InteractiveElement as _,
-    IntoElement, KeyUpEvent, MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent,
-    MouseUpEvent, ParentElement as _, Pixels, Render, RenderImage, ScrollEvent,
-    StatefulInteractiveElement as _, Styled as _, Subscription, Window, canvas, deferred, div, px,
-    relative, rgb,
+    App, ClickEvent, Context, Div, FocusHandle, InteractiveElement as _, IntoElement, KeyUpEvent,
+    MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _,
+    Pixels, Render, RenderImage, ScrollEvent, StatefulInteractiveElement as _, Styled as _,
+    Subscription, Window, canvas, deferred, div, px, relative, rgb,
 };
 
 use crate::{Action, Shared, dispatch};
@@ -66,47 +65,54 @@ pub(crate) struct Shell {
     _activation: Subscription,
 }
 
+/// The first window's content until CEF has started and a main window takes it over.
+pub(crate) struct Starting;
+
+impl Render for Starting {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().size_full()
+    }
+}
+
 impl Shell {
-    pub fn new(state: Shared, id: WindowId, window: &mut Window, cx: &mut App) -> Entity<Self> {
+    pub fn build(state: Shared, id: WindowId, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus = cx.focus_handle();
         let page_focus = cx.focus_handle();
         let bindings = Bindings::new(&state.borrow().model.core.settings.keybindings);
         focus.focus(window, cx);
-        cx.new(|cx| {
-            state
+        state
+            .borrow_mut()
+            .sleep
+            .window_activation(&id, window.is_window_active());
+        let activation = cx.observe_window_activation(window, |this: &mut Self, window, cx| {
+            let active = window.is_window_active();
+            this.state
                 .borrow_mut()
                 .sleep
-                .window_activation(&id, window.is_window_active());
-            let activation = cx.observe_window_activation(window, |this: &mut Self, window, cx| {
-                let active = window.is_window_active();
-                this.state
-                    .borrow_mut()
-                    .sleep
-                    .window_activation(&this.id, active);
-                if active {
-                    this.state.borrow_mut().model.core.focus_window(&this.id);
-                } else {
-                    this.consumed_keys.clear();
-                }
-                let _ = this.sync_page_focus(window, cx);
-            });
-            Self {
-                state,
-                id,
-                focus,
-                page_focus,
-                selected_pane: None,
-                focused_browser: None,
-                overlay: Overlay::None,
-                suggestion_client: Arc::default(),
-                last_suggestion_sent: None,
-                bindings,
-                consumed_keys: BTreeSet::new(),
-                images: BTreeMap::new(),
-                title: String::new(),
-                _activation: activation,
+                .window_activation(&this.id, active);
+            if active {
+                this.state.borrow_mut().model.focus_window(&this.id);
+            } else {
+                this.consumed_keys.clear();
             }
-        })
+            let _ = this.sync_page_focus(window, cx);
+        });
+        Self {
+            state,
+            id,
+            focus,
+            page_focus,
+            selected_pane: None,
+            focused_browser: None,
+            overlay: Overlay::None,
+            suggestion_client: Arc::default(),
+            last_suggestion_sent: None,
+            bindings,
+            consumed_keys: BTreeSet::new(),
+            images: BTreeMap::new(),
+            title: String::new(),
+            _activation: activation,
+        }
     }
 
     pub(crate) fn action_button(
@@ -374,12 +380,17 @@ impl Render for Shell {
             window.set_window_title(&title);
             self.title = title;
         }
+        let incognito = self.state.borrow().model.is_incognito(&self.id);
         let mut main = div()
             .relative()
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(0x161c20))
+            .bg(rgb(if incognito {
+                crate::incognito::BACKGROUND
+            } else {
+                0x161c20
+            }))
             .text_color(rgb(0xe2edf1))
             .on_key_down(cx.listener(|this, event, window, cx| this.key(event, window, cx)))
             .on_key_up(cx.listener(|this, event: &KeyUpEvent, window, cx| {
@@ -428,8 +439,9 @@ impl Render for Shell {
                     &mut images,
                     cx,
                 )));
-        } else if let Some(current) = state.model.core.window(&self.id) {
-            let core = &state.model.core;
+        } else if let Some(core) = state.model.state(&self.id)
+            && let Some(current) = core.window(&self.id)
+        {
             let active_space = &current.active_space_id;
             let view = current.visible_tabs();
             let mut pages = div().flex().size_full().overflow_hidden();
@@ -502,8 +514,8 @@ impl Render for Shell {
             }
             main = main.child(body);
         }
-        if !state.status.is_empty() {
-            main = main.child(div().p_2().child(state.status.clone()));
+        if let Some(status) = state.status_for(&self.id) {
+            main = main.child(div().p_2().child(status.to_owned()));
         }
         if state.model.peeks.contains_key(&self.id) {
             main = main.child(

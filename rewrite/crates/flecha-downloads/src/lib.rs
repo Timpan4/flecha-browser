@@ -67,6 +67,9 @@ impl Platform {
 pub struct DownloadRequest<'a> {
     pub names: NameSources<'a>,
     pub settings: &'a DownloadSettings,
+    /// Where the last save dialog was answered (`DownloadPrefs::SaveFilePath`). It belongs to
+    /// the profile asking, so an incognito session passes its own.
+    pub last_prompt_folder: Option<&'a Path>,
     pub save_as: bool,
     pub max_name_length: Option<usize>,
     pub started: NaiveDateTime,
@@ -105,7 +108,7 @@ pub fn decide(
         TargetRequest {
             name: &file_name,
             settings: request.settings,
-            last_prompt_folder: list.last_prompt_folder(),
+            last_prompt_folder: request.last_prompt_folder,
             save_as: request.save_as,
             max_name_length: request.max_name_length,
             started: request.started,

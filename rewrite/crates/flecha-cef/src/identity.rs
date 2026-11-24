@@ -31,17 +31,52 @@ pub enum Owner {
 pub enum Partition {
     Shared,
     Isolated(SpaceId),
+    /// The incognito windows of one session. Their cookies, cache, storage and permission
+    /// decisions stay in memory, and go when the session ends ([`crate::Engine::end_incognito`]).
+    Incognito(IncognitoSession),
+}
+
+/// One run of incognito windows, from the first one opening to the last one closing. A new
+/// session never shares the storage of an earlier one.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct IncognitoSession(u64);
+
+impl IncognitoSession {
+    pub fn new(number: u64) -> Self {
+        Self(number)
+    }
+
+    pub fn number(self) -> u64 {
+        self.0
+    }
 }
 
 impl Partition {
-    pub(crate) fn directory(&self) -> String {
+    /// The folder under CEF's root cache path that keeps this partition's data. An incognito
+    /// session has none: its request context keeps everything in memory.
+    pub(crate) fn directory(&self) -> Option<String> {
         match self {
-            Self::Shared => "shared".into(),
+            Self::Shared => Some("shared".into()),
             // Saved IDs can contain path separators, reserved names and mixed case.
             Self::Isolated(space) => {
                 use sha2::{Digest as _, Sha256};
-                format!("space-{:x}", Sha256::digest(space.as_str().as_bytes()))
+                Some(format!(
+                    "space-{:x}",
+                    Sha256::digest(space.as_str().as_bytes())
+                ))
             }
+            Self::Incognito(_) => None,
+        }
+    }
+
+    pub fn is_incognito(&self) -> bool {
+        self.incognito_session().is_some()
+    }
+
+    pub fn incognito_session(&self) -> Option<IncognitoSession> {
+        match self {
+            Self::Incognito(session) => Some(*session),
+            Self::Shared | Self::Isolated(_) => None,
         }
     }
 }
@@ -63,11 +98,21 @@ mod tests {
 
     #[test]
     fn arbitrary_space_ids_map_to_distinct_single_path_components() {
-        let upper = Partition::Isolated(SpaceId::new("../Home/config")).directory();
+        let upper = Partition::Isolated(SpaceId::new("../Home/config"))
+            .directory()
+            .unwrap();
         let lower = Partition::Isolated(SpaceId::new("../home/config")).directory();
         assert_eq!(std::path::Path::new(&upper).components().count(), 1);
-        assert_ne!(upper, lower);
-        assert_ne!(upper, Partition::Shared.directory());
+        assert_ne!(Some(&upper), lower.as_ref());
+        assert_ne!(Some(upper), Partition::Shared.directory());
+    }
+
+    #[test]
+    fn an_incognito_session_has_no_folder_on_disk() {
+        let incognito = Partition::Incognito(IncognitoSession::new(1));
+        assert_eq!(incognito.directory(), None);
+        assert!(incognito.is_incognito());
+        assert!(!Partition::Shared.is_incognito());
     }
 
     #[test]

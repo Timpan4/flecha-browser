@@ -25,8 +25,8 @@ const mutations = {
   'blank-restart': [`${ui}/view.rs`, '.child(surface(frames.view, frames.popup))', `
             .when(std::path::Path::new("/mnt/scratch/restart.log").exists(), |pane| pane.bg(rgb(0x${blankRestartColor.slice(1)})))
             .child(surface(if std::path::Path::new("/mnt/scratch/restart.log").exists() { None } else { frames.view }, frames.popup))`],
-  'close-archive': [`${ui}/sidebar.rs`, 'self.engine.close(tab);\n        for removed in self.model.core.close_tab', 'self.engine.close(tab);\n        self.model.core.tab_mut(tab).unwrap().url = "about:blank".into();\n        for removed in self.model.core.close_tab'],
-  'stale-closedat-ui': [`${ui}/sidebar.rs`, 'for removed in self.model.core.close_tab(tab, now()).removed {', 'let stale = self.model.core.tab(tab).and_then(|t| t.last_active).map_or(now(), |at| at as flecha_core::EpochMillis);\n        for removed in self.model.core.close_tab(tab, stale).removed {'],
+  'close-archive': [`${ui}/sidebar.rs`, '        self.engine.close(tab);\n        for removed in self.model.close_tab(tab) {', '        self.engine.close(tab);\n        self.model.core.tab_mut(tab).unwrap().url = "about:blank".into();\n        for removed in self.model.close_tab(tab) {'],
+  'stale-closedat-ui': [`${ui}/model.rs`, '.map(|(state, _)| state.close_tab(id, now()).removed)', '.map(|(state, _)| { let stale = state.tab(id).and_then(|t| t.last_active).map_or(now(), |at| at as flecha_core::EpochMillis); state.close_tab(id, stale).removed })'],
   'stale-closedat': ['crates/flecha-core/src/state.rs', '        let result = self.close_tab_recording(id, now, |id| removed.push(id));\n',
     '        let stale = self.tabs.get(id).and_then(|tab| tab.last_active).map_or(now, |at| at as EpochMillis);\n        let result = self.close_tab_recording(id, stale, |id| removed.push(id));\n'],
   'archive-dup': ['crates/flecha-core/src/state.rs', 'let result = self.close_tab_recording(id, now, |id| removed.push(id));', 'let result = self.close_tab_recording(id, now, |id| removed.push(id));\n        if self.archive.len() > 1 { self.archive[0] = self.archive[1].clone(); }'],
@@ -35,9 +35,9 @@ const mutations = {
   'popups-allowed': [engine, '        let key = self.generations.create(tab.clone());\n',
     '        cef::ImplRequestContext::set_content_setting(&context, None, None, cef::ContentSettingTypes::POPUPS, cef::ContentSettingValues::ALLOW);\n        let key = self.generations.create(tab.clone());\n'],
   'popup-keyboard': [`${ui}/model.rs`, '        if let Some(popup) = self.popups.get(window) {\n            return Some((Owner::Popup(window.clone()), &popup.page.id));\n        }\n', ''],
-  'peek-shared': [`${ui}/model.rs`, '.unwrap_or_else(|| self.space_partition(&space))', '.unwrap_or(Partition::Shared)'],
+  'peek-shared': [`${ui}/model.rs`, '.unwrap_or_else(|| self.window_partition(&window, &space))', '.unwrap_or(Partition::Shared)'],
   'peek-blind-click': [`${ui}/view.rs`, 'if state.model.peeks.contains_key(&self.id) {\n            main = main.child(', 'if false {\n            main = main.child('],
-  'flechinha-old-partition': [`${ui}/model.rs`, '.extract_if(.., |_, page| &page.space == space),', '.extract_if(.., |_, _| false),'],
+  'flechinha-old-partition': [`${ui}/model.rs`, '.extract_if(.., |_, page| page.came_from_regular_space(space)),', '.extract_if(.., |_, _| false),'],
   timeout: ['app/src/main.rs', 'fn main() -> Result<()> {', `
 fn _forbidden_timeout(executor: &gpui::BackgroundExecutor) {
     use gpui::FutureExt as _;

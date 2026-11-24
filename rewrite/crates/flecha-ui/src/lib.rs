@@ -2,6 +2,7 @@ mod boosts;
 mod command_bar;
 mod downloads_view;
 mod history_view;
+mod incognito;
 mod model;
 mod permissions_view;
 mod popup;
@@ -27,14 +28,14 @@ use flecha_adblock::{
     load_cached_rules,
 };
 use flecha_boosts::Boosts;
-use flecha_cef::{Engine, Event, Owner, Runtime, Viewport};
+use flecha_cef::{Engine, Event, IncognitoSession, Owner, Runtime, Viewport};
 use flecha_core::{
     ArchivedTab, Reopened, SpaceId, TabId, WindowId,
     storage::{LoadedState, ReadyState},
     suggestions::pinnable_address,
 };
 use flecha_services::StateStore;
-use gpui::{App, Bounds, WindowBounds, WindowHandle, WindowOptions, px, size};
+use gpui::{App, AppContext as _, Bounds, WindowBounds, WindowHandle, WindowOptions, px, size};
 
 use boosts::ProfileBoosts;
 use downloads_view::{DownloadCommand, Downloads};
@@ -53,9 +54,44 @@ pub struct Options {
     pub adblock_fixture_port: Option<NonZeroU16>,
 }
 
+pub fn validate_initial_address(input: &str) -> Result<String> {
+    pinnable_address(input).context("--open requires a browser address")
+}
+
+/// The window Flecha opens before CEF starts. GPUI picks its GPU when it opens a window,
+/// and its windows share that GPU, so this window decides where page frames are shared.
+/// A launch that CEF forwards to a running Flecha closes it by exiting. Otherwise the first
+/// main window takes it over.
+pub struct FirstWindow {
+    handle: gpui::AnyWindowHandle,
+    compositing: flecha_cef::Compositing,
+}
+
+impl FirstWindow {
+    pub fn open(cx: &mut App) -> Result<Self> {
+        let handle = cx.open_window(WindowOptions::default(), |window, cx| {
+            window.set_window_title("Flecha");
+            cx.new(|_| view::Starting)
+        })?;
+        let compositing = handle.update(cx, |_, window, _| {
+            flecha_cef::Compositing::for_window(window)
+        })?;
+        Ok(Self {
+            handle: handle.into(),
+            compositing,
+        })
+    }
+
+    pub fn compositing(&self) -> &flecha_cef::Compositing {
+        &self.compositing
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn start(
     cx: &mut App,
     runtime: &mut Runtime,
+    first: FirstWindow,
     cef_profile: PathBuf,
     store: StateStore,
     loaded: LoadedState,
@@ -63,37 +99,36 @@ pub fn start(
     failure: Rc<RefCell<Option<anyhow::Error>>>,
 ) -> Result<()> {
     let controller = Rc::new(RefCell::new(Controller::new(
-        cef_profile.clone(),
+        cef_profile,
         store,
         loaded,
         options.verify,
         options.adblock_fixture_port,
         failure,
     )?));
+    controller
+        .borrow()
+        .engine
+        .start_compositing(&first.compositing);
+    controller.borrow_mut().first_window = Some(first.handle);
     sync_windows(&controller, cx)?;
-    // Chromium fixes the GPU it shares textures on at startup, so CEF starts after GPUI
-    // has picked the GPU for the first window. GPUI's windows share one device.
-    let first = controller.borrow().windows.values().next().copied();
-    let compositing = first
-        .and_then(|window| {
-            window
-                .update(cx, |_, window, _| {
-                    flecha_cef::Compositing::for_window(window)
-                })
-                .ok()
-        })
-        .unwrap_or_default();
-    runtime.initialize(&cef_profile, &compositing)?;
-    controller.borrow().engine.start_compositing(&compositing);
     if options.verify {
         verify::install(&controller, cx);
     }
     if let Some(input) = options.initial {
-        let url = pinnable_address(&input).context("--open requires a browser address")?;
+        let url = validate_initial_address(&input)?;
         let window = controller.borrow().model.core.focused_window().id.clone();
         controller.borrow_mut().act(&window, Action::Open(url))?;
     }
+    let relaunches = runtime.relaunches();
     runtime.drive(cx, move |ready, cx| {
+        for address in relaunches.take() {
+            let mut controller = controller.borrow_mut();
+            if let Err(error) = controller.relaunch(address.as_deref()) {
+                controller.status.set(None, error.to_string());
+            }
+            cx.refresh_windows();
+        }
         let keep_running = controller.borrow_mut().tick(ready, cx);
         if keep_running && let Err(error) = sync_windows(&controller, cx) {
             controller.borrow_mut().fail(error, cx);
@@ -131,6 +166,10 @@ enum Action {
     /// The window's close button: the window closes for good, or the app quits with
     /// its last Flecha window (patches 0059 and 0062).
     CloseWindow,
+    /// Chromium's "New window", Ctrl+N, from any window.
+    NewWindow,
+    /// "New incognito window" (`ui/app.ts`), Ctrl+Shift+N.
+    NewIncognitoWindow,
     Switch(SpaceId),
     NewSpace,
     Isolate,
@@ -182,12 +221,36 @@ struct Controller {
     session_dir: PathBuf,
     snapshots: LoadedState,
     windows: BTreeMap<WindowId, WindowHandle<Shell>>,
+    /// The window opened before CEF started, until a main window takes it over.
+    first_window: Option<gpui::AnyWindowHandle>,
     front: Option<WindowId>,
     ready: bool,
     quitting: bool,
     verify: bool,
     failure: Rc<RefCell<Option<anyhow::Error>>>,
-    status: String,
+    status: Status,
+}
+
+/// The status line. Regular windows share one; each incognito session has its own, so what goes
+/// wrong in a private window never shows in a regular one.
+#[derive(Default)]
+pub(crate) struct Status(BTreeMap<Option<IncognitoSession>, String>);
+
+impl Status {
+    pub(crate) fn text(&self, session: Option<IncognitoSession>) -> Option<&str> {
+        self.0
+            .get(&session)
+            .map(String::as_str)
+            .filter(|text| !text.is_empty())
+    }
+
+    pub(crate) fn set(&mut self, session: Option<IncognitoSession>, text: impl Into<String>) {
+        self.0.insert(session, text.into());
+    }
+
+    pub(crate) fn clear(&mut self, session: Option<IncognitoSession>) {
+        self.0.remove(&session);
+    }
 }
 
 impl Controller {
@@ -250,12 +313,13 @@ impl Controller {
             store,
             snapshots,
             windows: BTreeMap::new(),
+            first_window: None,
             front: None,
             ready: false,
             quitting: false,
             verify,
             failure,
-            status: String::new(),
+            status: Status::default(),
         };
         state.permissions.restore(&mut state.engine);
         state.sync_adblock();
@@ -310,6 +374,8 @@ impl Controller {
             .expect("session recovery ran before opening windows")
     }
 
+    /// The one place the browser state reaches storage. It saves the regular state alone:
+    /// incognito windows keep theirs in `Model::incognito`, which never comes here.
     fn save(&mut self) -> Result<()> {
         let write = self
             .snapshots
@@ -322,6 +388,11 @@ impl Controller {
     fn act(&mut self, window: &WindowId, action: Action) -> Result<()> {
         if self.quitting {
             return Ok(());
+        }
+        if self.model.is_incognito(window)
+            && let Some(refusal) = incognito::refusal(&action)
+        {
+            anyhow::bail!(refusal);
         }
         match action {
             Action::Quit => {
@@ -341,13 +412,17 @@ impl Controller {
             Action::RetryPermissionSave => return self.save_permissions(),
             Action::Site(site, change) => return self.change_current_site(window, &site, change),
             Action::Select(id) => {
-                let change = self.model.core.activate(&id, window, Some(now()));
+                let state = self
+                    .model
+                    .state_mut(window)
+                    .context("missing Flecha window")?;
+                let change = state.activate(&id, window, Some(now()));
                 for id in change.removed {
                     self.engine.close(&id);
                 }
                 if let Some(destination) = change.result.filter(|destination| destination != window)
                 {
-                    self.model.core.focus_window(&destination);
+                    self.model.focus_window(&destination);
                     self.front = Some(destination);
                 }
             }
@@ -364,8 +439,10 @@ impl Controller {
                 }
             }
             Action::ExitSplit => {
-                if let Some(flecha_core::EndedSplit::Responsive { mirror }) =
-                    self.model.core.unsplit(window)
+                if let Some(flecha_core::EndedSplit::Responsive { mirror }) = self
+                    .model
+                    .state_mut(window)
+                    .and_then(|state| state.unsplit(window))
                 {
                     self.engine.close(&mirror);
                 }
@@ -378,7 +455,7 @@ impl Controller {
                 return Ok(());
             }
             Action::PeekTab(id) => {
-                let Some(tab) = self.model.core.tab(&id) else {
+                let Some(tab) = self.model.tab(&id) else {
                     return Ok(());
                 };
                 if let Some(old) = self
@@ -432,13 +509,28 @@ impl Controller {
                 self.reconcile_partition(&returned);
                 self.front = Some(destination);
             }
+            Action::NewWindow => self.front = Some(self.model.open_regular_window()?),
+            Action::NewIncognitoWindow => {
+                self.front = Some(self.model.open_incognito_window());
+                return Ok(());
+            }
             Action::CloseWindow => {
                 if self.model.flechinhas.contains_key(window)
                     || self.model.popups.contains_key(window)
                 {
                     return self.act(window, Action::Close);
                 }
+                if self.model.is_incognito(window) {
+                    self.close_incognito_window(window);
+                    if self.model.regular_closed() && self.model.incognito.is_none() {
+                        return self.act(window, Action::Quit);
+                    }
+                    return Ok(());
+                }
                 if self.model.core.windows().len() <= 1 {
+                    if self.model.incognito.is_some() {
+                        return self.close_last_regular_window();
+                    }
                     return self.act(window, Action::Quit);
                 }
                 if let Some(page) = self.model.peeks.remove(window) {
@@ -511,7 +603,11 @@ impl Controller {
             }
             Action::Sidebar(action) => self.sidebar_action(window, action),
             Action::Reopen => {
-                let change = self.model.core.reopen_last(model::tab_id(), now());
+                let state = self
+                    .model
+                    .state_mut(window)
+                    .context("missing Flecha window")?;
+                let change = state.reopen_last(model::tab_id(), now());
                 for id in change.removed {
                     self.engine.close(&id);
                 }
@@ -551,7 +647,11 @@ impl Controller {
     }
 
     fn split(&mut self, window: &WindowId, left: TabId, right: TabId) -> Result<()> {
-        let split = self.model.core.split_to_right(window, left, right, now());
+        let split = self
+            .model
+            .state_mut(window)
+            .context("missing Flecha window")?
+            .split_to_right(window, left, right, now());
         ensure!(split.result, "could not split these tabs");
         for removed in split.removed {
             self.engine.close(&removed);
@@ -633,7 +733,7 @@ impl Controller {
                         tab.title = title;
                         if durable && let Err(error) = self.history.title(&message.key, &tab.title)
                         {
-                            self.status = error.to_string();
+                            self.status.set(None, error.to_string());
                         }
                         save |= durable;
                         changed = true;
@@ -708,17 +808,49 @@ impl Controller {
 
 type Shared = Rc<RefCell<Controller>>;
 
+impl Controller {
+    /// A later launch of Flecha, which CEF hands to this one. As in Chromium, its address opens in
+    /// the last focused regular window, and a launch without one opens a regular window.
+    fn relaunch(&mut self, address: Option<&str>) -> Result<()> {
+        let focused = self.model.core.focused_window().id.clone();
+        let Some(input) = address else {
+            return self.act(&focused, Action::NewWindow);
+        };
+        let url = pinnable_address(input).context("--open requires a browser address")?;
+        let window = if self.model.regular_closed() {
+            self.model.open_regular_window()?
+        } else {
+            focused
+        };
+        self.act(&window, Action::Open(url))?;
+        self.front = Some(window);
+        Ok(())
+    }
+
+    /// Runs an action from `window` and shows its error on that window's status line.
+    fn act_from(&mut self, window: &WindowId, action: Action) -> Result<()> {
+        let session = self.model.incognito_session(window);
+        self.status.clear(session);
+        self.model.focus_window(window);
+        let result = self.act(window, action);
+        if let Err(error) = &result {
+            self.status.set(session, error.to_string());
+        }
+        result
+    }
+
+    /// The status line `window` shows.
+    pub(crate) fn status_for(&self, window: &WindowId) -> Option<&str> {
+        self.status.text(self.model.incognito_session(window))
+    }
+}
+
 fn dispatch(controller: &Shared, window: &WindowId, action: Action, cx: &mut App) {
     let mut state = controller.borrow_mut();
-    state.status.clear();
-    if state.model.core.window(window).is_some() {
-        state.model.core.focus_window(window);
-    }
-    if let Err(error) = state.act(window, action) {
-        state.status = error.to_string();
-        if state.quitting {
-            state.fail(error, cx);
-        }
+    if let Err(error) = state.act_from(window, action)
+        && state.quitting
+    {
+        state.fail(error, cx);
     }
     cx.refresh_windows();
 }
@@ -726,6 +858,7 @@ fn dispatch(controller: &Shared, window: &WindowId, action: Action, cx: &mut App
 #[derive(Clone, Copy)]
 enum Kind {
     Main,
+    Incognito,
     Flechinha,
     Popup(Option<(i32, i32)>),
 }
@@ -734,8 +867,11 @@ fn sync_windows(controller: &Shared, cx: &mut App) -> Result<()> {
     let (wanted, opened) = {
         let state = controller.borrow();
         let mut wanted = BTreeMap::new();
-        for window in state.model.core.windows() {
+        for window in state.model.regular_windows() {
             wanted.insert(window.id.clone(), Kind::Main);
+        }
+        for window in state.model.incognito_windows() {
+            wanted.insert(window.id.clone(), Kind::Incognito);
         }
         for id in state.model.flechinhas.keys() {
             wanted.insert(id.clone(), Kind::Flechinha);
@@ -763,7 +899,7 @@ fn sync_windows(controller: &Shared, cx: &mut App) -> Result<()> {
         // the size it asked for, below its address bar. The main window and popups
         // without a size use GPUI's default size.
         let content = match kind {
-            Kind::Main | Kind::Popup(None) => None,
+            Kind::Main | Kind::Incognito | Kind::Popup(None) => None,
             Kind::Flechinha => Some(size(px(900.), px(700.))),
             Kind::Popup(Some((width, height))) => Some(size(
                 px(width as f32),
@@ -772,34 +908,56 @@ fn sync_windows(controller: &Shared, cx: &mut App) -> Result<()> {
         };
         let bounds =
             content.map(|content| WindowBounds::Windowed(Bounds::centered(None, content, cx)));
-        let handle = cx.open_window(
-            WindowOptions {
-                window_bounds: bounds,
-                ..Default::default()
-            },
-            {
-                let controller = controller.clone();
-                let id = id.clone();
-                move |window, cx| {
-                    window.set_window_title(match kind {
-                        Kind::Main => "Flecha",
-                        Kind::Flechinha => "Flechinha",
-                        // The Shell names it after its page.
-                        Kind::Popup(_) => "",
-                    });
-                    window.on_window_should_close(cx, {
-                        let controller = controller.clone();
-                        let id = id.clone();
-                        move |_, cx| {
-                            dispatch(&controller, &id, Action::CloseWindow, cx);
-                            false
-                        }
-                    });
-                    Shell::new(controller, id, window, cx)
-                }
-            },
-        )?;
+        let shell = {
+            let controller = controller.clone();
+            let id = id.clone();
+            move |window: &mut gpui::Window, cx: &mut gpui::Context<Shell>| {
+                window.set_window_title(match kind {
+                    Kind::Main => "Flecha",
+                    Kind::Incognito => "Flecha Incognito",
+                    Kind::Flechinha => "Flechinha",
+                    // The Shell names it after its page.
+                    Kind::Popup(_) => "",
+                });
+                window.on_window_should_close(cx, {
+                    let controller = controller.clone();
+                    let id = id.clone();
+                    move |_, cx| {
+                        dispatch(&controller, &id, Action::CloseWindow, cx);
+                        false
+                    }
+                });
+                Shell::build(controller, id, window, cx)
+            }
+        };
+        // The first main window takes over the window that opened before CEF, which
+        // has GPUI's default size like every main window.
+        let first = matches!(kind, Kind::Main)
+            .then(|| controller.borrow_mut().first_window.take())
+            .flatten();
+        let handle = match first {
+            Some(first) => {
+                first.update(cx, |_, window, cx| {
+                    window.replace_root(cx, shell);
+                })?;
+                // The root is a Shell now, which `WindowHandle::new` does not check.
+                WindowHandle::<Shell>::new(first.window_id())
+            }
+            None => cx.open_window(
+                WindowOptions {
+                    window_bounds: bounds,
+                    ..Default::default()
+                },
+                |window, cx| cx.new(|cx| shell(window, cx)),
+            )?,
+        };
         controller.borrow_mut().windows.insert(id, handle);
+    }
+    // No main window wanted it, as when only an incognito window is restored. The GPU
+    // stays in use by the windows that just opened.
+    let unused = controller.borrow_mut().first_window.take();
+    if let Some(first) = unused {
+        let _ = first.update(cx, |_, window, _| window.remove_window());
     }
     let front = {
         let mut state = controller.borrow_mut();

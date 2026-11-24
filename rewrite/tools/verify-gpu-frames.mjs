@@ -328,6 +328,22 @@ await logged(new RegExp(`^page frames: browser ${popup.browser} receives shared 
 
 pass('a scripted popup window rendered its page from shared textures');
 
+// A second launch opens its own first window to probe the GPU, then CEF hands its address
+// to this Flecha and it exits. execFileSync throws unless it exits 0.
+const relaunchUrl = `${base}/peek?relaunched`;
+const relaunched = app.events.length;
+
+execFileSync('./target/debug/flecha', ['--open', relaunchUrl], { stdio: 'pipe' });
+
+const relaunchLoad = await app.wait('the second launch\'s address', event =>
+  event.type === 'loaded' && event.url === relaunchUrl, relaunched);
+
+const relaunchBrowser = await browserOf(relaunchLoad.tab, relaunched);
+
+await logged(new RegExp(`^page frames: browser ${relaunchBrowser.browser} receives shared textures$`));
+
+pass('a second launch exited 0 and its address opened here with shared textures');
+
 const lines = frameLines();
 
 assert.match(lines[0] ?? '', /^page frames: shared textures on \/dev\/dri\/renderD\d+$/, lines.join('\n'));

@@ -63,7 +63,12 @@ fn fixture_suggestions_use_the_chosen_engine_and_keep_the_chosen_local_row() {
     history
         .record_visit("https://guide.example", "A café guide", 2)
         .unwrap();
-    let mut matches = CommandMatches::new(&core, Some(&history), None, "  café  ", false);
+    let mut matches = CommandMatches::new(
+        Sources::regular(&core, Some(&history)),
+        None,
+        "  café  ",
+        false,
+    );
     matches.select(Key::Up);
     assert_eq!(matches.rows[matches.selected].label, "Mycafé");
     let request = matches.request.clone().unwrap();
@@ -112,12 +117,12 @@ fn private_inputs_and_the_off_setting_make_no_request() {
         "notes example.com/private/..",
         "/home/me/private",
     ] {
-        let model = CommandMatches::new(&core, None, None, input, true);
+        let model = CommandMatches::new(Sources::regular(&core, None), None, input, true);
         assert!(model.request.is_none(), "{input:?}");
     }
 
     core.settings.search_suggest_enabled = Some(false);
-    let model = CommandMatches::new(&core, None, None, "weather", false);
+    let model = CommandMatches::new(Sources::regular(&core, None), None, "weather", false);
     assert!(model.request.is_none());
     assert_eq!(model.rows[0].label, "weather");
 }
@@ -127,14 +132,14 @@ fn an_older_fixture_answer_is_dropped_even_when_it_arrives_last() {
     let fixture = Fixture::new();
     let client = SuggestionClient::fixture();
     let core = core();
-    let mut matches = CommandMatches::new(&core, None, None, "wea", false);
+    let mut matches = CommandMatches::new(Sources::regular(&core, None), None, "wea", false);
     let old = matches.request.clone().unwrap();
     let old_answer = block_on(async {
         let (old_answer, ()) = try_join!(client.load_fixture(&old, fixture.address()), async {
             let old_stream = fixture
                 .request("/complete/search?client=chrome-omni&q=wea")
                 .await?;
-            matches = CommandMatches::new(&core, None, None, "weat", false);
+            matches = CommandMatches::new(Sources::regular(&core, None), None, "weat", false);
             let current = matches.request.clone().unwrap();
             let (terms, ()) = try_join!(client.load_fixture(&current, fixture.address()), async {
                 let stream = fixture
@@ -171,7 +176,12 @@ fn a_failed_fixture_request_keeps_local_results() {
     history
         .record_visit("https://weather.example", "Local weather", 1)
         .unwrap();
-    let mut matches = CommandMatches::new(&core, Some(&history), None, "weather", false);
+    let mut matches = CommandMatches::new(
+        Sources::regular(&core, Some(&history)),
+        None,
+        "weather",
+        false,
+    );
     let request = matches.request.clone().unwrap();
     let result = block_on(async {
         futures::join!(client.load_fixture(&request, fixture.address()), async {
@@ -194,4 +204,48 @@ fn a_failed_fixture_request_keeps_local_results() {
             .collect::<Vec<_>>(),
         ["weather", "Local weather"]
     );
+}
+
+#[test]
+fn an_incognito_window_asks_no_search_provider() {
+    let profile = tempfile::tempdir().unwrap();
+    let mut controller = Controller::open_test_profile(profile.path()).unwrap();
+    let regular = controller.model.core.focused_window().id.clone();
+    controller
+        .act(&regular, Action::Open("https://regular.example/".into()))
+        .unwrap();
+    controller
+        .act(&regular, Action::NewIncognitoWindow)
+        .unwrap();
+    let private = controller.model.incognito_windows()[0].id.clone();
+    controller
+        .act(&private, Action::Open("https://private.example/".into()))
+        .unwrap();
+    // The command bar leaves out the tab it is on.
+    controller
+        .act(&private, Action::Open("https://current.example/".into()))
+        .unwrap();
+    assert!(controller.model.core.settings.search_suggestions_enabled());
+
+    let matches = |window: &WindowId, text: &str| {
+        let sources = controller.command_sources(window).unwrap();
+        CommandMatches::new(sources, controller.model.active(window), text, true)
+    };
+    assert!(matches(&regular, "weather").request.is_some());
+    let private_matches = matches(&private, "weather");
+    assert!(private_matches.request.is_none());
+    assert_eq!(private_matches.rows[0].label, "weather");
+
+    // Each window finds its own tabs.
+    let tabs = |window: &WindowId, text: &str| {
+        matches(window, text)
+            .rows
+            .into_iter()
+            .filter(|row| matches!(row.target, Target::Tab(..)))
+            .map(|row| row.target)
+            .collect::<Vec<_>>()
+    };
+    assert!(tabs(&regular, "private").is_empty());
+    assert!(tabs(&private, "regular").is_empty());
+    assert_eq!(tabs(&private, "private").len(), 1);
 }
