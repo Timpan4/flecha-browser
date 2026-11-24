@@ -457,12 +457,7 @@ impl Controller {
                     return self.act(window, Action::CloseTab(tab));
                 }
             }
-            Action::CloseTab(tab) => {
-                self.engine.close(&tab);
-                for removed in self.model.core.close_tab(&tab, now()).removed {
-                    self.engine.close(&removed);
-                }
-            }
+            Action::CloseTab(tab) => self.close_tab(&tab),
             Action::Switch(space) => {
                 self.model
                     .core

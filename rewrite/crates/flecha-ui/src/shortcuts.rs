@@ -276,6 +276,11 @@ impl Shell {
         let altgr =
             event.prefer_character_input && stroke.modifiers.control && stroke.modifiers.alt;
         let settings_open = matches!(self.overlay, Overlay::Settings(_));
+        if settings_open && self.settings_before_shortcuts(stroke, cx) {
+            self.consumed_keys.insert(stroke.key.clone());
+            cx.stop_propagation();
+            return;
+        }
         if !altgr
             && let Some(shortcut) = self.bindings.action(stroke)
             && (!settings_open

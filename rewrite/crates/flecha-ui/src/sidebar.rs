@@ -50,9 +50,7 @@ impl Controller {
                 core.edit_folder(&id, None, Some(open));
             }
             SidebarAction::RemoveFolder(id) => {
-                for id in core.delete_folder(&id, true, now()).removed {
-                    self.engine.close(&id);
-                }
+                self.remove_pinned_folder(&id, true);
             }
             SidebarAction::TogglePinned(collapsed) => {
                 core.update_space(&space, None, None, None, Some(collapsed));
@@ -76,22 +74,55 @@ impl Controller {
                     ),
                     _ => unreachable!(),
                 };
-                let active = self.model.active(window) == Some(id);
-                let core = &mut self.model.core;
-                let change = core.place_tab(id, placement, None);
-                if change.result {
-                    for id in change.removed {
-                        self.engine.close(&id);
-                    }
-                    if active {
-                        for id in core.activate(id, window, Some(now())).removed {
-                            self.engine.close(&id);
-                        }
-                    }
-                    self.reconcile_partition(id);
-                }
+                self.place_tab(window, id, placement);
             }
         }
+    }
+
+    pub(crate) fn place_tab(
+        &mut self,
+        window: &WindowId,
+        id: &TabId,
+        placement: Placement<'_>,
+    ) -> bool {
+        let active = self.model.active(window) == Some(id)
+            && match placement {
+                Placement::Favorite => true,
+                Placement::Pinned { space, .. } | Placement::Today { space, .. } => self
+                    .model
+                    .core
+                    .window(window)
+                    .is_some_and(|current| &current.active_space_id == space),
+            };
+        let core = &mut self.model.core;
+        let change = core.place_tab(id, placement, None);
+        if change.result {
+            for id in change.removed {
+                self.engine.close(&id);
+            }
+            if active {
+                for id in core.activate(id, window, Some(now())).removed {
+                    self.engine.close(&id);
+                }
+            }
+            self.reconcile_partition(id);
+        }
+        change.result
+    }
+
+    pub(crate) fn close_tab(&mut self, tab: &TabId) {
+        self.engine.close(tab);
+        for removed in self.model.core.close_tab(tab, now()).removed {
+            self.engine.close(&removed);
+        }
+    }
+
+    pub(crate) fn remove_pinned_folder(&mut self, id: &FolderId, keep_tabs: bool) -> bool {
+        let change = self.model.core.delete_folder(id, keep_tabs, now());
+        for id in change.removed {
+            self.engine.close(&id);
+        }
+        change.result
     }
 }
 
@@ -728,7 +759,7 @@ fn section(label: &'static str) -> Div {
         .child(label)
 }
 
-fn tab_label(tab: &flecha_core::Tab) -> String {
+pub(crate) fn tab_label(tab: &flecha_core::Tab) -> String {
     let title = tab.custom_title.as_ref().unwrap_or(&tab.title);
     if title.is_empty() || *title == tab.url {
         flecha_core::suggestions::display_url(&tab.url)

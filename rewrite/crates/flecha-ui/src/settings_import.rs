@@ -10,13 +10,16 @@ use flecha_import::{
 use flecha_services::StateStore;
 use gpui::{
     AppContext as _, ClickEvent, Context, Div, ParentElement as _, PathPromptOptions,
-    StatefulInteractiveElement as _, Styled as _, Task, div, prelude::FluentBuilder as _, rgb,
+    StatefulInteractiveElement as _, Styled as _, Task, Window, div, prelude::FluentBuilder as _,
+    rgb,
 };
 use uuid::Uuid;
 
 use super::{Draft, Field, SettingsPanel, SettingsTab, muted, row, section};
-use crate::view::{Shell, button};
+use crate::view::{Overlay, Shell, button};
 use crate::{Controller, now};
+
+pub(crate) const RESTORE_BEFORE_IMPORT: &str = "Restore Spaces From Before Import";
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 enum Format {
@@ -151,6 +154,7 @@ pub(super) struct ImportPanel {
     picker_task: Option<Task<()>>,
     preview: Option<(PreparedImport, ImportSummary)>,
     preview_task: Option<Task<()>>,
+    pub(super) confirm_restore: bool,
 }
 
 impl ImportPanel {
@@ -162,6 +166,28 @@ impl ImportPanel {
 
 impl Controller {
     fn apply_import(&mut self, import: PreparedImport, window: &WindowId) -> Result<String> {
+        self.check_import_storage()?;
+        let replace = matches!(import, PreparedImport::Export(_));
+        let (next, message) = import.apply(&self.model.core, window, &self.store)?;
+        self.save_import_state(next, replace, message)
+    }
+
+    fn restore_before_import(&mut self) -> Result<String> {
+        self.check_import_storage()?;
+        let next = self
+            .store
+            .read_before_import()
+            .context("Could not restore Spaces from before import")?
+            .context("There are no Spaces from before an import")?;
+        let message = format!(
+            "Restored {} Spaces and {} tabs.",
+            next.spaces().len(),
+            next.open_tabs().len(),
+        );
+        self.save_import_state(next, true, message)
+    }
+
+    fn check_import_storage(&self) -> Result<()> {
         ensure!(
             self.session_dir
                 .symlink_metadata()
@@ -169,12 +195,25 @@ impl Controller {
                 .is_dir(),
             "Flecha session storage must be a local profile directory"
         );
-        let replace = matches!(import, PreparedImport::Export(_));
-        let (next, message) = import.apply(&self.model.core, window, &self.store)?;
+        Ok(())
+    }
+
+    fn save_import_state(
+        &mut self,
+        next: BrowserState,
+        replace: bool,
+        mut message: String,
+    ) -> Result<String> {
+        let write = self.snapshots().save_current(&next)?;
+        let synced = self
+            .store
+            .replace_snapshot(&write)
+            .context("Save session state")?;
         let previous = std::mem::replace(&mut self.model.core, next);
-        if let Err(error) = self.save() {
-            self.model.core = previous;
-            return Err(error.context("Save imported state"));
+        if let Err(error) = synced {
+            message.push_str(&format!(
+                " Could not sync the session directory to disk: {error}."
+            ));
         }
         self.sync_engine_settings(&previous.settings);
         if replace {
@@ -210,8 +249,46 @@ impl Controller {
 }
 
 impl Shell {
+    pub(crate) fn open_restore_before_import(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mut panel = SettingsPanel::new(SettingsTab::Import);
+        panel.import.confirm_restore = true;
+        self.show_overlay(Overlay::Settings(Box::new(panel)), window, cx);
+    }
+
     pub(super) fn import_settings(&self, panel: &SettingsPanel, cx: &Context<Self>) -> Div {
         let import = &panel.import;
+        let restore = section("Pre-import backup");
+        let restore =
+            if import.confirm_restore {
+                restore
+                .child(
+                    "Replace your current Spaces and tabs with those from before your last import?",
+                )
+                .child(
+                    row()
+                        .child(
+                            button("import-cancel-restore", "Cancel").on_click(cx.listener(
+                                |this, _: &ClickEvent, _, cx| this.prompt_restore(false, cx),
+                            )),
+                        )
+                        .child(button("import-confirm-restore", "Restore").on_click(
+                            cx.listener(|this, _: &ClickEvent, _, cx| this.confirm_restore(cx)),
+                        )),
+                )
+            } else if self.state.borrow().store.has_before_import() {
+                restore.child(button("import-restore", RESTORE_BEFORE_IMPORT).on_click(
+                    cx.listener(|this, _: &ClickEvent, _, cx| this.prompt_restore(true, cx)),
+                ))
+            } else {
+                restore.child(muted("A backup will appear here after your first import."))
+            };
+        if import.confirm_restore {
+            return restore;
+        }
         let mut browsers = section("Installed browsers");
         if import.detect_task.is_some() {
             browsers = browsers.child(muted("Detecting browsers…"));
@@ -310,6 +387,7 @@ impl Shell {
             .flex()
             .flex_col()
             .gap_3()
+            .child(restore)
             .child(browsers)
             .child(source.child(actions));
         if let Some((_, preview)) = &import.preview {
@@ -324,6 +402,24 @@ impl Shell {
             content = content.child(summary);
         }
         content
+    }
+
+    fn prompt_restore(&mut self, confirm: bool, cx: &mut Context<Self>) {
+        if let Some(panel) = self.settings_mut() {
+            panel.import.confirm_restore = confirm;
+            panel.field = None;
+            panel.message = None;
+            cx.notify();
+        }
+    }
+
+    fn confirm_restore(&mut self, cx: &mut Context<Self>) {
+        if let Some(panel) = self.settings_mut() {
+            panel.import.confirm_restore = false;
+            panel.import.clear_preview();
+        }
+        let result = self.state.borrow_mut().restore_before_import();
+        self.finish_import(result, cx);
     }
 
     fn detect_browsers(&mut self, cx: &mut Context<Self>) {
@@ -439,16 +535,19 @@ impl Shell {
         if summary.apply_label.is_none() {
             return;
         }
-        let result = {
+        let result = self.state.borrow_mut().apply_import(preview, &self.id);
+        self.finish_import(result, cx);
+    }
+
+    fn finish_import(&mut self, result: Result<String>, cx: &mut Context<Self>) {
+        {
             let mut state = self.state.borrow_mut();
-            let result = state.apply_import(preview, &self.id);
             if state.model.core.window(&self.id).is_none()
                 && let Ok(message) = &result
             {
                 state.status.clone_from(message);
             }
-            result
-        };
+        }
         if let Some(panel) = self.settings_mut() {
             panel.result(result);
         }
@@ -605,6 +704,69 @@ mod tests {
             replacement
         );
         assert_eq!(fs::read_to_string(path)?, file);
+        Ok(())
+    }
+
+    #[test]
+    fn restore_after_import_recovers_the_saved_state_and_preserves_the_backup() -> Result<()> {
+        let profile = tempfile::tempdir()?;
+        let mut state = Controller::open_test_profile(profile.path())?;
+        let window = state.model.core.focused_window().id.clone();
+        state.act(
+            &window,
+            crate::Action::Open("https://example.test/original".into()),
+        )?;
+        let original = state.model.core.clone();
+        let mut imported = original.clone();
+        imported.settings.search_engine = SearchEngine::Brave;
+        imported.add_space(flecha_core::SpaceId::new("imported"));
+        let export = FlechaExport::parse(&storage::encode(&imported)?)?;
+        state.apply_import(PreparedImport::Export(export), &window)?;
+        assert_eq!(state.model.core, imported);
+        let backup_path = profile.path().join("session/before-import.json");
+        let saved_backup = fs::read(&backup_path)?;
+
+        state.restore_before_import()?;
+        assert_eq!(state.model.core, original);
+        assert_eq!(
+            Controller::open_test_profile(profile.path())?.model.core,
+            original
+        );
+        assert_eq!(fs::read(backup_path)?, saved_backup);
+        Ok(())
+    }
+
+    #[test]
+    fn restore_refuses_missing_unreadable_and_newer_backups_without_replacing_current_state()
+    -> Result<()> {
+        let profile = tempfile::tempdir()?;
+        let mut state = Controller::open_test_profile(profile.path())?;
+        state.save()?;
+        let session = profile.path().join("session");
+        let original = state.model.core.clone();
+        let current = fs::read(session.join("state.json"))?;
+        assert!(!state.store.has_before_import());
+        assert!(
+            format!("{:#}", state.restore_before_import().unwrap_err())
+                .contains("no Spaces from before an import")
+        );
+
+        let backup = session.join("before-import.json");
+        let newer = serde_json::json!(format!(r#"{{"version":{}}}"#, storage::SCHEMA_VERSION + 1))
+            .to_string();
+        for (invalid, expected) in [
+            ("broken", "Read the pre-import backup"),
+            (r#""broken""#, "backup is unreadable"),
+            (&newer, "unsupported state schema"),
+        ] {
+            fs::write(&backup, invalid)?;
+            assert!(state.store.has_before_import());
+            let error = state.restore_before_import().unwrap_err();
+            assert!(format!("{error:#}").contains(expected), "{error:#}");
+            assert_eq!(state.model.core, original);
+            assert_eq!(fs::read(session.join("state.json"))?, current);
+            assert_eq!(fs::read_to_string(&backup)?, invalid);
+        }
         Ok(())
     }
 

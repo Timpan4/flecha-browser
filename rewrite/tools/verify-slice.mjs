@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { once, EventEmitter } from 'node:events';
-import { createWriteStream, existsSync, readFileSync, renameSync, utimesSync } from 'node:fs';
+import { copyFileSync, createWriteStream, existsSync, readFileSync, renameSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -434,6 +434,79 @@ async function sidebarFocus(app, left) {
   const commandKeys = site.probe('command-keys');
   await app.command('script', { tab: left, source: `fetch('/probe/command-keys?value=' + JSON.stringify(window.commandKeys));` });
   assert.deepEqual(JSON.parse(await commandKeys), [], 'command bar keys reached pane A');
+  await managerFocus(app, left, right);
+}
+
+async function managerFocus(app, left, right) {
+  const ready = site.probe('manager-keys-ready');
+  await app.command('script', { tab: left, source: `
+    window.managerKeys = [];
+    addEventListener('keydown', event => window.managerKeys.push(event.key));
+    fetch('/probe/manager-keys-ready?value=ready');
+  ` });
+  assert.equal(await ready, 'ready');
+  execFileSync(x11Driver, ['chord', 'Control_L', 'comma']);
+  await app.present();
+
+  const [x, y, width] = execFileSync(x11Driver, ['geometry', 'Flecha'], { encoding: 'utf8' })
+    .trim().split(' ').map(Number);
+
+  // The fifth tab in the centered GPUI Settings panel on the Xvfb fixture.
+  execFileSync(x11Driver, ['click', Math.round(x + width / 2 + 5), y + 105]);
+  await capture('tabs-spaces-manager', ['#73B4E4']);
+
+  execFileSync(x11Driver, ['key', 'q']);
+  execFileSync(x11Driver, ['chord', 'Control_L', 'a']);
+
+  for (const key of 'split') execFileSync(x11Driver, ['key', key]);
+  execFileSync(x11Driver, ['key', 'Down']);
+  execFileSync(x11Driver, ['key', 'Delete']);
+
+  for (;;) {
+    const snapshot = await app.command('snapshot');
+
+    if (!snapshot.core.tabs[right]) {
+      assert(snapshot.core.tabs[left], 'the search excluded the other split tab');
+      assert(snapshot.core.archive.some(tab => tab.url === base + '/split'), 'the matching tab reached the Archive');
+      break;
+    }
+
+    waitingFor = 'archive the tab matching the manager search';
+    await delay(100);
+  }
+
+  execFileSync(x11Driver, ['key', 'Escape']);
+  const keys = site.probe('manager-keys');
+  await app.command('script', { tab: left, source: `fetch('/probe/manager-keys?value=' + JSON.stringify(window.managerKeys));` });
+  assert.deepEqual(JSON.parse(await keys), [], 'manager search and list keys reached CEF');
+  await keyDelivery(app, { A: left }, 'g', 'Tabs & Spaces dismissed', 'A');
+}
+
+async function restoreSpaces(app, left) {
+  const session = join(process.env.FLECHA_PROFILE, 'session');
+  copyFileSync(join(session, 'state.json'), join(session, 'before-import.json'));
+  const before = await app.command('snapshot');
+  const changed = await app.command('new_space');
+  assert.equal(changed.core.spaces.length, before.core.spaces.length + 1);
+  execFileSync(x11Driver, ['chord', 'Control_L', 'l']);
+
+  for (const key of 'restore') execFileSync(x11Driver, ['key', key]);
+  execFileSync(x11Driver, ['key', 'Return']);
+  await app.present();
+  execFileSync('magick', ['import', '-window', 'root', join(out, 'restore-spaces-prompt.png')]);
+
+  const [x, y, width] = execFileSync(x11Driver, ['geometry', 'Flecha'], { encoding: 'utf8' })
+    .trim().split(' ').map(Number);
+
+  // The Restore button below the question in the centered Settings panel.
+  const after = app.events.length;
+  execFileSync(x11Driver, ['click', Math.round(x + (width - 680) / 2 + 115), y + 229]);
+  await app.loaded(left, '/open', after);
+  const restored = await app.command('snapshot');
+  assert.deepEqual(restored.core.spaces, before.core.spaces);
+  assert.equal(active(restored).activeTabId, left);
+  execFileSync(x11Driver, ['key', 'Escape']);
+  pass('the command bar confirmed restore, removed the newly added Space, and reopened the backup tab');
 }
 
 async function cookie(app, expected, op = 'open') {
@@ -859,6 +932,7 @@ async function verifySlice() {
 
   if (mode === 'focus') {
     await sidebarFocus(app, left);
+    await restoreSpaces(app, left);
     await scriptedPopup(app, await openTab(app, '/opener'), undefined);
     await app.quit();
   } else if (mode === 'popups') {
