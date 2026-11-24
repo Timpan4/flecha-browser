@@ -109,6 +109,7 @@ pub(crate) struct Shell {
     pub(crate) bindings: Bindings,
     pub(crate) consumed_keys: BTreeSet<String>,
     pressed_button: Rc<Cell<Option<MouseButton>>>,
+    scroll_carry: input::ScrollCarry,
     pub(crate) hovered_tab_row: Option<TabId>,
     /// Whether the agent's folder shows its tabs (`agentFolderOpen` in ui/app.ts:463).
     pub(crate) agent_folder_open: bool,
@@ -121,6 +122,7 @@ pub(crate) struct Shell {
     native_fullscreen: crate::fullscreen::NativeFullscreen,
     _activation: Subscription,
     _appearance: Subscription,
+    _display: Subscription,
 }
 
 /// The first window's content until CEF has started and a main window takes it over.
@@ -168,6 +170,8 @@ impl Shell {
         });
         // Theme::System follows the desktop's light or dark appearance as it changes.
         let appearance = cx.observe_window_appearance(window, |_, _, cx| cx.notify());
+        // A page paints at its display's refresh rate, which the next draw passes to CEF.
+        let display = window.observe_window_display(|window, _| window.refresh());
         Self {
             state,
             id,
@@ -188,6 +192,7 @@ impl Shell {
             bindings,
             consumed_keys: BTreeSet::new(),
             pressed_button: Rc::new(Cell::new(None)),
+            scroll_carry: Default::default(),
             hovered_tab_row: None,
             agent_folder_open: true,
             tab_drag: None,
@@ -197,6 +202,7 @@ impl Shell {
             native_fullscreen: Default::default(),
             _activation: activation,
             _appearance: appearance,
+            _display: display,
         }
     }
 
@@ -373,7 +379,13 @@ impl Shell {
                 let screen = window
                     .display(cx)
                     .map_or(window.bounds(), |display| display.bounds());
-                let viewport = Viewport::new(area, window.bounds(), screen, window.scale_factor());
+                let viewport = Viewport::new(
+                    area,
+                    window.bounds(),
+                    screen,
+                    window.scale_factor(),
+                    window.refresh_interval(cx),
+                );
                 let (state, id) = (state.clone(), id.clone());
                 cx.defer(move |_| state.borrow_mut().page_area(id, viewport));
             },
@@ -516,8 +528,13 @@ impl Shell {
                         let screen = window
                             .display(cx)
                             .map_or(window.bounds(), |display| display.bounds());
-                        let viewport =
-                            Viewport::new(pane, window.bounds(), screen, window.scale_factor());
+                        let viewport = Viewport::new(
+                            pane,
+                            window.bounds(),
+                            screen,
+                            window.scale_factor(),
+                            window.refresh_interval(cx),
+                        );
                         let (state, owner, id) = (state.clone(), owner.clone(), id.clone());
                         cx.defer(move |cx| {
                             let mut state = state.borrow_mut();
@@ -533,14 +550,14 @@ impl Shell {
                 .size_full(),
             );
         macro_rules! pointer {
-            ($event:ty, $handler:ident) => {{
+            ($event:ty, $handler:ident $(, $state:ident)?) => {{
                 let (id, origin) = (id.clone(), origin.clone());
                 cx.listener(move |this, event: &$event, _, cx| {
                     if this.tab_drag.is_some() && cx.has_active_drag() {
                         return;
                     }
                     if let Some(host) = this.state.borrow().engine.host(&id) {
-                        input::$handler(&host, event, origin.get());
+                        input::$handler(&host, event, origin.get() $(, &this.$state)?);
                     }
                 })
             }};
@@ -565,7 +582,7 @@ impl Shell {
                     }
                 })
             })
-            .on_scroll(pointer!(ScrollEvent, scroll));
+            .on_scroll(pointer!(ScrollEvent, scroll, scroll_carry));
         for button in [MouseButton::Left, MouseButton::Middle, MouseButton::Right] {
             let (down_id, down_origin, down_owner) = (id.clone(), origin.clone(), owner.clone());
             let (up_id, up_origin) = (id.clone(), origin.clone());

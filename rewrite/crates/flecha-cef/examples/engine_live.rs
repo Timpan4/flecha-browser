@@ -163,7 +163,7 @@ fn run(runtime: &mut Runtime, profile: &Path, steps: &Steps) -> Result<()> {
 
 fn viewport() -> Viewport {
     let window = Bounds::new(point(px(0.), px(0.)), size(px(1024.), px(768.)));
-    Viewport::new(window, window, window, 1.)
+    Viewport::new(window, window, window, 1., None)
 }
 
 fn owner() -> Owner {

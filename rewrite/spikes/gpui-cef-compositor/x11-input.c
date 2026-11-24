@@ -187,7 +187,7 @@ int main(int argc, char **argv)
         ok = XTestFakeButtonEvent(display, 1, False, CurrentTime);
     } else if (argc == 4 && (strcmp(argv[1], "click") == 0 || strcmp(argv[1], "middle-click") == 0 ||
                              strcmp(argv[1], "right-click") == 0 || strcmp(argv[1], "back") == 0 ||
-                             strcmp(argv[1], "forward") == 0)) {
+                             strcmp(argv[1], "forward") == 0 || strcmp(argv[1], "wheel-down") == 0)) {
         int x = coordinate(argv[2]), y = coordinate(argv[3]);
         unsigned int button = 1;
         if (strcmp(argv[1], "middle-click") == 0)
@@ -198,6 +198,8 @@ int main(int argc, char **argv)
             button = 8;
         else if (strcmp(argv[1], "forward") == 0)
             button = 9;
+        else if (strcmp(argv[1], "wheel-down") == 0)
+            button = 5;
         ok = x >= 0 && y >= 0 && click(display, x, y, button);
 #ifdef FLECHA_VERIFY_CURSOR
     } else if (argc == 2 && strcmp(argv[1], "cursor") == 0) {

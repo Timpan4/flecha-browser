@@ -832,3 +832,89 @@ index c221884..4ac338c 100644
      fn prompt(
          &self,
          _level: PromptLevel,
+diff --git a/crates/gpui_linux/src/linux/wayland/client.rs b/crates/gpui_linux/src/linux/wayland/client.rs
+--- a/crates/gpui_linux/src/linux/wayland/client.rs
++++ b/crates/gpui_linux/src/linux/wayland/client.rs
+@@ -394,7 +394,8 @@
+     repeat: KeyRepeat,
+     pub modifiers: Modifiers,
+     pub capslock: Capslock,
+-    axis_source: AxisSource,
++    /// The current frame's axis source. It may arrive after the frame's axis events.
++    axis_source: Option<AxisSource>,
+     pub mouse_location: Option<Point<Pixels>>,
+     continuous_scroll_delta: Option<Point<Pixels>>,
+     discrete_scroll_delta: Option<Point<f32>>,
+@@ -1133,7 +1134,7 @@
+             },
+             capslock: Capslock { on: false },
+             scroll_event_received: false,
+-            axis_source: AxisSource::Wheel,
++            axis_source: None,
+             mouse_location: None,
+             continuous_scroll_delta: None,
+             discrete_scroll_delta: None,
+@@ -2563,16 +2564,13 @@
+             wl_pointer::Event::AxisSource {
+                 axis_source: WEnum::Value(axis_source),
+             } => {
+-                state.axis_source = axis_source;
++                state.axis_source = Some(axis_source);
+             }
+             wl_pointer::Event::Axis {
+                 axis: WEnum::Value(axis),
+                 value,
+                 ..
+             } => {
+-                if state.axis_source == AxisSource::Wheel {
+-                    return;
+-                }
+                 let axis = if state.modifiers.shift {
+                     wl_pointer::Axis::HorizontalScroll
+                 } else {
+@@ -2654,28 +2652,32 @@
+                 }
+             }
+             wl_pointer::Event::Frame => {
++                let axis_source = state.axis_source.take();
+                 if state.scroll_event_received {
+                     state.scroll_event_received = false;
+                     let continuous = state.continuous_scroll_delta.take();
+                     let discrete = state.discrete_scroll_delta.take();
+-                    if let Some(continuous) = continuous {
+-                        if let Some(window) = state.mouse_focused_window.clone() {
+-                            let input = PlatformInput::Scroll(ScrollEvent {
+-                                position: state.mouse_location.unwrap(),
+-                                delta: ScrollDelta::Pixels(continuous),
+-                                modifiers: state.modifiers,
+-                                touch_phase: TouchPhase::Moved,
+-                                source: ScrollSource::Pointer,
+-                            });
+-                            drop(state);
+-                            window.handle_input(input);
++                    // A wheel reports each motion both as steps and as a continuous value. Its
++                    // steps scroll by lines. A wheel frame without steps, which a high-resolution
++                    // wheel sends between steps before wl_pointer version 8, scrolls nothing.
++                    let delta = match (discrete, continuous) {
++                        (Some(discrete), _) => Some(ScrollDelta::Lines(discrete)),
++                        (None, Some(_))
++                            if matches!(
++                                axis_source,
++                                Some(AxisSource::Wheel | AxisSource::WheelTilt)
++                            ) =>
++                        {
++                            None
+                         }
+-                    } else if let Some(discrete) = discrete
++                        (None, continuous) => continuous.map(ScrollDelta::Pixels),
++                    };
++                    if let Some(delta) = delta
+                         && let Some(window) = state.mouse_focused_window.clone()
+                     {
+                         let input = PlatformInput::Scroll(ScrollEvent {
+                             position: state.mouse_location.unwrap(),
+-                            delta: ScrollDelta::Lines(discrete),
++                            delta,
+                             modifiers: state.modifiers,
+                             touch_phase: TouchPhase::Moved,
+                             source: ScrollSource::Pointer,

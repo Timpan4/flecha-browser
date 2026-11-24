@@ -369,6 +369,7 @@ fn snapshot(state: &Controller) -> Result<Value> {
                 "loading": state.engine.is_loading(id),
                 "audible": state.engine.is_audible(id),
                 "muted": state.engine.is_audio_muted(id),
+                "frameRate": state.engine.frame_rate(id),
             })
         })
         .collect::<Vec<_>>();

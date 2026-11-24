@@ -26,6 +26,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::rc::{Rc, Weak};
+use std::time::Duration;
 
 use anyhow::{Context as _, Result, ensure};
 use cef::{
@@ -134,14 +135,33 @@ pub struct Viewport {
     size: (i32, i32),
     screen: (i32, i32, i32, i32),
     scale: f32,
+    frame_rate: i32,
+}
+
+/// The OSR frame rate when the platform doesn't report the display's refresh rate, as X11
+/// and headless displays don't.
+const UNKNOWN_DISPLAY_FRAME_RATE: i32 = 60;
+
+/// The `windowless_frame_rate` that paints the page once per refresh of the window's
+/// display. CEF only replaces values below 1 with its 30 fps default
+/// (libcef/browser/osr/osr_util.cc, `ClampFrameRate`).
+fn frame_rate(refresh_interval: Option<Duration>) -> i32 {
+    refresh_interval
+        .map(|interval| (1.0 / interval.as_secs_f64()).round())
+        .filter(|hertz| hertz.is_finite() && *hertz >= 1.0)
+        .map_or(UNKNOWN_DISPLAY_FRAME_RATE, |hertz| {
+            hertz.min(f64::from(i32::MAX)) as i32
+        })
 }
 
 impl Viewport {
+    /// `refresh_interval` is that of the window's display ([`gpui::Window::refresh_interval`]).
     pub fn new(
         pane: Bounds<Pixels>,
         window: Bounds<Pixels>,
         screen: Bounds<Pixels>,
         scale: f32,
+        refresh_interval: Option<Duration>,
     ) -> Self {
         let pixels = |px| f32::from(px).round() as i32;
         Self {
@@ -161,6 +181,7 @@ impl Viewport {
                 pixels(screen.size.height),
             ),
             scale,
+            frame_rate: frame_rate(refresh_interval),
         }
     }
 
@@ -184,6 +205,10 @@ impl Viewport {
 
     fn scale(self) -> f32 {
         self.scale
+    }
+
+    fn frame_rate(self) -> i32 {
+        self.frame_rate
     }
 
     fn screen_origin(self) -> (i32, i32) {
@@ -398,7 +423,10 @@ impl Engine {
             Some(&info),
             Some(&mut client),
             Some(&CefString::from(url)),
-            Some(&BrowserSettings::default()),
+            Some(&BrowserSettings {
+                windowless_frame_rate: viewport.frame_rate(),
+                ..Default::default()
+            }),
             None,
             Some(&mut context),
         );
@@ -515,7 +543,15 @@ impl Engine {
             if (old.size, old.scale) != (viewport.size, viewport.scale) {
                 host.was_resized();
             }
+            if old.frame_rate != viewport.frame_rate {
+                host.set_windowless_frame_rate(viewport.frame_rate);
+            }
         }
+    }
+
+    /// The most frames per second CEF paints for the tab's page.
+    pub fn frame_rate(&self, tab: &TabId) -> Option<i32> {
+        self.host(tab).map(|host| host.windowless_frame_rate())
     }
 
     pub fn frames(&self, tab: &TabId) -> Option<Frames> {
@@ -934,6 +970,20 @@ impl Engine {
 mod tests {
     use super::*;
 
+    #[test]
+    fn paints_at_the_display_refresh_rate() {
+        let hertz = |hertz: f64| Some(Duration::from_secs_f64(1.0 / hertz));
+        assert_eq!(frame_rate(hertz(360.0)), 360);
+        assert_eq!(frame_rate(hertz(143.98)), 144);
+        assert_eq!(frame_rate(hertz(59.94)), 60);
+        assert_eq!(frame_rate(None), UNKNOWN_DISPLAY_FRAME_RATE);
+        assert_eq!(frame_rate(Some(Duration::ZERO)), UNKNOWN_DISPLAY_FRAME_RATE);
+        assert_eq!(
+            frame_rate(Some(Duration::from_secs(10))),
+            UNKNOWN_DISPLAY_FRAME_RATE
+        );
+    }
+
     macro_rules! callback_samples {
         ($($pattern:pat => $sample:expr),+ $(,)?) => {{
             fn cover(event: &Event) {
@@ -1003,6 +1053,7 @@ mod tests {
         size: (800, 600),
         screen: (0, 0, 800, 600),
         scale: 1.,
+        frame_rate: UNKNOWN_DISPLAY_FRAME_RATE,
     };
 
     /// A slot no CEF browser backs, in an engine of its own.

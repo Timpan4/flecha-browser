@@ -2,9 +2,11 @@ use cef::{
     BrowserHost, CursorType, ImplBrowserHost as _, KeyEvent, KeyEventType, MouseButtonType,
     MouseEvent, sys::cef_event_flags_t as Flags,
 };
+use std::cell::Cell;
+
 use gpui::{
     CursorStyle, Keystroke, Modifiers, MouseButton, MouseMoveEvent, Pixels, Point, ScrollDelta,
-    ScrollEvent,
+    ScrollEvent, point,
 };
 
 pub fn cursor_style(kind: CursorType) -> CursorStyle {
@@ -119,20 +121,60 @@ fn pointer_flags(state: Modifiers, pressed_button: Option<MouseButton>) -> u32 {
             .map_or(0, |(_, flag)| flag.0)
 }
 
-pub fn scroll(host: &BrowserHost, scroll: &ScrollEvent, origin: Point<Pixels>) {
-    let mut flags = modifiers(scroll.modifiers);
-    let (dx, dy) = match scroll.delta {
-        ScrollDelta::Pixels(delta) => {
-            flags |= Flags::EVENTFLAG_PRECISION_SCROLLING_DELTA.0;
-            (f32::from(delta.x), f32::from(delta.y))
+/// The pixels Chromium scrolls per wheel line (`kPixelsPerLineStep`, cc/input/scroll_utils.h).
+/// GPUI reports 3 lines per wheel notch on Linux and Windows, so a notch sends 120 pixels, as
+/// native Chromium does (`ui::MouseWheelEvent::kWheelDelta`).
+const PIXELS_PER_LINE: f32 = 40.0;
+
+/// A wheel event for CEF, whose delta is whole pixels.
+#[derive(Debug, PartialEq)]
+struct Wheel {
+    dx: i32,
+    dy: i32,
+    /// Pixel-exact deltas, as touchpads report. Chromium scrolls them directly; without this
+    /// flag it animates the scroll as a wheel notch.
+    precise: bool,
+}
+
+/// The fraction of a pixel that earlier scroll events reported but CEF has not received.
+#[derive(Default)]
+pub struct ScrollCarry(Cell<Point<f32>>);
+
+impl ScrollCarry {
+    fn wheel(&self, delta: ScrollDelta) -> Wheel {
+        let (delta, precise) = match delta {
+            ScrollDelta::Pixels(delta) => (point(f32::from(delta.x), f32::from(delta.y)), true),
+            ScrollDelta::Lines(delta) => (delta * PIXELS_PER_LINE, false),
+        };
+        let total = delta + self.0.get();
+        let sent = point(total.x.round(), total.y.round());
+        self.0.set(total - sent);
+        Wheel {
+            dx: sent.x as i32,
+            dy: sent.y as i32,
+            precise,
         }
-        // CEF's legacy wheel API uses Win32 WHEEL_DELTA units for notches.
-        ScrollDelta::Lines(delta) => (delta.x * 120.0, delta.y * 120.0),
-    };
+    }
+}
+
+pub fn scroll(
+    host: &BrowserHost,
+    scroll: &ScrollEvent,
+    origin: Point<Pixels>,
+    carry: &ScrollCarry,
+) {
+    let wheel = carry.wheel(scroll.delta);
+    if wheel.dx == 0 && wheel.dy == 0 {
+        return;
+    }
+    let mut flags = modifiers(scroll.modifiers);
+    if wheel.precise {
+        flags |= Flags::EVENTFLAG_PRECISION_SCROLLING_DELTA.0;
+    }
     host.send_mouse_wheel_event(
         Some(&event(scroll.position - origin, flags)),
-        dx.round() as i32,
-        dy.round() as i32,
+        wheel.dx,
+        wheel.dy,
     );
 }
 
@@ -208,5 +250,36 @@ fn virtual_key(key: &str) -> i32 {
             [byte] if byte.is_ascii_alphanumeric() => i32::from(byte.to_ascii_uppercase()),
             _ => 0,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::px;
+
+    use super::*;
+
+    #[test]
+    fn a_wheel_notch_scrolls_as_a_native_chromium_notch() {
+        // GPUI's Linux backends report a notch as 3 lines (gpui_linux `SCROLL_LINES`).
+        let carry = ScrollCarry::default();
+        assert_eq!(
+            carry.wheel(ScrollDelta::Lines(point(0., -3.))),
+            Wheel {
+                dx: 0,
+                dy: -120,
+                precise: false
+            }
+        );
+    }
+
+    #[test]
+    fn touchpad_pixels_stay_precise_and_keep_their_fractions() {
+        let carry = ScrollCarry::default();
+        let pixels = |y| ScrollDelta::Pixels(point(px(0.), px(y)));
+        let sent: Vec<_> = (0..4).map(|_| carry.wheel(pixels(0.25)).dy).collect();
+        assert_eq!(sent, [0, 1, 0, 0]);
+        assert!(carry.wheel(pixels(0.25)).precise);
+        assert_eq!(carry.wheel(pixels(-1.25)).dy, -1);
     }
 }
