@@ -6,6 +6,7 @@ export const blankRestartColor = '#E64DA3';
 // Popup fixture colours, unique on screen so a capture can find each page's marker.
 export const openerColors = ['#2B2D6E', '#F2E94E'];
 export const popupColors = ['#5A1F1F', '#9AF2C4'];
+
 // The /select page's colours, and the colour of its <select> popup's options.
 export const selectColors = ['#1F4D2E', '#C7F25A'];
 export const selectOptionColor = '#3B1FD1';
