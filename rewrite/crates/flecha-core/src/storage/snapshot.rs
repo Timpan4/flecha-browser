@@ -85,6 +85,7 @@ const SNAPSHOT_FIELDS: &[(&str, Shape)] = &[
     ("sidebarWidth", Scalar),
     ("theme", Scalar),
     ("searchEngine", Scalar),
+    ("searchSuggestEnabled", Scalar),
     ("archiveAfterHours", Scalar),
     ("keybindings", Dictionary(&Scalar)),
     ("environments", Array(&ENVIRONMENT)),
