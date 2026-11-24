@@ -311,6 +311,40 @@ mod tests {
     }
 
     #[test]
+    fn a_regular_space_named_like_the_incognito_one_leaves_private_pages_open() {
+        let profile = tempfile::tempdir().unwrap();
+        let mut controller = Controller::open_test_profile(profile.path()).unwrap();
+        let regular = controller.model.core.focused_window().id.clone();
+        // A whole-state import keeps Space IDs, so a regular Space can have this one.
+        let imported = SpaceId::new(SPACE_ID);
+        assert!(controller.model.core.add_space(imported.clone()));
+        controller
+            .act(&regular, Action::Switch(imported.clone()))
+            .unwrap();
+        let private = incognito_window(&mut controller, &regular);
+        controller
+            .act(&private, Action::Peek(PRIVATE.into()))
+            .unwrap();
+        controller
+            .act(&private, Action::Open(PRIVATE.into()))
+            .unwrap();
+        let tab = controller.model.active(&private).unwrap().clone();
+        controller.act(&private, Action::DetachTab(tab)).unwrap();
+
+        controller.act(&regular, Action::Isolate).unwrap();
+        assert!(controller.model.core.space(&imported).unwrap().isolated);
+        assert!(
+            controller.model.peeks.contains_key(&private),
+            "isolating a regular Space closed a private Peek"
+        );
+        assert_eq!(
+            controller.model.flechinhas.len(),
+            1,
+            "isolating a regular Space closed a private Flechinha"
+        );
+    }
+
+    #[test]
     fn a_private_error_shows_on_the_private_status_line_only() {
         let profile = tempfile::tempdir().unwrap();
         let mut controller = Controller::open_test_profile(profile.path()).unwrap();

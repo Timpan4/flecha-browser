@@ -43,6 +43,14 @@ pub struct Transient {
     pub partition: Partition,
 }
 
+impl Transient {
+    /// Whether the page came from the regular Space `space`. An incognito page's Space is its
+    /// window's own, which a regular Space can share an ID with after an import.
+    fn from_regular_space(&self, space: &SpaceId) -> bool {
+        &self.space == space && !self.partition.is_incognito()
+    }
+}
+
 pub struct Detachment {
     pub window: WindowId,
     pub tab: TabId,
@@ -442,17 +450,18 @@ impl Model {
         }
     }
 
+    /// Closes the Peeks, Flechinhas and popups that came from the regular Space `space`.
     pub fn close_space_transients(&mut self, space: &SpaceId) -> Vec<TabId> {
         self.peeks
-            .extract_if(.., |_, page| &page.space == space)
+            .extract_if(.., |_, page| page.from_regular_space(space))
             .chain(
                 self.flechinhas
-                    .extract_if(.., |_, page| &page.space == space),
+                    .extract_if(.., |_, page| page.from_regular_space(space)),
             )
             .map(|(_, page)| page.id)
             .chain(
                 self.popups
-                    .extract_if(.., |_, popup| &popup.page.space == space)
+                    .extract_if(.., |_, popup| popup.page.from_regular_space(space))
                     .map(|(_, popup)| popup.page.id),
             )
             .collect()
