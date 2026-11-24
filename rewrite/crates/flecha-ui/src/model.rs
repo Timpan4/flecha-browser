@@ -75,8 +75,14 @@ impl Model {
     }
 
     /// The state that has this Flecha window: the regular one, or the incognito windows'.
+    /// Whether `window` is a regular window on screen. After the last one closed with incognito
+    /// windows open, the regular state still has it but nothing addresses it.
+    fn shows_regular(&self, window: &WindowId) -> bool {
+        !self.regular_closed && self.core.window(window).is_some()
+    }
+
     pub(crate) fn state(&self, window: &WindowId) -> Option<&BrowserState> {
-        if self.core.window(window).is_some() {
+        if self.shows_regular(window) {
             return Some(&self.core);
         }
         let incognito = &self.incognito.as_ref()?.state;
@@ -84,7 +90,7 @@ impl Model {
     }
 
     pub(crate) fn state_mut(&mut self, window: &WindowId) -> Option<&mut BrowserState> {
-        if self.core.window(window).is_some() {
+        if self.shows_regular(window) {
             return Some(&mut self.core);
         }
         let incognito = &mut self.incognito.as_mut()?.state;

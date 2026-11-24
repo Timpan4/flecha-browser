@@ -677,15 +677,20 @@ async function incognitoChecks(app, main) {
   const regularJar = `flecha_regular_${run}`;
   const privateJar = `flecha_incognito_${run}`;
 
-  assert.equal((await jarPage(app, main, '/jar/set', regularJar, false)).title, `${regularJar}:set`);
+  // Each jar page titles itself after reading its storage entry back, so a write that never
+  // happened fails here instead of passing the disk scan.
+  assert.equal((await jarPage(app, main, '/jar/set', regularJar, false)).title, `${regularJar}:set:stored`,
+    'the regular page did not read back its storage entry');
   const first = await openIncognito(app);
   assert.equal(first.session, 1);
 
-  assert.equal((await jarPage(app, first.window, '/jar/check', regularJar, true)).title, `${regularJar}:absent`,
-    'a regular cookie reached the incognito window');
+  assert.equal((await jarPage(app, first.window, '/jar/check', regularJar, true)).title, `${regularJar}:absent:empty`,
+    'a regular cookie or storage entry reached the incognito window');
   const set = await jarPage(app, first.window, '/jar/set', privateJar, true);
-  assert.equal((await jarPage(app, first.window, '/jar/check', privateJar, true)).title, `${privateJar}:present`,
-    'the incognito window lost its own cookie within the session');
+
+  assert.equal(set.title, `${privateJar}:set:stored`, 'the incognito page did not read back its storage entry');
+  assert.equal((await jarPage(app, first.window, '/jar/check', privateJar, true)).title, `${privateJar}:present:stored`,
+    'the incognito window lost its own cookie or storage entry within the session');
   // The regular window lists its cookies without naming the incognito one in its address.
   const after = app.events.length;
   const listTab = active(await app.command('open', { url: base + '/jar/list', window: main })).activeTabId;
@@ -696,7 +701,7 @@ async function incognitoChecks(app, main) {
 
   assert(listed.includes(regularJar), `the regular window lost its cookie: ${listed}`);
   assert(!listed.includes(privateJar), 'an incognito cookie reached the regular window');
-  pass('regular and incognito cookies stayed in their own jars, and the incognito one lasted for its session');
+  pass('regular and incognito cookies and storage stayed apart, and the incognito ones lasted for their session');
 
   // A location grant in each kind of window. The incognito page is on another host name, so
   // its origin is one the regular window never visits.
@@ -743,15 +748,39 @@ async function incognitoChecks(app, main) {
   await app.wait('CEF closure of the incognito pages', event => event.type === 'closed' && event.tab === set.tab);
   const second = await openIncognito(app);
   assert.equal(second.session, 2);
-  assert.equal((await jarPage(app, second.window, '/jar/check', privateJar, true)).title, `${privateJar}:absent`,
-    'a new incognito session kept the last one\'s cookie');
+  assert.equal((await jarPage(app, second.window, '/jar/check', privateJar, true)).title, `${privateJar}:absent:empty`,
+    'a new incognito session kept the last one\'s cookie or storage entry');
   const { downloads: afterSession } = await app.command('snapshot');
   assert(!Object.values(afterSession).flat().some(privateDownload), 'the ended session\'s download is still listed');
   assert.equal(readFileSync(savedFile, 'utf8'), downloadBody, 'closing the session removed the downloaded file');
-  await app.command('close_window', { window: second.window });
   pass('closing the last incognito window destroyed its context: the next session started with an empty jar, and its download left the list but kept its file');
 
-  await app.quit();
+  // Closing the last regular window leaves the incognito one open, as Chromium does; closing
+  // that one quits.
+  const privatePage = incognitoTab(await app.command('snapshot'), second.window);
+  await app.command('close_window', { window: main });
+
+  const regularClosed = await poll('GPUI to close the regular window', async () => {
+    const snapshot = await app.command('snapshot');
+
+    return !snapshot.nativeWindows.includes(main) && snapshot;
+  });
+
+  assert.deepEqual(regularClosed.nativeWindows, [second.window], 'the incognito window closed with the regular one');
+  assert(regularClosed.browsers.some(page => page.tab === privatePage), 'the incognito page closed with the regular window');
+  assert(regularClosed.browsers.every(page => page.partition === `incognito-${second.session}`),
+    `a regular page outlived its last window: ${JSON.stringify(regularClosed.browsers)}`);
+
+  const beforeQuit = app.events.length;
+
+  await app.command('close_window', { window: second.window });
+
+  const drained = await app.wait('every CEF browser to close', event => event.type === 'drained', beforeQuit);
+
+  assert.equal(drained.live, 0, 'CEF browsers outlived the quit');
+  await app.exited();
+  pass('closing the last regular window left the incognito window and its page open, and closing that quit');
+
   const profile = process.env.FLECHA_PROFILE;
   const kept = filesContaining(profile, regularJar).map(path => relative(profile, path));
   assert(kept.length, 'the disk scan found nothing a regular window saved');
@@ -764,7 +793,7 @@ async function incognitoChecks(app, main) {
   await restarted.wait('restored CEF context ready', event => event.type === 'ready');
   const restored = await restarted.command('snapshot');
   assert.equal(restored.incognito, null);
-  assert.deepEqual(restored.nativeWindows, restored.core.windows.map(window => window.id).sort());
+  assert.deepEqual(restored.nativeWindows, [main], 'the regular window did not come back');
   assert(Object.values(restored.core.tabs).every(tab => !tab.url.includes(privateJar)));
   pass('restart restored no incognito window or tab');
   await restarted.quit();

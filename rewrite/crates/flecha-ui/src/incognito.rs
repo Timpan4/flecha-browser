@@ -430,6 +430,10 @@ mod tests {
             "the incognito window was closed with it"
         );
         assert!(controller.model.regular_windows().is_empty());
+        assert!(
+            controller.model.state(&regular).is_none(),
+            "a late frame of the closed window could open its page again"
+        );
         assert_eq!(controller.model.incognito_windows().len(), 1);
         assert!(controller.model.active(&private).is_some());
         controller.act(&private, Action::CloseWindow).unwrap();
