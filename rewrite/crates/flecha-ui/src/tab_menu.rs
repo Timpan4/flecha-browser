@@ -90,6 +90,7 @@ impl Controller {
                                     space: &space,
                                     window: &owner,
                                 },
+                                None,
                             )
                             .then_some(())
                             .context("could not move the tab");
@@ -97,7 +98,7 @@ impl Controller {
                     _ => return Ok(()),
                 };
                 ensure!(
-                    self.place_tab(window, id, placement),
+                    self.place_tab(window, id, placement, None),
                     "could not move the tab"
                 );
             }

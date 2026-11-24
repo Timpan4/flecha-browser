@@ -260,7 +260,7 @@ async function capture(name, colors, window = 'root') {
   });
 }
 
-async function captureUntil(name, window, mismatch) {
+async function captureUntil(name, window, mismatch, signal) {
   waitingFor = `${name} capture`;
   const path = join(out, `${name}.png`);
   let previous;
@@ -268,6 +268,7 @@ async function captureUntil(name, window, mismatch) {
   // X can still expose the previous frame after GPUI acknowledges presentation.
   // The launcher watchdog bounds both the capture attempts and their subprocesses.
   for (;;) {
+    signal?.throwIfAborted();
     execFileSync('magick', ['import', '-window', window, path]);
     const reason = mismatch(path);
 
@@ -282,7 +283,7 @@ async function captureUntil(name, window, mismatch) {
       previous = reason;
     }
 
-    await delay(100); // Matches Spike 1's capture readiness polling.
+    await delay(100, undefined, { signal }); // Matches Spike 1's capture readiness polling.
   }
 }
 
@@ -527,8 +528,8 @@ async function sidebarFocus(app, left) {
   assert.deepEqual(active(split).split, [left, right]);
   await keyDelivery(app, { A: left, B: right }, 'y', 'sidebar split', 'B');
 
-  // Pane A's row title, one 32px row plus its 2px margins further down.
-  execFileSync(x11Driver, ['click', 95, 269]);
+  // The split pair replaces both rows at the first row's position, with pane A on the left.
+  execFileSync(x11Driver, ['click', 50, 235]);
   await waitForSelection(app, left, 'sidebar selected pane A');
   await keyDelivery(app, { A: left, B: right }, 'z', 'sidebar select', 'A');
 
@@ -729,6 +730,148 @@ async function openTab(app, path) {
   await app.loaded(tab, path.split('?')[0], after);
 
   return tab;
+}
+
+async function tabDrags(app) {
+  const space = win(await app.command('new_space')).activeSpaceId;
+  const pinned = await openTab(app, '/opener');
+  await app.command('pin', { tab: pinned });
+  const favorite = await openTab(app, '/closed');
+  await app.command('favorite', { tab: favorite });
+  await app.command('new_folder', { name: 'Drag fixtures' });
+  const a = await openTab(app, '/open');
+  const b = await openTab(app, '/split');
+  const c = await openTab(app, '/peek');
+  await app.present();
+  execFileSync(x11Driver, ['focus', 'Flecha']);
+
+  const [x, y, width, height] = execFileSync(x11Driver, ['geometry', 'Flecha'], { encoding: 'utf8' })
+    .trim().split(' ').map(Number);
+
+  const pointer = (op, [localX, localY]) => execFileSync(x11Driver, [op, x + localX, y + localY]);
+
+  // Sidebar dimensions from tokens.rs at the default sidebar width. The drag adds the 4px
+  // Pinned end target. Each visible row, including a split pair, takes 32px plus its margins.
+  const pinnedHeader = 10 + 28 + 8 + 36 + 8 + 44 + 8 + 26 + 8;
+  const firstPinned = pinnedHeader + 22 + 1;
+  const rowHeight = 32 + 2;
+
+  const pinTop = index => firstPinned + index * rowHeight;
+
+  const todayTop = (index, pinnedRows, dragging = false) =>
+    pinTop(pinnedRows) + (dragging ? 4 : 0) + 8 + 30 + 34 + index * rowHeight;
+
+  const today = (index, pinnedRows = 2) => [60, todayTop(index, pinnedRows) + 16];
+  const beforeToday = index => [60, todayTop(index, 2, true) + 2];
+  const folder = index => [60, pinTop(index) + 16];
+  const favoriteTile = (index = 0) => [36 + 62 * index, 112];
+  const pane = fraction => [260 + Math.round((width - 260) * fraction), Math.floor(height / 2)];
+  const snapshot = () => app.command('snapshot');
+  const pins = state => state.core.spaces.find(candidate => candidate.id === space).pinnedFlat;
+  const pinOrder = state => pins(state).filter(node => node.depth === 0).map(node => node.tabId ?? node.id);
+  const children = state => pins(state).filter(node => node.depth === 1).map(node => node.tabId);
+
+  const folderId = pins(await snapshot()).find(node => node.name === 'Drag fixtures').id;
+
+  const drag = async (label, from, to, preview) => {
+    waitingFor = label;
+    pointer('press', from);
+
+    try {
+      pointer('move', [from[0] + 8, from[1]]);
+      await app.present();
+      pointer('move', to);
+      await app.present();
+
+      if (preview) await preview();
+    } finally {
+      execFileSync(x11Driver, ['release']);
+    }
+
+    await app.present();
+    waitingFor = label;
+
+    return snapshot();
+  };
+
+  const retain = name => {
+    if (existsSync('/mnt/visual')) copyFileSync(join(out, name + '.png'), join('/mnt/visual', name + '.png'));
+  };
+
+  const cue = (name, rgb, crop) => async () => {
+    await captureUntil(name, 'root', path => {
+      const pixels = execFileSync('magick', [path, '-crop', crop, '+repage', '-depth', '8', 'rgb:-']);
+
+      // Xvfb's composited color differed from the opaque blue token by up to three channel values.
+      for (let index = 0; index < pixels.length; index += 3) {
+        if (rgb.every((channel, offset) => Math.abs(channel - pixels[index + offset]) <= 3)) return;
+      }
+
+      return 'the highlighted border did not appear in ' + crop;
+    }, AbortSignal.timeout(stepTimeoutMs));
+    retain(name);
+  };
+
+  pointer('click', today(1));
+  await app.present();
+  const clicked = active(await snapshot());
+  assert.equal(clicked.activeTabId, b);
+  assert.deepEqual(clicked.today, [c, b, a]);
+  assert.equal(clicked.split, undefined);
+
+  const insertionCrop = '64x6+' + (x + 185) + '+' + (y + todayTop(0, 2, true) - 1);
+  let state = await drag('reorder Today', today(2), beforeToday(0), cue('drag-insertion', [58, 166, 217], insertionCrop));
+  assert.deepEqual(active(state).today, [a, c, b]);
+  assert.equal(active(state).activeTabId, b);
+  pass('a click selected its tab and a drag reordered Today with a visible insertion line');
+
+  const viewportCrop = '64x6+' + (x + 300) + '+' + (y + 8);
+  state = await drag('drop on the left of the viewport', today(0), pane(0.25), cue('drag-split-preview', [31, 111, 181], viewportCrop));
+  assert.deepEqual(active(state).split, [a, b]);
+  assert.equal(active(state).activeTabId, a);
+  await capture('drag-split-pair', ['#147A70', '#703496']);
+  retain('drag-split-pair');
+  state = await drag('drop on the right of the existing split', today(1), pane(0.75));
+  assert.deepEqual(active(state).split, [a, c]);
+  assert.equal(active(state).activeTabId, c);
+  state = await drag('split onto a pinned row', today(1), [125, pinTop(0) + 16]);
+  assert.deepEqual(active(state).split, [pinned, b]);
+  pass('viewport drops showed a highlight, created and replaced a split, and a sidebar row drop split with that tab');
+
+  const beforeCancel = active(state);
+  state = await drag('cancel over Favorites', today(0), favoriteTile(), () => {
+    execFileSync(x11Driver, ['key', 'Escape']);
+  });
+  assert.deepEqual(active(state), beforeCancel);
+  assert.deepEqual(state.core.favorites, [favorite]);
+  state = await drag('drop outside the tab targets', today(0), [60, height - 100]);
+  assert.deepEqual(active(state), beforeCancel);
+  pass('Escape and an outside drop cancelled the drag without changing tabs');
+
+  state = await drag('Today to Pinned', today(0), [60, pinTop(0) + 2]);
+  assert.deepEqual(pinOrder(state), [a, pinned, folderId]);
+  state = await drag('reorder Pinned', folder(1), [60, pinTop(0) + 2]);
+  assert.deepEqual(pinOrder(state), [pinned, a, folderId]);
+  state = await drag('Pinned into a folder', folder(1), folder(2));
+  assert.deepEqual(children(state), [a]);
+  state = await drag('Today into a folder', today(0, 3), folder(1));
+  assert.deepEqual(children(state), [a, c]);
+  state = await drag('reorder folder children', folder(3), [65, pinTop(2) + 2]);
+  assert.deepEqual(children(state), [c, a]);
+  state = await drag('folder to Favorites', folder(2), favoriteTile());
+  assert.deepEqual(state.core.favorites, [c, favorite]);
+  state = await drag('reorder Favorites', favoriteTile(1), favoriteTile());
+  assert.deepEqual(state.core.favorites, [favorite, c]);
+  state = await drag('Favorites to Pinned', favoriteTile(1), [60, pinnedHeader + 11]);
+  assert.deepEqual(pinOrder(state), [pinned, folderId, c]);
+  state = await drag('folder to Today', folder(2), [60, todayTop(0, 4, true) - 17]);
+  assert.deepEqual(active(state).today, [b, a]);
+  state = await drag('Pinned to Today', folder(2), [60, todayTop(0, 3, true) - 17]);
+  assert.deepEqual(active(state).today, [b, a, c]);
+  assert.deepEqual(children(state), []);
+  pass('reordered Pinned, a folder and Favorites, and moved tabs between all sidebar sections');
+
+  return state.core;
 }
 
 // HTML fullscreen: the page alone in its window without the sidebar, which comes back when Esc
@@ -1671,10 +1814,17 @@ async function verifySlice() {
     await restarted.command('switch', { space: shared });
     await cookie(restarted, 'Shared cookie');
     pass('the isolated cookie persisted after restart and stayed out of the ordinary Space');
+    const dragged = mode === 'slice' ? await tabDrags(restarted) : undefined;
     await restarted.quit();
 
     const popups = launch('popups');
     await popups.wait('CEF context ready for popups', event => event.type === 'ready');
+
+    if (dragged) {
+      assert.deepEqual((await popups.command('snapshot')).core, dragged);
+      pass('tab drag order, placements and split survived an isolated restart');
+    }
+
     await popupChecks(popups);
   } else {
     await app.quit();

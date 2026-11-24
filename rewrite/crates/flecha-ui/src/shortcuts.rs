@@ -408,6 +408,11 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if event.keystroke.key == "escape" && self.cancel_tab_drag(window, cx) {
+            self.consumed_keys.insert(event.keystroke.key.clone());
+            cx.stop_propagation();
+            return;
+        }
         let focused = self.sync_page_focus(window, cx);
         self.bindings
             .refresh(&self.state.borrow().model.core.settings.keybindings);
