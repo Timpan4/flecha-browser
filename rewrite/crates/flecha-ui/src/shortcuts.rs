@@ -5,8 +5,8 @@ use flecha_core::{
     shortcuts::{self, Keybindings, Platform},
 };
 use gpui::{
-    ClickEvent, Context, FontWeight, InteractiveElement as _, IntoElement, KeyDownEvent,
-    Keystroke, ParentElement as _, StatefulInteractiveElement as _, Styled as _, Window, div, px,
+    ClickEvent, Context, FontWeight, InteractiveElement as _, IntoElement, KeyDownEvent, Keystroke,
+    ParentElement as _, StatefulInteractiveElement as _, Styled as _, Window, div, px,
 };
 
 use crate::command_bar::Command;

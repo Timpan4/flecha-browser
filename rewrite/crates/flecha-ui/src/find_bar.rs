@@ -163,15 +163,19 @@ impl Shell {
 
     pub(crate) fn find_panel(&self, find: &FindSession, cx: &Context<Self>) -> Div {
         let step = |id, label, forward| {
-            // The chevron points right; a quarter turn either way points it up or down.
-            let turn = if forward { 0.25 } else { -0.25 };
-            turned_icon_button(id, "chevron", label, turn).on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                if let Some(action) = this.find.as_ref().and_then(|find| find.bar.step(forward)) {
-                    this.focus.focus(window, cx);
-                    this.sync_page_focus(window, cx);
-                    this.apply_find(action, window, cx);
-                }
-            }))
+            // The chevron points right; a quarter turn points it down, three quarters up. GPUI's
+            // `percentage` takes only 0 to 1.
+            let turn = if forward { 0.25 } else { 0.75 };
+            turned_icon_button(id, "chevron", label, turn).on_click(cx.listener(
+                move |this, _: &ClickEvent, window, cx| {
+                    if let Some(action) = this.find.as_ref().and_then(|find| find.bar.step(forward))
+                    {
+                        this.focus.focus(window, cx);
+                        this.sync_page_focus(window, cx);
+                        this.apply_find(action, window, cx);
+                    }
+                },
+            ))
         };
         // The shipping find bar is Chromium's own, so this one is drawn as a `.popover`
         // (ui/styles.css:1010-1022) with `.icon-button`s.
@@ -223,11 +227,13 @@ impl Shell {
             )
             .child(step("find-previous", "Previous match", false))
             .child(step("find-next", "Next match", true))
-            .child(icon_button("find-close", "close", "Close find bar").on_click(cx.listener(
-                |this, _: &ClickEvent, window, cx| {
-                    this.apply_find(FindAction::Close, window, cx);
-                },
-            )))
+            .child(
+                icon_button("find-close", "close", "Close find bar").on_click(cx.listener(
+                    |this, _: &ClickEvent, window, cx| {
+                        this.apply_find(FindAction::Close, window, cx);
+                    },
+                )),
+            )
     }
 }
 

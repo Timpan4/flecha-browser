@@ -448,9 +448,11 @@ impl Shell {
             .p_0()
             .gap_0()
             .child(popover_header("Downloads").child(
-                icon_button("close-downloads", "close", "Close").on_click(cx.listener(
-                    |this, _: &ClickEvent, window, cx| this.dismiss_overlay(window, cx),
-                )),
+                icon_button("close-downloads", "close", "Close").on_click(
+                    cx.listener(|this, _: &ClickEvent, window, cx| {
+                        this.dismiss_overlay(window, cx)
+                    }),
+                ),
             ))
             .when_some(state.status_for(&self.id), |panel, status| {
                 panel.child(note(status.to_owned()).pt_0())
@@ -643,7 +645,9 @@ fn download_card(title: impl Into<gpui::SharedString>, stopped: bool) -> Div {
             div()
                 .truncate()
                 .font_weight(FontWeight::MEDIUM)
-                .when(stopped, |name| name.text_color(palette.text_3).line_through())
+                .when(stopped, |name| {
+                    name.text_color(palette.text_3).line_through()
+                })
                 .child(title.into()),
         )
 }

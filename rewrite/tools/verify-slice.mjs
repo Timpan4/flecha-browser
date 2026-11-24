@@ -1282,7 +1282,8 @@ async function visualParity(app, left) {
     await shot(`visual-zoom-${theme}`);
     key('Control_L', '0');
 
-    execFileSync(x11Driver, ['right-click', x + width - 200, y + 200]);
+    // Near the page's left edge, so the menu opens to the right without clipping.
+    execFileSync(x11Driver, ['right-click', x + 260 + 120, y + 200]);
     await shot(`visual-context-menu-${theme}`);
     key('Escape');
 

@@ -1043,7 +1043,7 @@ pub(crate) fn tinted_icon_button(
         )
 }
 
-/// `.icon-button` with its glyph turned by `turn` of a full circle, as an open folder turns its
+/// `.icon-button` with its glyph turned clockwise by `turn` (0 to 1) of a full circle, as an open folder turns its
 /// chevron (ui/styles.css:772-774).
 pub(crate) fn turned_icon_button(
     id: impl Into<gpui::ElementId>,

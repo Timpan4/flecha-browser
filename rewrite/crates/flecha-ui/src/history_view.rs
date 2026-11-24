@@ -326,11 +326,13 @@ impl Shell {
     fn drawer_heading(&self, title: &'static str, cx: &Context<Self>) -> Div {
         popover_header(title)
             .p_0()
-            .child(icon_button("close-overlay", "close", "Close").on_click(cx.listener(
-                |this, _: &ClickEvent, window, cx| {
-                    this.dismiss_overlay(window, cx);
-                },
-            )))
+            .child(
+                icon_button("close-overlay", "close", "Close").on_click(cx.listener(
+                    |this, _: &ClickEvent, window, cx| {
+                        this.dismiss_overlay(window, cx);
+                    },
+                )),
+            )
     }
 
     pub(crate) fn history_panel(&self, panel: &HistoryPanel, cx: &Context<Self>) -> Div {
@@ -357,52 +359,54 @@ impl Shell {
                 previous = Some(day);
             }
             let url = entry.url.clone();
-            list = list.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(tokens::DOWNLOAD_ACTIONS_GAP))
-                    .child(
-                        entry_link(format!("history-{url}"), &entry.title, &url).on_click(
-                            cx.listener({
-                                let url = url.clone();
-                                move |this, _: &ClickEvent, window, cx| {
-                                    this.navigate_from_overlay(
-                                        Action::Open(url.clone()),
-                                        window,
-                                        cx,
-                                    );
-                                }
-                            }),
-                        ),
-                    )
-                    .child(
-                        text_button(format!("delete-{url}"), "Delete")
-                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+            list =
+                list.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(tokens::DOWNLOAD_ACTIONS_GAP))
+                        .child(
+                            entry_link(format!("history-{url}"), &entry.title, &url).on_click(
+                                cx.listener({
+                                    let url = url.clone();
+                                    move |this, _: &ClickEvent, window, cx| {
+                                        this.navigate_from_overlay(
+                                            Action::Open(url.clone()),
+                                            window,
+                                            cx,
+                                        );
+                                    }
+                                }),
+                            ),
+                        )
+                        .child(text_button(format!("delete-{url}"), "Delete").on_click(
+                            cx.listener(move |this, _: &ClickEvent, _, cx| {
                                 dispatch(
                                     &this.state,
                                     &this.id,
                                     Action::DeleteHistory(url.clone()),
                                     cx,
                                 );
-                            })),
-                    ),
-            );
+                            }),
+                        )),
+                );
         }
         if !panel.exhausted {
-            list = list.child(text_button("load-history", "Load more").on_click(cx.listener(
-                |this, _: &ClickEvent, _, cx| {
-                    if let Overlay::History(panel) = &mut this.overlay {
-                        let state = this.state.borrow();
-                        if panel.revision == Some(state.history.revision)
-                            && panel.entries.len().is_multiple_of(PAGE)
-                        {
-                            panel.load(&state.history);
+            list = list.child(
+                text_button("load-history", "Load more").on_click(cx.listener(
+                    |this, _: &ClickEvent, _, cx| {
+                        if let Overlay::History(panel) = &mut this.overlay {
+                            let state = this.state.borrow();
+                            if panel.revision == Some(state.history.revision)
+                                && panel.entries.len().is_multiple_of(PAGE)
+                            {
+                                panel.load(&state.history);
+                            }
+                            cx.notify();
                         }
-                        cx.notify();
-                    }
-                },
-            )));
+                    },
+                )),
+            );
         } else if panel.entries.is_empty() && panel.error.is_none() {
             list = list.child(empty_note("No matching history"));
         }

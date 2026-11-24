@@ -13,6 +13,11 @@ use gpui::{BoxShadow, Rgba, point, px};
 pub(crate) struct Css {
     /// The custom property, or the rule's selector for a literal value.
     pub(crate) name: &'static str,
+    /// Where the token test finds the cited line.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only the token test reads the source")
+    )]
     pub(crate) file: &'static str,
     pub(crate) light: (u32, &'static str),
     /// The value under `prefers-color-scheme: dark`, where it differs.
@@ -48,10 +53,12 @@ const SETTINGS: &str = "ui/settings.css";
 const FLECHINHA: &str = "ui/flechinha.css";
 const SHELL: &str = "shell.css";
 const WINDOW_CONTROLS: &str = "ui/windowControls.css";
+#[cfg(test)]
 const APP: &str = "ui/app.ts";
+#[cfg(test)]
 const FRAME_API: &str = "../patches/0010-flecha-private-extension-api.patch";
+#[cfg(test)]
 const SPLIT: &str = "../patches/0019-flat-split-view-and-split-ratio.patch";
-const FLECHINHA_FRAME: &str = "../patches/0023-flechinha-windows.patch";
 
 pub(crate) const COLORS: &[Css] = &[
     both("--ink", TOKENS, 34, "#0b2545"),
@@ -252,12 +259,10 @@ cited! {
     SPACE_2 = 8., TOKENS: 75 "--space-2: 8px";
     SPACE_3 = 12., TOKENS: 76 "--space-3: 12px";
     SPACE_4 = 16., TOKENS: 77 "--space-4: 16px";
-    SPACE_5 = 24., TOKENS: 78 "--space-5: 24px";
     RADIUS_SM = 6., TOKENS: 79 "--radius-sm: 6px";
     RADIUS_MD = 8., TOKENS: 80 "--radius-md: 8px";
     RADIUS_LG = 12., TOKENS: 81 "--radius-lg: 12px";
     RADIUS_XL = 16., TOKENS: 82 "--radius-xl: 16px";
-    FAST_MS = 120., TOKENS: 91 "--fast: 120ms";
     MEDIUM_MS = 200., TOKENS: 92 "--medium: 200ms";
     /// `html, body` line height, a multiple of the font size.
     LINE_HEIGHT = 1.35, STYLES: 17 "font: 400 var(--text-md) / 1.35 var(--font)";
@@ -373,12 +378,9 @@ cited! {
     SWITCH_HEIGHT = 19., STYLES: 1557 "height: 19px";
     SWITCH_KNOB = 15., STYLES: 1570 "width: 15px";
     SITE_INSET = 12., STYLES: 1964 "--inset: 12px";
-    SITE_CONTROL = 76., STYLES: 1965 "--control: 76px";
     SITE_FAVICON = 24., STYLES: 1980 "width: 24px";
-    SITE_ACTION = 32., STYLES: 2019 "height: 32px";
     SWITCH_KNOB_INSET = 2., STYLES: 1568 "top: 2px";
     SWITCH_TRAVEL = 13., STYLES: 1583 "transform: translateX(13px)";
-    FIELD_LABEL_TOP = 4., STYLES: 1451 "margin-top: 4px";
     POPOVER_FOOTER_PAD_TOP = 10., STYLES: 1590 "padding: 10px 14px 12px";
     POPOVER_FOOTER_PAD_X = 14., STYLES: 1590 "padding: 10px 14px 12px";
     POPOVER_FOOTER_PAD_BOTTOM = 12., STYLES: 1590 "padding: 10px 14px 12px";
@@ -422,17 +424,12 @@ cited! {
     PALETTE_MODE_PAD_Y = 2., STYLES: 1295 "padding: 2px 8px";
     PALETTE_MODE_PAD_X = 8., STYLES: 1295 "padding: 2px 8px";
 
-    // Menus and questions the shell draws (shell.css).
-    MENU_MIN_WIDTH = 180., SHELL: 75 "min-width: 180px";
+    // The page menu the shell draws (shell.css).
     MENU_PAD = 5., SHELL: 78 "padding: 5px";
     MENU_ITEM_PAD_Y = 4., SHELL: 88 "padding: 4px 10px";
     MENU_ITEM_PAD_X = 10., SHELL: 88 "padding: 4px 10px";
     MENU_ITEM_RADIUS = 4., SHELL: 89 "border-radius: 4px";
     MENU_DISABLED_OPACITY = 0.4, SHELL: 118 "opacity: 0.4";
-    MENU_SEPARATOR_Y = 5., SHELL: 133 "margin: 5px 6px";
-    MENU_SEPARATOR_X = 6., SHELL: 133 "margin: 5px 6px";
-    DIALOG_WIDTH = 360., SHELL: 140 "width: 360px";
-    DIALOG_PAD = 20., SHELL: 141 "padding: 20px";
 
     // Settings.
     SETTINGS_NAV = 216., SETTINGS: 5 "--nav: 216px";
@@ -441,7 +438,6 @@ cited! {
     SETTINGS_NAV_ITEM_PAD = 8., SETTINGS: 79 "padding: 0 8px";
     SETTINGS_TITLEBAR = 52., SETTINGS: 150 "height: 52px";
     SETTINGS_PANE_PAD_X = 28., SETTINGS: 151 "padding: 0 28px";
-    SETTINGS_ROW = 52., SETTINGS: 237 "min-height: 52px";
     SETTINGS_ROW_PAD_Y = 10., SETTINGS: 238 "padding: 10px 16px";
     SETTINGS_ROW_PAD_X = 16., SETTINGS: 238 "padding: 10px 16px";
     SETTINGS_CARD_GAP = 14., SETTINGS: 221 "margin-bottom: 14px";
@@ -458,8 +454,6 @@ cited! {
     SETTINGS_NAV_GLYPH = 14., SETTINGS: 105 "width: 14px";
     SETTINGS_PANE_PAD_TOP = 6., SETTINGS: 164 "padding: 6px 28px 28px";
     SETTINGS_PANE_PAD_BOTTOM = 28., SETTINGS: 164 "padding: 6px 28px 28px";
-    SETTINGS_ROW_RULE_INSET = 16., SETTINGS: 250 "left: 16px";
-    SETTINGS_ROW_SUB_GAP = 2., SETTINGS: 267 "margin-top: 2px";
     SETTINGS_SWITCH_WIDTH = 34., SETTINGS: 328 "width: 34px";
     SETTINGS_SWITCH_HEIGHT = 20., SETTINGS: 329 "height: 20px";
     SETTINGS_SWITCH_KNOB_INSET = 2., SETTINGS: 340 "top: 2px";
@@ -471,7 +465,6 @@ cited! {
     WINDOW_CONTROL = 20., WINDOW_CONTROLS: 9 "width: 20px";
     WINDOW_CONTROL_INSET = 4., WINDOW_CONTROLS: 18 "inset: 4px";
     WINDOW_CONTROL_GLYPH = 10., WINDOW_CONTROLS: 44 "width: 10px";
-    FLECHINHA_FRAME_TOOLBAR = 44., FLECHINHA_FRAME: 343 "kFlechinhaToolbarHeight = 44";
     FLECHINHA_CTA_PAD_LEFT = 10., FLECHINHA: 329 "padding: 0 12px 0 10px";
     FLECHINHA_CTA_PAD_RIGHT = 12., FLECHINHA: 329 "padding: 0 12px 0 10px";
     FLECHINHA_ADDRESS_MARGIN = 6., FLECHINHA: 122 "margin: 0 6px";
@@ -515,8 +508,6 @@ pub(crate) const MONO: &str = "JetBrains Mono";
 /// The `--ease` curve, `cubic-bezier(0.2, 0.8, 0.2, 1)` (ui/tokens.css:90).
 pub(crate) const EASE: (f32, f32, f32, f32) = (0.2, 0.8, 0.2, 1.);
 
-/// `--fast`, for hover and press feedback.
-pub(crate) const FAST: Duration = Duration::from_millis(FAST_MS as u64);
 /// `--medium`, for panels that open.
 pub(crate) const MEDIUM: Duration = Duration::from_millis(MEDIUM_MS as u64);
 
