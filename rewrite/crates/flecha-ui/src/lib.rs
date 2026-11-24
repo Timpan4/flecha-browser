@@ -91,7 +91,7 @@ impl FirstWindow {
 pub fn start(
     cx: &mut App,
     runtime: &mut Runtime,
-    first: FirstWindow,
+    first: Option<FirstWindow>,
     cef_profile: PathBuf,
     store: StateStore,
     loaded: LoadedState,
@@ -106,11 +106,23 @@ pub fn start(
         options.adblock_fixture_port,
         failure,
     )?));
-    controller
-        .borrow()
-        .engine
-        .start_compositing(&first.compositing);
-    controller.borrow_mut().first_window = Some(first.handle);
+    match first {
+        Some(first) => {
+            controller
+                .borrow()
+                .engine
+                .start_compositing(&first.compositing);
+            controller.borrow_mut().first_window = Some(first.handle);
+        }
+        // The profile looked held, so no window probed the GPU, yet CEF started here.
+        None => {
+            use std::io::Write as _;
+            let _ = writeln!(
+                std::io::stderr(),
+                "page frames: CPU copies, another process held the profile when Flecha started"
+            );
+        }
+    }
     sync_windows(&controller, cx)?;
     if options.verify {
         verify::install(&controller, cx);

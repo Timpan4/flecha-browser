@@ -33,6 +33,10 @@ macro_rules! log {
 #[derive(Clone, Default)]
 pub struct Compositing {
     shared: Option<Shared>,
+    /// The Ozone platform of the window GPUI opened, so Chromium uses GPUI's display
+    /// connection. Unknown without a window.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    ozone: Option<&'static str>,
 }
 
 #[derive(Clone)]
@@ -64,11 +68,15 @@ impl Compositing {
                             render_node,
                             ozone,
                         }),
+                        ozone: Some(ozone),
                     }
                 }
                 Err(error) => {
                     log!("page frames: CPU copies, shared textures are unavailable: {error:#}");
-                    Self::software()
+                    Self {
+                        shared: None,
+                        ozone: Some(ozone),
+                    }
                 }
             }
         }
@@ -77,6 +85,19 @@ impl Compositing {
             let _ = window;
             Self::software()
         }
+    }
+
+    /// The Ozone platform Chromium must use: the window's, or without one, Wayland when
+    /// `WAYLAND_DISPLAY` names a display. GPUI treats an empty value as unset too.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn ozone(&self) -> &'static str {
+        self.ozone.unwrap_or_else(|| {
+            if std::env::var_os("WAYLAND_DISPLAY").is_some_and(|display| !display.is_empty()) {
+                "wayland"
+            } else {
+                "x11"
+            }
+        })
     }
 
     /// The render node Chromium must allocate shared textures on.
@@ -224,6 +245,7 @@ mod tests {
                 render_node: PathBuf::from("/dev/dri/renderD128"),
                 ozone: "wayland",
             }),
+            ozone: Some("wayland"),
         });
         assert!(compositor.shares_textures());
         compositor.turn_off("import failed");

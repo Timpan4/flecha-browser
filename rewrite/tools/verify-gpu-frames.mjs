@@ -3,9 +3,9 @@
 // `fallback` mode, the switch to CPU copies after an import fails. Run it through
 // verify-gpu-frames.sh.
 import assert from 'node:assert/strict';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { EventEmitter, once } from 'node:events';
-import { createWriteStream, readdirSync, readFileSync, renameSync } from 'node:fs';
+import { createWriteStream, readdirSync, readFileSync, readlinkSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -328,12 +328,18 @@ await logged(new RegExp(`^page frames: browser ${popup.browser} receives shared 
 
 pass('a scripted popup window rendered its page from shared textures');
 
-// A second launch opens its own first window to probe the GPU, then CEF hands its address
-// to this Flecha and it exits. execFileSync throws unless it exits 0.
+// Chromium's process singleton marks the profile as held by `<hostname>-<pid>`.
+assert.match(readlinkSync(join(process.env.FLECHA_PROFILE, 'cef', 'SingletonLock')), /-\d+$/);
+
+// A second launch sees the profile held and opens no window, so it never probes the GPU
+// and logs no page frames line. CEF hands its address to this Flecha and it exits.
 const relaunchUrl = `${base}/peek?relaunched`;
 const relaunched = app.events.length;
+const second = spawnSync('./target/debug/flecha', ['--open', relaunchUrl], { encoding: 'utf8' });
 
-execFileSync('./target/debug/flecha', ['--open', relaunchUrl], { stdio: 'pipe' });
+assert.equal(second.status, 0, `the second launch failed:\n${second.stderr}`);
+
+assert(!/^page frames: /m.test(second.stderr), `the second launch opened a window:\n${second.stderr}`);
 
 const relaunchLoad = await app.wait('the second launch\'s address', event =>
   event.type === 'loaded' && event.url === relaunchUrl, relaunched);
@@ -342,7 +348,7 @@ const relaunchBrowser = await browserOf(relaunchLoad.tab, relaunched);
 
 await logged(new RegExp(`^page frames: browser ${relaunchBrowser.browser} receives shared textures$`));
 
-pass('a second launch exited 0 and its address opened here with shared textures');
+pass('a second launch opened no window, exited 0, and its address opened here with shared textures');
 
 const lines = frameLines();
 

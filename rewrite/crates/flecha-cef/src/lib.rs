@@ -40,7 +40,7 @@ pub use permissions::{PermissionEvent, PermissionPrompt};
 pub use popup::{Disposition, Opened};
 use popup::{Pending, Popups};
 use runtime::path_string;
-pub use runtime::{Relaunches, Runtime, Start};
+pub use runtime::{Relaunches, Runtime, Start, profile_in_use};
 use services::Services;
 pub use sleep::{Discarded, SleepChange};
 
