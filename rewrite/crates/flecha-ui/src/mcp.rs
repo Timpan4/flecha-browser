@@ -781,8 +781,8 @@ impl Controller {
         if self.ready && self.agent_viewport().is_none() {
             return Err(no_page_area());
         }
-        // A tab whose page can't start or that can't be saved is undone whole: closing it the
-        // usual way would archive its address.
+        // A tab whose page can't start or whose snapshot never replaced the saved one is undone
+        // whole: closing it the usual way would archive its address.
         let before = self.model.core.clone();
         let id = agent::state::open_agent_tab(&mut self.model.core, model::tab_id(), input, now())?;
         if let Err(error) = self.agent_browser(&id).and_then(|_| self.agent_changed()) {
@@ -807,9 +807,20 @@ impl Controller {
         self.agent_changed()
     }
 
+    /// Saves an agent's change. It fails only when the snapshot never replaced the saved one. A
+    /// snapshot in place whose directory entry could not be synced counts as saved, as an
+    /// import's does, and the regular window's status line says so.
     fn agent_changed(&mut self) -> ToolResult<()> {
         self.update_visibility();
-        self.save().map_err(|error| ToolError(error.to_string()))
+        let synced = self
+            .replace_snapshot()
+            .map_err(|error| ToolError(format!("Could not save the session: {error:#}")))?;
+        if let Err(error) = synced {
+            let warning = format!("Could not sync the session directory to disk: {error}.");
+            eprintln!("agent bridge: {warning}");
+            self.status.set(None, warning);
+        }
+        Ok(())
     }
 
     fn agent_status(&self, tab: &TabId) -> ToolResult<Status> {
@@ -1201,6 +1212,39 @@ mod tests {
         assert!(
             controller.model.core == before,
             "the failed open_tab left its tab behind"
+        );
+    }
+
+    #[test]
+    fn open_tab_saved_without_a_directory_sync_stays_open_in_memory_and_on_disk() {
+        let profile = tempfile::tempdir().unwrap();
+        let (mut controller, regular) = controller(&profile);
+        controller.page_area(regular, page_area());
+        controller.store.fail_next_directory_sync();
+
+        let opened = tool(
+            &mut controller,
+            "open_tab",
+            json!({ "url": "example.org/agent" }),
+        );
+        assert!(!failed(&opened), "{opened}");
+        let opened: Value = serde_json::from_str(text(&opened)).unwrap();
+        let id = TabId::new(opened["tabId"].as_str().unwrap());
+        assert!(controller.model.core.tab(&id).is_some());
+        assert!(
+            controller
+                .status
+                .text(None)
+                .is_some_and(|text| text.contains("Could not sync the session directory")),
+            "the window did not say the save may not last"
+        );
+        drop(controller);
+
+        let reopened = Controller::open_test_profile(profile.path()).unwrap();
+        assert_eq!(
+            reopened.model.core.tab(&id).map(|tab| tab.url.as_str()),
+            Some("https://example.org/agent"),
+            "the saved session lost the tab the agent was told is open"
         );
     }
 

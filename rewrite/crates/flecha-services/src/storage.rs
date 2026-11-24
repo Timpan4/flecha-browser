@@ -1,6 +1,7 @@
 use std::fs;
 use std::io::{self, BufReader, Write as _};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context as _, Result};
 use flecha_core::{
@@ -9,12 +10,12 @@ use flecha_core::{
 };
 use serde_json::Value;
 
-pub struct StateStore(PathBuf);
+pub struct StateStore(PathBuf, AtomicBool);
 
 impl StateStore {
     pub fn open(directory: &Path) -> Result<(Self, LoadedState)> {
         fs::create_dir_all(directory).context("create session storage")?;
-        let store = Self(directory.to_path_buf());
+        let store = Self(directory.to_path_buf(), AtomicBool::new(false));
         let current = store.read(Slot::Current)?;
         let last_good = store.read(Slot::LastGood)?;
         Ok((store, storage::load(current.as_ref(), last_good.as_ref())?))
@@ -78,11 +79,21 @@ impl StateStore {
         let directory = fs::File::open(&self.0)?;
         file.persist(self.path(write.slot()))
             .context("replace session snapshot")?;
+        if self.1.swap(false, Ordering::Relaxed) {
+            return Ok(Err(io::Error::other("injected directory sync failure")));
+        }
         #[cfg(unix)]
         let synced = directory.sync_all();
         #[cfg(not(unix))]
         let synced = Ok(());
         Ok(synced)
+    }
+
+    /// Makes the next snapshot replace the saved one and then report that the directory entry
+    /// could not be synced, so callers can check how they treat that error.
+    #[doc(hidden)]
+    pub fn fail_next_directory_sync(&self) {
+        self.1.store(true, Ordering::Relaxed);
     }
 }
 

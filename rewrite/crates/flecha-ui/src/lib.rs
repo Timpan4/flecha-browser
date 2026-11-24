@@ -419,12 +419,18 @@ impl Controller {
     /// The one place the browser state reaches storage. It saves the regular state alone:
     /// incognito windows keep theirs in `Model::incognito`, which never comes here.
     fn save(&mut self) -> Result<()> {
+        self.replace_snapshot()?.context("Sync session storage")
+    }
+
+    /// [`Self::save`], telling a snapshot that never replaced the saved one (`Err`) from one in
+    /// place whose directory entry could not be synced (`Ok(Err)`).
+    fn replace_snapshot(&mut self) -> Result<std::io::Result<()>> {
         let write = self
             .snapshots
             .ready()
             .expect("session recovered")
             .save_current(&self.model.core)?;
-        self.store.write(&write)
+        self.store.replace_snapshot(&write)
     }
 
     fn act(&mut self, window: &WindowId, action: Action) -> Result<()> {
