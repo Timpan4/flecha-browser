@@ -1,9 +1,12 @@
 use std::fs;
-use std::io::{self, Write as _};
+use std::io::{self, BufReader, Write as _};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
-use flecha_core::storage::{self, BackupWrite, LoadedState, Slot};
+use flecha_core::{
+    BrowserState,
+    storage::{self, BackupWrite, LoadedState, Slot},
+};
 use serde_json::Value;
 
 pub struct StateStore(PathBuf);
@@ -38,23 +41,55 @@ impl StateStore {
         }
     }
 
+    pub fn has_before_import(&self) -> bool {
+        !matches!(
+            self.path(Slot::BeforeImport).symlink_metadata(),
+            Err(error) if error.kind() == io::ErrorKind::NotFound
+        )
+    }
+
+    pub fn read_before_import(&self) -> Result<Option<BrowserState>> {
+        let file = match fs::File::open(self.path(Slot::BeforeImport)) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error).context("Read the pre-import backup"),
+        };
+        let value =
+            serde_json::from_reader(BufReader::new(file)).context("Read the pre-import backup")?;
+        Ok(Some(
+            storage::state_before_import(Some(&value))?
+                .context("The pre-import backup is unreadable")?,
+        ))
+    }
+
     pub fn write(&self, write: &BackupWrite) -> Result<()> {
+        self.replace_snapshot(write)?
+            .context("Sync session storage")
+    }
+
+    /// An outer error leaves the old snapshot in place. An inner error means the
+    /// new snapshot is in place but the directory entry could not be synced.
+    pub fn replace_snapshot(&self, write: &BackupWrite) -> Result<io::Result<()>> {
         let mut file = tempfile::NamedTempFile::new_in(&self.0)?;
         serde_json::to_writer(&mut file, write.value())?;
         file.flush()?;
         file.as_file().sync_all()?;
+        #[cfg(unix)]
+        let directory = fs::File::open(&self.0)?;
         file.persist(self.path(write.slot()))
             .context("replace session snapshot")?;
         #[cfg(unix)]
-        fs::File::open(&self.0)?.sync_all()?;
-        Ok(())
+        let synced = directory.sync_all();
+        #[cfg(not(unix))]
+        let synced = Ok(());
+        Ok(synced)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flecha_core::{BrowserState, SpaceId, WindowId};
+    use flecha_core::{SpaceId, WindowId};
 
     #[test]
     fn damaged_bytes_are_set_aside_before_restoring_the_last_good_file() -> Result<()> {

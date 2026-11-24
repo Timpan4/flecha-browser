@@ -1292,6 +1292,19 @@ impl BrowserState {
         true
     }
 
+    pub fn folder_tab_ids(&self, id: &FolderId) -> Option<Vec<&TabId>> {
+        let PinnedNode::Folder { children, .. } = self
+            .spaces
+            .iter()
+            .find_map(|space| find_folder(&space.pinned, id))?
+        else {
+            return None;
+        };
+        let mut tabs = Vec::new();
+        collect_pins(children, &mut tabs);
+        Some(tabs)
+    }
+
     pub fn move_folder(
         &mut self,
         id: &FolderId,
@@ -1630,7 +1643,8 @@ impl Branch for PinnedNode {
     }
 }
 
-pub(crate) fn walk_pins(
+/// Visits pinned nodes in display order, with their depth and parent folder.
+pub fn walk_pins(
     nodes: &[PinnedNode],
 ) -> impl Iterator<Item = (&PinnedNode, usize, Option<&FolderId>)> {
     tree::walk(nodes).map(|(node, depth, parent)| {
