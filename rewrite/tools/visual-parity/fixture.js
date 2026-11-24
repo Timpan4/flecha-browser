@@ -17,16 +17,21 @@
     const self = new Proxy(function () {}, {
       get: (_, key) => {
         if (key === Symbol.toPrimitive) return () => '';
+
         if (key === 'then') return thenable ? (resolve) => resolve(settled) : undefined;
+
         return self;
       },
       apply: () => inert,
     });
+
     return self;
   };
+
   const inert = stub(true);
   const settled = stub(false);
   const fallback = (target) => new Proxy(target, { get: (object, key) => object[key] ?? inert[key] });
+
   // The four pages the rewrite's fixture visited, newest first, for the History page.
   const visited = ['open', 'split', 'peek', 'opener'].map((path, index) => ({
     id: String(index),
@@ -35,29 +40,37 @@
     lastVisitTime: Date.now() - index * 60_000,
     visitCount: 1,
   }));
+
   // incognito.ts reads this flag directly; the fixture is a normal window.
   const chrome = fallback({
     extension: { inIncognitoContext: false },
     history: fallback({ search: () => Promise.resolve(visited) }),
     runtime: fallback({ getURL: (path) => `chrome-extension://fixture${path}` }),
   });
+
   Object.defineProperty(window, 'chrome', { value: chrome, configurable: true, writable: true });
 
   const listeners = {};
+
   const api = (extra = {}) =>
     new Proxy(extra, {
       get(target, key) {
         if (key in target) return target[key];
-        if (typeof key === 'string' && key.startsWith('on')) return (cb) => (listeners[key] = cb);
+
+        if (String(key).startsWith('on')) return (cb) => (listeners[key] = cb);
+
         return () => Promise.resolve([]);
       },
     });
+
   const emit = (name, ...args) => listeners[name]?.(...args);
 
   const split = surface === 'split';
+
   const tabs = Object.fromEntries(
     [page('opener'), page('peek'), page('split'), page('open'), page('favorite')].map((tab) => [tab.id, tab]),
   );
+
   const personal = {
     id: 'personal',
     name: 'Personal',
@@ -69,9 +82,12 @@
     ],
     today: split ? ['opener', 'split'] : ['opener'],
     activeTabId: 'opener',
-    ...(split ? { split: ['opener', 'split'] } : {}),
   };
+
+  if (split) personal.split = ['opener', 'split'];
+
   const work = { id: 'work', name: 'Work', emoji: '💼', color: '#d9534c', pinned: [], today: [] };
+
   const state = {
     windowId: 'window',
     spaces: [personal, work],
@@ -96,6 +112,7 @@
 
   window.flecha = api({ ready: () => {} });
   window.flechinha = api({ ready: () => {} });
+
   const settingsView = {
     adBlock: true,
     searchEngine: 'google',
@@ -112,6 +129,7 @@
     openLinksInFlechinha: true,
     sidebarInPageFullscreen: false,
   };
+
   window.settings = api({ get: () => Promise.resolve(settingsView), set: () => Promise.resolve(settingsView) });
 
   const shellMenu = () => {
@@ -119,6 +137,7 @@
     menu.className = 'shell-menu';
     menu.style.left = '380px';
     menu.style.top = '200px';
+
     for (const [label, disabled] of [['Back', true], ['Forward', true], ['Reload', false], ['Inspect element', false]]) {
       const item = document.createElement('button');
       item.className = 'shell-menu-item';
@@ -126,6 +145,7 @@
       item.disabled = disabled;
       menu.append(item);
     }
+
     document.body.append(menu);
   };
 
@@ -142,15 +162,22 @@
         space: { name: 'Personal', emoji: '🏠' },
         searchEngineName: 'Google',
       });
+
       return;
     }
+
     if (location.pathname.endsWith('settings.html')) return;
     emit('onState', state);
     emit('onDownloads', []);
+
     if (surface === 'command-bar') emit('onPalette', 'navigate');
+
     if (surface === 'downloads') document.getElementById('downloads-panel').hidden = false;
+
     if (surface === 'site-controls' || surface === 'zoom') document.getElementById('btn-site').click();
+
     if (surface === 'peek') emit('onPeek', { url: `${origin}/peek`, title: 'Flecha fixture /peek', bounds: { x: 300, y: 40, width: 860, height: 960 } });
+
     if (surface === 'context-menu') shellMenu();
   });
 })();

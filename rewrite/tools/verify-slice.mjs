@@ -1243,17 +1243,22 @@ async function visualParity(app, left) {
     // GPUI's animations (popovers rise in --medium, 200ms) settle before the capture.
     await delay(400);
     await app.present();
+
     const [x, y, width, height] = execFileSync(x11Driver, ['geometry', window], { encoding: 'utf8' })
       .trim().split(' ').map(Number);
+
     const full = join(out, `${name}-root.png`);
     execFileSync('magick', ['import', '-window', 'root', full]);
     const cropped = join(out, `${name}.png`);
     execFileSync('magick', [full, '-crop', `${width}x${height}+${x}+${y}`, '+repage', cropped]);
+
     // isolated-run.sh binds FLECHA_VISUAL_OUT here; the scratch directory goes when the run passes.
     if (existsSync('/mnt/visual')) copyFileSync(cropped, join('/mnt/visual', `${name}.png`));
   };
+
   const geometry = () => execFileSync(x11Driver, ['geometry', 'Flecha'], { encoding: 'utf8' })
     .trim().split(' ').map(Number);
+
   const key = (...keys) => execFileSync(x11Driver, keys.length > 1 ? ['chord', ...keys] : ['key', keys[0]]);
   const click = (x, y) => execFileSync(x11Driver, ['click', Math.round(x), Math.round(y)]);
 
