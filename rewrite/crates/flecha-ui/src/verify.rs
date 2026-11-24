@@ -79,7 +79,25 @@ enum Command {
         tab: TabId,
         x: f32,
         y: f32,
+        #[serde(default)]
+        right: bool,
     },
+    /// Writes `text`, when given, to GPUI's clipboard, then reads the clipboard's text back.
+    Clipboard {
+        text: Option<String>,
+    },
+    /// Dispatches a keystroke such as `ctrl-v` to the window, for displays without an input
+    /// injection protocol. It replies once the window has handled the keystroke.
+    Key {
+        keystroke: String,
+    },
+    /// Chooses the open page menu's enabled row labelled `label`, and replies once it has.
+    MenuRow {
+        label: String,
+    },
+    /// Makes the shell handle page clipboard edits as it does on Wayland, to check them on a
+    /// display whose compositor gives GPUI no input serial.
+    ShellClipboard,
     /// Makes the next shared-texture import fail, to check the switch to CPU copies.
     RejectNextSharedTexture,
 }
@@ -216,19 +234,64 @@ impl Command {
                 state.engine.reject_next_shared_texture();
                 return Ok(Value::Null);
             }
-            Self::Click { tab, x, y } => {
+            Self::Click { tab, x, y, right } => {
                 let host = state.engine.host(&tab).context("missing CEF host")?;
                 state.engine.focused(&tab, true);
+                let button = if right {
+                    gpui::MouseButton::Right
+                } else {
+                    gpui::MouseButton::Left
+                };
                 for up in [false, true] {
                     flecha_surface::input::click(
                         &host,
                         gpui::point(gpui::px(x), gpui::px(y)),
                         gpui::Modifiers::default(),
-                        gpui::MouseButton::Left,
+                        button,
                         1,
                         up,
                     );
                 }
+                return Ok(Value::Null);
+            }
+            Self::ShellClipboard => {
+                state.shell_clipboard = true;
+                return Ok(Value::Null);
+            }
+            Self::Clipboard { text } => {
+                if let Some(text) = text {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                }
+                let text = cx.read_from_clipboard().and_then(|item| item.text());
+                return Ok(json!({ "text": text }));
+            }
+            Self::Key { keystroke } => {
+                let keystroke = gpui::Keystroke::parse_with_os(&keystroke, cx.platform_info().os)
+                    .map_err(|_| anyhow::anyhow!("not a keystroke"))?;
+                let handle = *state.windows.get(window).context("no GPUI window")?;
+                // The shell borrows the controller this command holds, and dispatching renders
+                // the shell, so neither may be held here. The deferred dispatch replies.
+                cx.defer(move |cx| {
+                    let sent =
+                        gpui::AppContext::update_window(cx, handle.into(), |_, window, cx| {
+                            window.dispatch_keystroke(keystroke, cx);
+                        });
+                    reply(seq, sent.map(|()| Value::Null));
+                });
+                return Ok(Value::Null);
+            }
+            Self::MenuRow { label } => {
+                let handle = *state.windows.get(window).context("no GPUI window")?;
+                // Deferred and replied to like Key. The row is looked up in the same update
+                // that uses it, so it belongs to the menu that is open then.
+                cx.defer(move |cx| {
+                    let used = handle.update(cx, |shell, window, cx| {
+                        let row = shell.context_menu_row(&label)?;
+                        shell.use_context_menu(row, window, cx);
+                        anyhow::Ok(Value::Null)
+                    });
+                    reply(seq, used.and_then(|used| used));
+                });
                 return Ok(Value::Null);
             }
         };
@@ -308,19 +371,26 @@ pub(super) fn install(controller: &Shared, cx: &mut App) {
                 let id = request
                     .window
                     .unwrap_or_else(|| state.model.core.focused_window().id.clone());
+                let deferred = matches!(
+                    request.command,
+                    Command::Key { .. } | Command::MenuRow { .. }
+                );
                 match request.command.run(&mut state, &id, cx, request.seq) {
-                    Ok(result) => {
-                        emit(json!({ "type": "reply", "seq": request.seq, "result": result }))
-                    }
-                    Err(error) => emit(
-                        json!({ "type": "reply", "seq": request.seq, "error": error.to_string() }),
-                    ),
+                    Ok(_) if deferred => {}
+                    result => reply(request.seq, result),
                 }
                 cx.refresh_windows();
             });
         }
     })
     .detach();
+}
+
+fn reply(seq: u64, result: Result<Value>) {
+    emit(match result {
+        Ok(result) => json!({ "type": "reply", "seq": seq, "result": result }),
+        Err(error) => json!({ "type": "reply", "seq": seq, "error": error.to_string() }),
+    });
 }
 
 fn emit(value: Value) {
@@ -368,6 +438,11 @@ pub(super) fn ready() {
 /// The shell asked the platform to bring this window to the front.
 pub(super) fn activated(window: &WindowId) {
     emit(json!({ "type": "activated", "window": window }));
+}
+
+/// A page's Copy or Cut finished reading its selection. The text itself is never reported.
+pub(super) fn page_copy(tab: &TabId, copied: bool) {
+    emit(json!({ "type": "page_copy", "tab": tab, "copied": copied }));
 }
 
 /// Every CEF browser has closed and the app is about to quit.

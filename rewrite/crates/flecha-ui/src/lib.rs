@@ -1,4 +1,5 @@
 mod boosts;
+mod clipboard;
 mod command_bar;
 mod context_menu;
 mod downloads_view;
@@ -255,6 +256,11 @@ struct Controller {
     ready: bool,
     quitting: bool,
     verify: bool,
+    /// Set by the verify harness: the shell handles page clipboard edits on every display, so a
+    /// display without a Wayland input serial can still check them.
+    shell_clipboard: bool,
+    /// Page input waiting behind a selection read, per browser.
+    held: BTreeMap<flecha_cef::BrowserKey, clipboard::Hold>,
     failure: Rc<RefCell<Option<anyhow::Error>>>,
     status: Status,
 }
@@ -348,6 +354,8 @@ impl Controller {
             ready: false,
             quitting: false,
             verify,
+            shell_clipboard: false,
+            held: BTreeMap::new(),
             failure,
             status: Status::default(),
         };
@@ -840,6 +848,7 @@ impl Controller {
         changed |= self.poll_permissions();
         changed |= self.poll_toolbars();
         self.poll_page_overlays(cx);
+        self.poll_clipboard(cx);
         if self.ready && !self.quitting {
             changed |= self.poll_sleep(Instant::now());
         }

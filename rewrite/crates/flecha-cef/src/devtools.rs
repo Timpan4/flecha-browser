@@ -129,6 +129,9 @@ pub(crate) enum Internal {
     Ignore,
     /// The page's classes and ids, for generic ad hiding.
     Generic(crate::adblock::Generic),
+    /// The page's selection, for the shell's clipboard. Its text never reaches
+    /// [`DevToolsEvent`]s.
+    Selection(crate::clipboard::Selection),
 }
 
 wrap_dev_tools_message_observer! {
@@ -154,6 +157,10 @@ wrap_dev_tools_message_observer! {
                         let reply = result.filter(|_| success != 0);
                         crate::adblock::reported(&services.adblock, &frame, generic, reply);
                     }
+                }
+                Some(Internal::Selection(read)) => {
+                    let reply = result.filter(|_| success != 0);
+                    crate::clipboard::read(&slot, browser, read, reply);
                 }
             }
         }
