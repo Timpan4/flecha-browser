@@ -226,6 +226,18 @@ pub enum Placement<'a> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SplitSide {
+    Left,
+    Right,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SplitDropTarget {
+    Page(TabId),
+    Row(TabId),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CloseTab {
     Missing,
     Unloaded,
@@ -1139,10 +1151,71 @@ impl BrowserState {
         right: TabId,
         now: EpochMillis,
     ) -> TabChange<bool> {
-        let selected = right.clone();
-        let change = self.set_split_selecting(window, [left, right], selected.clone());
+        self.split_with(window, right, left, SplitSide::Right, now)
+    }
+
+    /// A viewport drop keeps the focused pane, or the desktop pane of a responsive split.
+    pub fn page_split_target(&self, window: &WindowId, source: &TabId) -> Option<&TabId> {
+        let win = self.window(window)?;
+        let ws = win.spaces.get(&win.active_space_id)?;
+        let active = ws.active_tab_id.as_ref()?;
+        let target = match &ws.split {
+            Some(pair) if pair.contains(active) => {
+                if pair.contains(source) {
+                    return None;
+                }
+                if ws.split_mode == Some(SplitMode::Responsive) {
+                    &pair[0]
+                } else {
+                    active
+                }
+            }
+            _ => active,
+        };
+        (source != target
+            && self.tab(source)?.device != Some(Device::Mobile)
+            && self.tab(target)?.device != Some(Device::Mobile))
+        .then_some(target)
+    }
+
+    pub fn drop_to_split(
+        &mut self,
+        window: &WindowId,
+        source: TabId,
+        side: SplitSide,
+        target: SplitDropTarget,
+        now: EpochMillis,
+    ) -> TabChange<bool> {
+        let target = match target {
+            SplitDropTarget::Page(id) if self.page_split_target(window, &source) == Some(&id) => id,
+            SplitDropTarget::Row(id)
+                if matches!(
+                    self.locate(&id),
+                    Some(Placement::Today { .. } | Placement::Pinned { .. })
+                ) =>
+            {
+                id
+            }
+            _ => return TabChange::unchanged(false),
+        };
+        self.split_with(window, source, target, side, now)
+    }
+
+    fn split_with(
+        &mut self,
+        window: &WindowId,
+        source: TabId,
+        target: TabId,
+        side: SplitSide,
+        now: EpochMillis,
+    ) -> TabChange<bool> {
+        let pair = match side {
+            SplitSide::Left => [source.clone(), target],
+            SplitSide::Right => [target, source.clone()],
+        };
+        let change = self.set_split_selecting(window, pair, source.clone());
         if change.result {
-            self.touch(&selected, now);
+            self.touch(&source, now);
         }
         change
     }
