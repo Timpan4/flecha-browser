@@ -498,20 +498,56 @@ mod tests {
                 "@\u{85}\u{200B}",
                 "\u{FEFF}\u{2009}@\u{2060}\u{202F}",
             ] {
-                for suffix in ["", ":8080", "/path", ":8080/path"] {
-                    let input = format!("{userinfo}{separator}host.example{suffix}");
-                    let rows = suggestions_for(&core, Some(&history), None, &input);
-                    assert!(
-                        rows.iter().all(|row| matches!(row.target, Target::Copy(_))),
-                        "{input:?}"
-                    );
+                for host in ["host.example", "localhost", "127.0.0.1", "[::1]"] {
+                    for suffix in ["", ":8080", "/path", ":8080/path"] {
+                        let input = format!("{userinfo}{separator}{host}{suffix}");
+                        let rows = suggestions_for(&core, Some(&history), None, &input);
+                        assert!(
+                            rows.iter().all(|row| matches!(row.target, Target::Copy(_))),
+                            "{input:?}"
+                        );
+                    }
                 }
             }
         }
-        assert!(matches!(
-            suggestions_for(&core, None, None, "weather tomorrow")[0].target,
-            Target::Search(_)
-        ));
+    }
+
+    #[test]
+    fn ordinary_at_sign_phrases_offer_a_search() {
+        let core = BrowserState::new(SpaceId::new("space"), WindowId::new("main"));
+        for query in [
+            "rust @ 2026",
+            "dinner @ 7pm",
+            "lunch @ 12",
+            "price @ 5%",
+            "tweet @ someone",
+            "meet @ noon tomorrow",
+            "contact@ example",
+            "weather @ stockholm",
+        ] {
+            let rows = suggestions_for(&core, None, None, query);
+            assert_eq!(rows.len(), 1, "{query:?}");
+            assert_eq!(
+                rows[0].target,
+                Target::Search(core.settings.search_engine.search_url(query))
+            );
+        }
+    }
+
+    #[test]
+    fn developer_aliases_with_credentials_offer_no_external_targets() {
+        let core = BrowserState::new(SpaceId::new("space"), WindowId::new("main"));
+        for query in [
+            "mdn user:pass@\u{feff}host.example",
+            "mdn user:pass@host.example",
+            "mdn user@ \u{feff}localhost",
+        ] {
+            let rows = suggestions_for(&core, None, None, query);
+            assert!(
+                rows.iter().all(|row| matches!(row.target, Target::Copy(_))),
+                "{query:?}"
+            );
+        }
     }
 
     #[test]

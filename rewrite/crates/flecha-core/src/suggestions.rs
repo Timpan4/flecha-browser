@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use unicode_normalization::UnicodeNormalization;
 use url::{Host, Url};
 
-use crate::input_text::{split_input, trim_input};
+use crate::input_text::{is_js_whitespace, split_input, trim_input};
 use crate::{Environment, EnvironmentTarget, EpochMillis, SearchEngine};
 
 macro_rules! re {
@@ -133,7 +133,11 @@ pub fn parse_suggestions(body: &str, query: &str) -> Vec<String> {
 /// Keep addresses, credentials, and private paths out of search suggestion requests.
 pub fn suggestable(raw: &str) -> bool {
     let query = trim_input(raw);
-    if query.is_empty() || web_address(query).is_some() || rejected_address(query) {
+    if query.is_empty()
+        || web_address(query).is_some()
+        || rejected_address(query)
+        || rejected_alias_argument(query)
+    {
         return false;
     }
     let normalized: String = query.nfkc().collect();
@@ -475,14 +479,12 @@ pub fn developer_suggestions(
             })
             .collect();
     }
-    let mut words = split_input(query);
-    if let Some(alias) = words.next() {
-        let arg = words.collect::<Vec<_>>().join(" ");
-        if !arg.is_empty()
-            && let Some(suggestion) = developer_alias(alias, &arg, current_url)
-        {
-            return vec![suggestion];
+    if let Some((alias, argument)) = developer_alias_input(query) {
+        if private_alias_argument(argument) {
+            return Vec::new();
         }
+        let arg = split_input(argument).collect::<Vec<_>>().join(" ");
+        return vec![developer_alias(alias, &arg, current_url)];
     }
     decode_jwt(query, now)
         .or_else(|| decode_timestamp(query, now))
@@ -490,45 +492,78 @@ pub fn developer_suggestions(
         .collect()
 }
 
+enum DeveloperAlias {
+    GitHub,
+    Npm,
+    Mdn,
+    CanIUse,
+    StackOverflow,
+}
+
+fn developer_alias_input(query: &str) -> Option<(DeveloperAlias, &str)> {
+    let (alias, argument) = trim_input(query).split_once(is_js_whitespace)?;
+    let alias = match alias.to_ascii_lowercase().as_str() {
+        "gh" if alias == "gh" => DeveloperAlias::GitHub,
+        "npm" => DeveloperAlias::Npm,
+        "mdn" => DeveloperAlias::Mdn,
+        "caniuse" => DeveloperAlias::CanIUse,
+        "so" => DeveloperAlias::StackOverflow,
+        _ => return None,
+    };
+    let argument = trim_input(argument);
+    (!argument.is_empty()).then_some((alias, argument))
+}
+
+fn rejected_alias_argument(query: &str) -> bool {
+    developer_alias_input(query).is_some_and(|(_, argument)| private_alias_argument(argument))
+}
+
+fn private_alias_argument(argument: &str) -> bool {
+    let mut tail = argument;
+    while let Some((_, rest)) = developer_alias_input(tail) {
+        tail = rest;
+    }
+    rejected_address(argument) || (tail != argument && rejected_address(tail))
+}
+
 fn developer_alias(
-    alias: &str,
+    alias: DeveloperAlias,
     arg: &str,
     current_url: Option<&str>,
-) -> Option<DeveloperSuggestion> {
-    if alias == "gh" {
-        return Some(github(arg, current_url));
-    }
-    let (name, url) = match alias.to_ascii_lowercase().as_str() {
-        "npm" if !arg.contains(' ') => ("npm", format!("https://www.npmjs.com/package/{arg}")),
-        "npm" => (
+) -> DeveloperSuggestion {
+    let (name, url) = match alias {
+        DeveloperAlias::GitHub => return github(arg, current_url),
+        DeveloperAlias::Npm if !arg.contains(' ') => {
+            ("npm", format!("https://www.npmjs.com/package/{arg}"))
+        }
+        DeveloperAlias::Npm => (
             "npm",
             format!("https://www.npmjs.com/search?q={}", encode_component(arg)),
         ),
-        "mdn" => (
+        DeveloperAlias::Mdn => (
             "MDN",
             format!(
                 "https://developer.mozilla.org/en-US/search?q={}",
                 encode_component(arg)
             ),
         ),
-        "caniuse" => (
+        DeveloperAlias::CanIUse => (
             "Can I use",
             format!("https://caniuse.com/?search={}", encode_component(arg)),
         ),
-        "so" => (
+        DeveloperAlias::StackOverflow => (
             "Stack Overflow",
             format!(
                 "https://stackoverflow.com/search?q={}",
                 encode_component(arg)
             ),
         ),
-        _ => return None,
     };
-    Some(DeveloperSuggestion {
+    DeveloperSuggestion {
         label: arg.into(),
         detail: format!("Open in {name}"),
         action: SuggestionAction::Open(url),
-    })
+    }
 }
 
 fn github(arg: &str, current_url: Option<&str>) -> DeveloperSuggestion {

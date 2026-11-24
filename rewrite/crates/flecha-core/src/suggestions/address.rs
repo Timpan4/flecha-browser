@@ -1,6 +1,6 @@
 use url::{Host, Url};
 
-use super::{decode_component, default_ignorables, encode_component};
+use super::{decode_component, default_ignorables, encode_component, rejected_alias_argument};
 use crate::SearchEngine;
 use crate::input_text::{is_js_whitespace, trim_input};
 
@@ -16,7 +16,7 @@ pub fn resolve_input(raw: &str, engine: SearchEngine) -> InputResolution {
     if let Some(address) = web_address(input) {
         return InputResolution::Navigate(address);
     }
-    if input.is_empty() || rejected_address(input) {
+    if input.is_empty() || rejected_address(input) || rejected_alias_argument(input) {
         return InputResolution::Invalid;
     }
     InputResolution::Search(engine.search_url(input))
@@ -59,9 +59,23 @@ fn has_credentials(input: &str) -> bool {
         None => {
             !userinfo.contains(['/', '?', '#'])
                 && (has_tail || !userinfo.contains(is_js_whitespace))
+                && (separator.len() == 1 || starts_with_host(destination))
         }
         _ => false,
     }
+}
+
+fn starts_with_host(destination: &str) -> bool {
+    let Some(authority) = re!(r"\A[^\p{White_Space}/?#\\]+").find(destination) else {
+        return false;
+    };
+    let authority = authority.as_str();
+    let (host, port) = authority.split_once(':').unwrap_or((authority, ""));
+    let host = host.trim_end_matches('.');
+    authority.starts_with('[')
+        || host.eq_ignore_ascii_case("localhost")
+        || host.contains(['.', '。', '．', '｡'])
+        || (!host.is_empty() && !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 pub fn rejected_address(raw: &str) -> bool {

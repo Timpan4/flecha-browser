@@ -29,16 +29,67 @@ fn whitespace_and_format_characters_around_credential_separator_stay_local() {
             "@\u{85}\u{200B}",
             "\u{FEFF}\u{2009}@\u{2060}\u{202F}",
         ] {
-            for suffix in ["", ":8080", "/path", ":8080/path"] {
-                let input = format!("{userinfo}{separator}host.example{suffix}");
-                assert_eq!(
-                    resolve_input(&input, engine),
-                    InputResolution::Invalid,
-                    "{input:?}"
-                );
-                assert!(engine.suggestion_url(&input).is_none(), "{input:?}");
+            for host in ["host.example", "localhost", "127.0.0.1", "[::1]"] {
+                for suffix in ["", ":8080", "/path", ":8080/path"] {
+                    let input = format!("{userinfo}{separator}{host}{suffix}");
+                    assert_eq!(
+                        resolve_input(&input, engine),
+                        InputResolution::Invalid,
+                        "{input:?}"
+                    );
+                    assert!(engine.suggestion_url(&input).is_none(), "{input:?}");
+                }
             }
         }
+    }
+    for separator in ["@ ", " @", "@\u{feff}"] {
+        let input = format!("user{separator}intranet:8080");
+        assert_eq!(resolve_input(&input, engine), InputResolution::Invalid);
+        assert!(engine.suggestion_url(&input).is_none());
+    }
+}
+
+#[test]
+fn ordinary_at_sign_phrases_still_search() {
+    let engine = SearchEngine::Google;
+    for query in [
+        "rust @ 2026",
+        "dinner @ 7pm",
+        "lunch @ 12",
+        "price @ 5%",
+        "tweet @ someone",
+        "meet @ noon tomorrow",
+        "contact@ example",
+        "weather @ stockholm",
+    ] {
+        assert_eq!(
+            resolve_input(query, engine),
+            InputResolution::Search(engine.search_url(query)),
+            "{query:?}"
+        );
+    }
+}
+
+#[test]
+fn developer_aliases_do_not_send_rejected_arguments_to_either_search() {
+    let engine = SearchEngine::Google;
+    for query in [
+        "mdn user:pass@\u{feff}host.example",
+        "mdn user:pass@host.example",
+        "mdn user@ \u{feff}localhost",
+        "mdn https:///private",
+        "so mdn user@ host.example",
+    ] {
+        assert!(
+            developer_suggestions(query, None, &[], 0).is_empty(),
+            "{query:?}"
+        );
+        assert_eq!(
+            resolve_input(query, engine),
+            InputResolution::Invalid,
+            "{query:?}"
+        );
+        assert!(engine.suggestion_url(query).is_none(), "{query:?}");
     }
 }
 
