@@ -136,9 +136,7 @@ mod tests {
     }
 
     fn incognito_window(controller: &mut Controller, regular: &WindowId) -> WindowId {
-        controller
-            .act(regular, Action::NewIncognitoWindow)
-            .unwrap();
+        controller.act(regular, Action::NewIncognitoWindow).unwrap();
         controller.model.incognito_windows()[0].id.clone()
     }
 
@@ -234,7 +232,10 @@ mod tests {
             let error = controller.act(&private, action).unwrap_err();
             assert_eq!(Some(error.to_string().as_str()), refused);
         }
-        assert_eq!(controller.model.core, before, "a refusal changed the regular state");
+        assert_eq!(
+            controller.model.core, before,
+            "a refusal changed the regular state"
+        );
         let incognito = &controller.model.incognito.as_ref().unwrap().state;
         assert_eq!(incognito.spaces().len(), 1);
         assert_eq!(incognito.spaces()[0].name, SPACE_NAME);
@@ -319,7 +320,9 @@ mod tests {
             .act(&first, Action::Open(PRIVATE.into()))
             .unwrap();
         let session = controller.model.incognito.as_ref().unwrap().session;
-        controller.act(&regular, Action::NewIncognitoWindow).unwrap();
+        controller
+            .act(&regular, Action::NewIncognitoWindow)
+            .unwrap();
         assert_eq!(controller.model.incognito_windows().len(), 2);
         let second = controller.model.incognito_windows()[0].id.clone();
         assert_ne!(first, second);
@@ -342,7 +345,10 @@ mod tests {
             !controller.model.flechinhas.contains_key(&mini),
             "the session's Flechinha outlived it"
         );
-        assert!(!controller.quitting, "closing incognito windows quit Flecha");
+        assert!(
+            !controller.quitting,
+            "closing incognito windows quit Flecha"
+        );
         assert_eq!(controller.model.core.windows().len(), 1);
         assert!(
             controller
@@ -356,9 +362,14 @@ mod tests {
             "a page of an ended session reopened"
         );
 
-        controller.act(&regular, Action::NewIncognitoWindow).unwrap();
+        controller
+            .act(&regular, Action::NewIncognitoWindow)
+            .unwrap();
         let next = controller.model.incognito.as_ref().unwrap();
-        assert_ne!(next.session, session, "a new session reused the old storage");
+        assert_ne!(
+            next.session, session,
+            "a new session reused the old storage"
+        );
         assert!(next.state.open_tabs().is_empty());
     }
 }

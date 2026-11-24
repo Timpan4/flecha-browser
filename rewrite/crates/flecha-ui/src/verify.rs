@@ -26,29 +26,48 @@ struct Request {
 #[derive(Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 enum Command {
-    Open { url: String },
-    Select { tab: TabId },
-    Split { url: String },
-    Peek { url: String },
+    Open {
+        url: String,
+    },
+    Select {
+        tab: TabId,
+    },
+    Split {
+        url: String,
+    },
+    Peek {
+        url: String,
+    },
     ClosePeek,
     Promote,
     Detach,
     Return,
     Close,
     CloseWindow,
-    OpenWindow { url: String },
+    OpenWindow {
+        url: String,
+    },
     NewIncognitoWindow,
     /// Site Controls' "Allow" for location on the window's current page.
     AllowGeolocation,
-    Switch { space: SpaceId },
+    Switch {
+        space: SpaceId,
+    },
     NewSpace,
     Isolate,
     Quit,
     Snapshot,
     Capture,
-    Discard { tab: TabId },
-    Recreate { tab: TabId },
-    Script { tab: TabId, source: String },
+    Discard {
+        tab: TabId,
+    },
+    Recreate {
+        tab: TabId,
+    },
+    Script {
+        tab: TabId,
+        source: String,
+    },
 }
 
 impl Command {
