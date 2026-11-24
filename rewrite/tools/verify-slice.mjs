@@ -1472,22 +1472,37 @@ async function tabStatus(app, main, left) {
   });
   pass(`the audible page's row showed an audio mark (${mark.map(Math.round).join(', ')})`);
 
-  execFileSync(x11Driver, ['click', Math.round(mark[0]), Math.round(mark[1])]);
-  await poll('the mark to mute the page', async () =>
-    (await tab(audioTab)).muted === true && (await browser(audioTab)).muted);
-  execFileSync(x11Driver, ['click', Math.round(mark[0]), Math.round(mark[1])]);
-  await poll('the mark to unmute the page', async () =>
-    (await tab(audioTab)).muted === undefined && !(await browser(audioTab)).muted);
-  pass('clicking the audio mark muted the page in CEF and the saved tab, and clicking again unmuted it');
-
   // The split mark (ui/app.ts:574-576) sits where the close button shows on hover, and hovering
   // the row hides it (ui/styles.css:660-683). A split pair drawn side by side leaves it out
   // (ui/styles.css:1955-1958), so the audio tab is pinned first and its split partner stays in
   // Today. The pinned row is drawn alone and in a split, each time with the pointer on the page
-  // beside the sidebar and then on the row's title. A row is 32px tall (ui/styles.css:6), and its
-  // icon and title end where the 20px audio mark (ui/styles.css:2174) begins.
+  // beside the sidebar and then on the row's title. A row is 32px tall (ui/styles.css:6). The
+  // split mark moves the speaker toward the title, so the title's own end is measured: it is the
+  // last pixel before the 20px audio mark (ui/styles.css:2174) that differs from the row's fill,
+  // within the line the 14px speaker icon (ui/styles.css:2190) spans, clear of the row's edges.
   const rowHeight = 32;
-  const titleWidth = Math.round(mark[0] - windowX - 20);
+  const audibleCentre = Math.round(mark[1] - windowY);
+  const beforeSpeaker = join(out, 'tab-audible-title.png');
+
+  execFileSync('magick', [
+    join(out, 'tab-audible-sidebar.png'),
+    '-crop', `${Math.round(mark[0] - windowX - 20 / 2)}x14+0+${audibleCentre - 14 / 2}`,
+    '+repage', beforeSpeaker,
+  ]);
+
+  const rowFill = execFileSync('magick', [beforeSpeaker, '-format', '%[pixel:p{w-1,h/2}]', 'info:'], { encoding: 'utf8' }).trim();
+
+  const titleEnd = execFileSync('magick', [
+    beforeSpeaker, '(', '+clone', '-fill', rowFill, '-colorize', '100', ')',
+    '-compose', 'difference', '-composite',
+    '-separate', '-evaluate-sequence', 'max', '-threshold', '0', '-format', '%@', 'info:',
+  ], { encoding: 'utf8' }).trim();
+
+  const [, endWidth, , endX] = /^(\d+)x(\d+)\+(\d+)\+(\d+)$/.exec(titleEnd)?.map(Number) ?? [];
+
+  assert(endWidth, `no title before the audio mark: ${titleEnd}`);
+
+  const titleWidth = endX + endWidth;
   const click = ([x, y]) => execFileSync(x11Driver, ['click', Math.round(x), Math.round(y)]);
   const awayPoint = [windowX + sidebarWidth + 40, windowY + windowHeight - 40];
   const titlePoint = centre => [windowX + titleWidth / 2, windowY + centre];
@@ -1520,8 +1535,6 @@ async function tabStatus(app, main, left) {
     await captureUntil(name, 'root', path => check(crop(name, path)));
   };
 
-  const audibleCentre = Math.round(mark[1] - windowY);
-
   // Where `part` best matches in `path`, and whether it matches there exactly.
   const search = (path, metric, part) => {
     const { metric: different, output } = compare('-metric', metric, '-subimage-search', path, part);
@@ -1541,6 +1554,30 @@ async function tabStatus(app, main, left) {
     '+repage', speaker,
   ]);
 
+  // The row draws its actions after the speaker only while the pointer is on it, and an X11
+  // click presses before GPUI draws that hover, so a click aimed at the resting speaker can land
+  // on the close button. The pointer first rests on the title, and the clicks go where the
+  // speaker is drawn then. A half of a split pair moves the icon by a fraction of a pixel, so the
+  // match is the closest one, and the clicks show whether it was the speaker.
+  const findSpeaker = path => search(path, 'RMSE', speaker)?.at;
+  const restingX = Math.round(mark[0] - windowX - 14 / 2);
+  let hoveredSpeaker;
+
+  click(titlePoint(audibleCentre));
+  await shot('tab-audible-hover', path => {
+    const moved = findSpeaker(path);
+
+    if (!moved || moved[0] >= restingX) return 'the hovered row made no room for its actions';
+    hoveredSpeaker = [windowX + moved[0] + 14 / 2, windowY + moved[1] + 14 / 2];
+  });
+  click(hoveredSpeaker);
+  await poll('the mark to mute the page', async () =>
+    (await tab(audioTab)).muted === true && (await browser(audioTab)).muted);
+  click(hoveredSpeaker);
+  await poll('the mark to unmute the page', async () =>
+    (await tab(audioTab)).muted === undefined && !(await browser(audioTab)).muted);
+  pass('clicking the audio mark muted the page in CEF and the saved tab, and clicking again unmuted it');
+
   const tabsBefore = Object.keys((await app.command('snapshot')).core.tabs);
 
   await app.command('split', { url: base + '/split' });
@@ -1549,9 +1586,6 @@ async function tabStatus(app, main, left) {
   await app.command('select', { tab: audioTab });
   click(awayPoint);
 
-  // The half's own width moves the icon by a fraction of a pixel, so the match is the closest
-  // one, and the clicks below show whether it was the speaker.
-  const findSpeaker = path => search(path, 'RMSE', speaker)?.at;
   let resting;
   let pairSpeaker;
 
