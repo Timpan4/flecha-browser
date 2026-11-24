@@ -124,6 +124,7 @@ pub(crate) fn refusal(action: &Action) -> Option<&'static str> {
         Action::RestoreArchive(_) | Action::ClearArchive => {
             Some("An incognito window has no archive")
         }
+        Action::OpenFlechinha(_) => Some("Open a Flechinha from a regular window"),
         Action::Sidebar(
             SidebarAction::Pin(..)
             | SidebarAction::Favorite(_)

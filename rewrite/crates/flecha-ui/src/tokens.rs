@@ -54,6 +54,8 @@ const FLECHINHA: &str = "ui/flechinha.css";
 const SHELL: &str = "shell.css";
 const WINDOW_CONTROLS: &str = "ui/windowControls.css";
 #[cfg(test)]
+const SETTINGS_UI: &str = "settingsUi.ts";
+#[cfg(test)]
 const APP: &str = "ui/app.ts";
 #[cfg(test)]
 const FRAME_API: &str = "../patches/0010-flecha-private-extension-api.patch";
@@ -150,6 +152,15 @@ pub(crate) const COLORS: &[Css] = &[
         "rgba(11, 37, 69, 0.18)",
     ),
     both(".window-control.close", WINDOW_CONTROLS, 26, "#ff5f57"),
+    both(".window-control.minimize", WINDOW_CONTROLS, 30, "#febc2e"),
+    both(".window-control.maximize", WINDOW_CONTROLS, 34, "#28c840"),
+    // An unfocused window's circles, until the pointer comes.
+    both(
+        ".window-control idle",
+        WINDOW_CONTROLS,
+        39,
+        "rgba(11, 37, 69, 0.18)",
+    ),
     // Settings' pane icons: each a top-to-bottom gradient between two colours.
     both(".nav-icon.gray top", SETTINGS, 111, "#8e98a6"),
     both(".nav-icon.gray bottom", SETTINGS, 111, "#6b7686"),
@@ -430,6 +441,24 @@ cited! {
     MENU_ITEM_PAD_X = 10., SHELL: 88 "padding: 4px 10px";
     MENU_ITEM_RADIUS = 4., SHELL: 89 "border-radius: 4px";
     MENU_DISABLED_OPACITY = 0.4, SHELL: 118 "opacity: 0.4";
+    MENU_MIN_WIDTH = 180., SHELL: 75 "min-width: 180px";
+    MENU_SUBMENU_ARROW_GAP = 16., SHELL: 106 "margin-left: 16px";
+    MENU_ACCEL_GAP = 24., SHELL: 113 "margin-left: 24px";
+    MENU_ACCEL_OPACITY = 0.6, SHELL: 114 "opacity: 0.6";
+    MENU_CHECKABLE_PAD_LEFT = 24., SHELL: 122 "padding-left: 24px";
+    /// How far the check mark sits left of a checkable item's text.
+    MENU_CHECK_OFFSET = 15., SHELL: 128 "margin-left: -15px";
+    MENU_SEPARATOR = 1., SHELL: 132 "height: 1px";
+    MENU_SEPARATOR_MARGIN_Y = 5., SHELL: 133 "margin: 5px 6px";
+    MENU_SEPARATOR_MARGIN_X = 6., SHELL: 133 "margin: 5px 6px";
+    /// A menu opened from a button sits this far below it.
+    MENU_ANCHOR_GAP = 4., SETTINGS_UI: 202 "y: anchor.bottom + 4";
+    /// A menu keeps this far from the window's edges.
+    MENU_WINDOW_MARGIN = 4., SETTINGS_UI: 204 "innerWidth - width - 4";
+    /// A submenu sits this far right of its item ...
+    SUBMENU_GAP = 2., SETTINGS_UI: 92 "const right = at.right + 2";
+    /// ... and this far above it, so its first item lines up with the item.
+    SUBMENU_RAISE = 5., SETTINGS_UI: 94 "at.top - 5";
 
     // Settings.
     SETTINGS_NAV = 216., SETTINGS: 5 "--nav: 216px";
@@ -465,6 +494,13 @@ cited! {
     WINDOW_CONTROL = 20., WINDOW_CONTROLS: 9 "width: 20px";
     WINDOW_CONTROL_INSET = 4., WINDOW_CONTROLS: 18 "inset: 4px";
     WINDOW_CONTROL_GLYPH = 10., WINDOW_CONTROLS: 44 "width: 10px";
+    /// The room the window controls take at the start of the sidebar's toolbar.
+    WINDOW_CONTROLS_WIDTH = 70., STYLES: 97 "width: 70px";
+    WINDOW_CONTROLS_PAD_LEFT = 4., STYLES: 98 "padding-left: 4px";
+    /// Between the toolbar's lines when back, forward and reload wrap below the controls.
+    TOOLBAR_ROW_GAP = 4., STYLES: 117 "row-gap: 4px";
+    FLECHINHA_WINDOW_CONTROLS_WIDTH = 72., FLECHINHA: 73 "width: 72px";
+    FLECHINHA_WINDOW_CONTROLS_PAD_LEFT = 4., FLECHINHA: 75 "padding-left: 4px";
     FLECHINHA_CTA_PAD_LEFT = 10., FLECHINHA: 329 "padding: 0 12px 0 10px";
     FLECHINHA_CTA_PAD_RIGHT = 12., FLECHINHA: 329 "padding: 0 12px 0 10px";
     FLECHINHA_ADDRESS_MARGIN = 6., FLECHINHA: 122 "margin: 0 6px";
@@ -794,6 +830,8 @@ pub(crate) mod tests {
                 include_str!("../../../../chromium/shell/ui/windowControls.css")
             }
             "ui/flechinha.html" => include_str!("../../../../chromium/shell/ui/flechinha.html"),
+            "ui/index.html" => include_str!("../../../../chromium/shell/ui/index.html"),
+            "settingsUi.ts" => include_str!("../../../../chromium/shell/settingsUi.ts"),
             "ui/spaceChoices.ts" => include_str!("../../../../chromium/shell/ui/spaceChoices.ts"),
             "lib/spaceTint.ts" => include_str!("../../../../chromium/shell/lib/spaceTint.ts"),
             "ui/app.ts" => include_str!("../../../../chromium/shell/ui/app.ts"),

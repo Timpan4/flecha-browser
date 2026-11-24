@@ -47,6 +47,8 @@ pub(crate) enum Command {
     EditLocation,
     Split,
     Peek,
+    /// "New Flechinha window" (`ui/app.ts` `windowMenu`): the address opens in a new Flechinha.
+    Flechinha,
     OpenSettings,
 }
 
@@ -57,6 +59,7 @@ impl Command {
             Self::EditLocation => "Edit address",
             Self::Split => "Split with a new tab",
             Self::Peek => "Open Peek",
+            Self::Flechinha => "New Flechinha window",
             Self::OpenSettings => "Settings",
         }
     }
@@ -573,6 +576,10 @@ impl Shell {
         }
         let next = {
             let state = self.state.borrow();
+            // `incognito::refusal` turns the Flechinha away, so its bar does not open.
+            if mode == Command::Flechinha && state.model.is_incognito(&self.id) {
+                return false;
+            }
             let Some(sources) = state.command_sources(&self.id) else {
                 return false;
             };
@@ -734,6 +741,7 @@ impl Shell {
             Command::EditLocation => Action::Navigate(url),
             Command::Split => Action::SplitNew(url),
             Command::Peek => Action::Peek(url),
+            Command::Flechinha => Action::OpenFlechinha(url),
             Command::OpenSettings => unreachable!("Settings has its own overlay"),
         };
         self.navigate_from_overlay(action, window, cx);
@@ -765,6 +773,7 @@ impl Shell {
             };
             let go = match (&row.target, bar.mode) {
                 (Target::Tab(..), Command::Split) => Some("Split with Tab"),
+                (Target::Tab(..), Command::Flechinha) => None,
                 (Target::Tab(..), _) => Some("Switch to Tab"),
                 _ => None,
             };

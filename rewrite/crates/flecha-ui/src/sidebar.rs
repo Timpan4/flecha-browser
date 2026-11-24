@@ -3,13 +3,15 @@ use std::time::Duration;
 use flecha_core::{BrowserState, FolderId, PinnedNode, Placement, TabId, WindowId, shortcuts};
 use gpui::{
     Animation, AnimationExt as _, ClickEvent, Context, Div, FontWeight, InteractiveElement as _,
-    ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _, Transformation,
-    Window, div, percentage, prelude::FluentBuilder as _, px, relative,
+    MouseButton, MouseDownEvent, ParentElement as _, SharedString, StatefulInteractiveElement as _,
+    Styled as _, Transformation, Window, canvas, div, percentage, prelude::FluentBuilder as _, px,
+    relative,
 };
 use uuid::Uuid;
 
 use crate::command_bar::Command;
 use crate::icons::icon;
+use crate::shell_menu::{self, MenuAnchor};
 use crate::shortcuts::{Navigation, platform};
 use crate::text_field::TextField;
 use crate::theme::palette;
@@ -18,6 +20,7 @@ use crate::view::{
     Overlay, Shell, hairline, icon_button, icon_square, is_dev_url, kbd, letter_favicon, menu_item,
     overlay_panel, primary_button, site, sized_icon_button, text_button, tinted_icon_button,
 };
+use crate::window_chrome::TitleBar;
 use crate::{Action, Controller, dispatch, now};
 
 #[derive(Clone)]
@@ -145,6 +148,8 @@ impl Shell {
         &self,
         state: &Controller,
         current: &flecha_core::Window,
+        title_bar: TitleBar,
+        window: &Window,
         cx: &Context<Self>,
     ) -> Div {
         let Some(core) = state.model.state(&self.id) else {
@@ -153,6 +158,10 @@ impl Shell {
         let palette = palette();
         let incognito = state.model.is_incognito(&self.id);
         let toggle = Action::Sidebar(SidebarAction::Toggle);
+        let controls_room = (
+            tokens::WINDOW_CONTROLS_WIDTH,
+            tokens::WINDOW_CONTROLS_PAD_LEFT,
+        );
         if !core.sidebar_visible(&self.id) {
             // The shipping shell has no control here: its sidebar comes back by shortcut or menu.
             return div()
@@ -166,6 +175,8 @@ impl Shell {
                 .rounded(px(tokens::RADIUS_SM))
                 .bg(palette.tint)
                 .shadow(palette.shadow_row())
+                // The window keeps its controls while the sidebar is hidden.
+                .children(self.window_controls(title_bar, controls_room, window, cx))
                 .child(self.toolbar_button("sidebar-toggle", "sidebar", "Show sidebar", toggle, cx))
                 .when(!state.model.peeks.contains_key(&self.id), |bar| {
                     bar.children(self.zoom_badge(cx))
@@ -231,57 +242,95 @@ impl Shell {
             .gap(px(tokens::SPACE_2))
             .bg(palette.tint)
             .child(
-                // `.toolbar` (ui/styles.css:51-73).
-                div()
-                    .flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .gap(px(tokens::TOOLBAR_GAP))
-                    .h(px(tokens::TOOLBAR_HEIGHT))
-                    .child(self.toolbar_button(
-                        "sidebar-toggle",
-                        "sidebar",
-                        "Hide sidebar",
-                        toggle,
-                        cx,
-                    ))
-                    .child(div().flex_1())
-                    .when(!state.model.peeks.contains_key(&self.id), |bar| {
-                        bar.children(self.zoom_badge(cx))
-                    })
-                    .child(self.navigation_button(
-                        "back",
-                        "arrowLeft",
-                        Navigation::Back,
-                        toolbar.back,
-                        cx,
-                    ))
-                    .child(self.navigation_button(
-                        "forward",
-                        "arrowRight",
-                        Navigation::Forward,
-                        toolbar.forward,
-                        cx,
-                    ))
-                    .child(if toolbar.loading {
-                        self.navigation_button("reload", "close", Navigation::Stop, true, cx)
-                    } else {
-                        self.navigation_button(
-                            "reload",
-                            "reload",
-                            Navigation::Reload,
-                            toolbar.available,
-                            cx,
+                self.window_drag(
+                    // `.toolbar` (ui/styles.css:51-73, 105-127): the window controls, the sidebar
+                    // toggle and the menu, then back, forward and reload, which wrap to a second
+                    // line on the right in a sidebar too narrow for one. Its empty room moves the
+                    // window.
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .flex_shrink_0()
+                        .items_center()
+                        .gap_x(px(tokens::TOOLBAR_GAP))
+                        .gap_y(px(tokens::TOOLBAR_ROW_GAP))
+                        .min_h(px(tokens::TOOLBAR_HEIGHT))
+                        .children(self.window_controls(title_bar, controls_room, window, cx))
+                        .child(
+                            self.toolbar_button(
+                                "sidebar-toggle",
+                                "sidebar",
+                                "Hide sidebar",
+                                toggle,
+                                cx,
+                            )
+                            .occlude(),
                         )
-                    }),
+                        .child(self.menu_button(incognito, cx).occlude())
+                        .child(div().flex_1())
+                        .child(
+                            div()
+                                .flex()
+                                .flex_shrink_0()
+                                .items_center()
+                                .ml_auto()
+                                .gap(px(tokens::TOOLBAR_GAP))
+                                .occlude()
+                                .when(!state.model.peeks.contains_key(&self.id), |nav| {
+                                    nav.children(self.zoom_badge(cx))
+                                })
+                                .child(self.navigation_button(
+                                    "back",
+                                    "arrowLeft",
+                                    Navigation::Back,
+                                    toolbar.back,
+                                    cx,
+                                ))
+                                .child(self.navigation_button(
+                                    "forward",
+                                    "arrowRight",
+                                    Navigation::Forward,
+                                    toolbar.forward,
+                                    cx,
+                                ))
+                                .child(if toolbar.loading {
+                                    self.navigation_button(
+                                        "reload",
+                                        "close",
+                                        Navigation::Stop,
+                                        true,
+                                        cx,
+                                    )
+                                } else {
+                                    self.navigation_button(
+                                        "reload",
+                                        "reload",
+                                        Navigation::Reload,
+                                        toolbar.available,
+                                        cx,
+                                    )
+                                }),
+                        ),
+                    title_bar,
+                    cx,
+                ),
             )
             .child(self.urlbar(state, &rows, toolbar.loading, cx))
             .when(!incognito, |sidebar| {
                 sidebar.children(self.favorites(&rows, cx))
             })
-            .child(space_header(space))
+            .child(space_header(space).when(!incognito, |header| {
+                let isolated = space.isolated;
+                header.on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                        let entries = shell_menu::space_entries(isolated);
+                        this.open_menu(entries, MenuAnchor::At(event.position), window, cx);
+                        cx.stop_propagation();
+                    }),
+                )
+            }))
             .child(tabs)
-            .child(self.sidebar_extras(current, &rows, space.isolated, incognito, cx))
             .child(
                 // `footer` (ui/styles.css:917-922).
                 div()
@@ -815,80 +864,30 @@ impl Shell {
         spaces
     }
 
-    /// The rewrite's controls that the shipping shell keeps in menus, which the rewrite does not
-    /// have yet: shown as the shell's small text buttons.
-    fn sidebar_extras(
-        &self,
-        current: &flecha_core::Window,
-        rows: &Rows<'_>,
-        isolated: bool,
-        incognito: bool,
-        cx: &Context<Self>,
-    ) -> Div {
-        let add_favorite = rows
-            .active
-            .filter(|id| !incognito && !rows.core.favorites().contains(id));
-        div()
-            .flex()
-            .flex_wrap()
-            .flex_shrink_0()
-            .gap(px(tokens::TOOLBAR_GAP))
-            .when_some(add_favorite, |extras, id| {
-                extras.child(self.text_action(
-                    format!("add-favorite-{}", id.as_str()),
-                    "+ Favorite",
-                    Action::Sidebar(SidebarAction::Favorite(id.clone())),
-                    cx,
-                ))
-            })
-            .when(!incognito, |extras| {
-                extras
-                    .child(text_button("show-history", "History").on_click(cx.listener(
-                        |this, _: &ClickEvent, window, cx| this.toggle_history(window, cx),
-                    )))
-                    .child(text_button("show-archive", "Archive").on_click(cx.listener(
-                        |this, _: &ClickEvent, window, cx| this.toggle_archive(window, cx),
-                    )))
-            })
-            .child(
-                text_button("open-settings", "Settings").on_click(cx.listener(
-                    |this, _: &ClickEvent, window, cx| {
-                        this.open_command(Command::OpenSettings, window, cx);
-                    },
-                )),
-            )
-            .when(!incognito, |extras| {
-                extras.child(self.text_action(
-                    "isolation",
-                    if isolated {
-                        "Isolated cookies"
-                    } else {
-                        "Shared cookies"
-                    },
-                    Action::Isolate,
-                    cx,
-                ))
-            })
-            .when(current.visible_tabs().len() > 1, |extras| {
-                extras.child(self.text_action("unsplit", "Exit split", Action::ExitSplit, cx))
-            })
-            .child(self.text_action(
-                "new-incognito-window",
-                "+ Incognito",
-                Action::NewIncognitoWindow,
-                cx,
-            ))
-    }
-
-    fn text_action(
-        &self,
-        id: impl Into<gpui::ElementId>,
-        label: &'static str,
-        action: Action,
-        cx: &Context<Self>,
-    ) -> gpui::Stateful<Div> {
-        text_button(id, label).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-            dispatch(&this.state, &this.id, action.clone(), cx);
+    /// `#btn-menu` (ui/index.html): the window menu, which holds what the macOS menu bar does
+    /// (ui/app.ts `windowMenu`). It drops from where the button was last drawn.
+    fn menu_button(&self, incognito: bool, cx: &Context<Self>) -> gpui::Stateful<Div> {
+        let bounds = self.menu_button.clone();
+        sized_icon_button(
+            "window-menu",
+            "menu",
+            "Menu",
+            tokens::TOOLBAR_BUTTON,
+            tokens::TOOLBAR_ICON,
+        )
+        .relative()
+        .child(
+            canvas(move |drawn, _, _| bounds.set(drawn), |_, (), _, _| {})
+                .absolute()
+                .size_full(),
+        )
+        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+            let entries = shell_menu::window_entries(
+                incognito,
+                &this.state.borrow().model.core.settings.keybindings,
+            );
+            let below = MenuAnchor::Below(this.menu_button.get());
+            this.open_menu(entries, below, window, cx);
         }))
     }
 
@@ -1033,6 +1032,14 @@ impl Shell {
                 "Add to favorites",
                 Action::Sidebar(SidebarAction::Favorite(id.clone())),
             ));
+        }
+        // `tabMenu` (chromium/shell/background.ts): a tab in the split offers to end it.
+        let split = core
+            .window(&self.id)
+            .map(flecha_core::Window::visible_tabs)
+            .filter(|shown| shown.len() > 1);
+        if split.is_some_and(|shown| shown.contains(tab_id)) {
+            actions.push(("Exit split view", Action::ExitSplit));
         }
         actions.extend([
             ("Open in Peek", Action::PeekTab(id.clone())),
