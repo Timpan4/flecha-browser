@@ -11,9 +11,10 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::{
     Animation, AnimationExt as _, App, ClickEvent, Context, Div, FocusHandle, FontWeight,
     HoverListenerMode, InteractiveElement as _, IntoElement, KeyUpEvent, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection, ParentElement as _, Pixels,
-    Render, RenderImage, ScrollEvent, SharedString, StatefulInteractiveElement as _, Styled as _,
-    Subscription, Window, canvas, deferred, div, px, relative,
+    MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection,
+    ParentElement as _, Pixels, Render, RenderImage, ScrollEvent, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Window, canvas, deferred, div, px,
+    relative,
 };
 
 use crate::icons::icon;
@@ -68,6 +69,7 @@ pub(crate) struct Shell {
     pub(crate) last_suggestion_sent: Option<Instant>,
     pub(crate) bindings: Bindings,
     pub(crate) consumed_keys: BTreeSet<String>,
+    pressed_button: Rc<Cell<Option<MouseButton>>>,
     pub(crate) hovered_tab_row: Option<TabId>,
     pub(crate) tab_drag: Option<crate::tab_drag::TabDrag>,
     images: BTreeMap<TabId, Vec<Arc<RenderImage>>>,
@@ -125,6 +127,7 @@ impl Shell {
             last_suggestion_sent: None,
             bindings,
             consumed_keys: BTreeSet::new(),
+            pressed_button: Rc::new(Cell::new(None)),
             hovered_tab_row: None,
             tab_drag: None,
             images: BTreeMap::new(),
@@ -285,6 +288,29 @@ impl Shell {
         .size_full()
     }
 
+    fn pointer_button_probe(&self) -> impl IntoElement {
+        let pressed_button = self.pressed_button.clone();
+        canvas(
+            |_, _, _| (),
+            move |_, (), window, _| {
+                // Capture the native button before GPUI dispatches a pane's hover transition.
+                let motion_button = pressed_button.clone();
+                window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, _| {
+                    if phase.capture() {
+                        motion_button.set(event.pressed_button);
+                    }
+                });
+                window.on_mouse_event(move |event: &MouseExitEvent, phase, _, _| {
+                    if phase.capture() {
+                        pressed_button.set(event.pressed_button);
+                    }
+                });
+            },
+        )
+        .absolute()
+        .size_0()
+    }
+
     /// Puts the window in native fullscreen while its page is in HTML fullscreen, and takes it
     /// out afterwards unless the user had made it fullscreen first. GPUI redraws a window whose
     /// bounds change, as a native fullscreen change does, so a late entry is undone here too.
@@ -421,6 +447,7 @@ impl Shell {
                                 &host,
                                 window.mouse_position() - origin.get(),
                                 window.modifiers(),
+                                this.pressed_button.get(),
                             );
                         }
                     }
@@ -555,6 +582,16 @@ impl Render for Shell {
             .when_some(ui_font(cx), |main, font| main.font_family(font))
             .text_size(px(tokens::TEXT_MD))
             .line_height(relative(tokens::LINE_HEIGHT))
+            .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, _, _| {
+                if !matches!(event.button, MouseButton::Navigate(_)) {
+                    this.pressed_button.set(Some(event.button));
+                }
+            }))
+            .capture_any_mouse_up(cx.listener(|this, event: &MouseUpEvent, _, _| {
+                if this.pressed_button.get() == Some(event.button) {
+                    this.pressed_button.set(None);
+                }
+            }))
             .on_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, _, cx| {
                 let navigation = match event.button {
                     MouseButton::Navigate(NavigationDirection::Back) => Navigation::Back,
@@ -573,6 +610,7 @@ impl Render for Shell {
                 let focused = this.sync_page_focus(window, cx);
                 this.page_key(focused, &event.keystroke, true, false, false);
             }))
+            .child(self.pointer_button_probe())
             .child(div().absolute().size_0().track_focus(&self.page_focus))
             .child(div().absolute().size_0().track_focus(&self.focus));
         let mut images = BTreeMap::new();

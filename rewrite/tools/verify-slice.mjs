@@ -462,6 +462,28 @@ async function quickWins(app) {
   await poll('X11 cursor returns to link hand', () => cursor()[0] === hand);
   pass('X11 changed cursor over links and text, hid it over cursor:none, and drew and cleared the link status pill');
 
+  const dragReady = site.probe('quick-wins-drag-ready', stepTimeoutMs);
+  const dragLeave = site.probe('quick-wins-drag-leave', stepTimeoutMs);
+  await app.command('script', { tab, source: `
+    document.querySelector('input').value = 'Drag to select this text';
+    document.documentElement.addEventListener('mouseleave', event => {
+      fetch('/probe/quick-wins-drag-leave?value=' + event.buttons);
+    }, { once: true });
+    fetch('/probe/quick-wins-drag-ready?value=ready');
+  ` });
+  await dragReady;
+  input('press', ...field);
+
+  try {
+    input('move', field[0] - 8, field[1]);
+    input('move', pageX - 8, field[1]);
+    assert.equal(await dragLeave, '1', 'CEF received the page exit without the held left button');
+  } finally {
+    execFileSync(x11Driver, ['release']);
+  }
+
+  pass('X11 drag selection kept the left button pressed on exit into the sidebar');
+
   for (const [operation, position, path] of [['click', link, '/split'], ['back', blank, '/open'], ['forward', blank, '/split']]) {
     const after = app.events.length;
 

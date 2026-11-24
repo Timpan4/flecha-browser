@@ -748,7 +748,12 @@ impl Render for Demo {
             }))
             .on_mouse_exit(cx.listener(|demo, event: &gpui::MouseExitEvent, _, _| {
                 if let Some(host) = demo.host() {
-                    input::mouse_exit(&host, event, point(px(0.), px(0.)));
+                    input::mouse_leave(
+                        &host,
+                        event.position,
+                        event.modifiers,
+                        event.pressed_button,
+                    );
                 }
             }))
             .on_scroll(cx.listener(|demo, event: &gpui::ScrollEvent, _, _| {

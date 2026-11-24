@@ -98,16 +98,25 @@ pub fn click(
 }
 
 pub fn mouse_move(host: &BrowserHost, motion: &MouseMoveEvent, origin: Point<Pixels>) {
-    let flags = modifiers(motion.modifiers)
-        | motion
-            .pressed_button
-            .and_then(button)
-            .map_or(0, |(_, flag)| flag.0);
+    let flags = pointer_flags(motion.modifiers, motion.pressed_button);
     host.send_mouse_move_event(Some(&event(motion.position - origin, flags)), 0);
 }
 
-pub fn mouse_leave(host: &BrowserHost, position: Point<Pixels>, state: Modifiers) {
-    host.send_mouse_move_event(Some(&event(position, modifiers(state))), 1);
+pub fn mouse_leave(
+    host: &BrowserHost,
+    position: Point<Pixels>,
+    state: Modifiers,
+    pressed_button: Option<MouseButton>,
+) {
+    let flags = pointer_flags(state, pressed_button);
+    host.send_mouse_move_event(Some(&event(position, flags)), 1);
+}
+
+fn pointer_flags(state: Modifiers, pressed_button: Option<MouseButton>) -> u32 {
+    modifiers(state)
+        | pressed_button
+            .and_then(button)
+            .map_or(0, |(_, flag)| flag.0)
 }
 
 pub fn scroll(host: &BrowserHost, scroll: &ScrollEvent, origin: Point<Pixels>) {
