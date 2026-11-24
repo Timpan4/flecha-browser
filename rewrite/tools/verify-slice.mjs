@@ -491,10 +491,12 @@ async function nativeWheel(app, tab) {
   // GPUI reports no refresh rate for Xvfb's display, so pages paint at the 60 fps fallback
   // instead of CEF's 30 fps default.
   assert.equal(page?.frameRate, 60, 'CEF windowless frame rate');
+
   const [x, y] = execFileSync('magick', [
     join(out, 'open.png'), '-transparent', '#FFCC49', '-alpha', 'extract', '-negate',
     '-trim', '-format', '%X %Y', 'info:',
   ], { encoding: 'utf8' }).trim().split(' ').map(Number);
+
   assert(Number.isFinite(x) && Number.isFinite(y), 'missing page marker');
 
   const ready = site.probe('wheel-ready', stepTimeoutMs);
@@ -526,6 +528,7 @@ async function nativeWheel(app, tab) {
   await ready;
   execFileSync(x11Driver, ['wheel-down', x + 10, y + 10]);
   waitingFor = 'X11 wheel scroll in the CEF page';
+
   const positions = JSON.parse(await scrolled.catch(async error => {
     const recorded = site.probe('wheel-recorded', stepTimeoutMs);
     await app.command('script', {
@@ -534,6 +537,7 @@ async function nativeWheel(app, tab) {
     });
     throw new Error(`${error.message}; the page recorded ${await recorded}`);
   }));
+
   assert.equal(positions.at(-1), 120, `one wheel notch scrolled ${JSON.stringify(positions)}`);
   assert(positions.some(position => position > 0 && position < 120),
     `one wheel notch jumped without animating: ${JSON.stringify(positions)}`);
