@@ -1,8 +1,15 @@
+mod adblock;
+mod boosts;
 mod callbacks;
+mod devtools;
+mod downloads;
 mod identity;
+mod permissions;
 mod popup;
 mod pump;
 mod runtime;
+mod services;
+mod sleep;
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
@@ -11,7 +18,7 @@ use std::rc::{Rc, Weak};
 
 use anyhow::{Context as _, Result, ensure};
 use cef::{
-    BrowserHost, BrowserSettings, CefString, ImplBrowser as _, ImplBrowserHost as _,
+    Browser, BrowserHost, BrowserSettings, CefString, ImplBrowser as _, ImplBrowserHost as _,
     ImplFrame as _, Rect, RequestContext, RequestContextSettings, RuntimeStyle, WindowInfo,
     browser_host_create_browser_sync, request_context_create_context,
 };
@@ -20,12 +27,19 @@ use gpui::{Bounds, Pixels};
 
 pub use callbacks::Frames;
 use callbacks::{Queue, Slot, Stage};
+pub use devtools::{DevToolsEvent, DevToolsMessage};
+pub use downloads::{
+    DownloadConfig, DownloadError, DownloadEvent, DownloadHandle, DownloadMessage,
+};
 use identity::Generations;
 pub use identity::{BrowserKey, Owner, Partition};
+pub use permissions::{PermissionEvent, PermissionPrompt};
 pub use popup::{Disposition, Opened};
 use popup::{Pending, Popups};
 pub use runtime::Runtime;
 use runtime::path_string;
+use services::Services;
+pub use sleep::{Discarded, SleepChange};
 
 /// `Opened`: CEF is creating this browser for a page, and the engine already owns it.
 /// `ClosedByPage`: the page closed its browser (`window.close()`), or CEF abandoned
@@ -118,6 +132,17 @@ struct Session {
     slot: Rc<Slot>,
     hidden: bool,
     opener: Option<Weak<Slot>>,
+    frozen: Frozen,
+}
+
+/// Whether tab sleep froze this browser, and whether freezing muted it.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum Frozen {
+    #[default]
+    No,
+    Yes {
+        muted: bool,
+    },
 }
 
 struct PersistentContext {
@@ -134,6 +159,10 @@ pub struct Engine {
     closing: BTreeSet<BrowserKey>,
     events: Queue,
     popups: Rc<Popups>,
+    /// Tabs tab sleep discarded, with what each needs to load again.
+    discarded: BTreeMap<TabId, Discarded>,
+    /// Sites where ad blocking is off (`Settings::ad_block_allowed`).
+    adblock_allowed: Vec<String>,
 }
 
 impl Engine {
@@ -145,6 +174,7 @@ impl Engine {
             mint,
             pending: RefCell::new(Vec::new()),
             live: Cell::new(0),
+            services: Rc::new(Services::new()),
         });
         Self {
             profile,
@@ -155,7 +185,13 @@ impl Engine {
             closing: BTreeSet::new(),
             events: Queue::default(),
             popups,
+            discarded: BTreeMap::new(),
+            adblock_allowed: Vec::new(),
         }
+    }
+
+    fn services(&self) -> &Services {
+        &self.popups.services
     }
 
     pub fn key(&self, tab: &TabId) -> Option<BrowserKey> {
@@ -185,7 +221,7 @@ impl Engine {
             self.resize(&tab, viewport);
             return Ok(());
         }
-        self.close(&tab);
+        self.close_browser(&tab);
         let Some(mut context) = self.context(&partition)? else {
             return Ok(());
         };
@@ -196,6 +232,7 @@ impl Engine {
             self.events.clone(),
             self.popups.clone(),
         ));
+        slot.partition.replace(Some(partition.clone()));
         let mut client = callbacks::client(slot.clone());
         let info = WindowInfo {
             runtime_style: RuntimeStyle::ALLOY,
@@ -222,8 +259,10 @@ impl Engine {
                 partition,
                 hidden: false,
                 opener: None,
+                frozen: Frozen::No,
             },
         );
+        self.discarded.remove(&tab);
         let alloy = browser
             .and_then(|browser| browser.host())
             .is_some_and(|host| host.runtime_style() == RuntimeStyle::ALLOY);
@@ -327,6 +366,9 @@ impl Engine {
     }
 
     pub fn set_visible(&mut self, tab: &TabId, visible: bool) {
+        if visible {
+            self.thaw_tab(tab);
+        }
         let Some(session) = self.browsers.get_mut(tab) else {
             return;
         };
@@ -369,7 +411,73 @@ impl Engine {
         }
     }
 
+    fn browser(&self, tab: &TabId) -> Option<Browser> {
+        self.browsers.get(tab)?.slot.browser.borrow().clone()
+    }
+
+    /// Loads `url` in the tab's main frame as a browser-initiated navigation, as the address bar
+    /// does. Returns whether the tab has a main frame.
+    pub fn navigate(&self, tab: &TabId, url: &str) -> bool {
+        let frame = self.browser(tab).and_then(|browser| browser.main_frame());
+        if let Some(frame) = &frame {
+            frame.load_url(Some(&CefString::from(url)));
+        }
+        frame.is_some()
+    }
+
+    pub fn go_back(&self, tab: &TabId) {
+        if let Some(browser) = self.browser(tab) {
+            browser.go_back();
+        }
+    }
+
+    pub fn go_forward(&self, tab: &TabId) {
+        if let Some(browser) = self.browser(tab) {
+            browser.go_forward();
+        }
+    }
+
+    pub fn reload(&self, tab: &TabId) {
+        if let Some(browser) = self.browser(tab) {
+            browser.reload();
+        }
+    }
+
+    pub fn stop_load(&self, tab: &TabId) {
+        if let Some(browser) = self.browser(tab) {
+            browser.stop_load();
+        }
+    }
+
+    pub fn can_go_back(&self, tab: &TabId) -> bool {
+        self.browser(tab)
+            .is_some_and(|browser| browser.can_go_back() != 0)
+    }
+
+    pub fn can_go_forward(&self, tab: &TabId) -> bool {
+        self.browser(tab)
+            .is_some_and(|browser| browser.can_go_forward() != 0)
+    }
+
+    pub fn is_loading(&self, tab: &TabId) -> bool {
+        self.browser(tab)
+            .is_some_and(|browser| browser.is_loading() != 0)
+    }
+
+    /// The main frame's URL, as CEF has it now.
+    pub fn url(&self, tab: &TabId) -> Option<String> {
+        let frame = self.browser(tab)?.main_frame()?;
+        Some(CefString::from(&frame.url()).to_string())
+    }
+
+    /// Closes the tab's browser and forgets the tab, discarded page included.
     pub fn close(&mut self, tab: &TabId) {
+        self.discarded.remove(tab);
+        self.close_browser(tab);
+    }
+
+    /// Closes the tab's browser. A discarded page's record stays for [`Self::restore_tab`].
+    fn close_browser(&mut self, tab: &TabId) {
         let Some(session) = self.browsers.remove(tab) else {
             return;
         };
@@ -437,6 +545,7 @@ impl Engine {
                     slot: child,
                     hidden: false,
                     opener: Some(Rc::downgrade(&opener)),
+                    frozen: Frozen::No,
                 },
             );
         }
@@ -564,18 +673,39 @@ mod tests {
         assert_eq!(engine.next_event(), Some(live));
     }
 
+    const VIEWPORT: Viewport = Viewport {
+        origin: (0, 0),
+        size: (800, 600),
+        screen: (0, 0, 800, 600),
+        scale: 1.,
+    };
+
+    /// A slot no CEF browser backs, in an engine of its own.
+    pub(crate) fn slot(tab: &str) -> Rc<Slot> {
+        slots(&[tab]).remove(0)
+    }
+
+    /// Browsers of one engine, so they share its services.
+    pub(crate) fn slots(tabs: &[&str]) -> Vec<Rc<Slot>> {
+        let mut engine = Engine::new(PathBuf::new(), || TabId::new("popup"));
+        tabs.iter()
+            .map(|tab| {
+                Rc::new(Slot::new(
+                    engine.generations.create(TabId::new(*tab)),
+                    VIEWPORT,
+                    engine.events.clone(),
+                    engine.popups.clone(),
+                ))
+            })
+            .collect()
+    }
+
     /// A live opener with a popup CEF has started creating, and the popup's slot.
     fn opener_with_pending_popup(engine: &mut Engine) -> (Rc<Slot>, Rc<Slot>) {
         let tab = TabId::new("opener");
-        let viewport = Viewport {
-            origin: (0, 0),
-            size: (800, 600),
-            screen: (0, 0, 800, 600),
-            scale: 1.,
-        };
         let opener = Rc::new(Slot::new(
             engine.generations.create(tab.clone()),
-            viewport,
+            VIEWPORT,
             engine.events.clone(),
             engine.popups.clone(),
         ));
@@ -588,6 +718,7 @@ mod tests {
                 slot: opener.clone(),
                 hidden: false,
                 opener: None,
+                frozen: Frozen::No,
             },
         );
         let child = popup::open(&opener, 7, None);

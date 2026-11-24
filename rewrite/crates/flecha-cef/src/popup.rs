@@ -66,6 +66,8 @@ pub(crate) struct Popups {
     pub pending: RefCell<Vec<Pending>>,
     /// CEF browsers between `on_after_created` and `on_before_close`.
     pub live: Cell<usize>,
+    /// Blocking, Boosts, downloads, permissions and DevTools.
+    pub services: Rc<crate::services::Services>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -117,6 +119,8 @@ pub(crate) fn open(opener: &Rc<Slot>, popup_id: i32, size: Option<(i32, i32)>) -
     child
         .origin
         .replace(Some((Rc::downgrade(opener), popup_id)));
+    // CEF creates a popup in its opener's request context.
+    child.partition.replace(opener.partition.borrow().clone());
     opener.opening.borrow_mut().insert(popup_id, child.clone());
     opener.popups.pending.borrow_mut().push(Pending {
         child: child.clone(),
