@@ -27,18 +27,12 @@ pub(crate) enum TabAction {
     GoHome,
     SetHome,
     CloseTabs(CloseToday),
-    ViewSource,
 }
 
 /// `sameAddress` (chromium/shell/lib/url.ts:141-145): two addresses that load the same page.
 fn same_address(a: &str, b: &str) -> bool {
     let comparable = |url: &str| pinnable_address(url).unwrap_or_else(|| url.to_owned());
     comparable(a) == comparable(b)
-}
-
-/// `isWebPage`: what Chromium shows the source of.
-fn is_web_page(url: &str) -> bool {
-    url.starts_with("http://") || url.starts_with("https://")
 }
 
 impl Controller {
@@ -57,11 +51,6 @@ impl Controller {
         match action {
             TabAction::Duplicate => {
                 self.model.open(window, tab.url, true)?;
-            }
-            TabAction::ViewSource => {
-                ensure!(is_web_page(&tab.url), "This page has no source to show");
-                self.model
-                    .open(window, format!("view-source:{}", tab.url), true)?;
             }
             TabAction::Reload => self.engine.reload(id),
             TabAction::ToggleMute => {

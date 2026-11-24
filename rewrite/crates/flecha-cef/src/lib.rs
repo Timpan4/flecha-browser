@@ -5,11 +5,14 @@ mod clipboard;
 mod compositor;
 mod context_menu;
 mod devtools;
+mod dialogs;
 mod downloads;
 mod find;
 mod identity;
 mod permissions;
 mod popup;
+#[cfg(target_os = "linux")]
+mod printing;
 mod pump;
 mod runtime;
 mod services;
@@ -39,6 +42,9 @@ pub use context_menu::{
     ContextMenuEvent, ContextMenuId, ContextMenuRequest, FrameEdit, MenuContext, MenuFrame,
 };
 pub use devtools::{DevToolsEvent, DevToolsMessage};
+pub use dialogs::{
+    ConnectionSecurity, DialogId, DialogKind, DialogRequest, DialogResponse, FileMode,
+};
 pub use downloads::{
     DownloadConfig, DownloadError, DownloadEvent, DownloadHandle, DownloadMessage,
 };
@@ -59,6 +65,8 @@ pub use zoom::{PageZoom, zoom_percentage};
 /// creating it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
+    SecurityChanged,
+    DialogChanged,
     Created(i32),
     Closed,
     Address(String),
@@ -656,6 +664,19 @@ impl Engine {
         }
     }
 
+    pub fn print(&self, tab: &TabId) -> Result<()> {
+        let host = self.host(tab).context("The page has closed")?;
+        #[cfg(target_os = "linux")]
+        {
+            self.print_for_portal(tab, &host)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            host.print();
+            Ok(())
+        }
+    }
+
     pub fn stop_load(&self, tab: &TabId) {
         if let Some(browser) = self.browser(tab) {
             browser.stop_load();
@@ -717,6 +738,7 @@ impl Engine {
         slot.retired.set(true);
         find::forget(slot);
         context_menu::cancel(slot);
+        slot.dialogs.cancel();
         match slot.stage.get() {
             // CEF already destroyed it. Its queued ClosedByPage now has a retired key.
             Stage::Closed => {}
@@ -874,6 +896,8 @@ mod tests {
         let url = "https://example.test/old";
         for event in callback_samples![
             Event::Created(_) => Event::Created(1),
+            Event::DialogChanged => Event::DialogChanged,
+            Event::SecurityChanged => Event::SecurityChanged,
             Event::Closed => Event::Closed,
             Event::Address(_) => Event::Address(url.into()),
             Event::Title(_) => Event::Title("Old document".into()),

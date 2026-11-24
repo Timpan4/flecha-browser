@@ -298,8 +298,8 @@ pub(crate) struct Downloads {
     /// The handle of each download CEF is running. The list knows a download by its handle.
     handles: BTreeMap<CefDownload, DownloadHandle>,
     last_handle: u32,
-    /// The rows incognito sessions recorded, until their session ends and the row can go.
-    incognito: BTreeMap<DownloadId, IncognitoSession>,
+    /// The request context that started each row, including rows whose browsers are gone.
+    partitions: BTreeMap<DownloadId, Partition>,
     /// Where each incognito session last answered a save dialog. It lives as long as the session
     /// and never becomes the regular folder.
     prompt_folders: BTreeMap<IncognitoSession, PathBuf>,
@@ -356,12 +356,16 @@ impl Downloads {
         handle
     }
 
-    /// The incognito session whose request context runs the download.
-    fn handle_session(&self, handle: DownloadHandle) -> Option<IncognitoSession> {
+    fn handle_partition(&self, handle: DownloadHandle) -> Option<&Partition> {
         self.handles
             .iter()
             .find(|(_, live)| **live == handle)
-            .and_then(|((partition, _), _)| partition.as_ref()?.incognito_session())
+            .and_then(|((partition, _), _)| partition.as_ref())
+    }
+
+    fn handle_session(&self, handle: DownloadHandle) -> Option<IncognitoSession> {
+        self.handle_partition(handle)
+            .and_then(Partition::incognito_session)
     }
 
     /// Where a save dialog for `session` starts. An incognito session starts from the regular
@@ -376,7 +380,7 @@ impl Downloads {
     fn session(&self, event: &DownloadEvent) -> Option<IncognitoSession> {
         event
             .id()
-            .and_then(|id| self.incognito.get(&id).copied())
+            .and_then(|id| self.partitions.get(&id)?.incognito_session())
             .or_else(|| self.handle_session(event.handle()))
     }
 
@@ -385,8 +389,9 @@ impl Downloads {
     fn end_session(&mut self, session: IncognitoSession) {
         self.prompt_folders.remove(&session);
         let list = &mut self.list;
-        self.incognito.retain(|id, owner| {
-            *owner != session || matches!(list.remove(*id), Err(ListError::NotAllowed { .. }))
+        self.partitions.retain(|id, partition| {
+            partition.incognito_session() != Some(session)
+                || matches!(list.remove(*id), Err(ListError::NotAllowed { .. }))
         });
     }
 
@@ -550,8 +555,8 @@ impl Downloads {
                 Act::Emit(browser, DownloadEvent::Blocked { handle, url }),
             ];
         };
-        if let Some(session) = self.handle_session(handle) {
-            self.incognito.insert(id, session);
+        if let Some(partition) = self.handle_partition(handle).cloned() {
+            self.partitions.insert(id, partition);
         }
         match warning {
             Some(warning) => {
@@ -880,18 +885,27 @@ impl crate::Engine {
     /// Installs the list loaded at startup (`flecha_downloads::persist::load`). Call it before
     /// the first download.
     pub fn restore_downloads(&self, list: DownloadList) {
-        self.services().downloads.borrow_mut().list = list;
+        let mut downloads = self.services().downloads.borrow_mut();
+        downloads.partitions.clear();
+        downloads.list = list;
     }
 
     /// Drops a finished, cancelled or interrupted row. The file stays on disk.
     pub fn remove_download(&self, id: DownloadId) -> Result<(), DownloadError> {
         let mut downloads = self.services().downloads.borrow_mut();
-        downloads.list.remove(id).map(drop).map_err(Into::into)
+        downloads.list.remove(id)?;
+        downloads.partitions.remove(&id);
+        Ok(())
     }
 
     /// `clearDownloads`: drops every row started after `since` that isn't progressing.
     pub fn clear_downloads(&self, since: EpochMillis) -> Vec<DownloadId> {
-        self.services().downloads.borrow_mut().list.clear(since)
+        let mut downloads = self.services().downloads.borrow_mut();
+        let removed = downloads.list.clear(since);
+        for id in &removed {
+            downloads.partitions.remove(id);
+        }
+        removed
     }
 
     /// The handle of a download CEF is still running.
@@ -910,9 +924,21 @@ impl crate::Engine {
         self.services()
             .downloads
             .borrow()
-            .incognito
+            .partitions
             .get(&id)
-            .copied()
+            .and_then(Partition::incognito_session)
+    }
+
+    pub fn download_partition(&self, id: DownloadId) -> Option<Partition> {
+        let downloads = self.services().downloads.borrow();
+        downloads.list.get(id)?;
+        Some(
+            downloads
+                .partitions
+                .get(&id)
+                .cloned()
+                .unwrap_or(Partition::Shared),
+        )
     }
 
     pub fn next_download_event(&mut self) -> Option<DownloadMessage> {
@@ -920,6 +946,11 @@ impl crate::Engine {
         let (tab, event) = self.services().download_events.pop()?;
         let mut downloads = self.services().downloads.borrow_mut();
         let incognito = downloads.session(&event);
+        if let Some(id) = event.id()
+            && downloads.list.get(id).is_none()
+        {
+            downloads.partitions.remove(&id);
+        }
         if let Some(session) = incognito
             && !self.contexts.contains_key(&Partition::Incognito(session))
         {
@@ -1841,7 +1872,14 @@ mod tests {
         );
         services.downloads.borrow_mut().end_session(session);
         assert_eq!(rows(&services), [regular_id]);
-        assert!(services.downloads.borrow().incognito.is_empty());
+        assert!(
+            services
+                .downloads
+                .borrow()
+                .partitions
+                .values()
+                .all(|partition| !partition.is_incognito())
+        );
     }
 
     #[test]

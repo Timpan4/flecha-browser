@@ -46,6 +46,8 @@ pub(crate) enum Shortcut {
     Find,
     Zoom(PageZoom),
     DevTools,
+    Print,
+    ViewSource,
     Cycle(bool),
     Select(usize),
     History,
@@ -68,7 +70,6 @@ pub(crate) enum Shortcut {
     SelectSpace(usize),
     NewSpace,
     ExitSplit,
-    ViewSource,
     // The command bar's actions without a key of their own.
     EditSpace,
     Archive,
@@ -115,6 +116,8 @@ impl Bindings {
             ("f5", Shortcut::Browser(Navigation::Reload)),
             ("secondary-q", Shortcut::Quit),
             ("escape", Shortcut::Escape),
+            ("secondary-p", Shortcut::Print),
+            ("secondary-u", Shortcut::ViewSource),
             // Chromium's IDC_NEW_WINDOW, which shipping leaves to Chromium (`ui/app.ts`).
             ("secondary-n", Shortcut::NewWindow),
             // Chromium's IDC_NEW_INCOGNITO_WINDOW, which the shipping menu shows (`ui/app.ts`).
@@ -416,6 +419,15 @@ impl Shell {
         self.bindings
             .refresh(&self.state.borrow().model.core.settings.keybindings);
         let stroke = &event.keystroke;
+        if self.browser_dialog.is_some()
+            && self.bindings.action(stroke) != Some(Shortcut::Close)
+            && self.bindings.action(stroke) != Some(Shortcut::Quit)
+        {
+            self.browser_dialog_key(stroke, window, cx);
+            self.consumed_keys.insert(stroke.key.clone());
+            cx.stop_propagation();
+            return;
+        }
         let altgr =
             event.prefer_character_input && stroke.modifiers.control && stroke.modifiers.alt;
         let settings_open = matches!(self.overlay, Overlay::Settings(_));
@@ -487,6 +499,8 @@ impl Shell {
         let action = match shortcut {
             Shortcut::Find if !self.overlay.is_open() => return self.open_find(window, cx),
             Shortcut::Zoom(action) if !self.overlay.is_open() => return self.zoom(action, cx),
+            Shortcut::Print if !self.overlay.is_open() => Action::Print,
+            Shortcut::ViewSource if !self.overlay.is_open() => Action::ViewSource,
             Shortcut::DevTools if !self.overlay.is_open() => {
                 let Some(key) = self.active_browser() else {
                     return false;
@@ -625,16 +639,16 @@ impl Shell {
                     SidebarAction::ToToday(id)
                 })
             }
-            Shortcut::Duplicate | Shortcut::Mute | Shortcut::ViewSource => {
+            Shortcut::Duplicate | Shortcut::Mute => {
                 let Some(id) = shown.tab.clone() else {
                     return false;
                 };
                 Action::Tab(
                     id,
-                    match shortcut {
-                        Shortcut::Duplicate => TabAction::Duplicate,
-                        Shortcut::Mute => TabAction::ToggleMute,
-                        _ => TabAction::ViewSource,
+                    if shortcut == Shortcut::Duplicate {
+                        TabAction::Duplicate
+                    } else {
+                        TabAction::ToggleMute
                     },
                 )
             }
@@ -757,6 +771,7 @@ fn runs_once(shortcut: Shortcut) -> bool {
             | Shortcut::SettingsTab(_)
             | Shortcut::Find
             | Shortcut::DevTools
+            | Shortcut::Print
             | Shortcut::Command(Command::Flechinha)
             | Shortcut::Pin
             | Shortcut::Duplicate
