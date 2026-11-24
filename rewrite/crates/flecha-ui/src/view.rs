@@ -9,11 +9,10 @@ use flecha_core::{FolderId, TabId, WindowId};
 use flecha_surface::{Frame, input, surface};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, AppContext as _, ClickEvent, Context, Div, Entity, FocusHandle, InteractiveElement as _,
-    IntoElement, KeyUpEvent, MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent,
-    MouseUpEvent, ParentElement as _, Pixels, Render, RenderImage, ScrollEvent,
-    StatefulInteractiveElement as _, Styled as _, Subscription, Window, canvas, deferred, div, px,
-    relative,
+    App, ClickEvent, Context, Div, FocusHandle, InteractiveElement as _, IntoElement, KeyUpEvent,
+    MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _,
+    Pixels, Render, RenderImage, ScrollEvent, StatefulInteractiveElement as _, Styled as _,
+    Subscription, Window, canvas, deferred, div, px, relative,
 };
 
 use crate::theme::{Palette, palette};
@@ -71,51 +70,58 @@ pub(crate) struct Shell {
     _appearance: Subscription,
 }
 
+/// The first window's content until CEF has started and a main window takes it over.
+pub(crate) struct Starting;
+
+impl Render for Starting {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().size_full()
+    }
+}
+
 impl Shell {
-    pub fn new(state: Shared, id: WindowId, window: &mut Window, cx: &mut App) -> Entity<Self> {
+    pub fn build(state: Shared, id: WindowId, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus = cx.focus_handle();
         let page_focus = cx.focus_handle();
         let bindings = Bindings::new(&state.borrow().model.core.settings.keybindings);
         focus.focus(window, cx);
-        cx.new(|cx| {
-            state
+        state
+            .borrow_mut()
+            .sleep
+            .window_activation(&id, window.is_window_active());
+        let activation = cx.observe_window_activation(window, |this: &mut Self, window, cx| {
+            let active = window.is_window_active();
+            this.state
                 .borrow_mut()
                 .sleep
-                .window_activation(&id, window.is_window_active());
-            let activation = cx.observe_window_activation(window, |this: &mut Self, window, cx| {
-                let active = window.is_window_active();
-                this.state
-                    .borrow_mut()
-                    .sleep
-                    .window_activation(&this.id, active);
-                if active {
-                    this.state.borrow_mut().model.focus_window(&this.id);
-                } else {
-                    this.consumed_keys.clear();
-                }
-                let _ = this.sync_page_focus(window, cx);
-            });
-            // Theme::System follows the desktop's light or dark appearance as it changes.
-            let appearance = cx.observe_window_appearance(window, |_, _, cx| cx.notify());
-            Self {
-                state,
-                id,
-                focus,
-                page_focus,
-                selected_pane: None,
-                focused_browser: None,
-                overlay: Overlay::None,
-                suggestion_client: Arc::default(),
-                last_suggestion_sent: None,
-                bindings,
-                consumed_keys: BTreeSet::new(),
-                images: BTreeMap::new(),
-                title: String::new(),
-                page_made_fullscreen: false,
-                _activation: activation,
-                _appearance: appearance,
+                .window_activation(&this.id, active);
+            if active {
+                this.state.borrow_mut().model.focus_window(&this.id);
+            } else {
+                this.consumed_keys.clear();
             }
-        })
+            let _ = this.sync_page_focus(window, cx);
+        });
+        // Theme::System follows the desktop's light or dark appearance as it changes.
+        let appearance = cx.observe_window_appearance(window, |_, _, cx| cx.notify());
+        Self {
+            state,
+            id,
+            focus,
+            page_focus,
+            selected_pane: None,
+            focused_browser: None,
+            overlay: Overlay::None,
+            suggestion_client: Arc::default(),
+            last_suggestion_sent: None,
+            bindings,
+            consumed_keys: BTreeSet::new(),
+            images: BTreeMap::new(),
+            title: String::new(),
+            page_made_fullscreen: false,
+            _activation: activation,
+            _appearance: appearance,
+        }
     }
 
     pub(crate) fn action_button(
@@ -291,6 +297,10 @@ impl Shell {
                     let id = id.clone();
                     move |pane, (), window, cx| {
                         origin.set(pane.origin);
+                        #[cfg(target_os = "linux")]
+                        state.borrow().engine.follow_window_device(
+                            flecha_surface::SurfaceTarget::for_window(window),
+                        );
                         let screen = window
                             .display(cx)
                             .map_or(window.bounds(), |display| display.bounds());

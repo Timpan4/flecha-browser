@@ -127,7 +127,7 @@ fn run(runtime: &mut Runtime, profile: &Path, steps: &Steps) -> Result<()> {
     std::fs::create_dir_all(&cef_profile)?;
     ensure!(
         matches!(
-            runtime.initialize(&cef_profile, None)?,
+            runtime.initialize(&cef_profile, None, &flecha_cef::Compositing::software())?,
             flecha_cef::Start::Running
         ),
         "another process runs the probe profile"

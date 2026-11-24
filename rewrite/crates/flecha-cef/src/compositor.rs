@@ -1,0 +1,265 @@
+//! How CEF hands page frames to GPUI: shared GPU textures or CPU copies.
+//!
+//! In shared-texture mode CEF calls `OnAcceleratedPaint` with a dma-buf, and
+//! `flecha_surface` copies it into a texture on GPUI's device. CEF's GPU process must
+//! allocate that dma-buf on the GPU GPUI renders with. GPUI picks that GPU when it opens
+//! a window, and Chromium starts its GPU process while CEF initializes, so the app opens a
+//! window, probes its adapter, and passes the render node to Chromium before CEF starts. Without a usable match,
+//! every browser gets CPU copies through `OnPaint`.
+//!
+//! CEF fixes a browser's mode when it creates the browser. When a shared texture cannot
+//! be imported, the engine reopens that browser's page with CPU copies, and every
+//! browser created after that gets CPU copies. CEF also falls back to `OnPaint` by
+//! itself when GPU compositing becomes unavailable, and the render handler accepts those
+//! frames in either mode.
+
+use std::cell::{Cell, RefCell};
+use std::path::PathBuf;
+
+use flecha_surface::SurfaceTarget;
+
+/// Writes one diagnostic line to stderr. CEF callbacks cannot unwind, and `eprintln!`
+/// panics when stderr rejects the write, so a lost line must not abort the browser.
+pub(crate) fn log(line: std::fmt::Arguments<'_>) {
+    use std::io::Write as _;
+    let _ = writeln!(std::io::stderr(), "{line}");
+}
+
+macro_rules! log {
+    ($($arg:tt)*) => { log(format_args!($($arg)*)) };
+}
+
+/// How this process's browsers receive frames. The app decides once, before CEF starts.
+#[derive(Clone, Default)]
+pub struct Compositing {
+    shared: Option<Shared>,
+    /// The Ozone platform of the window GPUI opened, so Chromium uses GPUI's display
+    /// connection. Unknown without a window.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    ozone: Option<&'static str>,
+}
+
+#[derive(Clone)]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+struct Shared {
+    target: SurfaceTarget,
+    render_node: PathBuf,
+    ozone: &'static str,
+}
+
+impl Compositing {
+    /// CPU copies only, for runs without a window.
+    pub fn software() -> Self {
+        Self::default()
+    }
+
+    /// Shared textures when the GPU that renders `window` can import CEF's.
+    pub fn for_window(window: &gpui::Window) -> Self {
+        #[cfg(target_os = "linux")]
+        {
+            let ozone = flecha_surface::ozone_platform(window);
+            let target = SurfaceTarget::for_window(window);
+            match target.render_node(ozone) {
+                Ok(render_node) => {
+                    log!("page frames: shared textures on {}", render_node.display());
+                    Self {
+                        shared: Some(Shared {
+                            target,
+                            render_node,
+                            ozone,
+                        }),
+                        ozone: Some(ozone),
+                    }
+                }
+                Err(error) => {
+                    log!("page frames: CPU copies, shared textures are unavailable: {error:#}");
+                    Self {
+                        shared: None,
+                        ozone: Some(ozone),
+                    }
+                }
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = window;
+            Self::software()
+        }
+    }
+
+    /// The Ozone platform Chromium must use: the window's, or without one, Wayland when
+    /// `WAYLAND_DISPLAY` names a display. GPUI treats an empty value as unset too.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn ozone(&self) -> &'static str {
+        self.ozone.unwrap_or_else(|| {
+            if std::env::var_os("WAYLAND_DISPLAY").is_some_and(|display| !display.is_empty()) {
+                "wayland"
+            } else {
+                "x11"
+            }
+        })
+    }
+
+    /// The render node Chromium must allocate shared textures on.
+    pub(crate) fn render_node(&self) -> Option<&std::path::Path> {
+        self.shared
+            .as_ref()
+            .map(|shared| shared.render_node.as_path())
+    }
+}
+
+/// What a change of GPUI's device means for browsers that share textures.
+#[cfg(target_os = "linux")]
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum DeviceChange {
+    None,
+    /// GPUI recreated its device on the same GPU. CEF keeps producing for it.
+    SameGpu,
+    /// GPUI now renders on another GPU or none, so shared textures are off.
+    Lost,
+}
+
+/// The engine's current mode, shared with every browser's render handler.
+#[derive(Default)]
+pub(crate) struct Compositor {
+    /// GPUI's renderer and CEF's render node, while browsers on that GPU may share.
+    shared: RefCell<Option<Shared>>,
+    /// Whether browsers created now share textures. One failed import clears it, and
+    /// browsers that still import keep sharing.
+    for_new_browsers: Cell<bool>,
+    /// Set by the display harness to make the next import fail.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    reject_next: Cell<bool>,
+}
+
+impl Compositor {
+    pub fn start(&self, compositing: &Compositing) {
+        self.shared.replace(compositing.shared.clone());
+        self.for_new_browsers.set(compositing.shared.is_some());
+    }
+
+    /// Whether browsers created now should share textures.
+    pub fn shares_textures(&self) -> bool {
+        self.for_new_browsers.get()
+    }
+
+    /// GPUI's renderer pair for imports, while it is on CEF's GPU.
+    #[cfg(target_os = "linux")]
+    pub fn target(&self) -> Option<SurfaceTarget> {
+        self.shared
+            .borrow()
+            .as_ref()
+            .map(|shared| shared.target.clone())
+    }
+
+    /// Gives browsers created from now on CPU copies. Logs only the change.
+    pub fn turn_off(&self, reason: &str) {
+        if self.for_new_browsers.replace(false) {
+            log!("page frames: CPU copies for new browsers from now on: {reason}");
+        }
+    }
+
+    /// Follows GPUI's device for `target`'s window. A window without a device, as during
+    /// GPUI's device recovery, changes nothing.
+    #[cfg(target_os = "linux")]
+    pub fn follow(&self, target: SurfaceTarget) -> DeviceChange {
+        let mut shared = self.shared.borrow_mut();
+        let Some(current) = shared.as_mut() else {
+            return DeviceChange::None;
+        };
+        if target.adapter().is_none() || current.target.is_same_device(&target) {
+            return DeviceChange::None;
+        }
+        match target.render_node(current.ozone) {
+            Ok(node) if node == current.render_node => {
+                current.target = target;
+                DeviceChange::SameGpu
+            }
+            result => {
+                let reason = match result {
+                    Ok(node) => format!("GPUI moved to {}", node.display()),
+                    Err(error) => format!("GPUI's new device cannot import: {error:#}"),
+                };
+                shared.take();
+                drop(shared);
+                self.turn_off(&reason);
+                DeviceChange::Lost
+            }
+        }
+    }
+
+    /// Makes the next shared-texture import fail, for the display harness.
+    pub fn reject_next_import(&self) {
+        self.reject_next.set(true);
+    }
+
+    /// Imports `info`, unless the harness asked for the next import to fail. Then the
+    /// importer gets the texture with no planes and rejects it.
+    #[cfg(target_os = "linux")]
+    pub fn import<T>(
+        &self,
+        info: &cef::AcceleratedPaintInfo,
+        import: impl FnOnce(&cef::AcceleratedPaintInfo) -> T,
+    ) -> T {
+        if self.reject_next.take() {
+            let mut invalid = info.clone();
+            invalid.plane_count = 0;
+            return import(&invalid);
+        }
+        import(info)
+    }
+}
+
+/// How a browser last delivered a frame, so a change is logged once.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) enum Delivery {
+    SharedTexture,
+    CpuCopy,
+}
+
+/// Records `delivery` for a browser and logs when it differs from the last frame's.
+pub(crate) fn delivered(last: &Cell<Option<Delivery>>, delivery: Delivery, browser: Option<i32>) {
+    if last.replace(Some(delivery)) != Some(delivery) {
+        let what = match delivery {
+            Delivery::SharedTexture => "shared textures",
+            Delivery::CpuCopy => "CPU copies",
+        };
+        match browser {
+            Some(id) => log!("page frames: browser {id} receives {what}"),
+            None => log!("page frames: a new browser receives {what}"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn one_failed_import_gives_new_browsers_cpu_copies_and_keeps_the_target() {
+        let compositor = Compositor::default();
+        compositor.start(&Compositing {
+            shared: Some(Shared {
+                target: SurfaceTarget::default(),
+                render_node: PathBuf::from("/dev/dri/renderD128"),
+                ozone: "wayland",
+            }),
+            ozone: Some("wayland"),
+        });
+        assert!(compositor.shares_textures());
+        compositor.turn_off("import failed");
+        assert!(!compositor.shares_textures());
+        // Browsers that already share keep importing on the same GPU.
+        #[cfg(target_os = "linux")]
+        assert!(compositor.target().is_some());
+    }
+
+    #[test]
+    fn software_compositing_never_shares() {
+        let compositor = Compositor::default();
+        compositor.start(&Compositing::software());
+        assert!(!compositor.shares_textures());
+        assert_eq!(Compositing::software().render_node(), None);
+    }
+}

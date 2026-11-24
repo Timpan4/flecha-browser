@@ -49,6 +49,12 @@ devices=()
 for device in null zero full random urandom tty; do
   devices+=(--dev-bind "/dev/$device" "/dev/$device")
 done
+if [[ $backend == wayland ]]; then
+  # The NVIDIA driver's Vulkan ICD needs its control nodes besides /dev/dri.
+  for device in nvidiactl nvidia0 nvidia-modeset; do
+    devices+=(--dev-bind-try "/dev/$device" "/dev/$device")
+  done
+fi
 
 cc -std=c17 -Wall -Wextra -Werror "$rewrite/tools/pidfd-run.c" -o "$scratch/pidfd-run"
 # The shipping Chromium native harness supplies the watchdog. The command

@@ -4,6 +4,11 @@ use anyhow::{Context as _, Result, ensure};
 use cef::AcceleratedPaintInfo;
 use gpui::{Bounds, Canvas, ContentMask, Pixels, RenderImage, Styled as _, canvas};
 
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+pub use linux::ozone_platform;
+
 /// A frame whose texture and renderer provenance are assigned together.
 ///
 /// ```compile_fail
@@ -262,6 +267,15 @@ impl SurfaceTarget {
     #[cfg(target_os = "linux")]
     pub fn adapter(&self) -> Option<&wgpu::Adapter> {
         self.gpu.as_ref().map(|gpu| &gpu.adapter)
+    }
+
+    /// The DRM render node of this target's GPU, where CEF must allocate the textures it
+    /// shares. Fails when GPUI's adapter cannot import CEF's dma-bufs or, on X11, when
+    /// Chromium's DRI3 device is a different GPU.
+    #[cfg(target_os = "linux")]
+    pub fn render_node(&self, ozone: &str) -> Result<std::path::PathBuf> {
+        let gpu = self.gpu.as_ref().context("GPUI did not provide a GPU")?;
+        linux::render_node(&gpu.adapter, ozone)
     }
 
     #[cfg(target_os = "linux")]

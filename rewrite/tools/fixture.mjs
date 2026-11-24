@@ -7,6 +7,10 @@ export const blankRestartColor = '#E64DA3';
 export const openerColors = ['#2B2D6E', '#F2E94E'];
 export const popupColors = ['#5A1F1F', '#9AF2C4'];
 
+// The /select page's colours, and the colour of its <select> popup's options.
+export const selectColors = ['#1F4D2E', '#C7F25A'];
+export const selectOptionColor = '#3B1FD1';
+
 // The bytes of /jar/download.
 export const downloadBody = 'Flecha fixture download\n';
 
@@ -101,6 +105,7 @@ export async function fixture(handle = () => false) {
     '/peek': ['#235089', '#83ddff'],
     '/opener': openerColors,
     '/popup': popupColors,
+    '/select': selectColors,
   }[path] ?? ['#147a70', '#ffcc49'];
 
   // Asks before leaving. Chromium shows the prompt only after a user gesture.
@@ -124,6 +129,12 @@ export async function fixture(handle = () => false) {
     '/fullscreen': `
       <button id="full">Fullscreen</button>
       <script>document.querySelector('#full').addEventListener('click', () => document.documentElement.requestFullscreen());</script>`,
+    '/select': `
+      <style>
+        #choice { position: absolute; left: 400px; top: 32px; width: 240px; height: 48px; font: 24px system-ui; }
+        option { background: ${selectOptionColor}; color: white; }
+      </style>
+      <select id="choice"><option>One</option><option>Two</option><option>Three</option></select>`,
     '/jar/set': jar ? jarReport(jar, 'set', `localStorage.setItem('${jar}', '${jar}_stored');`) : '',
     '/jar/check': jar ? jarReport(jar, inJar ? 'present' : 'absent', '') : '',
   }[path] ?? '';

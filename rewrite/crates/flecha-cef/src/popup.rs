@@ -68,6 +68,8 @@ pub(crate) struct Popups {
     pub live: Cell<usize>,
     /// Blocking, Boosts, downloads, permissions and DevTools.
     pub services: Rc<crate::services::Services>,
+    /// Whether new browsers receive shared textures or CPU copies.
+    pub compositor: crate::compositor::Compositor,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -97,6 +99,9 @@ pub(crate) fn before_popup(
     // CEF writes the whole struct back, so change only the fields OSR needs.
     window.windowless_rendering_enabled = 1;
     window.runtime_style = RuntimeStyle::ALLOY;
+    let shared = opener.popups.compositor.shares_textures();
+    window.shared_texture_enabled = i32::from(shared);
+    child.shares_textures.set(shared);
     *client = Some(callbacks::client(child.clone()));
     child.emit(Event::Opened(Opened {
         url: url.map(ToString::to_string).unwrap_or_default(),
