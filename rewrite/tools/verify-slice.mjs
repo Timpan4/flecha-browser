@@ -1196,6 +1196,11 @@ async function verifySlice() {
   pass(`checked /proc environ for the app and its CEF descendants (${checked} processes, including a renderer or zygote child)`);
   await capture('open', ['#147A70', '#FFCC49']);
   pass('opened a durable tab, received CEF load and paint, and captured the GPUI fixture frame');
+  // Under Xvfb GPUI's adapter cannot import Vulkan dma-bufs, so these checks cover the CPU
+  // copy path, not shared textures.
+  const frames = /^page frames: .*$/m.exec(readFileSync(join(out, 'first.log'), 'utf8'))?.[0] ?? '';
+  assert.match(frames, /^page frames: CPU copies, shared textures are unavailable: /, 'Xvfb run did not use CPU copies');
+  pass(`Xvfb pages use CPU copies (${frames})`);
   await nativeInput(app, left);
 
   if (mode === 'focus') {

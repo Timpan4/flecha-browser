@@ -36,12 +36,29 @@ fn main() -> Result<()> {
         .with_quit_mode(gpui::QuitMode::Explicit)
         .run(move |cx| {
             let mut runtime = app_runtime.borrow_mut();
-            let started = runtime.initialize(&cef_profile, options.initial.as_deref());
-            if let Err(error) = started.and_then(|start| match start {
+            // GPUI picks its GPU for the first window, and Chromium's GPU process, which CEF
+            // starts during `initialize`, must share textures on that GPU. A launch CEF will
+            // forward to the Flecha holding the profile opens no window.
+            let first = if flecha_cef::profile_in_use(&cef_profile) {
+                Ok(None)
+            } else {
+                flecha_ui::FirstWindow::open(cx).map(Some)
+            };
+            let started = first.and_then(|first| {
+                let software = flecha_cef::Compositing::software();
+                let compositing = first
+                    .as_ref()
+                    .map_or(&software, flecha_ui::FirstWindow::compositing);
+                let start =
+                    runtime.initialize(&cef_profile, options.initial.as_deref(), compositing)?;
+                Ok((start, first))
+            });
+            if let Err(error) = started.and_then(|(start, first)| match start {
                 Start::Forwarded => std::process::exit(0),
                 Start::Running => flecha_ui::start(
                     cx,
                     &mut runtime,
+                    first,
                     cef_profile,
                     store,
                     loaded,

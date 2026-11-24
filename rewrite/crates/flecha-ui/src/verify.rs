@@ -68,6 +68,20 @@ enum Command {
         tab: TabId,
         source: String,
     },
+    /// Resizes the window's content area, in logical pixels.
+    Resize {
+        width: f32,
+        height: f32,
+    },
+    /// A left click at page coordinates, sent through CEF for displays without an
+    /// input injection protocol.
+    Click {
+        tab: TabId,
+        x: f32,
+        y: f32,
+    },
+    /// Makes the next shared-texture import fail, to check the switch to CPU copies.
+    RejectNextSharedTexture,
 }
 
 impl Command {
@@ -186,6 +200,35 @@ impl Command {
                     state.engine.execute_script(&tab, &source),
                     "missing CEF main frame"
                 );
+                return Ok(Value::Null);
+            }
+            Self::Resize { width, height } => {
+                let handle = *state
+                    .windows
+                    .get(window)
+                    .context("no GPUI window to resize")?;
+                handle.update(cx, |_, window, _| {
+                    window.resize(gpui::size(gpui::px(width), gpui::px(height)));
+                })?;
+                return Ok(Value::Null);
+            }
+            Self::RejectNextSharedTexture => {
+                state.engine.reject_next_shared_texture();
+                return Ok(Value::Null);
+            }
+            Self::Click { tab, x, y } => {
+                let host = state.engine.host(&tab).context("missing CEF host")?;
+                state.engine.focused(&tab, true);
+                for up in [false, true] {
+                    flecha_surface::input::click(
+                        &host,
+                        gpui::point(gpui::px(x), gpui::px(y)),
+                        gpui::Modifiers::default(),
+                        gpui::MouseButton::Left,
+                        1,
+                        up,
+                    );
+                }
                 return Ok(Value::Null);
             }
         };
