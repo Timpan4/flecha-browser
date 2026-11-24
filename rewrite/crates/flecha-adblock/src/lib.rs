@@ -22,4 +22,6 @@ pub use fetch::{DOWNLOAD_TIMEOUT, Download, DownloadRequest, MAX_REDIRECTS, Wire
 pub use lists::{LISTS, MAX_AGE};
 pub use sites::{SiteAllowList, site_host};
 pub use transport::UreqDownload;
-pub use updater::{EngineOutcome, UpdateReport, Updater, UpdaterConfig, update_once, warm_start};
+pub use updater::{
+    EngineOutcome, UpdateReport, Updater, UpdaterConfig, load_cached_rules, update_once, warm_start,
+};

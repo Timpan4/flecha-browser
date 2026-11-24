@@ -413,6 +413,7 @@ mod tests {
             "[Adblock Plus 2.0]\n! Title: EasyPrivacy\n\n||tracker.example.test^\n",
         )?;
         let mut controller = Controller::open_test_profile(profile.path())?;
+        controller.engine.load_adblock_rules(&cache);
         let site = site();
         let request = Request {
             url: "https://ads.example.test/ad.js",
@@ -431,6 +432,7 @@ mod tests {
         drop(controller);
 
         let mut restarted = Controller::open_test_profile(profile.path())?;
+        restarted.engine.load_adblock_rules(&cache);
         assert!(!restarted.engine.adblocker().should_block(&request));
         restarted.change_site(&site, SiteChange::Shield(true))?;
         assert!(restarted.engine.adblocker().should_block(&request));
