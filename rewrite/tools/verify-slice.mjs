@@ -623,6 +623,7 @@ async function pageFullscreen(app, main, other) {
   const tab = await openTab(app, '/fullscreen');
   const histogram = path => execFileSync('magick', [path, '-format', '%c', 'histogram:info:'], { encoding: 'utf8' });
   const sidebarShown = path => sidebars.some(color => histogram(path).includes(color));
+
   const enter = async label => {
     const after = app.events.length;
 
@@ -636,6 +637,7 @@ async function pageFullscreen(app, main, other) {
       return page.every(color => histogram(path).includes(color)) ? undefined : 'the fullscreen page is not on screen';
     });
   };
+
   const ended = async (step, after) => {
     await app.wait(`${step} to end fullscreen`, event =>
       event.type === 'fullscreen' && event.tab === tab && !event.fullscreen, after);
@@ -894,11 +896,13 @@ async function incognitoChecks(app, main) {
   const relaunchUrl = `${base}/open?relaunched=${run}`;
   const linkedAt = app.events.length;
   relaunch(['--open', relaunchUrl]);
+
   const linked = await poll('the second launch\'s Flechinha', async () => {
     const state = await app.command('snapshot');
 
     return state.flechinhas.length === 1 && state.nativeWindows.includes(state.flechinhas[0].window) && state;
   });
+
   const [{ window: linkMini, tab: linkPage }] = linked.flechinhas;
   assert(!linked.nativeWindows.includes(main), 'the second launch\'s address reopened the regular window');
   await app.wait('the second launch\'s address in its Flechinha', event =>
