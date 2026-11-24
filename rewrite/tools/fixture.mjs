@@ -121,6 +121,9 @@ export async function fixture(handle = () => false) {
         window.opener?.postMessage('hello-from-popup', '*');${beforeUnload}
       </script>`,
     '/unload': `<script>${beforeUnload}</script>`,
+    '/fullscreen': `
+      <button id="full">Fullscreen</button>
+      <script>document.querySelector('#full').addEventListener('click', () => document.documentElement.requestFullscreen());</script>`,
     '/jar/set': jar ? jarReport(jar, 'set', `localStorage.setItem('${jar}', '${jar}_stored');`) : '',
     '/jar/check': jar ? jarReport(jar, inJar ? 'present' : 'absent', '') : '',
   }[path] ?? '';
@@ -132,7 +135,7 @@ export async function fixture(handle = () => false) {
       html { background: ${background}; color: white; font: 24px system-ui; }
       body { margin: 32px; }
       #marker { width: 116px; height: 56px; background: ${marker}; }
-      #blank, #scripted { display: block; width: 320px; height: 64px; margin: 8px 0; font: inherit; }
+      #blank, #scripted, #full { display: block; width: 320px; height: 64px; margin: 8px 0; font: inherit; }
     </style>
     <div id="marker"></div>
     <h1>${name}</h1>

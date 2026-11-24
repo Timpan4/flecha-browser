@@ -19,7 +19,7 @@ const stepTimeoutMs = 10_000;
 const shippingTrace = readFileSync(new URL('./slice-ts-replay.jsonl', import.meta.url), 'utf8')
   .trim().split('\n').map(line => JSON.parse(line));
 
-assert(['slice', 'open', 'focus', 'popups', 'adblock', 'incognito', 'break-restore'].includes(mode), 'unknown slice check');
+assert(['slice', 'open', 'focus', 'popups', 'adblock', 'incognito', 'fullscreen', 'break-restore'].includes(mode), 'unknown slice check');
 
 const easylist = '[Adblock Plus 2.0]\n! Title: EasyList\n/fixture-ad$xmlhttprequest\n';
 const easyprivacy = '[Adblock Plus 2.0]\n! Title: EasyPrivacy\n/fixture-tracker$xmlhttprequest\n';
@@ -190,7 +190,10 @@ function paneMismatch(path, geometry, ratio, colors) {
 
   const pixel = (x, y) => pixels.readUIntBE((y * width + x) * 3, 3);
   const [left, right] = colors.map(color => Number.parseInt(color.slice(1), 16));
-  const sidebar = 0x202a30;
+  // The Dark and Light palettes' sidebars (flecha-ui/src/theme.rs). The default
+  // System theme follows the desktop's appearance, which GPUI reads as Light on
+  // this session's private bus, where no desktop portal answers.
+  const sidebars = [0x202a30, 0xe4e9ed];
   // The sidebar's first row starts below the command bar. Its padding
   // leaves this entire row solid, so both chrome edges come from the
   // screenshot independently of the page layout.
@@ -200,9 +203,11 @@ function paneMismatch(path, geometry, ratio, colors) {
   const bottom = Math.min(height, windowY + windowHeight);
   let top = Math.max(0, windowY);
 
-  while (top < bottom && pixel(origin, top) !== sidebar) top++;
+  while (top < bottom && !sidebars.includes(pixel(origin, top))) top++;
 
   if (top >= bottom) return 'could not locate the sidebar';
+
+  const sidebar = pixel(origin, top);
 
   let edge = origin;
 
@@ -607,6 +612,53 @@ async function openTab(app, path) {
   await app.loaded(tab, path.split('?')[0], after);
 
   return tab;
+}
+
+// HTML fullscreen: the page alone in its window without the sidebar, which comes back when Esc
+// or a tab switch ends it. Xvfb runs no window manager, so the native fullscreen request has
+// no effect here and the window keeps its size.
+async function pageFullscreen(app, main, other) {
+  const sidebars = ['#202A30', '#E4E9ED'];
+  const page = ['#147A70', '#FFCC49'];
+  const tab = await openTab(app, '/fullscreen');
+  const histogram = path => execFileSync('magick', [path, '-format', '%c', 'histogram:info:'], { encoding: 'utf8' });
+  const sidebarShown = path => sidebars.some(color => histogram(path).includes(color));
+  const enter = async label => {
+    const after = app.events.length;
+
+    await clickElement(app, tab, '#full', page, label, main);
+    await app.wait(`${label}: the page to enter fullscreen`, event =>
+      event.type === 'fullscreen' && event.tab === tab && event.fullscreen, after);
+    await app.present(main);
+    await captureUntil(`${label}-shown`, 'root', path => {
+      if (sidebarShown(path)) return 'the sidebar stayed beside the fullscreen page';
+
+      return page.every(color => histogram(path).includes(color)) ? undefined : 'the fullscreen page is not on screen';
+    });
+  };
+  const ended = async (step, after) => {
+    await app.wait(`${step} to end fullscreen`, event =>
+      event.type === 'fullscreen' && event.tab === tab && !event.fullscreen, after);
+    await app.present(main);
+    await captureUntil(`fullscreen-${step.replaceAll(/\W/g, '-')}`, 'root', path =>
+      sidebarShown(path) ? undefined : 'the sidebar did not come back');
+  };
+
+  await enter('fullscreen');
+  pass('a page entered HTML fullscreen through CEF and the window showed it without the sidebar');
+
+  let after = app.events.length;
+
+  execFileSync(x11Driver, ['key', 'Escape']);
+  await ended('Esc', after);
+  pass('Esc asked the page to leave fullscreen and the sidebar came back');
+
+  await enter('fullscreen-again');
+  after = app.events.length;
+  await app.command('select', { tab: other });
+  await ended('a tab switch', after);
+  pass('switching tabs ended the page\'s fullscreen and the sidebar came back');
+  await app.quit();
 }
 
 // Incognito windows: one in-memory cookie jar per session, kept apart from the regular one,
@@ -1227,6 +1279,8 @@ async function verifySlice() {
     await popupChecks(app);
   } else if (mode === 'incognito') {
     await incognitoChecks(app, main);
+  } else if (mode === 'fullscreen') {
+    await pageFullscreen(app, main, left);
   } else if (mode !== 'open') {
     const publicUrl = base.replace('127.0.0.1', 'localtest.me') + '/open';
     const attempted = await app.command('peek', { url: publicUrl });
