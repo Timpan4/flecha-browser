@@ -14,6 +14,10 @@ pub struct Model {
     /// The incognito windows' own state while any is open. Storage never sees it.
     pub(crate) incognito: Option<Incognito>,
     incognito_sessions: u64,
+    /// The last regular window closed while incognito windows stayed open, as Chromium allows.
+    /// The regular state keeps that window for the next start, as a quit would, and shows nothing
+    /// until then.
+    pub(crate) regular_closed: bool,
     pub peeks: BTreeMap<WindowId, Transient>,
     pub flechinhas: BTreeMap<WindowId, Transient>,
     pub popups: BTreeMap<WindowId, Popup>,
@@ -63,6 +67,7 @@ impl Model {
             core: core.unwrap_or_else(|| BrowserState::new(space_id(), window_id())),
             incognito: None,
             incognito_sessions: 0,
+            regular_closed: false,
             peeks: BTreeMap::new(),
             flechinhas: BTreeMap::new(),
             popups: BTreeMap::new(),
@@ -119,6 +124,15 @@ impl Model {
             .as_ref()
             .filter(|incognito| incognito.state.window(window).is_some())
             .map(|incognito| incognito.session)
+    }
+
+    /// The regular windows on screen.
+    pub(crate) fn regular_windows(&self) -> &[flecha_core::Window] {
+        if self.regular_closed {
+            &[]
+        } else {
+            self.core.windows()
+        }
     }
 
     /// The incognito windows, while a session lasts.

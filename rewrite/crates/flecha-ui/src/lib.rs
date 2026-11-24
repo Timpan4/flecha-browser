@@ -468,9 +468,15 @@ impl Controller {
                 }
                 if self.model.is_incognito(window) {
                     self.close_incognito_window(window);
+                    if self.model.regular_closed && self.model.incognito.is_none() {
+                        return self.act(window, Action::Quit);
+                    }
                     return Ok(());
                 }
                 if self.model.core.windows().len() <= 1 {
+                    if self.model.incognito.is_some() {
+                        return self.close_last_regular_window();
+                    }
                     return self.act(window, Action::Quit);
                 }
                 if let Some(page) = self.model.peeks.remove(window) {
@@ -788,7 +794,7 @@ fn sync_windows(controller: &Shared, cx: &mut App) -> Result<()> {
     let (wanted, opened) = {
         let state = controller.borrow();
         let mut wanted = BTreeMap::new();
-        for window in state.model.core.windows() {
+        for window in state.model.regular_windows() {
             wanted.insert(window.id.clone(), Kind::Main);
         }
         for window in state.model.incognito_windows() {

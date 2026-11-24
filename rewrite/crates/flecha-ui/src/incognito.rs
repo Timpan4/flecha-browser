@@ -77,6 +77,38 @@ impl Controller {
         }
         self.update_visibility();
     }
+
+    /// The last regular window closed while incognito windows stay open, which Chromium and the
+    /// shipping shell (`background.ts`) allow. Its pages close, and the regular state is saved
+    /// with that window, as a quit saves it, for the next start. Closing the last incognito
+    /// window then quits.
+    pub(crate) fn close_last_regular_window(&mut self) -> anyhow::Result<()> {
+        self.model.regular_closed = true;
+        let model = &mut self.model;
+        model.peeks.retain(|_, page| page.partition.is_incognito());
+        model
+            .flechinhas
+            .retain(|_, page| page.partition.is_incognito());
+        model
+            .popups
+            .retain(|_, popup| popup.page.partition.is_incognito());
+        let regular = self
+            .engine
+            .ids()
+            .filter(|id| {
+                !self
+                    .engine
+                    .partition(id)
+                    .is_some_and(Partition::is_incognito)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        for id in &regular {
+            self.engine.close(id);
+        }
+        self.update_visibility();
+        self.save()
+    }
 }
 
 /// Why an incognito window refuses `action`, if it does. It has one Space of tabs that goes
@@ -377,6 +409,52 @@ mod tests {
 
         controller.act(&private, Action::CloseWindow).unwrap();
         assert!(controller.status.0.keys().all(Option::is_none));
+    }
+
+    #[test]
+    fn flecha_quits_when_the_last_window_of_either_kind_closes() {
+        // Regular first: the incognito window stays open, and closing it quits.
+        let profile = tempfile::tempdir().unwrap();
+        let mut controller = Controller::open_test_profile(profile.path()).unwrap();
+        let regular = controller.model.core.focused_window().id.clone();
+        controller
+            .act(&regular, Action::Open(REGULAR.into()))
+            .unwrap();
+        let private = incognito_window(&mut controller, &regular);
+        controller
+            .act(&private, Action::Open(PRIVATE.into()))
+            .unwrap();
+        controller.act(&regular, Action::CloseWindow).unwrap();
+        assert!(
+            !controller.quitting,
+            "the incognito window was closed with it"
+        );
+        assert!(controller.model.regular_windows().is_empty());
+        assert_eq!(controller.model.incognito_windows().len(), 1);
+        assert!(controller.model.active(&private).is_some());
+        controller.act(&private, Action::CloseWindow).unwrap();
+        assert!(
+            controller.quitting,
+            "the last window closed and Flecha kept running"
+        );
+        drop(controller);
+        let restarted = Controller::open_test_profile(profile.path()).unwrap();
+        let restored = &restarted.model.core;
+        assert_eq!(restored.windows().len(), 1);
+        let window = &restored.windows()[0].id;
+        let active = restarted.model.active(window).unwrap();
+        assert_eq!(restored.tab(active).unwrap().url, REGULAR);
+
+        // Incognito first: the regular window stays, and closing it quits.
+        let profile = tempfile::tempdir().unwrap();
+        let mut controller = Controller::open_test_profile(profile.path()).unwrap();
+        let regular = controller.model.core.focused_window().id.clone();
+        let private = incognito_window(&mut controller, &regular);
+        controller.act(&private, Action::CloseWindow).unwrap();
+        assert!(!controller.quitting);
+        assert_eq!(controller.model.regular_windows().len(), 1);
+        controller.act(&regular, Action::CloseWindow).unwrap();
+        assert!(controller.quitting);
     }
 
     #[test]
