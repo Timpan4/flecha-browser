@@ -3,7 +3,6 @@
 //! go back to most, your dev servers, and a few shortcuts.
 
 use std::collections::BTreeSet;
-use std::time::{Duration, Instant};
 
 use chrono::Timelike as _;
 use flecha_core::{Space, WindowId, shortcuts};
@@ -22,10 +21,6 @@ use crate::theme::palette;
 use crate::tokens;
 use crate::view::{Shell, hairline, kbd, ring, site};
 use crate::{Action, Controller, dispatch};
-
-/// `Date.now() - … > 60_000` in ui/app.ts:263: while a page stays empty, its tiles are fetched
-/// again after this long.
-const REFETCH: Duration = Duration::from_millis(60_000);
 
 /// The dev server scan. It starts on the first UI tick, so a controller that never runs the
 /// UI, such as a unit test's, never reads the host's sockets or asks its servers for pages.
@@ -51,14 +46,16 @@ impl LocalWatch {
 pub(crate) struct TopSites {
     sites: Vec<HistoryEntry>,
     showing: BTreeSet<WindowId>,
-    fetched: Option<Instant>,
+    /// The history revision the sites were read at.
+    fetched: Option<u64>,
 }
 
 impl Controller {
-    /// Fetches the sites again when a regular window's page becomes empty, or after
-    /// [`REFETCH`] while one stays empty: history changes as you browse. Returns whether the
-    /// tiles changed.
-    pub(crate) fn refresh_top_sites(&mut self, now: Instant) -> bool {
+    /// Fetches the sites again when a regular window's page becomes empty, or when history
+    /// changes while one is: a visit, or a deletion whose tiles must not stay clickable.
+    /// The shell refetches after 60 s instead (ui/app.ts:263) because it has no such signal.
+    /// Returns whether the tiles changed.
+    pub(crate) fn refresh_top_sites(&mut self) -> bool {
         let showing: BTreeSet<_> = self
             .model
             .core
@@ -70,16 +67,14 @@ impl Controller {
         let newly = showing
             .iter()
             .any(|id| !self.top_sites.showing.contains(id));
-        let stale = self
-            .top_sites
-            .fetched
-            .is_none_or(|at| now.saturating_duration_since(at) > REFETCH);
+        let revision = self.history.revision();
+        let stale = self.top_sites.fetched != Some(revision);
         let due = newly || (!showing.is_empty() && stale);
         self.top_sites.showing = showing;
         if !due {
             return false;
         }
-        self.top_sites.fetched = Some(now);
+        self.top_sites.fetched = Some(revision);
         let Some(sites) = self
             .history
             .store()
@@ -521,6 +516,65 @@ pub(crate) fn port_label(port: u16) -> Div {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn jump_back_in_follows_history_as_it_is_visited_and_deleted() {
+        use crate::history_view::ClearRange;
+        use flecha_cef::Partition;
+
+        let profile = tempfile::tempdir().unwrap();
+        let mut controller = Controller::open_test_profile(profile.path()).unwrap();
+        let window = controller.model.core.focused_window().id.clone();
+        assert!(
+            controller
+                .model
+                .core
+                .focused_window()
+                .visible_tabs()
+                .is_empty()
+        );
+        let shown = |controller: &Controller| -> Vec<String> {
+            controller
+                .top_sites
+                .sites
+                .iter()
+                .map(|site| site.url.clone())
+                .collect()
+        };
+        let visit = |controller: &mut Controller, url: &str| {
+            controller
+                .history
+                .record(true, Some(&Partition::Shared), url, "Site", 1)
+                .unwrap()
+                .expect("the visit is saved");
+        };
+
+        controller.refresh_top_sites();
+        assert!(shown(&controller).is_empty());
+
+        // A visit while the page is empty shows at once; an unchanged history reads nothing.
+        visit(&mut controller, "https://kept.test/");
+        visit(&mut controller, "https://deleted.test/");
+        assert!(controller.refresh_top_sites());
+        assert_eq!(shown(&controller).len(), 2);
+        assert!(!controller.refresh_top_sites());
+
+        // Deleting a page or clearing history takes its tile away on the next tick.
+        controller
+            .act(
+                &window,
+                Action::DeleteHistory("https://deleted.test/".into()),
+            )
+            .unwrap();
+        assert!(controller.refresh_top_sites());
+        assert_eq!(shown(&controller), ["https://kept.test/"]);
+
+        controller
+            .act(&window, Action::ClearHistory(ClearRange::All))
+            .unwrap();
+        assert!(controller.refresh_top_sites());
+        assert!(shown(&controller).is_empty());
+    }
 
     #[test]
     fn the_switch_space_hint_shows_the_fixed_space_keys() {

@@ -1034,7 +1034,7 @@ impl Controller {
         changed |= self.serve_agents();
         changed |= self.agents.status_changed(Instant::now());
         changed |= self.poll_local_servers();
-        changed |= self.refresh_top_sites(Instant::now());
+        changed |= self.refresh_top_sites();
         changed |= self.finish_history();
         changed |= self.drain_downloads();
         changed |= self.poll_permissions();
