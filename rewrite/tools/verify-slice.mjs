@@ -1017,9 +1017,10 @@ async function managerFocus(app, left, right) {
   const [x, y] = execFileSync(x11Driver, ['geometry', 'Flecha'], { encoding: 'utf8' })
     .trim().split(' ').map(Number);
 
-  // Tabs & Spaces, the second item in the Settings nav column beside the sidebar: General's
-  // highlight spans y 62-91 in the visual capture, and items sit 2px apart (ui/settings.css:56).
-  execFileSync(x11Driver, ['click', x + 360, y + 108]);
+  // Tabs & Spaces, the second item in the Settings nav column beside the sidebar: below the
+  // 28px search field and its 10px margin (ui/settings.css:1332-1333), General's highlight
+  // spans y 100-129 in the visual capture, and items sit 2px apart (ui/settings.css:56).
+  execFileSync(x11Driver, ['click', x + 360, y + 146]);
   // The selected Settings tab's accent (theme.rs accent_strong), Dark or Light: Theme::System
   // follows Xvfb's Light appearance.
   await captureUntil('tabs-spaces-manager', 'root', path => {
@@ -3098,12 +3099,12 @@ async function verifyClipboard() {
 
   let probes = 0;
 
-  const page = async (step, source = 'null') => {
+  const page = async (step, source = 'null', target = tab) => {
     const label = `clipboard-${++probes}`;
     const reply = site.probe(label, stepTimeoutMs);
     reply.catch(() => {}); // A failed command rejects first; the probe's timeout must not go unhandled.
     await app.command('script', {
-      tab,
+      tab: target,
       source: `{
         const field = selector => document.querySelector(selector);
         const result = (() => { ${step}; return ${source}; })();
@@ -3514,6 +3515,46 @@ async function verifyClipboard() {
   await busyCut('End and Ctrl+V after Ctrl+X', [['End'], ['Control_L', 'v']], ' flecha-race-keepflecha-race-cut');
 
   assert.deepEqual(failed, [], 'clipboard race checks failed');
+
+  if (x11) {
+    execFileSync('setxkbmap', ['-layout', 'us', '-variant', 'intl', '-option', 'compose:menu']);
+    const text = `field('#text').value`;
+    const focus = `field('#text').value = ''; field('#text').focus()`;
+    await page(`${focus};
+      window.compositionEvents = [];
+      for (const type of ['compositionstart', 'compositionend']) {
+        field('#text').addEventListener(type, event => window.compositionEvents.push([type, event.data]));
+      }`);
+    await keys(['a'], ['dead_acute']);
+    await poll('the dead key to start page composition', async () => (await page('', text)) === 'a´');
+    await keys(['e'], ['Multi_key'], ['o'], ['c']);
+    await poll('the composed characters to commit once', async () => (await page('', text)) === 'aé©');
+    assert.deepEqual(await page('', 'window.compositionEvents'), [['compositionstart', ''], ['compositionend', 'é']]);
+    pass('X11: ordinary typing, a dead-key accent and a Compose sequence each inserted once');
+
+    const next = await openTab(app, '/clipboard');
+    await page(focus, 'null', next);
+    await app.command('select', { tab });
+    await app.present();
+    await page(focus);
+    await keys(['dead_acute']);
+    await poll('the second dead key to start composition', async () => (await page('', text)) === '´');
+    await app.command('select', { tab: next });
+    await app.present();
+    await poll('the original tab to discard preedit', async () => (await page('', text)) === '');
+    await keys(['e']);
+    const typed = await poll('typing in the next tab to reach the field', async () => page('', text, next));
+
+    assert.equal(typed, 'e', 'the previous tab sent its Compose sequence to the next tab');
+    pass('X11: a tab switch discarded the preedit and reset the Compose sequence');
+
+    await keys(['dead_acute']);
+    await poll('a dead key to mark text before a pointer press', async () => (await page('', text, next)) === 'e´');
+    await clickElement(app, next, '#text', ['#147A70', '#FFCC49'], 'ime-field', opened.window);
+    await poll('the pointer press to discard preedit', async () => (await page('', text, next)) === 'e');
+    pass('X11: a pointer press discarded preedit without inserting the accent');
+  }
+
   await app.quit();
 }
 

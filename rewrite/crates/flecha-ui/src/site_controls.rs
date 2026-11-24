@@ -193,7 +193,7 @@ impl Shell {
         };
         let origin = site.origin.to_string();
         let site_icon = self.site_icon(
-            state.tab_favicon(&site.tab),
+            state.tab_favicon(&self.id, &site.tab),
             &origin,
             (
                 tokens::SITE_FAVICON,

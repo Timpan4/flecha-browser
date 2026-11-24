@@ -20,6 +20,40 @@ fn a_disabled_suggestion_preference_survives_restart() {
 }
 
 #[test]
+fn the_agent_switch_survives_restart_without_the_shell_token() {
+    let mut state = migrate_legacy(V2).unwrap();
+    assert!(
+        !state.settings.agents_enabled(),
+        "agents are off by default"
+    );
+    state.settings.agent = Some(flecha_core::AgentPreference { enabled: true });
+    let saved = encode(&state).unwrap();
+    assert!(decode(&saved).unwrap().settings.agents_enabled());
+
+    // A shell profile kept the bearer token beside the switch. The rewrite reads the switch,
+    // and the token never reaches its saved state.
+    let shell = format!(
+        r#"{{"version":{SCHEMA_VERSION},"tabs":{{}},"spaces":[{{"id":"s"}}],
+        "agent":{{"enabled":true,"token":"shell-secret"}}}}"#
+    );
+    let state = decode(&shell).unwrap();
+    assert!(state.settings.agents_enabled());
+    assert!(!encode(&state).unwrap().contains("shell-secret"));
+
+    // The sparse profile tools/verify-agent.mjs seeds loads as a saved state.
+    let mut loaded = load(Some(&json!(shell)), None).unwrap();
+    let ready = loaded.ready().expect("the seed is readable");
+    assert!(ready.state.as_ref().unwrap().settings.agents_enabled());
+
+    for broken in [r#""agent":true"#, r#""agent":{"enabled":"yes"}"#] {
+        let saved = format!(
+            r#"{{"version":{SCHEMA_VERSION},"tabs":{{}},"spaces":[{{"id":"s"}}],{broken}}}"#
+        );
+        assert_eq!(decode(&saved).unwrap().settings.agent, None, "{broken}");
+    }
+}
+
+#[test]
 fn saved_surrogates_are_replaced_per_code_unit_without_losing_archive_entries() {
     let cases = [
         (r"Cut \ud83d", "Cut �"),

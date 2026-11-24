@@ -234,24 +234,25 @@ impl TextField {
         field.child(self.render_line(0..self.text.len()))
     }
 
-    /// The field's line without a box of its own, for a control that draws the box around it,
-    /// as Flechinha's address does around `#address-input` (ui/flechinha.css:224-238).
-    pub(crate) fn render_inline(&self, placeholder: &'static str) -> Div {
+    /// The text alone, for a field whose box its owner draws, such as Settings' search or
+    /// Flechinha's address (ui/flechinha.css:224-238): the caret and selection show only while
+    /// `focused`.
+    pub(crate) fn render_inline(&self, placeholder: &'static str, focused: bool) -> Div {
         let field = div()
             .flex()
-            .flex_1()
             .items_center()
+            .flex_1()
             .min_w_0()
-            .h_full()
             .overflow_hidden()
-            .whitespace_nowrap()
-            .text_color(palette().text);
-        if self.text.is_empty() {
-            return field
-                .child(caret())
-                .child(div().text_color(palette().text_3).child(placeholder));
+            .whitespace_nowrap();
+        match (self.text.is_empty(), focused) {
+            (true, true) => field.child(caret()).child(placeholder),
+            (true, false) => field.child(placeholder),
+            (false, true) => field
+                .text_color(palette().text)
+                .child(self.render_line(0..self.text.len())),
+            (false, false) => field.text_color(palette().text).child(self.text.clone()),
         }
-        field.child(self.render_line(0..self.text.len()))
     }
 
     fn render_line(&self, line: Range<usize>) -> Div {

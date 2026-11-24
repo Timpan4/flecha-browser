@@ -116,6 +116,14 @@ pub struct WindowBounds {
     pub maximized: Option<bool>,
 }
 
+/// The MCP bridge for coding agents (`agent` in `chromium/shared/types.d.ts`). The shell kept
+/// the bearer token beside `enabled`; the rewrite keeps it in its own file
+/// (`flecha_services::agent::AgentToken`), so the saved state carries only the switch.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct AgentPreference {
+    pub enabled: bool,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PermissionDecision {
@@ -151,6 +159,8 @@ pub struct Settings {
     pub ad_block: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ad_block_allowed: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent: Option<AgentPreference>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub onboarded: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -195,6 +205,11 @@ impl Settings {
     /// Whether the sidebar stays beside a page in fullscreen (`!!sidebarInPageFullscreen`).
     pub fn keeps_sidebar_in_page_fullscreen(&self) -> bool {
         self.sidebar_in_page_fullscreen.unwrap_or(false)
+    }
+
+    /// Whether coding agents may use Flecha: off unless turned on in Settings.
+    pub fn agents_enabled(&self) -> bool {
+        self.agent.is_some_and(|agent| agent.enabled)
     }
 
     /// The per-site rule. The global ad-block switch is stored separately.

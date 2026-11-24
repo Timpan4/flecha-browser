@@ -618,3 +618,217 @@ diff --git a/crates/gpui_web/src/platform.rs b/crates/gpui_web/src/platform.rs
          };
 
          self.last_cursor_css.set(css_cursor);
+diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
+index 810f6e8..c031af8 100644
+--- a/crates/gpui/src/platform.rs
++++ b/crates/gpui/src/platform.rs
+@@ -1524,6 +1524,9 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
+     /// Inform the operating system that the text input state has changed
+     fn text_input_state_changed(&self, _change: TextInputStateChange) {}
+
++    /// Discard the platform's pending composition.
++    fn reset_ime(&self) {}
++
+     fn play_system_bell(&self) {}
+
+     /// Initialize the accessibility adapter with callbacks.
+@@ -2257,6 +2260,11 @@ impl PlatformInputHandler {
+         self.handler.apple_press_and_hold_enabled()
+     }
+
++    /// Whether a pointer press should commit preedit instead of discarding it.
++    pub fn commit_preedit_on_pointer_press(&self) -> bool {
++        self.handler.commit_preedit_on_pointer_press()
++    }
++
+     /// Ends a composition from inside an update, where [`Self::unmark_text`]
+     /// cannot borrow the app.
+     pub(crate) fn unmark_text_during_update(&mut self, window: &mut Window, cx: &mut App) {
+@@ -2583,6 +2591,11 @@ pub trait InputHandler: 'static {
+         true
+     }
+
++    /// Whether a pointer press should commit preedit instead of discarding it.
++    fn commit_preedit_on_pointer_press(&self) -> bool {
++        true
++    }
++
+     /// The contiguous range of text, in UTF-16 code units, that platform text
+     /// input may read and edit around the current selection.
+     ///
+diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
+index b498928..31f6dd5 100644
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -5923,6 +5923,11 @@ impl Window {
+         }
+     }
+
++    /// Discards any platform composition when the focused text target changes in place.
++    pub fn reset_ime(&self) {
++        self.platform_window.reset_ime();
++    }
++
+     /// Notifies native text services that the focused component's text changed.
+     ///
+     /// Text components should call this after application-driven edits, in addition
+diff --git a/crates/gpui_linux/src/linux/x11/client.rs b/crates/gpui_linux/src/linux/x11/client.rs
+index 0975a08..e9fb1fa 100644
+--- a/crates/gpui_linux/src/linux/x11/client.rs
++++ b/crates/gpui_linux/src/linux/x11/client.rs
+@@ -860,6 +860,11 @@ impl X11Client {
+
+     pub fn reset_ime(&self) {
+         let mut state = self.0.borrow_mut();
++        if let Some(compose) = state.compose_state.as_mut() {
++            compose.reset();
++        }
++        state.pre_edit_text = None;
++        state.pre_key_char_down = None;
+         state.composing = false;
+         if let Some(mut ximc) = state.ximc.take() {
+             if let Some(xim_handler) = state.xim_handler.as_ref() {
+@@ -1075,10 +1080,6 @@ impl X11Client {
+                 // Set last scroll values to `None` so that a large delta isn't created if scrolling is done outside the window (the valuator is global)
+                 reset_all_pointer_device_scroll_positions(&mut state.pointer_device_states);
+                 state.keyboard_focused_window = None;
+-                if let Some(compose_state) = state.compose_state.as_mut() {
+-                    compose_state.reset();
+-                }
+-                state.pre_edit_text.take();
+                 state.restore_cursor_after_hide();
+                 drop(state);
+                 self.reset_ime();
+@@ -1240,7 +1241,16 @@ impl X11Client {
+                     px(event.event_y as f32 / u16::MAX as f32 / state.scale_factor),
+                 );
+
+-                if state.composing && state.ximc.is_some() {
++                let composing = state.composing
++                    || state.compose_state.as_ref().is_some_and(|compose| {
++                        compose.status() == xkbc::Status::Composing
++                    });
++                if composing && !window.commit_preedit_on_pointer_press() {
++                    drop(state);
++                    self.reset_ime();
++                    window.handle_ime_delete();
++                    state = self.0.borrow_mut();
++                } else if state.composing && state.ximc.is_some() {
+                     drop(state);
+                     self.reset_ime();
+                     window.handle_ime_unmark();
+diff --git a/crates/gpui_linux/src/linux/x11/window.rs b/crates/gpui_linux/src/linux/x11/window.rs
+index 115d35d..25edab7 100644
+--- a/crates/gpui_linux/src/linux/x11/window.rs
++++ b/crates/gpui_linux/src/linux/x11/window.rs
+@@ -1297,6 +1297,14 @@ impl X11WindowStatePtr {
+         }
+     }
+
++    pub fn commit_preedit_on_pointer_press(&self) -> bool {
++        self.state
++            .borrow()
++            .input_handler
++            .as_ref()
++            .is_none_or(PlatformInputHandler::commit_preedit_on_pointer_press)
++    }
++
+     pub fn get_ime_area(&self) -> Option<Bounds<ScaledPixels>> {
+         let mut state = self.state.borrow_mut();
+         let scale_factor = state.scale_factor;
+@@ -1548,6 +1556,13 @@ impl PlatformWindow for X11Window {
+         self.0.state.borrow_mut().input_handler.take()
+     }
+
++    fn reset_ime(&self) {
++        let client = self.0.state.borrow().client.get_client();
++        if let Some(client) = client {
++            client.reset_ime();
++        }
++    }
++
+     fn prompt(
+         &self,
+         _level: PromptLevel,
+diff --git a/crates/gpui_linux/src/linux/wayland/client.rs b/crates/gpui_linux/src/linux/wayland/client.rs
+index 60c2880..7d8c304 100644
+--- a/crates/gpui_linux/src/linux/wayland/client.rs
++++ b/crates/gpui_linux/src/linux/wayland/client.rs
+@@ -752,6 +752,28 @@ impl WaylandClientStatePtr {
+         client.borrow().ime_enabled
+     }
+
++    pub fn reset_ime(&self) {
++        let client = self.get_client();
++        let mut state = client.borrow_mut();
++        if let Some(compose) = state.compose_state.as_mut() {
++            compose.reset();
++        }
++        state.pre_edit_text = None;
++        state.ime_pre_edit = None;
++        if std::mem::take(&mut state.composing)
++            && state.ime_enabled == Some(true)
++            && let Some(text_input) = &state.text_input
++        {
++            // text-input-v3 resets an active context by disabling and reenabling it.
++            text_input.disable();
++            text_input.commit();
++            text_input.enable();
++            text_input.set_content_type(ContentHint::None, ContentPurpose::Normal);
++            text_input.commit();
++            state.last_ime_cursor_rectangle = None;
++        }
++    }
++
+     pub fn update_ime_position(&self, bounds: Bounds<Pixels>) {
+         let client = self.get_client();
+         let mut state = client.borrow_mut();
+@@ -2459,7 +2481,16 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
+                 match button_state {
+                     wl_pointer::ButtonState::Pressed => {
+                         if let Some(window) = state.keyboard_focused_window.clone() {
+-                            if state.composing && state.text_input.is_some() {
++                            let composing = state.composing
++                                || state.compose_state.as_ref().is_some_and(|compose| {
++                                    compose.status() == xkb::Status::Composing
++                                });
++                            if composing && !window.commit_preedit_on_pointer_press() {
++                                drop(state);
++                                this.reset_ime();
++                                window.handle_ime(ImeInput::DeleteText);
++                                state = client.borrow_mut();
++                            } else if state.composing && state.text_input.is_some() {
+                                 drop(state);
+                                 // text_input_v3 don't have something like a reset function
+                                 this.disable_ime();
+diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/src/linux/wayland/window.rs
+index c221884..4ac338c 100644
+--- a/crates/gpui_linux/src/linux/wayland/window.rs
++++ b/crates/gpui_linux/src/linux/wayland/window.rs
+@@ -1517,6 +1517,14 @@ impl WaylandWindowStatePtr {
+         }
+     }
+
++    pub fn commit_preedit_on_pointer_press(&self) -> bool {
++        self.state
++            .borrow()
++            .input_handler
++            .as_ref()
++            .is_none_or(PlatformInputHandler::commit_preedit_on_pointer_press)
++    }
++
+     pub fn get_ime_area(&self) -> Option<Bounds<Pixels>> {
+         let mut state = self.state.borrow_mut();
+         let mut bounds: Option<Bounds<Pixels>> = None;
+@@ -1880,6 +1888,11 @@ impl PlatformWindow for WaylandWindow {
+         self.borrow_mut().input_handler.take()
+     }
+
++    fn reset_ime(&self) {
++        let client = self.borrow().client.clone();
++        client.reset_ime();
++    }
++
+     fn prompt(
+         &self,
+         _level: PromptLevel,

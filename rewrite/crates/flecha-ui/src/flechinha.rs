@@ -184,8 +184,9 @@ impl Shell {
                         .gap(px(tokens::SPACE_2))
                         .pl(px(tokens::FLECHINHA_ADDRESS_SHOW_PAD_LEFT))
                         .pr(px(tokens::FLECHINHA_EDIT_PAD_RIGHT))
+                        .text_color(palette.text_3)
                         .child(icon("search", tokens::FLECHINHA_SITE_GLYPH, palette.text_3))
-                        .child(input.render_inline("Search or enter address")),
+                        .child(input.render_inline("Search or enter address", true)),
                 ),
             None => address
                 .bg(palette.fill_subtle)
@@ -327,7 +328,7 @@ impl Shell {
                 ))
                 .into_any_element();
         }
-        match self.state.borrow().tab_favicon(&page.id) {
+        match self.state.borrow().tab_favicon(&self.id, &page.id) {
             Some(image) => self.site_icon(
                 Some(image),
                 url,

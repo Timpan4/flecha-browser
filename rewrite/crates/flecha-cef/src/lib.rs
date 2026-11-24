@@ -10,6 +10,7 @@ mod downloads;
 mod favicon;
 mod find;
 mod identity;
+mod ime;
 mod page_tools;
 mod permissions;
 mod popup;
@@ -54,6 +55,7 @@ pub use favicon::{FAVICON_SIZE, Favicon, FaviconBitmap};
 pub use find::{FindEvent, FindResult};
 use identity::Generations;
 pub use identity::{BrowserKey, IncognitoSession, Owner, Partition};
+pub use ime::{Ime, ImeEdit};
 pub use page_tools::{Copied, PHONE_WIDTH, PageToolEvent, PageToolMessage};
 pub use permissions::{PermissionEvent, PermissionPrompt};
 pub use popup::{Disposition, Opened};
@@ -581,8 +583,8 @@ impl Engine {
     }
 
     pub fn focused(&self, tab: &TabId, focused: bool) {
-        if let Some(host) = self.host(tab) {
-            host.set_focus(i32::from(focused));
+        if let Some(session) = self.browsers.get(tab) {
+            session.slot.set_page_focus(focused);
         }
     }
 
@@ -596,6 +598,7 @@ impl Engine {
         if session.hidden == visible {
             session.hidden = !visible;
             if !visible {
+                session.slot.set_page_focus(false);
                 session.slot.set_status(None);
             }
             if let Some(host) = self.host(tab) {
@@ -626,6 +629,11 @@ impl Engine {
         }
         self.discarded.retain(|_, page| page.partition != partition);
         self.contexts.remove(&partition);
+        self.popups
+            .services
+            .favicons
+            .borrow_mut()
+            .retain(|result| result.partition != partition);
         self.end_download_session(session);
         let ephemeral = permissions::partition(&partition);
         self.edit_permissions(|manager| ((), manager.clear_partition(&ephemeral)));
@@ -641,6 +649,7 @@ impl Engine {
             return;
         };
         if from != &to || session.owner != owner {
+            session.slot.set_page_focus(false);
             if session.slot.finding.get() {
                 find::stop(&session.slot, true);
             }
@@ -786,6 +795,7 @@ impl Engine {
         let key = slot.key.borrow().clone();
         self.generations.retire(&key);
         slot.retired.set(true);
+        slot.set_page_focus(false);
         find::forget(slot);
         context_menu::cancel(slot);
         slot.dialogs.cancel();

@@ -1156,9 +1156,9 @@ impl Shell {
     fn target_favicon(&self, target: &Target) -> Option<Arc<gpui::RenderImage>> {
         let state = self.state.borrow();
         match target {
-            Target::Tab(id, _) => state.tab_favicon(id),
+            Target::Tab(id, _) => state.tab_favicon(&self.id, id),
             Target::Address(url) | Target::Archived(url) => {
-                let partition = state.model.partition(state.model.active(&self.id)?)?;
+                let partition = state.favicon_partition(&self.id, state.model.active(&self.id)?)?;
                 state.site_favicon(&partition, url)
             }
             _ => None,

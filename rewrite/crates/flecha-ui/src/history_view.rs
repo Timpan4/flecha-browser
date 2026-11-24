@@ -53,6 +53,11 @@ impl History {
         }
     }
 
+    /// Counts changes to the stored history, so views know when to read it again.
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
+
     pub(crate) fn store(&self) -> Option<&HistoryStore> {
         self.store.as_ref()
     }

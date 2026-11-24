@@ -25,6 +25,10 @@ use crate::{Engine, Partition};
 /// (chromium/shell/favicons.ts:8). CEF returns versions up to the display's scale factor.
 pub const FAVICON_SIZE: u32 = 32;
 
+pub(crate) fn is_web_icon(url: &str) -> bool {
+    url::Url::parse(url).is_ok_and(|url| matches!(url.scheme(), "http" | "https" | "data"))
+}
+
 /// One download's result.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Favicon {
@@ -136,6 +140,9 @@ impl Engine {
     /// none. Returns `false` when no browser can fetch it, and [`Self::next_favicon`] then
     /// reports nothing for it.
     pub fn download_favicon(&self, tab: &TabId, partition: &Partition, url: &str) -> bool {
+        if !is_web_icon(url) {
+            return false;
+        }
         let own = self
             .browsers
             .get(tab)
@@ -174,13 +181,40 @@ impl Engine {
 
     /// The next finished icon download.
     pub fn next_favicon(&mut self) -> Option<Favicon> {
-        self.popups.services.favicons.borrow_mut().pop_front()
+        let mut results = self.popups.services.favicons.borrow_mut();
+        while let Some(result) = results.pop_front() {
+            if !result.partition.is_incognito() || self.contexts.contains_key(&result.partition) {
+                return Some(result);
+            }
+        }
+        None
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_web_schemes_can_supply_favicons() {
+        for url in [
+            "http://example.test/icon.png",
+            "HTTPS://example.test/icon.png",
+            "data:image/png;base64,AAAA",
+        ] {
+            assert!(is_web_icon(url), "{url}");
+        }
+        for url in [
+            "file:///home/example/icon.png",
+            "chrome://favicon/icon.png",
+            "blob:https://example.test/id",
+            "javascript:alert(1)",
+            "/icon.png",
+            "https://",
+        ] {
+            assert!(!is_web_icon(url), "{url}");
+        }
+    }
 
     #[test]
     fn a_dropped_request_reports_one_failure() {

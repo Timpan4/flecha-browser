@@ -68,6 +68,8 @@ impl Controller {
         }
         if let Some(session) = closed.ended {
             self.status.clear(Some(session));
+            self.favicons
+                .clear_partition(&Partition::Incognito(session));
             self.engine.end_incognito(session);
         }
         self.update_visibility();

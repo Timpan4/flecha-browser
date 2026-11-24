@@ -3,6 +3,7 @@ use flecha_cef::{PageZoom, zoom_percentage};
 use flecha_core::{
     BrowserState, TabId, WindowId,
     shortcuts::{self, Keybindings, Platform},
+    suggestions::describe_environment,
 };
 use gpui::{
     ClickEvent, Context, FontWeight, InteractiveElement as _, IntoElement, KeyDownEvent, Keystroke,
@@ -72,6 +73,9 @@ pub(crate) enum Shortcut {
     ExitSplit,
     /// Opens or closes the phone-sized mirror beside the shown tab.
     Responsive,
+    /// The shown page on its project's next environment (`nextEnvironment` in
+    /// chromium/shell/features.ts:108-115).
+    NextEnvironment,
     // The command bar's actions without a key of their own.
     EditSpace,
     Archive,
@@ -214,6 +218,7 @@ pub(crate) fn shortcut_for_id(id: &str) -> Option<Shortcut> {
         "exitSplit" => Shortcut::ExitSplit,
         "responsive" => Shortcut::Responsive,
         "viewSource" => Shortcut::ViewSource,
+        "nextEnvironment" => Shortcut::NextEnvironment,
         id => {
             if let Some(number) = id.strip_prefix("selectSpace:") {
                 return Some(Shortcut::SelectSpace(
@@ -497,14 +502,16 @@ impl Shell {
         {
             self.consumed_keys.insert(stroke.key.clone());
             cx.stop_propagation();
-        } else {
-            self.page_key(
-                focused,
-                stroke,
-                false,
-                event.is_held,
-                event.prefer_character_input,
-            );
+        } else if self.page_key(
+            focused,
+            stroke,
+            false,
+            event.is_held,
+            event.prefer_character_input,
+        ) {
+            // CEF already receives its character event. GPUI's printable-key fallback would
+            // also insert it through the registered text input handler.
+            cx.stop_propagation();
         }
     }
 
@@ -682,6 +689,10 @@ impl Shell {
             Shortcut::ClearToday => Action::ClearToday,
             Shortcut::ExitSplit => Action::ExitSplit,
             Shortcut::Responsive => Action::ToggleResponsive,
+            Shortcut::NextEnvironment => match shown.next_environment.clone() {
+                Some(url) => Action::Navigate(url),
+                None => return false,
+            },
             Shortcut::StepSpace(back) => {
                 let count = shown.spaces.len();
                 let Some(index) = shown.spaces.iter().position(|id| *id == shown.space) else {
@@ -724,6 +735,8 @@ pub(crate) struct ShownWindow {
     split: bool,
     /// Whether the split is the responsive view's.
     responsive: bool,
+    /// The shown page on its project's next environment, when it is on one.
+    next_environment: Option<String>,
 }
 
 impl ShownWindow {
@@ -760,6 +773,14 @@ impl ShownWindow {
                     space.split.is_some()
                         && space.split_mode == Some(flecha_core::SplitMode::Responsive)
                 }),
+            next_environment: shown.and_then(|tab| {
+                let environments = &state.model.core.settings.environments;
+                describe_environment(&tab.url, environments)?
+                    .switches
+                    .into_iter()
+                    .next()
+                    .map(|switch| switch.url)
+            }),
         })
     }
 
@@ -786,6 +807,7 @@ impl ShownWindow {
             Shortcut::Responsive => self.responsive || self.tab.is_some(),
             Shortcut::ViewSource => self.web_page,
             Shortcut::ExitSplit => self.split,
+            Shortcut::NextEnvironment => self.next_environment.is_some(),
             _ => true,
         }
     }
