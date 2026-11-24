@@ -48,6 +48,9 @@ const spinnerColor = '#3AA6D9';
 
 const slowResponses = [];
 
+// Each request's path and user agent, in arrival order.
+const requestAgents = [];
+
 /** A `size` square PNG in one colour. */
 function solidPng(size, color) {
   const chunk = (type, data) => {
@@ -94,6 +97,8 @@ const statusPages = {
 const partitionColors = { r1: '#7B2FBE', i1: '#E8871E', i2: '#C21F8A', r2: '#2E6FD8', s1: '#1E9E5A' };
 
 const site = await fixture((path, response, request) => {
+  requestAgents.push({ path, agent: request.headers['user-agent'] ?? '' });
+
   if (path === '/icon.png') {
     response.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-store' }).end(solidPng(32, faviconColor));
 
@@ -2515,8 +2520,32 @@ async function surfaces(app) {
   await poll('a double click to even the panes', async () => await ratio() === 0.5);
   pass('dragging the split divider resized the panes live, saved the share on release, and a double click evened them');
 
+  // A drag whose split leaves the front, here for another Space, ends without saving, even
+  // when the split is back by the time the button comes up.
+  const home = win(await app.command('snapshot')).activeSpaceId;
+  await app.present();
+  execFileSync(x11Driver, ['press', divider(0.5), middle]);
+
+  try {
+    execFileSync(x11Driver, ['move', divider(0.5) + 60, middle]);
+    await app.present();
+    await app.command('new_space');
+    await app.present();
+    execFileSync(x11Driver, ['move', divider(0.5) + 100, middle]);
+    await app.present();
+    await app.command('switch', { space: home });
+    await app.present();
+  } finally {
+    execFileSync(x11Driver, ['release']);
+  }
+
+  await app.present();
+  assert.equal(await ratio(), 0.5, 'a drag saved its share after its split left the front');
+  pass('a divider drag ended without saving when its split left the front');
+
   // The responsive view from the desktop side's tab.
   await app.command('select', { tab: desktop });
+  const askedBefore = requestAgents.length;
   await app.command('key', { keystroke: 'ctrl-alt-m' });
   const responsive = active(await app.command('snapshot'));
   assert.equal(responsive.splitMode, 'responsive');
@@ -2524,8 +2553,9 @@ async function surfaces(app) {
   const mirror = responsive.split[1];
   let probes = 0;
 
-  // The mirror reports its user agent, touch points and screen width. Emulating reloads it, which
-  // can drop a probe sent just before, so it asks again until a phone answers; the launcher
+  // The mirror reports its user agent, touch points and screen width. Its browser starts blank
+  // and loads the page once it emulates a phone, which can drop a probe sent just before, so it
+  // asks again until a phone answers; the launcher
   // watchdog bounds the attempts, as it does a capture's. A page without a viewport tag lays out
   // 980px wide on a phone (Chromium's mobile default), so the emulated screen tells the width.
   const phone = async step => {
@@ -2552,6 +2582,11 @@ async function surfaces(app) {
   };
 
   await phone('phone emulation');
+  // Every request for the mirror's page, its first included, went out as a phone's.
+  const mirrorPath = new URL((await app.command('snapshot')).core.tabs[mirror].url).pathname;
+  const mirrorLoads = requestAgents.slice(askedBefore).filter(request => request.path === mirrorPath);
+  assert(mirrorLoads.length > 0 && mirrorLoads.every(request => /Mobile/.test(request.agent)),
+    `the mirror's requests for ${mirrorPath}: ${JSON.stringify(mirrorLoads)}`);
   await app.present();
   await captureUntil('responsive-view', 'root', () => undefined);
   const followed = app.events.length;
@@ -2565,7 +2600,7 @@ async function surfaces(app) {
   const closed = await app.command('snapshot');
   assert.equal(active(closed).split, undefined, 'the responsive split stayed open');
   assert(!closed.browsers.some(browser => browser.tab === mirror), 'the phone mirror kept its browser');
-  pass('the responsive view opened a 393px phone mirror with a mobile user agent and touch, followed the desktop side, and closed');
+  pass('the responsive view opened a 393px phone mirror whose first request was a phone\'s, with touch, followed the desktop side, and closed');
 
   // `--surface` in Light and Dark (ui/tokens.css:51, 107), where a panel or menu covers.
   const surface = ['FFFFFF', '161E2B'];

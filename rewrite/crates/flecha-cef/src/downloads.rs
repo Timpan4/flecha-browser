@@ -15,7 +15,7 @@
 //! [`Downloads`] never touches one: it returns [`Act`]s, which [`run`] carries out once the
 //! `RefCell` borrow has ended. That covers releasing a callback too.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
 
@@ -303,8 +303,9 @@ pub(crate) struct Downloads {
     /// Where each incognito session last answered a save dialog. It lives as long as the session
     /// and never becomes the regular folder.
     prompt_folders: BTreeMap<IncognitoSession, PathBuf>,
-    /// Addresses a tab's "Save … as" asked for, which ask where to save once when they arrive.
-    save_as: BTreeSet<(TabId, String)>,
+    /// Addresses a tab's "Save … as" asked for, oldest first. Each request asks where to save
+    /// once, so asking twice for one address asks for two downloads.
+    save_as: Vec<(TabId, String)>,
 }
 
 fn same(browser: &Weak<Slot>, slot: &Slot) -> bool {
@@ -453,11 +454,17 @@ impl Downloads {
             .filter_map(|url| Url::parse(url).ok())
             .collect();
         let initiator = offer.initiator.and_then(|url| Url::parse(url).ok());
+        // The address the tab asked for comes before where it redirected, so a redirect onto
+        // another request's address leaves that request for its own download.
         let save_as = browser.upgrade().is_some_and(|slot| {
             let tab = slot.key.borrow().tab.clone();
-            [offer.url, offer.original_url]
-                .into_iter()
-                .any(|url| self.save_as.remove(&(tab.clone(), url.to_owned())))
+            [offer.original_url, offer.url].into_iter().any(|url| {
+                self.save_as
+                    .iter()
+                    .position(|(asked, wanted)| *asked == tab && wanted == url)
+                    .map(|index| self.save_as.remove(index))
+                    .is_some()
+            })
         });
         #[cfg(unix)]
         let max_name_length = flecha_downloads::name_max(&config.settings.folder);
@@ -881,7 +888,7 @@ impl Downloads {
 
     /// The next download of `url` from `tab` asks where to save, as Chromium's "Save … as" does.
     fn ask_where_to_save(&mut self, tab: TabId, url: &str) {
-        self.save_as.insert((tab, url.to_owned()));
+        self.save_as.push((tab, url.to_owned()));
     }
 }
 
@@ -1356,6 +1363,59 @@ mod tests {
         // A closed browser's pending request goes with it.
         downloads.ask_where_to_save(TabId::new("other"), url);
         settle(downloads.browser_closed(&slots[1]));
+        assert!(downloads.save_as.is_empty());
+    }
+
+    fn asks_where(events: &[DownloadEvent]) -> bool {
+        matches!(
+            events,
+            [DownloadEvent::AskPath {
+                reason: AskReason::SaveAs,
+                ..
+            }]
+        )
+    }
+
+    #[test]
+    fn each_save_as_request_asks_once_and_keeps_to_the_address_it_named() {
+        let mut downloads = downloads(false);
+        let log = Log::default();
+        let slots = crate::tests::slots(&["page"]);
+        let page = TabId::new("page");
+        let report = "https://files.example/report.pdf";
+        let mirror = "https://mirror.example/report.pdf";
+
+        // Asking twice for one address asks for both downloads.
+        downloads.ask_where_to_save(page.clone(), report);
+        downloads.ask_where_to_save(page.clone(), report);
+        for handle in [1, 2] {
+            let events = before(
+                &mut downloads,
+                &log,
+                offer(handle, report, "https://files.example/"),
+                Rc::downgrade(&slots[0]),
+            );
+            assert!(asks_where(&events), "{events:?}");
+        }
+
+        // A download of `mirror` that redirected to `report` uses the request for `mirror`,
+        // and leaves the one for `report` to the download that names it.
+        downloads.ask_where_to_save(page.clone(), report);
+        downloads.ask_where_to_save(page.clone(), mirror);
+        let redirected = Offer {
+            original_url: mirror,
+            ..offer(3, report, "https://files.example/")
+        };
+        let events = before(&mut downloads, &log, redirected, Rc::downgrade(&slots[0]));
+        assert!(asks_where(&events), "{events:?}");
+        assert_eq!(downloads.save_as, [(page.clone(), report.to_owned())]);
+        let events = before(
+            &mut downloads,
+            &log,
+            offer(4, report, "https://files.example/"),
+            Rc::downgrade(&slots[0]),
+        );
+        assert!(asks_where(&events), "{events:?}");
         assert!(downloads.save_as.is_empty());
     }
 

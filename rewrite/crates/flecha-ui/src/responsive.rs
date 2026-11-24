@@ -8,8 +8,8 @@ use flecha_core::{Device, SplitMode, TabId, WindowId};
 use crate::Controller;
 
 impl Controller {
-    /// The mirrors whose desktop side is `source`, in every window that shows a responsive
-    /// split.
+    /// The mirrors whose desktop side is `source`, in every responsive split of every window,
+    /// including Spaces the window does not show.
     fn mirrors_of(&self, source: &TabId) -> Vec<TabId> {
         let windows: Vec<WindowId> = self
             .model
@@ -20,9 +20,9 @@ impl Controller {
             .collect();
         windows
             .iter()
-            .filter_map(|id| {
-                let current = self.model.state(id)?.window(id)?;
-                let space = current.spaces.get(&current.active_space_id)?;
+            .filter_map(|id| self.model.state(id)?.window(id))
+            .flat_map(|current| current.spaces.values())
+            .filter_map(|space| {
                 let [desktop, mirror] = space.split.as_ref()?;
                 (space.split_mode == Some(SplitMode::Responsive) && desktop == source)
                     .then(|| mirror.clone())
@@ -51,16 +51,17 @@ impl Controller {
         save
     }
 
-    /// A mirror's browser emulates a phone from its creation on.
+    /// A mirror's browser, created blank, emulates a phone and then loads the mirror's page.
     pub(crate) fn emulate_mirror(&mut self, id: &TabId) {
-        if self
+        let Some(url) = self
             .model
             .tab(id)
-            .is_none_or(|tab| tab.device != Some(Device::Mobile))
-        {
+            .filter(|tab| tab.device == Some(Device::Mobile))
+            .map(|tab| tab.url.clone())
+        else {
             return;
-        }
-        if let Err(error) = self.engine.emulate_phone(id) {
+        };
+        if let Err(error) = self.engine.emulate_phone(id, &url) {
             let session = self
                 .model
                 .partition(id)
@@ -117,6 +118,29 @@ mod tests {
             controller.model.tab(&desktop).unwrap().url,
             "https://example.test/next"
         );
+
+        // It follows while its Space is out of sight too.
+        let home = controller
+            .model
+            .core
+            .window(&window)
+            .unwrap()
+            .active_space_id
+            .clone();
+        controller.act(&window, Action::NewSpace).unwrap();
+        controller
+            .model
+            .tab_mut(&desktop)
+            .unwrap()
+            .0
+            .url
+            .clone_from(&"https://example.test/hidden".to_owned());
+        assert!(controller.follow_responsive(&desktop));
+        assert_eq!(
+            controller.model.tab(&mirror).unwrap().url,
+            "https://example.test/hidden"
+        );
+        controller.act(&window, Action::Switch(home)).unwrap();
 
         controller.act(&window, Action::ToggleResponsive).unwrap();
         let current = controller.model.core.window(&window).unwrap();

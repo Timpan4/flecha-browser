@@ -6,7 +6,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use flecha_core::clamp_split_ratio;
+use flecha_core::{SpaceId, TabId, clamp_split_ratio};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     Bounds, Context, DispatchPhase, Div, InteractiveElement as _, IntoElement, MouseButton,
@@ -26,9 +26,13 @@ const HANDLE_HEIGHT: f32 = 24.;
 
 /// A divider drag under way.
 pub(crate) struct SplitDrag {
+    /// The split it shares out: its Space and pair of tabs.
+    split: Option<ShownSplit>,
     start: f64,
     pub(crate) ratio: f64,
 }
+
+type ShownSplit = (SpaceId, [TabId; 2]);
 
 /// The first pane's share when the pointer is at `x` in a split area spanning `area`: the
 /// divider's middle follows the pointer.
@@ -55,7 +59,14 @@ impl Shell {
                         return;
                     }
                     view.update(cx, |this, cx| {
-                        if this.split_drag.is_none() {
+                        let Some(drag) = &this.split_drag else {
+                            return;
+                        };
+                        // Another split came to the front, by a key or another window: the
+                        // drag was for the one that left.
+                        if drag.split != this.shown_split() {
+                            this.split_drag = None;
+                            cx.notify();
                             return;
                         }
                         if event.pressed_button == Some(MouseButton::Left) {
@@ -91,10 +102,28 @@ impl Shell {
         .size_full()
     }
 
-    /// Saves a drag's share, if it moved, and ends the drag.
+    /// The split the window shows, which `SetSplitRatio` changes.
+    fn shown_split(&self) -> Option<ShownSplit> {
+        let state = self.state.borrow();
+        let core = state.model.state(&self.id).unwrap_or(&state.model.core);
+        let window = core.window(&self.id)?;
+        let pair = window.spaces.get(&window.active_space_id)?.split.clone()?;
+        Some((window.active_space_id.clone(), pair))
+    }
+
+    /// The share a drag of the shown split has reached, before it is saved.
+    pub(crate) fn dragged_split_ratio(&self) -> Option<f64> {
+        self.split_drag
+            .as_ref()
+            .filter(|drag| drag.split == self.shown_split())
+            .map(|drag| drag.ratio)
+    }
+
+    /// Saves a drag's share, if it moved and its split is still the one shown, and ends the
+    /// drag.
     pub(crate) fn finish_split_drag(&mut self, cx: &mut Context<Self>) {
         if let Some(drag) = self.split_drag.take() {
-            if drag.ratio != drag.start {
+            if drag.ratio != drag.start && drag.split == self.shown_split() {
                 dispatch(&self.state, &self.id, Action::SetSplitRatio(drag.ratio), cx);
             }
             cx.notify();
@@ -135,6 +164,7 @@ impl Shell {
                         return;
                     }
                     this.split_drag = Some(SplitDrag {
+                        split: this.shown_split(),
                         start: ratio,
                         ratio,
                     });

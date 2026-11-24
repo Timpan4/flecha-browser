@@ -8,8 +8,8 @@ use anyhow::{Context as _, Result, bail};
 use base64::Engine as _;
 use cef::{
     BinaryValue, CefString, DownloadImageCallback, Image, ImplBinaryValue as _, ImplBrowser as _,
-    ImplBrowserHost as _, ImplDownloadImageCallback, ImplImage as _, WrapDownloadImageCallback,
-    rc::Rc as _, wrap_download_image_callback,
+    ImplBrowserHost as _, ImplDownloadImageCallback, ImplFrame as _, ImplImage as _,
+    WrapDownloadImageCallback, rc::Rc as _, wrap_download_image_callback,
 };
 use flecha_core::TabId;
 
@@ -62,10 +62,14 @@ pub(crate) fn reply(
             what: Copied::Screenshot,
             png: reply.and_then(screenshot_png),
         },
-        Tool::ClearSiteData => {
-            // The page's own scripts and requests still hold what they read; it loads again.
+        Tool::ClearSiteData { origin } => {
+            // The page's own scripts and requests still hold what they read; it loads again,
+            // unless it has gone to another site since.
             if reply.is_some()
                 && let Some(browser) = browser.filter(|_| !slot.retired.get())
+                && browser.main_frame().is_some_and(|frame| {
+                    on_origin(&CefString::from(&frame.url()).to_string(), &origin)
+                })
             {
                 browser.reload();
             }
@@ -79,11 +83,19 @@ pub(crate) fn reply(
         .push(Rc::downgrade(slot), event);
 }
 
+/// Whether the page at `url` is on `origin`, as [`flecha_permissions::Origin`] serializes it.
+fn on_origin(url: &str, origin: &str) -> bool {
+    flecha_permissions::Origin::parse(url).is_ok_and(|page| page.as_str() == origin)
+}
+
 /// The calls whose replies [`reply`] handles.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Tool {
     Screenshot,
-    ClearSiteData,
+    /// Clears the data of `origin`, the page's origin when it was asked.
+    ClearSiteData {
+        origin: String,
+    },
 }
 
 wrap_download_image_callback! {
@@ -155,7 +167,9 @@ impl crate::Engine {
             &host,
             "Storage.clearDataForOrigin",
             Some(&params),
-            Some(Internal::Tool(Tool::ClearSiteData)),
+            Some(Internal::Tool(Tool::ClearSiteData {
+                origin: origin.to_owned(),
+            })),
         )?;
         Ok(())
     }
@@ -171,9 +185,9 @@ impl crate::Engine {
     }
 
     /// Makes the page lay out, take input and identify itself as a phone's, as Chrome's
-    /// device mode does, and loads it again as one (chromium/shell/features/responsive.ts).
+    /// device mode does, then loads `url` as one (chromium/shell/features/responsive.ts).
     /// The device scale factor stays the window's, so frames keep the pane's size.
-    pub fn emulate_phone(&self, tab: &TabId) -> Result<()> {
+    pub fn emulate_phone(&self, tab: &TabId, url: &str) -> Result<()> {
         let (slot, host) = self.tool_slot(tab)?;
         let user_agent = serde_json::json!({
             "userAgent": phone_user_agent(),
@@ -207,20 +221,15 @@ impl crate::Engine {
                 Some(Internal::Ignore),
             )?;
         }
-        // The first load went out as a desktop's. CDP runs calls in order, so it reloads as
-        // the phone.
-        let web = self
-            .url(tab)
-            .is_some_and(|url| url.starts_with("https:") || url.starts_with("http:"));
-        if web {
-            send(
-                slot,
-                &host,
-                "Page.reload",
-                Some(r#"{"ignoreCache":false}"#),
-                Some(Internal::Ignore),
-            )?;
-        }
+        // CDP runs calls in order, so the page's first request goes out as the phone's.
+        let navigate = serde_json::json!({ "url": url }).to_string();
+        send(
+            slot,
+            &host,
+            "Page.navigate",
+            Some(&navigate),
+            Some(Internal::Ignore),
+        )?;
         Ok(())
     }
 
@@ -264,5 +273,16 @@ mod tests {
             .clear_site_data(&TabId::new("tab"), "file:///home")
             .unwrap_err();
         assert!(error.to_string().contains("web page"));
+    }
+
+    #[test]
+    fn clearing_reloads_only_a_page_still_on_the_cleared_origin() {
+        assert!(on_origin(
+            "https://Example.com:443/a?b#c",
+            "https://example.com"
+        ));
+        assert!(!on_origin("https://other.example/", "https://example.com"));
+        assert!(!on_origin("http://example.com/", "https://example.com"));
+        assert!(!on_origin("about:blank", "https://example.com"));
     }
 }

@@ -819,10 +819,9 @@ impl Render for Shell {
             let responsive = space
                 .is_some_and(|space| space.split_mode == Some(flecha_core::SplitMode::Responsive));
             // A drag under way shows its share before it is saved.
-            let ratio = self.split_drag.as_ref().map_or_else(
-                || space.and_then(|space| space.split_ratio).unwrap_or(0.5),
-                |drag| drag.ratio,
-            );
+            let ratio = self
+                .dragged_split_ratio()
+                .unwrap_or_else(|| space.and_then(|space| space.split_ratio).unwrap_or(0.5));
             if view.is_empty()
                 && let Some(space) = core.space(active_space)
             {

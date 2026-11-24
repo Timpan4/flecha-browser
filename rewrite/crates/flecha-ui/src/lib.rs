@@ -936,7 +936,14 @@ impl Controller {
             .model
             .partition(&id)
             .context("page lacks a request context")?;
-        tab_sleep::ensure_visible(&mut self.engine, &id, owner, partition, &tab.url, viewport)?;
+        // A responsive mirror's browser starts blank and loads its page once it emulates a
+        // phone (`emulate_mirror`), so the page's first request is already a phone's.
+        let url = if tab.device == Some(flecha_core::Device::Mobile) {
+            "about:blank"
+        } else {
+            tab.url.as_str()
+        };
+        tab_sleep::ensure_visible(&mut self.engine, &id, owner, partition, url, viewport)?;
         self.engine.set_visible(&id, true);
         Ok(())
     }
@@ -975,7 +982,13 @@ impl Controller {
             }
             match message.event {
                 Event::Address(address) => {
-                    if let Some((tab, durable)) = self.model.tab_mut(id) {
+                    // A mirror's browser starts blank before it loads its page (`pane`).
+                    let mirror_start = address == "about:blank"
+                        && self
+                            .model
+                            .tab(id)
+                            .is_some_and(|tab| tab.device == Some(flecha_core::Device::Mobile));
+                    if !mirror_start && let Some((tab, durable)) = self.model.tab_mut(id) {
                         if durable {
                             self.history.begin(&message.key, &address);
                         }
