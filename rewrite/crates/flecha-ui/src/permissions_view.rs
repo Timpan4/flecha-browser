@@ -6,11 +6,12 @@ use anyhow::{Context as _, Result, ensure};
 use flecha_cef::{Engine, PermissionPrompt};
 use flecha_permissions::{PermissionKind, PromptOutcome, RequestId, Snapshot};
 use gpui::{
-    ClickEvent, Context, Div, ParentElement as _, StatefulInteractiveElement as _, Styled as _,
-    div, prelude::FluentBuilder as _,
+    ClickEvent, Context, Div, FontWeight, ParentElement as _, StatefulInteractiveElement as _,
+    Styled as _, div, prelude::FluentBuilder as _, px,
 };
 
 use crate::theme::palette;
+use crate::tokens;
 use crate::view::{Shell, button};
 use crate::{Action, Controller, dispatch};
 
@@ -173,19 +174,34 @@ impl Shell {
             .map(permission_label)
             .collect::<Vec<_>>()
             .join(", ");
+        // The shipping shell asks through Chromium's own permission bubble, so this strip is
+        // drawn like the site panel's header (ui/styles.css:1972-1991) over a popover hairline.
+        let palette = palette();
         let mut banner = div()
             .flex()
             .flex_col()
             .flex_shrink_0()
-            .gap_1()
-            .p_2()
-            .text_sm()
-            .bg(palette().surface)
-            .child(div().child(format!("{} requests {kinds}", prompt.origin)))
+            .gap(px(tokens::SPACE_1))
+            .py(px(tokens::SPACE_2))
+            .px(px(tokens::SPACE_3))
+            .bg(palette.surface)
+            .text_color(palette.text)
+            .border_b(px(tokens::POPOVER_RULE))
+            .border_color(palette.surface_line)
+            .child(
+                div()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(format!("{} requests {kinds}", prompt.origin)),
+            )
             .when(!writable, |banner| {
-                banner.child("Saved permissions are read-only.")
+                banner.child(
+                    div()
+                        .text_size(px(tokens::TEXT_XS))
+                        .text_color(palette.text_3)
+                        .child("Saved permissions are read-only."),
+                )
             });
-        let mut buttons = div().flex().flex_wrap().gap_1();
+        let mut buttons = div().flex().flex_wrap().gap(px(tokens::SPACE_1));
         for (id, label, outcome, enabled) in [
             ("allow-once", "Allow once", PromptOutcome::AllowOnce, true),
             (
@@ -212,7 +228,11 @@ impl Shell {
                             dispatch(&this.state, &this.id, action.clone(), cx);
                         }))
                     },
-                    |button| button.opacity(0.5).cursor_default(),
+                    |button| {
+                        button
+                            .opacity(tokens::ICON_BUTTON_DISABLED_OPACITY)
+                            .cursor_default()
+                    },
                 ),
             );
         }

@@ -395,6 +395,7 @@ cited! {
     SITE_ROW = 32., STYLES: 2104 "height: 32px";
     MINI_SELECT = 24., STYLES: 2114 "height: 24px";
     MINI_SELECT_PAD = 6., STYLES: 2115 "padding: 0 6px";
+    ZOOM_VALUE = 24., STYLES: 2143 "height: 24px";
 
     // Peek.
     PILL_GAP = 6., STYLES: 1193 "gap: 6px";
