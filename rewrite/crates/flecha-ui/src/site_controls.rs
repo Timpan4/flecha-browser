@@ -1,6 +1,6 @@
 use anyhow::{Context as _, Result, ensure};
 use flecha_adblock::site_host;
-use flecha_cef::{ConnectionSecurity, Partition};
+use flecha_cef::{ConnectionSecurity, Copied, PageToolEvent, PageZoom, Partition, zoom_percentage};
 use flecha_core::{Settings, TabId, WindowId, blocks_ads_on, is_site_host};
 use flecha_permissions::{Decision, Origin, PermissionKind, SiteSettings};
 use gpui::{
@@ -10,13 +10,24 @@ use gpui::{
 
 use crate::icons::icon;
 use crate::permissions_view::permission_label;
+use crate::settings_view::SettingsTab;
+use crate::shortcuts::Shortcut;
 use crate::theme::palette;
 use crate::tokens;
 use crate::view::{
-    Overlay, SHELL_SWITCH, Shell, danger_button, icon_button, is_dev_url, overlay_panel,
-    popover_footer, site, switch,
+    Overlay, SHELL_SWITCH, Shell, danger_button, danger_icon_button, icon_button, is_dev_url,
+    overlay_panel, popover_footer, site, switch,
 };
 use crate::{Action, Controller, dispatch};
+
+/// The site panel's quick actions (ui/index.html:102-107).
+#[derive(Clone, Copy)]
+enum SiteTool {
+    CopyLink,
+    Screenshot,
+    Boost,
+    DevTools,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Site {
@@ -42,6 +53,8 @@ pub(crate) enum SiteChange {
     Shield(bool),
     Permission(PermissionKind, Decision),
     ClearPermissions,
+    /// "Clear Site Data": the origin's cookies, storage and caches, then the page again.
+    ClearData,
 }
 
 fn inherited_exception<'a>(settings: &'a Settings, host: &str) -> Option<&'a str> {
@@ -110,7 +123,44 @@ impl Controller {
                     .clear_site_permissions(&site.partition, &site.origin);
                 self.save_permissions()
             }
+            SiteChange::ClearData => self.engine.clear_site_data(&site.tab, site.origin.as_str()),
         }
+    }
+
+    /// Reports the page tools' outcomes on the status line, and puts their pictures on the
+    /// clipboard.
+    pub(crate) fn poll_page_tools(&mut self, cx: &mut gpui::App) -> bool {
+        let mut changed = false;
+        while let Some(message) = self.engine.next_page_tool_event() {
+            let text = match message.event {
+                PageToolEvent::Copied {
+                    what,
+                    png: Some(png),
+                } => {
+                    let image = gpui::Image::from_bytes(gpui::ImageFormat::Png, png);
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_image(&image));
+                    match what {
+                        Copied::Screenshot => "Screenshot copied",
+                        Copied::Image => "Image copied",
+                    }
+                }
+                PageToolEvent::Copied { what, png: None } => match what {
+                    Copied::Screenshot => "Could not take a screenshot of this page",
+                    Copied::Image => "Could not copy this image",
+                },
+                PageToolEvent::SiteDataCleared { success: true } => "Site data cleared",
+                PageToolEvent::SiteDataCleared { success: false } => {
+                    "Could not clear this site's data"
+                }
+            };
+            let session = self
+                .model
+                .partition(&message.tab)
+                .and_then(|partition| partition.incognito_session());
+            self.status.set(session, text);
+            changed = true;
+        }
+        changed
     }
 
     pub(crate) fn site_permissions(&self, site: &Site) -> SiteSettings {
@@ -178,6 +228,7 @@ impl Shell {
                 .border_b(px(tokens::POPOVER_RULE))
                 .border_color(palette.surface_line)
         };
+        body = body.child(rule(self.site_actions(cx)));
         if let Some(host) = &site.host {
             let settings = &state.model.core.settings;
             let shield_on = settings.blocks_ads_on(host);
@@ -251,10 +302,24 @@ impl Shell {
                 .py(px(tokens::SITE_SHIELD_PAD_Y))
                 .child(text)
         };
+        let zoom = state
+            .engine
+            .zoom_level(&site.tab)
+            .map_or(100, zoom_percentage);
+        let finish = |body: gpui::Stateful<Div>, permissions: bool| {
+            panel.child(body.child(self.zoom_row(zoom, cx)).child(self.site_footer(
+                &site,
+                permissions,
+                cx,
+            )))
+        };
         if let Some(error) = state.permissions.error() {
-            return panel.child(body.child(message(format!(
-                "Saved permissions are read-only. {error:#}"
-            ))));
+            return finish(
+                body.child(message(format!(
+                    "Saved permissions are read-only. {error:#}"
+                ))),
+                false,
+            );
         }
         if let Some(error) = state.permissions.save_error() {
             body = body.child(
@@ -270,9 +335,12 @@ impl Shell {
             );
         }
         if !site.origin.is_potentially_trustworthy() {
-            return panel.child(body.child(message(
-                "This origin cannot request site permissions.".into(),
-            )));
+            return finish(
+                body.child(message(
+                    "This origin cannot request site permissions.".into(),
+                )),
+                false,
+            );
         }
         // `.site-label` and `.field-label` (ui/styles.css:1450-1455, 2094-2097).
         body = body.child(
@@ -347,14 +415,187 @@ impl Shell {
                     ),
             );
         }
-        panel.child(
-            body.child(
-                popover_footer().mt(px(tokens::SITE_LABEL_PAD_TOP)).child(
+        finish(body, true)
+    }
+
+    /// `.site-actions` (ui/styles.css:2007-2047, ui/index.html:102-107): Copy Link, Screenshot,
+    /// Boost and DevTools in two columns. Each closes the panel first, as ui/app.ts:912-928 does.
+    fn site_actions(&self, cx: &Context<Self>) -> Div {
+        let palette = palette();
+        let inset = px(tokens::SITE_INSET);
+        let action =
+            |id: &'static str, glyph: &'static str, label: &'static str, tool: SiteTool| {
+                let group = gpui::SharedString::new_static("site-action");
+                div()
+                    .id(id)
+                    .group(group.clone())
+                    .flex()
+                    .items_center()
+                    .gap(px(tokens::SITE_ACTION_GAP))
+                    .h(px(tokens::SITE_ACTION))
+                    .min_w_0()
+                    .px(px(tokens::SITE_ACTION_PAD))
+                    .rounded(px(tokens::RADIUS_MD))
+                    .bg(palette.surface_2)
+                    .text_size(px(tokens::TEXT_SM))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(palette.text_2)
+                    .cursor_pointer()
+                    .hover(|button| {
+                        button
+                            .bg(palette.fill_hover)
+                            .text_color(palette.text)
+                            .shadow(vec![crate::view::hairline(palette.surface_line)])
+                    })
+                    .child(
+                        icon(glyph, tokens::SITE_ACTION_ICON, palette.text_2)
+                            .flex_none()
+                            .group_hover(group, |glyph| glyph.text_color(palette.text)),
+                    )
+                    .child(div().min_w_0().truncate().child(label))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                        this.run_site_tool(tool, window, cx);
+                    }))
+            };
+        div()
+            .grid()
+            .grid_cols(2)
+            .flex_none()
+            .gap(px(tokens::SITE_ACTIONS_GAP))
+            .px(inset)
+            .pb(inset)
+            .child(action("site-copy", "link", "Copy Link", SiteTool::CopyLink))
+            .child(action(
+                "site-shot",
+                "camera",
+                "Screenshot",
+                SiteTool::Screenshot,
+            ))
+            .child(action("site-boost", "zap", "Boost", SiteTool::Boost))
+            .child(action(
+                "site-devtools",
+                "wrench",
+                "DevTools",
+                SiteTool::DevTools,
+            ))
+    }
+
+    /// The Zoom `.site-row` with its `.zoom-control` (ui/index.html:112-119,
+    /// ui/styles.css:2123-2150): out, the level (which resets it), in.
+    fn zoom_row(&self, percent: u16, cx: &Context<Self>) -> Div {
+        let palette = palette();
+        let step = |id: &'static str, glyph: &'static str, label: &'static str, zoom: PageZoom| {
+            crate::view::tinted_icon_button(
+                id,
+                glyph,
+                label,
+                (tokens::ZOOM_STEP, tokens::ZOOM_STEP_ICON),
+                palette.text_2,
+            )
+            .h(px(tokens::ZOOM_VALUE))
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                this.zoom(zoom, cx);
+            }))
+        };
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_between()
+            .gap(px(tokens::SITE_ROW_GAP))
+            .h(px(tokens::SITE_ROW))
+            .px(px(tokens::SITE_INSET))
+            .child(div().min_w_0().truncate().child("Zoom"))
+            .child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .w(px(tokens::SITE_CONTROL))
+                    .h(px(tokens::ZOOM_VALUE))
+                    .rounded(px(tokens::RADIUS_SM))
+                    .bg(palette.surface_2)
+                    .child(step("zoom-out", "minus", "Zoom out", PageZoom::Out))
+                    .child(
+                        div()
+                            .id("zoom-reset")
+                            .flex()
+                            .flex_1()
+                            .items_center()
+                            .justify_center()
+                            .h_full()
+                            .text_size(px(tokens::TEXT_XS))
+                            .font_family(tokens::MONO)
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(palette.text_2)
+                            .cursor_pointer()
+                            .hover(|value| value.text_color(palette.text))
+                            .aria_label("Actual size")
+                            .child(format!("{percent}%"))
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.zoom(PageZoom::Reset, cx);
+                            })),
+                    )
+                    .child(step("zoom-in", "plus", "Zoom in", PageZoom::In)),
+            )
+    }
+
+    /// `.site-panel .popover-footer` (ui/styles.css:2152-2167): Clear Site Data, and the
+    /// rewrite's Clear permissions while permissions can be saved.
+    fn site_footer(&self, site: &Site, permissions: bool, cx: &Context<Self>) -> Div {
+        popover_footer()
+            .mt(px(tokens::SITE_FOOTER_MARGIN))
+            .pt(px(tokens::SITE_FOOTER_PAD_TOP))
+            .px(px(tokens::SITE_INSET))
+            .pb(px(tokens::SITE_FOOTER_PAD_BOTTOM))
+            .child(
+                danger_icon_button("site-clear", "trash", "Clear Site Data")
+                    .on_click(self.site_click(site, SiteChange::ClearData, cx)),
+            )
+            .when(permissions, |footer| {
+                footer.child(
                     danger_button("clear-site-permissions", "Clear permissions")
-                        .on_click(self.site_click(&site, SiteChange::ClearPermissions, cx)),
-                ),
-            ),
-        )
+                        .on_click(self.site_click(site, SiteChange::ClearPermissions, cx)),
+                )
+            })
+    }
+
+    /// Runs a site action on the shown page, after closing the panel.
+    fn run_site_tool(&mut self, tool: SiteTool, window: &mut Window, cx: &mut Context<Self>) {
+        self.dismiss_overlay(window, cx);
+        let shown = {
+            let state = self.state.borrow();
+            state
+                .model
+                .keyboard_pane(&self.id)
+                .map(|(_, tab)| (tab.clone(), state.engine.url(tab)))
+        };
+        let Some((tab, url)) = shown else {
+            return;
+        };
+        let result = match tool {
+            SiteTool::CopyLink => {
+                if let Some(url) = url {
+                    self.copy_text(url, "Link copied", cx);
+                }
+                return;
+            }
+            SiteTool::Boost => {
+                self.invoke_shortcut(Shortcut::SettingsTab(SettingsTab::Boosts), window, cx);
+                return;
+            }
+            SiteTool::DevTools => {
+                self.invoke_shortcut(Shortcut::DevTools, window, cx);
+                return;
+            }
+            SiteTool::Screenshot => self.state.borrow().engine.capture_screenshot(&tab),
+        };
+        if let Err(error) = result {
+            let mut state = self.state.borrow_mut();
+            let session = state.model.incognito_session(&self.id);
+            state.status.set(session, format!("{error:#}"));
+            cx.notify();
+        }
     }
 
     fn site_click(

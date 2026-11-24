@@ -11,6 +11,7 @@ mod favicon;
 mod find;
 mod identity;
 mod ime;
+mod page_tools;
 mod permissions;
 mod popup;
 #[cfg(target_os = "linux")]
@@ -55,6 +56,7 @@ pub use find::{FindEvent, FindResult};
 use identity::Generations;
 pub use identity::{BrowserKey, IncognitoSession, Owner, Partition};
 pub use ime::{Ime, ImeEdit};
+pub use page_tools::{Copied, PHONE_WIDTH, PageToolEvent, PageToolMessage};
 pub use permissions::{PermissionEvent, PermissionPrompt};
 pub use popup::{Disposition, Opened};
 use popup::{Pending, Popups};
@@ -63,6 +65,25 @@ pub use runtime::{Relaunches, Runtime, Start, profile_in_use};
 use services::Services;
 pub use sleep::{Discarded, SleepChange};
 pub use zoom::{PageZoom, zoom_percentage};
+
+/// The CEF build Flecha is built against (`pins.toml`'s `cef.version`), such as
+/// `158.0.3+g8c29be2+chromium-158.0.8127.18`. cef-rs refuses a runtime with another API hash.
+pub fn cef_version() -> &'static str {
+    std::ffi::CStr::from_bytes_with_nul(cef::sys::CEF_VERSION)
+        .ok()
+        .and_then(|version| version.to_str().ok())
+        .unwrap_or_default()
+}
+
+/// The Chromium version inside that CEF build, such as `158.0.8127.18`.
+pub fn chromium_version() -> String {
+    use cef::sys::{
+        CHROME_VERSION_BUILD, CHROME_VERSION_MAJOR, CHROME_VERSION_MINOR, CHROME_VERSION_PATCH,
+    };
+    format!(
+        "{CHROME_VERSION_MAJOR}.{CHROME_VERSION_MINOR}.{CHROME_VERSION_BUILD}.{CHROME_VERSION_PATCH}"
+    )
+}
 
 /// `Opened`: CEF is creating this browser for a page, and the engine already owns it.
 /// `ClosedByPage`: the page closed its browser (`window.close()`), or CEF abandoned
@@ -246,6 +267,12 @@ impl Engine {
     /// the same `compositing`.
     pub fn start_compositing(&self, compositing: &Compositing) {
         self.popups.compositor.start(compositing);
+    }
+
+    /// Whether browsers created now receive page frames as shared GPU textures, rather than
+    /// CPU copies.
+    pub fn shares_textures(&self) -> bool {
+        self.popups.compositor.shares_textures()
     }
 
     /// Follows the GPUI device of a window that shows pages. When GPUI recreates its

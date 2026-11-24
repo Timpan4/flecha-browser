@@ -90,6 +90,22 @@ impl Downloads {
         )
     }
 
+    /// The file name each download waiting for a path suggests, and why it asks.
+    pub(crate) fn path_prompts(&self) -> Vec<(String, AskReason)> {
+        self.prompts
+            .values()
+            .filter_map(|prompt| match prompt {
+                Prompt::Path { suggested, reason } => Some((
+                    suggested
+                        .file_name()
+                        .map_or_else(String::new, |name| name.to_string_lossy().into_owned()),
+                    *reason,
+                )),
+                Prompt::Held { .. } => None,
+            })
+            .collect()
+    }
+
     fn track(&mut self, message: DownloadMessage, list: &DownloadList) {
         let handle = message.event.handle();
         let incognito = message.incognito;

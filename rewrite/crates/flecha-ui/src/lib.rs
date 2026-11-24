@@ -1,3 +1,4 @@
+mod about;
 mod boosts;
 mod clipboard;
 mod command_bar;
@@ -7,6 +8,7 @@ mod downloads_view;
 mod empty_page;
 mod favicons;
 mod find_bar;
+mod flechinha;
 mod fullscreen;
 mod history_view;
 mod icons;
@@ -18,12 +20,14 @@ mod permissions_view;
 mod popup;
 #[cfg(target_os = "linux")]
 mod printing;
+mod responsive;
 mod settings_view;
 mod shell_menu;
 mod shortcuts;
 mod sidebar;
 mod site_controls;
 mod space_editor;
+mod split_view;
 mod tab_drag;
 mod tab_menu;
 mod tab_sleep;
@@ -196,6 +200,11 @@ enum Action {
     SplitNew(String),
     DropTab(tab_drag::TabDrag, tab_drag::TabDrop),
     ExitSplit,
+    /// The split divider was dragged to this share for the first pane, or reset to half.
+    SetSplitRatio(f64),
+    /// The responsive view (`responsive`): a phone-sized mirror of the shown tab beside it, or
+    /// the tab alone again.
+    ToggleResponsive,
     Peek(String),
     PeekTab(TabId),
     Promote,
@@ -576,6 +585,37 @@ impl Controller {
                     self.engine.close(&mirror);
                 }
             }
+            Action::SetSplitRatio(ratio) => {
+                self.model
+                    .state_mut(window)
+                    .context("missing Flecha window")?
+                    .set_split_ratio(window, ratio);
+            }
+            Action::ToggleResponsive => {
+                let state = self
+                    .model
+                    .state_mut(window)
+                    .context("missing Flecha window")?;
+                let responsive = state.window(window).is_some_and(|current| {
+                    current
+                        .spaces
+                        .get(&current.active_space_id)
+                        .is_some_and(|space| {
+                            space.split.is_some()
+                                && space.split_mode == Some(flecha_core::SplitMode::Responsive)
+                        })
+                });
+                if responsive {
+                    // Ending the split closes the mirror and shows the desktop side.
+                    return self.act(window, Action::ExitSplit);
+                }
+                ensure!(
+                    state
+                        .open_responsive(window, model::tab_id(), now())
+                        .is_some(),
+                    "Responsive view needs a page"
+                );
+            }
             Action::Peek(url) => {
                 let source = self.model.active(window).cloned();
                 if let Some(old) = self.model.peek(window.clone(), url, source.as_ref())? {
@@ -896,7 +936,14 @@ impl Controller {
             .model
             .partition(&id)
             .context("page lacks a request context")?;
-        tab_sleep::ensure_visible(&mut self.engine, &id, owner, partition, &tab.url, viewport)?;
+        // A responsive mirror's browser starts blank and loads its page once it emulates a
+        // phone (`emulate_mirror`), so the page's first request is already a phone's.
+        let url = if tab.device == Some(flecha_core::Device::Mobile) {
+            "about:blank"
+        } else {
+            tab.url.as_str()
+        };
+        tab_sleep::ensure_visible(&mut self.engine, &id, owner, partition, url, viewport)?;
         self.engine.set_visible(&id, true);
         Ok(())
     }
@@ -935,7 +982,13 @@ impl Controller {
             }
             match message.event {
                 Event::Address(address) => {
-                    if let Some((tab, durable)) = self.model.tab_mut(id) {
+                    // A mirror's browser starts blank before it loads its page (`pane`).
+                    let mirror_start = address == "about:blank"
+                        && self
+                            .model
+                            .tab(id)
+                            .is_some_and(|tab| tab.device == Some(flecha_core::Device::Mobile));
+                    if !mirror_start && let Some((tab, durable)) = self.model.tab_mut(id) {
                         if durable {
                             self.history.begin(&message.key, &address);
                         }
@@ -947,6 +1000,7 @@ impl Controller {
                             if moved {
                                 self.page_site_changed(id);
                             }
+                            save |= self.follow_responsive(id);
                         }
                     }
                 }
@@ -1001,6 +1055,7 @@ impl Controller {
                     {
                         self.engine.set_audio_muted(id, true);
                     }
+                    self.emulate_mirror(id);
                     self.start_download_retries(id);
                     self.favicons_stale();
                 }
@@ -1046,6 +1101,7 @@ impl Controller {
             changed |= pending != self.copy_link_flashes.len();
         }
         self.poll_page_overlays(cx);
+        changed |= self.poll_page_tools(cx);
         self.poll_clipboard(cx);
         #[cfg(target_os = "linux")]
         self.poll_print_jobs(cx);

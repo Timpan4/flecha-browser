@@ -833,7 +833,9 @@ impl Shell {
                     )
                     .invisible()
                     .group_hover(group.clone(), |action| action.visible())
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.copy_link(cx))),
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.copy_link(cx);
+                    })),
                 )
             })
             .when(
@@ -886,14 +888,18 @@ impl Shell {
             })
     }
 
-    fn copy_link(&self, cx: &mut Context<Self>) {
+    /// Copies the shown page's address and says so in its address bar, a Flechinha's included.
+    /// Returns whether there was an address to copy.
+    pub(crate) fn copy_link(&self, cx: &mut Context<Self>) -> bool {
         let mut state = self.state.borrow_mut();
         let url = state
             .model
             .active(&self.id)
             .and_then(|tab| state.model.tab(tab))
-            .map(|tab| tab.url.clone());
-        let Some(url) = url else { return };
+            .or_else(|| state.model.flechinhas.get(&self.id).map(|page| &page.tab))
+            .map(|tab| tab.url.clone())
+            .filter(|url| !url.is_empty() && url != "about:blank");
+        let Some(url) = url else { return false };
         cx.write_to_clipboard(ClipboardItem::new_string(url));
         // The shipping address bar shows the confirmation for 1400ms (ui/app.ts:986).
         state.copy_link_flashes.insert(
@@ -901,6 +907,7 @@ impl Shell {
             Instant::now() + Duration::from_millis(1400),
         );
         cx.notify();
+        true
     }
 
     /// `#favorites` (ui/styles.css:414-457): a grid of four site tiles.
@@ -1741,12 +1748,36 @@ impl Shell {
         }))
     }
 
+    /// The sidebar toolbar's Back, Forward and Reload (ui/styles.css:65-73, 152-155).
     fn navigation_button(
         &self,
         id: &'static str,
         name: &'static str,
         navigation: Navigation,
         enabled: bool,
+        cx: &Context<Self>,
+    ) -> gpui::Stateful<Div> {
+        self.sized_navigation_button(
+            (id, name),
+            navigation,
+            enabled,
+            (
+                tokens::TOOLBAR_BUTTON,
+                tokens::TOOLBAR_ICON,
+                tokens::ICON_BUTTON_DISABLED_OPACITY,
+            ),
+            cx,
+        )
+    }
+
+    /// A Back, Forward, Reload or Stop button `size` square with a `glyph` icon, at `disabled`
+    /// opacity while it can't run.
+    pub(crate) fn sized_navigation_button(
+        &self,
+        (id, name): (&'static str, &'static str),
+        navigation: Navigation,
+        enabled: bool,
+        (size, glyph, disabled): (f32, f32, f32),
         cx: &Context<Self>,
     ) -> gpui::Stateful<Div> {
         let label = match navigation {
@@ -1757,26 +1788,13 @@ impl Shell {
             Navigation::Stop => "Stop",
         };
         if !enabled {
-            // `.icon-button:disabled` (ui/styles.css:152-155).
-            return icon_square(
-                id,
-                name,
-                label,
-                (tokens::TOOLBAR_BUTTON, tokens::TOOLBAR_ICON),
-                palette().text_3,
-            )
-            .opacity(tokens::ICON_BUTTON_DISABLED_OPACITY);
+            return icon_square(id, name, label, (size, glyph), palette().text_3).opacity(disabled);
         }
-        sized_icon_button(
-            id,
-            name,
-            label,
-            tokens::TOOLBAR_BUTTON,
-            tokens::TOOLBAR_ICON,
-        )
-        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-            dispatch(&this.state, &this.id, Action::Browser(navigation), cx)
-        }))
+        sized_icon_button(id, name, label, size, glyph).on_click(cx.listener(
+            move |this, _: &ClickEvent, _, cx| {
+                dispatch(&this.state, &this.id, Action::Browser(navigation), cx)
+            },
+        ))
     }
 
     /// A row's icon button, shown while the pointer is over its row.

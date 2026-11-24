@@ -97,6 +97,9 @@ enum Command {
     MenuRow {
         label: String,
     },
+    /// Opens or closes Site Controls for the window's page, as the address bar's button does,
+    /// and replies once it has.
+    SiteControls,
     /// Makes the shell handle page clipboard edits as it does on Wayland, to check them on a
     /// display whose compositor gives GPUI no input serial.
     ShellClipboard,
@@ -309,6 +312,18 @@ impl Command {
                 });
                 return Ok(Value::Null);
             }
+            Self::SiteControls => {
+                let handle = *state.windows.get(window).context("no GPUI window")?;
+                // Deferred and replied to like Key: the shell renders what it opens.
+                cx.defer(move |cx| {
+                    let opened = handle.update(cx, |shell, window, cx| {
+                        shell.toggle_site_controls(window, cx);
+                        Value::Bool(matches!(shell.overlay, crate::view::Overlay::SiteControls))
+                    });
+                    reply(seq, opened);
+                });
+                return Ok(Value::Null);
+            }
             Self::MenuRow { label } => {
                 let handle = *state.windows.get(window).context("no GPUI window")?;
                 // Deferred and replied to like Key. The row is looked up in the same update
@@ -370,6 +385,8 @@ fn snapshot(state: &Controller) -> Result<Value> {
         })),
         "contexts": state.engine.context_partitions().map(partition).collect::<Vec<_>>(),
         "downloads": state.windows.keys().map(|window| (window.as_str().to_owned(), json!(state.download_rows(window)))).collect::<serde_json::Map<_, _>>(),
+        "status": state.status.text(None),
+        "downloadPathPrompts": state.downloads.path_prompts().into_iter().map(|(name, reason)| json!({ "name": name, "reason": format!("{reason:?}") })).collect::<Vec<_>>(),
         "liveBrowsers": state.engine.live_browsers(),
         "nativeWindows": state.windows.keys().collect::<Vec<_>>(),
     }))
@@ -409,7 +426,7 @@ pub(super) fn install(controller: &Shared, cx: &mut App) {
                     .unwrap_or_else(|| state.model.core.focused_window().id.clone());
                 let deferred = matches!(
                     request.command,
-                    Command::Key { .. } | Command::MenuRow { .. }
+                    Command::Key { .. } | Command::MenuRow { .. } | Command::SiteControls
                 );
                 match request.command.run(&mut state, &id, cx, request.seq) {
                     Ok(_) if deferred => {}
@@ -427,6 +444,27 @@ fn reply(seq: u64, result: Result<Value>) {
         Ok(result) => json!({ "type": "reply", "seq": seq, "result": result }),
         Err(error) => json!({ "type": "reply", "seq": seq, "error": error.to_string() }),
     });
+}
+
+/// A window's overlay opened or went, as `kind`.
+pub(crate) fn overlay(state: &Controller, window: &WindowId, kind: &str) {
+    if state.verify {
+        emit(json!({ "type": "overlay", "window": window, "overlay": kind }));
+    }
+}
+
+/// A page asked for its menu while `overlay` was open or another page had the keyboard.
+pub(crate) fn context_menu_refused(
+    state: &Controller,
+    window: &WindowId,
+    overlay: &str,
+    active: bool,
+) {
+    if state.verify {
+        emit(
+            json!({ "type": "context_menu_refused", "window": window, "overlay": overlay, "active": active }),
+        );
+    }
 }
 
 fn emit(value: Value) {

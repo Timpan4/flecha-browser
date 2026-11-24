@@ -234,8 +234,9 @@ impl TextField {
         field.child(self.render_line(0..self.text.len()))
     }
 
-    /// The text alone, for a field whose box its owner draws, such as Settings' search: the
-    /// caret and selection show only while `focused`.
+    /// The text alone, for a field whose box its owner draws, such as Settings' search or
+    /// Flechinha's address (ui/flechinha.css:224-238): the caret and selection show only while
+    /// `focused`.
     pub(crate) fn render_inline(&self, placeholder: &'static str, focused: bool) -> Div {
         let field = div()
             .flex()

@@ -138,7 +138,10 @@
     menu.style.left = '380px';
     menu.style.top = '200px';
 
-    for (const [label, disabled] of [['Back', true], ['Forward', true], ['Reload', false], ['Inspect element', false]]) {
+    for (const [label, disabled] of [
+      ['Back', true], ['Forward', true], ['Reload', false],
+      ['Save as…', false], ['Print…', false], ['View page source', false], ['Inspect element', false],
+    ]) {
       const item = document.createElement('button');
       item.className = 'shell-menu-item';
       item.textContent = label;

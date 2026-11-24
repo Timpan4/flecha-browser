@@ -23,8 +23,13 @@ pub struct ContextMenuRequest {
 
 #[derive(Debug, Default)]
 pub struct MenuContext {
+    /// The address of the page the menu opened on, its top frame's.
+    pub page_url: String,
     pub link_url: String,
+    /// The element's source: an image's, or a video's or audio's.
     pub src_url: String,
+    /// Whether the menu opened on an image, which `src_url` names.
+    pub is_image: bool,
     pub selection_text: String,
     pub is_editable: bool,
     /// Chromium's verdict on copying the selection. It refuses a password field's.
@@ -93,8 +98,11 @@ wrap_context_menu_handler! {
                     position,
                     anchor: self.slot.viewport.get().window_point(position),
                     context: MenuContext {
+                        page_url: CefString::from(&params.page_url()).to_string(),
                         link_url: CefString::from(&params.link_url()).to_string(),
                         src_url: CefString::from(&params.source_url()).to_string(),
+                        is_image: *params.media_type().as_ref()
+                            == sys::cef_context_menu_media_type_t::CM_MEDIATYPE_IMAGE,
                         selection_text: CefString::from(&params.selection_text()).to_string(),
                         is_editable: params.is_editable() != 0,
                         can_copy: can(sys::cef_context_menu_edit_state_flags_t::CM_EDITFLAG_CAN_COPY),

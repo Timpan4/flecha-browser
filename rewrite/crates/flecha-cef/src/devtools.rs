@@ -132,6 +132,8 @@ pub(crate) enum Internal {
     /// The page's selection, for the shell's clipboard. Its text never reaches
     /// [`DevToolsEvent`]s.
     Selection(crate::clipboard::Selection),
+    /// A page tool's call, whose outcome reaches the shell as a [`crate::PageToolEvent`].
+    Tool(crate::page_tools::Tool),
 }
 
 wrap_dev_tools_message_observer! {
@@ -161,6 +163,10 @@ wrap_dev_tools_message_observer! {
                 Some(Internal::Selection(read)) => {
                     let reply = result.filter(|_| success != 0);
                     crate::clipboard::read(&slot, browser, read, reply);
+                }
+                Some(Internal::Tool(call)) => {
+                    let reply = result.filter(|_| success != 0);
+                    crate::page_tools::reply(&slot, browser, call, reply);
                 }
             }
         }

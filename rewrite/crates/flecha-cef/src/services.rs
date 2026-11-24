@@ -41,6 +41,8 @@ pub(crate) struct Services {
     pub copied: Mailbox<Option<String>>,
     /// Finished icon downloads, by URL ([`crate::Engine::next_favicon`]).
     pub favicons: RefCell<VecDeque<crate::Favicon>>,
+    /// Outcomes of the shell's page tools ([`crate::Engine::next_page_tool_event`]).
+    pub page_tool_events: Mailbox<crate::PageToolEvent>,
 }
 
 impl Services {
@@ -63,6 +65,7 @@ impl Services {
             devtools_internal: RefCell::new(BTreeMap::new()),
             copied: Mailbox::default(),
             favicons: RefCell::default(),
+            page_tool_events: Mailbox::default(),
         }
     }
 

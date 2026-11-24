@@ -160,6 +160,14 @@ pub struct WindowSpace {
     pub split_ratio: Option<f64>,
 }
 
+/// The first pane's share of a split, as the shell's divider allows it (store.ts).
+pub const SPLIT_RATIO_RANGE: std::ops::RangeInclusive<f64> = 0.2..=0.8;
+
+/// `ratio` within [`SPLIT_RATIO_RANGE`].
+pub fn clamp_split_ratio(ratio: f64) -> f64 {
+    ratio.clamp(*SPLIT_RATIO_RANGE.start(), *SPLIT_RATIO_RANGE.end())
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SplitMode {
@@ -1295,8 +1303,7 @@ impl BrowserState {
         if ratio.is_nan() {
             return false;
         }
-        // The shell divider range in store.ts.
-        ws.split_ratio = Some(ratio.clamp(0.2, 0.8));
+        ws.split_ratio = Some(clamp_split_ratio(ratio));
         true
     }
 
