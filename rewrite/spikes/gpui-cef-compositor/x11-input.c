@@ -177,10 +177,14 @@ int main(int argc, char **argv)
     if (display == NULL)
         return EXIT_FAILURE;
     int ok = 0;
-    if (argc == 4 && strcmp(argv[1], "move") == 0) {
+    if (argc == 4 && (strcmp(argv[1], "press") == 0 || strcmp(argv[1], "move") == 0)) {
         int x = coordinate(argv[2]), y = coordinate(argv[3]);
         ok = x >= 0 && y >= 0 &&
              XTestFakeMotionEvent(display, DefaultScreen(display), x, y, CurrentTime);
+        if (ok && strcmp(argv[1], "press") == 0)
+            ok = XTestFakeButtonEvent(display, 1, True, CurrentTime);
+    } else if (argc == 2 && strcmp(argv[1], "release") == 0) {
+        ok = XTestFakeButtonEvent(display, 1, False, CurrentTime);
     } else if (argc == 4 && (strcmp(argv[1], "click") == 0 || strcmp(argv[1], "right-click") == 0 ||
                             strcmp(argv[1], "back") == 0 || strcmp(argv[1], "forward") == 0)) {
         int x = coordinate(argv[2]), y = coordinate(argv[3]);
