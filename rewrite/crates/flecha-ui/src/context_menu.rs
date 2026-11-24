@@ -6,12 +6,13 @@ use flecha_core::{TabId, WindowId, suggestions::pinnable_address};
 use gpui::{
     App, ClickEvent, ClipboardItem, Context, InteractiveElement as _, IntoElement, MouseDownEvent,
     ParentElement as _, Pixels, StatefulInteractiveElement as _, Styled as _, Window, deferred,
-    div, px, rgb,
+    div, px,
 };
 
 use crate::model::tab_id;
 use crate::popup::{Place, place};
 use crate::shortcuts::Navigation;
+use crate::theme::palette;
 use crate::view::{Overlay, Shell, button};
 use crate::{Action, Controller, dispatch};
 
@@ -308,8 +309,8 @@ impl Shell {
                         .p(PADDING)
                         .rounded_lg()
                         .border_1()
-                        .border_color(rgb(0x405863))
-                        .bg(rgb(0x1d2a32))
+                        .border_color(palette().border)
+                        .bg(palette().panel)
                         .shadow_lg()
                         .text_sm()
                         .children(rows.into_iter().map(|(item, enabled)| {
@@ -328,7 +329,7 @@ impl Shell {
                                     .h(ROW)
                                     .px_2()
                                     .py_1()
-                                    .text_color(rgb(0x8b9ba4))
+                                    .text_color(palette().disabled)
                                     .child(label)
                                     .into_any_element()
                             }

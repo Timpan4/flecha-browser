@@ -5,13 +5,14 @@ use flecha_boosts::{BoostKind, BoostName, CompiledBoost, applies, boost_host_for
 use gpui::{
     AppContext as _, ClickEvent, Context, CursorStyle, Div, InteractiveElement as _, Keystroke,
     ParentElement as _, StatefulInteractiveElement as _, Styled as _, Task, div,
-    prelude::FluentBuilder as _, px, rgb,
+    prelude::FluentBuilder as _, px,
 };
 
 use super::{Draft, Field, SettingsPanel, muted, row, section};
 use crate::Controller;
 use crate::boosts::compile_script;
 use crate::text_field::TextField;
+use crate::theme::palette;
 use crate::view::{Shell, button};
 
 #[derive(Default)]
@@ -181,7 +182,7 @@ impl Shell {
             });
             let selected = editor.selected.as_ref() == Some(name);
             let select = button(format!("select-boost-{name}"), name.to_string())
-                .when(selected, |button| button.bg(rgb(0x27547b)))
+                .when(selected, |button| button.bg(palette().accent))
                 .on_click(cx.listener({
                     let name = name.clone();
                     move |this, _: &ClickEvent, _, cx| this.select_boost(name.clone(), cx)
@@ -232,7 +233,7 @@ impl Shell {
                     div()
                         .rounded_md()
                         .p_2()
-                        .bg(rgb(0x542f31))
+                        .bg(palette().destructive)
                         .child(div().child("Compile error"))
                         .child(div().whitespace_normal().child(build_error.clone())),
                 );

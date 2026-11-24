@@ -13,10 +13,11 @@ use flecha_downloads::{
 };
 use gpui::{
     ClickEvent, Context, Div, InteractiveElement as _, Keystroke, ParentElement as _,
-    StatefulInteractiveElement as _, Styled as _, Window, div, prelude::FluentBuilder as _, rgb,
+    StatefulInteractiveElement as _, Styled as _, Window, div, prelude::FluentBuilder as _,
 };
 
 use crate::text_field::TextField;
+use crate::theme::palette;
 use crate::view::{Overlay, Shell, button, overlay_panel};
 use crate::{Action, Controller, dispatch};
 
@@ -597,7 +598,7 @@ fn download_card(title: impl Into<gpui::SharedString>) -> Div {
         .p_2()
         .min_w_0()
         .rounded_md()
-        .bg(rgb(0x243640))
+        .bg(palette().inset)
         .child(div().truncate().child(title.into()))
 }
 

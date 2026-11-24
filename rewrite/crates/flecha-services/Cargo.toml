@@ -26,6 +26,10 @@ tokio-util = "0.7"
 tracing = "0.1"
 tracing-core = "0.1"
 
+[features]
+# Failure injection for other crates' tests. Never enabled outside dev-dependencies.
+test-support = []
+
 [dev-dependencies]
 rmcp = { version = "3.11.0", default-features = false }
 tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread", "test-util"] }

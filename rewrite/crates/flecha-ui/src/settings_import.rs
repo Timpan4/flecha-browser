@@ -11,11 +11,11 @@ use flecha_services::StateStore;
 use gpui::{
     AppContext as _, ClickEvent, Context, Div, ParentElement as _, PathPromptOptions,
     StatefulInteractiveElement as _, Styled as _, Task, Window, div, prelude::FluentBuilder as _,
-    rgb,
 };
 use uuid::Uuid;
 
 use super::{Draft, Field, SettingsPanel, SettingsTab, muted, row, section};
+use crate::theme::palette;
 use crate::view::{Overlay, Shell, button};
 use crate::{Controller, now};
 
@@ -433,7 +433,9 @@ impl Shell {
             .into_iter()
             .map(|format| {
                 button(format.label(), format.label())
-                    .when(import.format == format, |button| button.bg(rgb(0x27547b)))
+                    .when(import.format == format, |button| {
+                        button.bg(palette().accent)
+                    })
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         if let Some(panel) = this.settings_mut() {
                             panel.import.format = format;

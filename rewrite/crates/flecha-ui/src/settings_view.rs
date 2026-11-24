@@ -16,11 +16,12 @@ use flecha_core::Settings;
 use gpui::{
     ClickEvent, Context, Div, InteractiveElement as _, Keystroke, Modifiers, ParentElement as _,
     ScrollHandle, StatefulInteractiveElement as _, Styled as _, Window, div,
-    prelude::FluentBuilder as _, px, rgb,
+    prelude::FluentBuilder as _, px,
 };
 
 use crate::Controller;
 use crate::text_field::TextField;
+use crate::theme::palette;
 use crate::view::{Overlay, Shell, button, overlay_panel};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -269,7 +270,7 @@ impl Shell {
         .map(|tab| {
             let selected = tab == panel.tab;
             button(tab.label(), tab.label())
-                .when(selected, |tab| tab.bg(rgb(0x27547b)))
+                .when(selected, |tab| tab.bg(palette().accent))
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     if let Some(panel) = this.settings_mut() {
                         panel.select(tab);
@@ -303,7 +304,11 @@ impl Shell {
                     div()
                         .rounded_md()
                         .p_2()
-                        .bg(rgb(if *error { 0x542f31 } else { 0x263c46 }))
+                        .bg(if *error {
+                            palette().destructive
+                        } else {
+                            palette().surface
+                        })
                         .child(text.clone()),
                 )
             })
@@ -331,10 +336,10 @@ fn section(label: &'static str) -> Div {
         .gap_2()
         .py_2()
         .border_t_1()
-        .border_color(rgb(0x405863))
+        .border_color(palette().border)
         .child(div().text_base().child(label))
 }
 
 fn muted(label: impl Into<gpui::SharedString>) -> Div {
-    div().text_color(rgb(0xa4b5c3)).child(label.into())
+    div().text_color(palette().muted).child(label.into())
 }

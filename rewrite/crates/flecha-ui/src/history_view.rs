@@ -8,10 +8,11 @@ use flecha_core::{EpochMillis, TabId, suggestions::display_url};
 use flecha_history::{HistoryEntry, HistoryError, HistoryStore, PAGE, RecordedVisit};
 use gpui::{
     ClickEvent, Context, Div, InteractiveElement as _, ParentElement as _, ScrollHandle,
-    StatefulInteractiveElement as _, Styled as _, Window, div, prelude::FluentBuilder as _, rgb,
+    StatefulInteractiveElement as _, Styled as _, Window, div, prelude::FluentBuilder as _,
 };
 
 use crate::text_field::TextField;
+use crate::theme::palette;
 use crate::view::{Overlay, Shell, button, overlay_panel};
 use crate::{Action, Controller, dispatch, now};
 
@@ -355,7 +356,7 @@ impl Shell {
                         .mt_2()
                         .px_2()
                         .text_xs()
-                        .text_color(rgb(0xa4b5c3))
+                        .text_color(palette().muted)
                         .child(day_label(day, today)),
                 );
                 previous = Some(day);
@@ -430,7 +431,7 @@ impl Shell {
             .child(
                 div()
                     .border_t_1()
-                    .border_color(rgb(0x304855))
+                    .border_color(palette().row)
                     .pt_2()
                     .child(div().text_sm().child("Clear browsing data"))
                     .child(clear),
@@ -491,7 +492,7 @@ fn entry_link(id: impl Into<gpui::ElementId>, title: &str, url: &str) -> gpui::S
         .py_1()
         .cursor_pointer()
         .rounded_md()
-        .hover(|row| row.bg(rgb(0x304855)))
+        .hover(|row| row.bg(palette().row))
         .child(
             div()
                 .flex_1()
@@ -501,7 +502,7 @@ fn entry_link(id: impl Into<gpui::ElementId>, title: &str, url: &str) -> gpui::S
                     div()
                         .truncate()
                         .text_xs()
-                        .text_color(rgb(0xa4b5c3))
+                        .text_color(palette().muted)
                         .child(address),
                 ),
         )

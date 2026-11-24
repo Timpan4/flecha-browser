@@ -1,6 +1,8 @@
 use std::fs;
 use std::io::{self, BufReader, Write as _};
 use std::path::{Path, PathBuf};
+#[cfg(any(test, feature = "test-support"))]
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context as _, Result};
 use flecha_core::{
@@ -9,19 +11,27 @@ use flecha_core::{
 };
 use serde_json::Value;
 
-pub struct StateStore(PathBuf);
+pub struct StateStore {
+    directory: PathBuf,
+    #[cfg(any(test, feature = "test-support"))]
+    fail_next_sync: AtomicBool,
+}
 
 impl StateStore {
     pub fn open(directory: &Path) -> Result<(Self, LoadedState)> {
         fs::create_dir_all(directory).context("create session storage")?;
-        let store = Self(directory.to_path_buf());
+        let store = Self {
+            directory: directory.to_path_buf(),
+            #[cfg(any(test, feature = "test-support"))]
+            fail_next_sync: AtomicBool::new(false),
+        };
         let current = store.read(Slot::Current)?;
         let last_good = store.read(Slot::LastGood)?;
         Ok((store, storage::load(current.as_ref(), last_good.as_ref())?))
     }
 
     fn path(&self, slot: Slot) -> PathBuf {
-        self.0.join(match slot {
+        self.directory.join(match slot {
             Slot::Current => "state.json",
             Slot::LastGood => "last-good.json",
             Slot::Damaged => "damaged.json",
@@ -70,19 +80,30 @@ impl StateStore {
     /// An outer error leaves the old snapshot in place. An inner error means the
     /// new snapshot is in place but the directory entry could not be synced.
     pub fn replace_snapshot(&self, write: &BackupWrite) -> Result<io::Result<()>> {
-        let mut file = tempfile::NamedTempFile::new_in(&self.0)?;
+        let mut file = tempfile::NamedTempFile::new_in(&self.directory)?;
         serde_json::to_writer(&mut file, write.value())?;
         file.flush()?;
         file.as_file().sync_all()?;
         #[cfg(unix)]
-        let directory = fs::File::open(&self.0)?;
+        let directory = fs::File::open(&self.directory)?;
         file.persist(self.path(write.slot()))
             .context("replace session snapshot")?;
+        #[cfg(any(test, feature = "test-support"))]
+        if self.fail_next_sync.swap(false, Ordering::Relaxed) {
+            return Ok(Err(io::Error::other("injected directory sync failure")));
+        }
         #[cfg(unix)]
         let synced = directory.sync_all();
         #[cfg(not(unix))]
         let synced = Ok(());
         Ok(synced)
+    }
+
+    /// Makes the next snapshot replace the saved one and then report that the directory entry
+    /// could not be synced, so callers can check how they treat that error.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn fail_next_directory_sync(&self) {
+        self.fail_next_sync.store(true, Ordering::Relaxed);
     }
 }
 

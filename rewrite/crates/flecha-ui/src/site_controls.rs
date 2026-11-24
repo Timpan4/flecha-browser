@@ -5,10 +5,11 @@ use flecha_core::{Settings, TabId, WindowId, blocks_ads_on, is_site_host};
 use flecha_permissions::{Decision, Origin, PermissionKind, SiteSettings};
 use gpui::{
     ClickEvent, Context, Div, ParentElement as _, StatefulInteractiveElement as _, Styled as _,
-    Window, div, prelude::FluentBuilder as _, px, rgb,
+    Window, div, prelude::FluentBuilder as _, px,
 };
 
 use crate::permissions_view::permission_label;
+use crate::theme::palette;
 use crate::view::{Overlay, Shell, button, overlay_panel};
 use crate::{Action, Controller, dispatch};
 
@@ -212,7 +213,7 @@ impl Shell {
                             ]
                             .map(|(value, label)| {
                                 button(format!("permission-{}-{label}", kind.name()), label)
-                                    .when(decision == value, |button| button.bg(rgb(0x27547b)))
+                                    .when(decision == value, |button| button.bg(palette().accent))
                                     .on_click(self.site_click(
                                         &site,
                                         SiteChange::Permission(kind, value),

@@ -6,12 +6,13 @@ use flecha_core::{
 };
 use gpui::{
     ClickEvent, Context, IntoElement, KeyDownEvent, Keystroke, StatefulInteractiveElement as _,
-    Styled as _, Window, rgb,
+    Styled as _, Window,
 };
 
 use crate::command_bar::Command;
 use crate::settings_view::SettingsTab;
 use crate::sidebar::SidebarAction;
+use crate::theme::palette;
 use crate::view::{Overlay, Shell, button};
 use crate::{Action, Controller, dispatch};
 
@@ -225,6 +226,9 @@ impl Controller {
     pub(crate) fn poll_toolbars(&mut self) -> bool {
         let mut changed = false;
         while let Some(message) = self.engine.next_devtools_event() {
+            let Some(message) = self.agents.devtools(message) else {
+                continue;
+            };
             if let flecha_cef::DevToolsEvent::Result { id, success, .. } = message.event
                 && let Some(key) = self.pending_reloads.remove(&id)
                 && !success
@@ -325,9 +329,9 @@ impl Shell {
         Some(
             button("reset-page-zoom", format!("{percent}%"))
                 .flex_shrink_0()
-                .bg(rgb(0x26343d))
+                .bg(palette().surface)
                 .text_xs()
-                .text_color(rgb(0xa4b5c3))
+                .text_color(palette().muted)
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                     this.zoom(PageZoom::Reset, cx);
                 })),
@@ -451,6 +455,13 @@ impl Shell {
             }
             Shortcut::Escape if self.overlay.is_open() => {
                 self.dismiss_overlay(window, cx);
+                return true;
+            }
+            Shortcut::Escape if self.state.borrow().fullscreen_pane(&self.id).is_some() => {
+                let state = self.state.borrow();
+                if let Some((_, tab)) = state.fullscreen_pane(&self.id) {
+                    state.engine.exit_fullscreen(&tab);
+                }
                 return true;
             }
             Shortcut::Escape if self.state.borrow().model.peeks.contains_key(&self.id) => {
