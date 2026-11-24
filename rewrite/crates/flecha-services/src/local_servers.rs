@@ -10,6 +10,7 @@
 //! The scan runs on a thread of its own every [`POLL`]; the UI takes the list when it changes.
 
 use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
 use std::io::{self, Read as _, Write as _};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -101,10 +102,7 @@ fn table_address(hex: &str) -> Option<(IpAddr, Family)> {
     match words.as_slice() {
         [word] => Some((Ipv4Addr::from(*word).into(), Family::V4)),
         [a, b, c, d] => {
-            let mut bytes = [0; 16];
-            for (chunk, word) in bytes.chunks_exact_mut(4).zip([a, b, c, d]) {
-                chunk.copy_from_slice(word);
-            }
+            let bytes: [u8; 16] = [*a, *b, *c, *d].concat().try_into().ok()?;
             Some((Ipv6Addr::from(bytes).into(), Family::V6))
         }
         _ => None,
@@ -203,15 +201,17 @@ impl Scanner {
             .filter(|(port, _)| Some(**port) != excluded)
             .filter_map(|(&port, family)| {
                 let host = format!("localhost:{port}");
-                if !self.names.contains_key(&port) {
-                    let answer = ask(SocketAddr::new(family.loopback(), port), &host)?;
-                    self.names
-                        .insert(port, answer.unwrap_or_else(|| host.clone()));
-                }
+                let name = match self.names.entry(port) {
+                    Entry::Occupied(name) => name.get().clone(),
+                    Entry::Vacant(slot) => {
+                        let answer = ask(SocketAddr::new(family.loopback(), port), &host)?;
+                        slot.insert(answer.unwrap_or_else(|| host.clone())).clone()
+                    }
+                };
                 Some(LocalServer {
                     port,
                     url: format!("http://{host}/"),
-                    name: self.names[&port].clone(),
+                    name,
                 })
             })
             .collect()
