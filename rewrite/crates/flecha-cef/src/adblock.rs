@@ -9,7 +9,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use cef::{rc::Rc as _, *};
-use flecha_adblock::{AdBlocker, Request as AdRequest, RequestType, UpdateReport};
+use flecha_adblock::{
+    AdBlocker, Request as AdRequest, RequestType, UpdateReport, load_cached_rules,
+};
 
 use crate::callbacks::Slot;
 use crate::{devtools, services};
@@ -149,28 +151,6 @@ impl crate::Engine {
             .get(tab)
             .map_or(0, |session| session.slot.blocked.load(Ordering::Relaxed))
     }
-}
-
-/// A transport that never connects: loading lists from the cache must not touch the network.
-struct Offline;
-
-impl flecha_adblock::Download for Offline {
-    fn get(
-        &self,
-        _url: &str,
-        _request: &flecha_adblock::DownloadRequest,
-    ) -> std::io::Result<flecha_adblock::WireResponse> {
-        Err(std::io::Error::other("cached lists only"))
-    }
-}
-
-/// Builds or deserializes the engine for the lists cached in `cache` and installs it, without
-/// downloading. A missing or invalid list leaves the installed engine in place and is reported.
-pub(crate) fn load_cached_rules(blocker: &AdBlocker, cache: &Path) -> UpdateReport {
-    // `update_once` reschedules a failed pass after this delay; a single offline pass has no
-    // next pass, so the value only fills the report.
-    let unused_retry = std::time::Duration::ZERO;
-    flecha_adblock::update_once(blocker, cache, false, &Offline, &mut None, unused_retry)
 }
 
 fn text(value: &CefStringUserfree) -> String {
