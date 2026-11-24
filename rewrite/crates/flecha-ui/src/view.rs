@@ -21,7 +21,7 @@ use crate::icons::icon;
 use crate::shortcuts::Navigation;
 use crate::theme::{DEFAULT_TINT, Palette, palette};
 use crate::tokens::{self, ease};
-use crate::window_chrome::{TitleBar, close_control, resize_edges};
+use crate::window_chrome::{TitleBar, resize_edges};
 use crate::{Action, Shared, dispatch};
 use crate::{
     command_bar::{CommandBar, SuggestionClient},
@@ -55,6 +55,9 @@ pub(crate) enum Overlay {
     SiteControls,
     ContextMenu(ContextMenuRequest),
     Menu(crate::shell_menu::ShellMenu),
+    /// A Flechinha's address, edited in its toolbar.
+    FlechinhaAddress(TextField),
+    About(crate::about::About),
 }
 
 impl Overlay {
@@ -73,6 +76,8 @@ pub(crate) struct Shell {
     pub(crate) overlay: Overlay,
     pub(crate) browser_dialog: Option<BrowserDialog>,
     pub(crate) sidebar_interaction: SidebarInteraction,
+    pub(crate) split_drag: Option<crate::split_view::SplitDrag>,
+    pub(crate) split_area: crate::split_view::SplitArea,
     /// Where the sidebar's menu button was last drawn, for the window menu to drop from.
     pub(crate) menu_button: Rc<Cell<gpui::Bounds<Pixels>>>,
     /// The left button went down on a title bar's empty room; the next drag moves the window.
@@ -126,6 +131,11 @@ impl Shell {
             } else {
                 this.consumed_keys.clear();
                 this.finish_sidebar_resize(None, cx);
+                this.finish_split_drag(cx);
+                // Blurring the address field stops editing it (ui/flechinha.ts:118).
+                if matches!(this.overlay, Overlay::FlechinhaAddress(_)) {
+                    this.overlay = Overlay::None;
+                }
                 this.hide_floating_sidebar(cx);
                 this.cancel_tab_drag(window, cx);
             }
@@ -145,6 +155,8 @@ impl Shell {
             overlay: Overlay::None,
             browser_dialog: None,
             sidebar_interaction: SidebarInteraction::default(),
+            split_drag: None,
+            split_area: Rc::default(),
             menu_button: Rc::default(),
             moving: false,
             find: None,
@@ -519,6 +531,11 @@ impl Shell {
                         {
                             dispatch(&this.state, &this.id, Action::Select(down_id.clone()), cx);
                         }
+                        // The address field loses its focus to the page, and stops being edited.
+                        if matches!(this.overlay, Overlay::FlechinhaAddress(_)) {
+                            this.overlay = Overlay::None;
+                            cx.notify();
+                        }
                         this.page_focus.focus(window, cx);
                         let _ = this.sync_page_focus(window, cx);
                         let state = this.state.borrow();
@@ -720,100 +737,8 @@ impl Render for Shell {
                     cx,
                 )));
         } else if let Some(page) = state.model.flechinhas.get(&self.id) {
-            let host = flecha_core::suggestions::display_url(&page.tab.url);
             main = main
-                .child(
-                    self.window_drag(
-                        // Flechinha's toolbar (ui/flechinha.css): 44 tall on the tint, controls 28
-                        // tall, the address a resting chip. Its empty room moves the window.
-                        div()
-                            .h(px(tokens::FLECHINHA_TOOLBAR))
-                            .flex_shrink_0()
-                            .flex()
-                            .items_center()
-                            .gap(px(tokens::TOOLBAR_GAP))
-                            .pl(px(tokens::SPACE_2 - tokens::TOOLBAR_GAP))
-                            .pr(px(tokens::SPACE_2))
-                            .map(|bar| match title_bar {
-                                TitleBar::Platform => bar.child(close_control().on_click(
-                                    cx.listener(|this, _: &ClickEvent, _, cx| {
-                                        dispatch(&this.state, &this.id, Action::Close, cx);
-                                    }),
-                                )),
-                                _ => bar.children(self.window_controls(
-                                    title_bar,
-                                    (
-                                        tokens::FLECHINHA_WINDOW_CONTROLS_WIDTH,
-                                        tokens::FLECHINHA_WINDOW_CONTROLS_PAD_LEFT,
-                                    ),
-                                    window,
-                                    cx,
-                                )),
-                            })
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .h(px(tokens::PILL_HEIGHT))
-                                    .occlude()
-                                    .mx(px(tokens::FLECHINHA_ADDRESS_MARGIN))
-                                    .px(px(tokens::URLBAR_PAD_LEFT))
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(tokens::SPACE_2))
-                                    .rounded(px(tokens::PAGE_RADIUS))
-                                    .bg(palette().fill_subtle)
-                                    .shadow(vec![hairline(palette().line)])
-                                    .child(
-                                        div()
-                                            .min_w_0()
-                                            .truncate()
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .child(host),
-                                    )
-                                    .when(!page.tab.title.is_empty(), |address| {
-                                        address.child(
-                                            div()
-                                                .flex_1()
-                                                .min_w_0()
-                                                .truncate()
-                                                .text_color(palette().text_3)
-                                                .child(format!("— {}", page.tab.title)),
-                                        )
-                                    }),
-                            )
-                            .children(
-                                self.zoom_badge(cx)
-                                    .map(|badge| div().flex_none().occlude().child(badge)),
-                            )
-                            .child(
-                                div()
-                                    .id("return")
-                                    .occlude()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(tokens::PILL_GAP))
-                                    .h(px(tokens::PILL_HEIGHT))
-                                    .flex_shrink_0()
-                                    .pl(px(tokens::FLECHINHA_CTA_PAD_LEFT))
-                                    .pr(px(tokens::FLECHINHA_CTA_PAD_RIGHT))
-                                    .rounded(px(tokens::PAGE_RADIUS))
-                                    .bg(palette().cta)
-                                    .text_color(palette().cta_text)
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_size(px(tokens::TEXT_SM))
-                                    .cursor_pointer()
-                                    .hover(|cta| cta.bg(palette().cta_hover))
-                                    .child(icon("external", tokens::PILL_ICON, palette().cta_text))
-                                    .child("Open in Flecha")
-                                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                        dispatch(&this.state, &this.id, Action::Return, cx);
-                                    })),
-                            ),
-                        title_bar,
-                        cx,
-                    ),
-                )
+                .child(self.flechinha_toolbar(page, title_bar, window, cx))
                 .child(
                     div()
                         .flex_1()
@@ -840,28 +765,43 @@ impl Render for Shell {
                 .flex()
                 .size_full()
                 .gap(px(tokens::SPLIT_GAP))
-                .child(self.page_area_probe());
+                .child(self.page_area_probe())
+                .child(self.split_input(cx));
+            let space = current.spaces.get(active_space);
+            let responsive = space
+                .is_some_and(|space| space.split_mode == Some(flecha_core::SplitMode::Responsive));
+            // A drag under way shows its share before it is saved.
+            let ratio = self.split_drag.as_ref().map_or_else(
+                || space.and_then(|space| space.split_ratio).unwrap_or(0.5),
+                |drag| drag.ratio,
+            );
             for (index, tab) in view.iter().enumerate() {
                 let pane = self.pane(Owner::Tab(self.id.clone()), tab.clone(), &mut images, cx);
-                let ratio = current
-                    .spaces
-                    .get(active_space)
-                    .and_then(|space| space.split_ratio)
-                    .unwrap_or(0.5) as f32;
-                let width = if view.len() == 1 {
-                    1.0
+                let frame = div().h_full().min_w_0();
+                pages = pages.child(if view.len() == 1 {
+                    frame.flex_1().child(page_card(pane))
+                } else if responsive {
+                    // The phone keeps its width (lib/responsiveViewport.ts), the desktop side
+                    // takes the rest, and there is no share to drag.
+                    if index == 0 {
+                        frame.flex_1().child(page_card(pane))
+                    } else {
+                        frame
+                            .flex_none()
+                            .w(px(flecha_cef::PHONE_WIDTH as f32))
+                            .child(page_card(pane))
+                    }
                 } else if index == 0 {
-                    ratio
+                    frame
+                        .relative()
+                        .flex_basis(relative(ratio as f32))
+                        .child(page_card(pane))
+                        .child(self.split_divider(ratio, cx))
                 } else {
-                    1.0 - ratio
-                };
-                pages = pages.child(
-                    div()
-                        .h_full()
-                        .min_w_0()
-                        .flex_basis(relative(width))
-                        .child(page_card(pane)),
-                );
+                    frame
+                        .flex_basis(relative(1.0 - ratio as f32))
+                        .child(page_card(pane))
+                });
             }
             if !self.overlay.is_open()
                 && !state.model.peeks.contains_key(&self.id)
@@ -1016,7 +956,10 @@ impl Render for Shell {
             panel.refresh(&self.state.borrow().downloads);
         }
         let overlay = match &self.overlay {
-            Overlay::None | Overlay::ContextMenu(_) | Overlay::Menu(_) => None,
+            Overlay::None
+            | Overlay::ContextMenu(_)
+            | Overlay::Menu(_)
+            | Overlay::FlechinhaAddress(_) => None,
             Overlay::Command(bar) => Some(self.command_panel(bar, cx)),
             Overlay::History(panel) => Some(self.history_panel(panel, cx)),
             Overlay::Settings(panel) => Some(self.settings_panel(panel, cx)),
@@ -1027,11 +970,12 @@ impl Render for Shell {
             Overlay::DeleteSpace(id) => Some(self.delete_space_panel(id, cx)),
             Overlay::Downloads(panel) => Some(self.downloads_panel(panel, cx)),
             Overlay::SiteControls => Some(self.site_controls_panel(cx)),
+            Overlay::About(about) => Some(self.about_panel(about, cx)),
         };
         if let Some(panel) = overlay {
             let placement = match self.overlay {
                 Overlay::Command(_) => Placement::Palette,
-                Overlay::DeleteSpace(_) => Placement::Dialog,
+                Overlay::DeleteSpace(_) | Overlay::About(_) => Placement::Dialog,
                 Overlay::Settings(_) | Overlay::History(_) => Placement::Page,
                 Overlay::Archive(_) | Overlay::Downloads(_) => Placement::SidebarFoot,
                 Overlay::SiteControls => Placement::SidebarTop(tokens::SITE_PANEL_TOP),
@@ -1154,6 +1098,9 @@ impl Render for Shell {
             main = main.child(self.menu_panel(menu, cx));
         }
         if let Some(drag) = self.sidebar_drag_layer() {
+            main = main.child(deferred(drag));
+        }
+        if let Some(drag) = self.split_drag_layer() {
             main = main.child(deferred(drag));
         }
         if let Some(dialog) = self.browser_dialog_panel(cx) {
@@ -1659,6 +1606,24 @@ pub(crate) fn danger_button(
     id: impl Into<gpui::ElementId>,
     name: impl Into<gpui::SharedString>,
 ) -> gpui::Stateful<Div> {
+    danger_frame(id).child(name.into())
+}
+
+/// `.text-button.danger` with an icon before its label (the site panel's Clear Site Data,
+/// ui/styles.css:2156-2167).
+pub(crate) fn danger_icon_button(
+    id: impl Into<gpui::ElementId>,
+    glyph: &'static str,
+    name: impl Into<gpui::SharedString>,
+) -> gpui::Stateful<Div> {
+    danger_frame(id)
+        .gap(px(tokens::SITE_FOOTER_BUTTON_GAP))
+        .ml(px(-tokens::SITE_FOOTER_BUTTON_GAP))
+        .child(icon(glyph, tokens::SITE_FOOTER_ICON, palette().red))
+        .child(name.into())
+}
+
+fn danger_frame(id: impl Into<gpui::ElementId>) -> gpui::Stateful<Div> {
     // Its red outranks `.text-button:hover`, which comes earlier in the file.
     div()
         .id(id)
@@ -1673,7 +1638,6 @@ pub(crate) fn danger_button(
         .text_color(palette().red)
         .cursor_pointer()
         .hover(|style| style.bg(palette().fill_hover))
-        .child(name.into())
 }
 
 /// The first `--font` family installed here. Without one the shipping shell lands on

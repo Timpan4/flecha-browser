@@ -3,11 +3,11 @@ use flecha_cef::{
     BrowserKey, ClipboardEdit, ContextMenuEvent, ContextMenuRequest, Disposition, FrameEdit,
     MenuContext, MenuFrame, Owner,
 };
-use flecha_core::{TabId, WindowId, suggestions::pinnable_address};
+use flecha_core::{SearchEngine, TabId, WindowId, suggestions::pinnable_address};
 use gpui::{
     App, ClickEvent, ClipboardItem, Context, InteractiveElement as _, IntoElement, MouseDownEvent,
-    ParentElement as _, Pixels, StatefulInteractiveElement as _, Styled as _, Window, deferred,
-    div, px,
+    ParentElement as _, Pixels, SharedString, StatefulInteractiveElement as _, Styled as _, Window,
+    deferred, div, px,
 };
 
 use crate::clipboard::Held;
@@ -21,7 +21,10 @@ use crate::{Action, Controller, dispatch};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Destination {
+    /// A tab behind the source, as a link's "Open link in new tab" opens.
     Tab,
+    /// A tab in front, as a search for the selection opens.
+    FrontTab,
     Peek,
     Incognito,
 }
@@ -29,37 +32,101 @@ pub(crate) enum Destination {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Item {
     Link(Destination),
+    SplitLink,
+    SaveLink,
     CopyLink,
     Image,
+    SaveImage,
     CopyImage,
+    CopyImageAddress,
     Edit(FrameEdit),
+    Search,
     Navigate(Navigation),
+    SavePage,
+    Print,
+    ViewSource,
     Inspect,
 }
 
-impl Item {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Link(Destination::Tab) => "Open link in new tab",
-            Self::Link(Destination::Peek) => "Peek link",
-            Self::Link(Destination::Incognito) => "Open link in Incognito",
-            Self::CopyLink => "Copy link address",
-            Self::Image => "Open image in new tab",
-            Self::CopyImage => "Copy image address",
-            Self::Edit(FrameEdit::Copy) => "Copy",
-            Self::Edit(FrameEdit::Cut) => "Cut",
-            Self::Edit(FrameEdit::Paste) => "Paste",
-            Self::Edit(FrameEdit::SelectAll) => "Select all",
-            Self::Navigate(Navigation::Back) => "Back",
-            Self::Navigate(Navigation::Forward) => "Forward",
-            Self::Navigate(Navigation::Reload) => "Reload",
-            Self::Navigate(_) => unreachable!(),
-            Self::Inspect => "Inspect element",
+/// The longest selection a Search row quotes (`kMaxSelectionTextLength` in Chromium's
+/// render_view_context_menu.cc).
+const SEARCH_LABEL_SELECTION: usize = 50;
+
+/// What the menu's rows depend on beyond the page: the search engine Search names, and whether
+/// the page is a Flecha window's tab, which alone can open a link in a split.
+#[derive(Clone, Copy)]
+pub(crate) struct MenuPlace {
+    engine: SearchEngine,
+    splits: bool,
+}
+
+impl MenuPlace {
+    fn of(state: &Controller, tab: &TabId) -> Self {
+        Self {
+            engine: state.model.core.settings.search_engine,
+            splits: matches!(state.engine.owner(tab), Some(Owner::Tab(_))),
         }
     }
 }
 
-fn items(context: &MenuContext) -> Vec<(Item, bool)> {
+impl Item {
+    /// The row's label, Chromium's own (chrome/app/generated_resources.grd).
+    fn label(self, context: &MenuContext, place: MenuPlace) -> SharedString {
+        SharedString::new_static(match self {
+            Self::Link(Destination::Tab | Destination::FrontTab) => "Open link in new tab",
+            Self::Link(Destination::Peek) => "Peek link",
+            Self::Link(Destination::Incognito) => "Open link in Incognito",
+            Self::SplitLink => "Open link in split view",
+            Self::SaveLink => "Save link as…",
+            Self::CopyLink => "Copy link address",
+            Self::Image => "Open image in new tab",
+            Self::SaveImage => "Save image as…",
+            Self::CopyImage => "Copy image",
+            Self::CopyImageAddress => "Copy image address",
+            Self::Edit(FrameEdit::Copy) => "Copy",
+            Self::Edit(FrameEdit::Cut) => "Cut",
+            Self::Edit(FrameEdit::Paste) => "Paste",
+            Self::Edit(FrameEdit::SelectAll) => "Select all",
+            Self::Search => {
+                return format!(
+                    "Search {} for “{}”",
+                    place.engine.name(),
+                    search_label_text(&context.selection_text)
+                )
+                .into();
+            }
+            Self::Navigate(Navigation::Back) => "Back",
+            Self::Navigate(Navigation::Forward) => "Forward",
+            Self::Navigate(Navigation::Reload) => "Reload",
+            Self::Navigate(_) => unreachable!(),
+            Self::SavePage => "Save as…",
+            Self::Print => "Print…",
+            Self::ViewSource => "View page source",
+            Self::Inspect => "Inspect element",
+        })
+    }
+}
+
+/// The selection as a Search row quotes it: on one line, and cut short with an ellipsis.
+fn search_label_text(selection: &str) -> String {
+    let line = selection.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut chars = line.chars();
+    let quoted: String = chars.by_ref().take(SEARCH_LABEL_SELECTION).collect();
+    if chars.next().is_some() {
+        format!("{quoted}…")
+    } else {
+        quoted
+    }
+}
+
+/// Whether Flecha can save or show the source of a page at `url`.
+fn saveable(url: &str) -> bool {
+    ["https:", "http:", "file:"]
+        .iter()
+        .any(|scheme| url.starts_with(scheme))
+}
+
+fn items(context: &MenuContext, place: MenuPlace) -> Vec<(Item, bool)> {
     let mut items = Vec::new();
     if !context.link_url.is_empty() {
         let navigable = pinnable_address(&context.link_url).is_some();
@@ -67,14 +134,24 @@ fn items(context: &MenuContext) -> Vec<(Item, bool)> {
             (Item::Link(Destination::Tab), navigable),
             (Item::Link(Destination::Peek), navigable),
             (Item::Link(Destination::Incognito), navigable),
+        ]);
+        if place.splits {
+            items.push((Item::SplitLink, navigable));
+        }
+        items.extend([
+            (Item::SaveLink, saveable(&context.link_url)),
             (Item::CopyLink, true),
         ]);
     }
     if !context.src_url.is_empty() {
-        items.extend([
-            (Item::CopyImage, true),
-            (Item::Image, pinnable_address(&context.src_url).is_some()),
-        ]);
+        items.push((Item::Image, pinnable_address(&context.src_url).is_some()));
+        if context.is_image {
+            items.extend([
+                (Item::SaveImage, saveable(&context.src_url)),
+                (Item::CopyImage, true),
+            ]);
+        }
+        items.push((Item::CopyImageAddress, true));
     }
     let selected = !context.selection_text.is_empty();
     if context.is_editable {
@@ -87,10 +164,18 @@ fn items(context: &MenuContext) -> Vec<(Item, bool)> {
         }
         items.push((Item::Edit(FrameEdit::SelectAll), true));
     }
+    // Chromium offers no search for a password field's selection, which it won't copy either.
+    if context.can_copy && !context.selection_text.trim().is_empty() {
+        items.push((Item::Search, true));
+    }
+    let page = saveable(&context.page_url);
     items.extend([
         (Item::Navigate(Navigation::Back), context.can_go_back),
         (Item::Navigate(Navigation::Forward), context.can_go_forward),
         (Item::Navigate(Navigation::Reload), true),
+        (Item::SavePage, page),
+        (Item::Print, true),
+        (Item::ViewSource, page),
         (Item::Inspect, true),
     ]);
     items
@@ -158,13 +243,16 @@ impl Controller {
             .model
             .partition(source)
             .context("The source page has closed")?;
+        // Placed as a background link, so a pinned tab's search opens a tab rather than Peek.
+        let in_tab = matches!(target, Destination::Tab | Destination::FrontTab);
         let window = match place(&self.model, &owner, source, Disposition::BackgroundTab) {
             Place::Tab {
                 window,
                 after,
                 activate,
             } => {
-                if target == Destination::Tab {
+                if in_tab {
+                    let activate = activate || target == Destination::FrontTab;
                     self.model
                         .open_page(tab_id(), &window, url, after.as_ref(), activate)?;
                     if matches!(owner, Owner::Flechinha(_) | Owner::Popup(_)) {
@@ -175,7 +263,7 @@ impl Controller {
                 window
             }
             Place::Nowhere => {
-                if target == Destination::Tab {
+                if in_tab {
                     self.front = Some(self.model.open_window_page(tab_id(), url, &partition)?);
                     return Ok(());
                 }
@@ -226,9 +314,12 @@ impl Shell {
         let Overlay::ContextMenu(request) = &self.overlay else {
             anyhow::bail!("no page menu is open");
         };
-        items(&request.context)
+        let place = MenuPlace::of(&self.state.borrow(), &request.id.key.tab);
+        items(&request.context, place)
             .into_iter()
-            .find_map(|(item, enabled)| (enabled && item.label() == label).then_some(item))
+            .find_map(|(item, enabled)| {
+                (enabled && item.label(&request.context, place) == label).then_some(item)
+            })
             .with_context(|| format!("the page menu has no enabled {label} row"))
     }
 
@@ -261,8 +352,39 @@ impl Shell {
                 request.context.src_url.clone(),
                 Destination::Tab,
             )),
+            Item::SplitLink => Some(Action::SplitNew(request.context.link_url.clone())),
+            Item::Search => {
+                let engine = self.state.borrow().model.core.settings.search_engine;
+                Some(Action::OpenContext(
+                    id.key.tab.clone(),
+                    engine.search_url(request.context.selection_text.trim()),
+                    Destination::FrontTab,
+                ))
+            }
             Item::Navigate(nav) => Some(Action::Browser(nav)),
-            Item::CopyLink | Item::CopyImage => {
+            Item::Print => Some(Action::Print),
+            Item::ViewSource => Some(Action::ViewSource),
+            Item::SaveLink | Item::SaveImage | Item::SavePage | Item::CopyImage => {
+                let context = &request.context;
+                let mut state = self.state.borrow_mut();
+                let tab = &id.key.tab;
+                let done = match item {
+                    Item::SaveLink => state.engine.save_as(tab, &context.link_url),
+                    Item::SaveImage => state.engine.save_as(tab, &context.src_url),
+                    // Saved from the network again, not from the page as it stands.
+                    Item::SavePage => state.engine.save_as(tab, &context.page_url),
+                    _ => state.engine.copy_image(tab, &context.src_url),
+                };
+                if let Err(error) = done {
+                    let session = state
+                        .model
+                        .partition(tab)
+                        .and_then(|partition| partition.incognito_session());
+                    state.status.set(session, format!("{error:#}"));
+                }
+                None
+            }
+            Item::CopyLink | Item::CopyImageAddress => {
                 let url = if item == Item::CopyLink {
                     &request.context.link_url
                 } else {
@@ -363,7 +485,8 @@ impl Shell {
             px(tokens::MENU_ITEM_PAD_Y * 2. + tokens::TEXT_MD * tokens::LINE_HEIGHT);
         const PADDING: Pixels = px(tokens::MENU_PAD);
         const BORDER: Pixels = px(0.);
-        let rows = items(&menu.context);
+        let place = MenuPlace::of(&self.state.borrow(), &menu.id.key.tab);
+        let rows = items(&menu.context, place);
         let viewport = window.viewport_size();
         let width = WIDTH.min(viewport.width);
         let height = (ROW * rows.len() as f32 + (PADDING + BORDER) * 2.).min(viewport.height);
@@ -396,9 +519,10 @@ impl Shell {
                         .text_color(palette().text)
                         .shadow(palette().shadow_pop())
                         .children(rows.into_iter().map(|(item, enabled)| {
-                            let label = item.label();
+                            let label = item.label(&menu.context, place);
                             if enabled {
-                                menu_item(label, label)
+                                menu_item(label.clone(), label)
+                                    .truncate()
                                     .h(ROW)
                                     .on_click(cx.listener(
                                         move |this, _: &ClickEvent, window, cx| {
@@ -431,14 +555,21 @@ mod tests {
         use FrameEdit::*;
         use Item::*;
         use Navigation::*;
+        let tab = MenuPlace {
+            engine: SearchEngine::Google,
+            splits: true,
+        };
         let default = MenuContext::default();
         let baseline = [
             (Navigate(Back), false),
             (Navigate(Forward), false),
             (Navigate(Reload), true),
+            (SavePage, false),
+            (Print, true),
+            (ViewSource, false),
             (Inspect, true),
         ];
-        assert_eq!(items(&default), baseline);
+        assert_eq!(items(&default, tab), baseline);
         for (context, expected) in [
             (
                 MenuContext {
@@ -449,6 +580,22 @@ mod tests {
                     (Link(Tab), true),
                     (Link(Peek), true),
                     (Link(Incognito), true),
+                    (SplitLink, true),
+                    (SaveLink, true),
+                    (CopyLink, true),
+                ],
+            ),
+            (
+                MenuContext {
+                    link_url: "javascript:void(0)".into(),
+                    ..MenuContext::default()
+                },
+                vec![
+                    (Link(Tab), false),
+                    (Link(Peek), false),
+                    (Link(Incognito), false),
+                    (SplitLink, false),
+                    (SaveLink, false),
                     (CopyLink, true),
                 ],
             ),
@@ -458,7 +605,7 @@ mod tests {
                     can_copy: true,
                     ..MenuContext::default()
                 },
-                vec![(Edit(Copy), true), (Edit(SelectAll), true)],
+                vec![(Edit(Copy), true), (Edit(SelectAll), true), (Search, true)],
             ),
             (
                 MenuContext {
@@ -473,9 +620,10 @@ mod tests {
                     (Edit(Copy), true),
                     (Edit(Paste), true),
                     (Edit(SelectAll), true),
+                    (Search, true),
                 ],
             ),
-            // Chromium refuses to copy or cut a password field's selection.
+            // Chromium refuses to copy or cut a password field's selection, or search for it.
             (
                 MenuContext {
                     is_editable: true,
@@ -501,23 +649,97 @@ mod tests {
                     (Edit(SelectAll), true),
                 ],
             ),
+            // A video's or audio's source has no image rows.
+            (
+                MenuContext {
+                    src_url: "https://example.org/clip.webm".into(),
+                    ..MenuContext::default()
+                },
+                vec![(Image, true), (CopyImageAddress, true)],
+            ),
             (
                 MenuContext {
                     src_url: "https://example.org/image.png".into(),
+                    is_image: true,
                     ..MenuContext::default()
                 },
-                vec![(CopyImage, true), (Image, true)],
+                vec![
+                    (Image, true),
+                    (SaveImage, true),
+                    (CopyImage, true),
+                    (CopyImageAddress, true),
+                ],
             ),
         ] {
-            assert_eq!(items(&context), [expected.as_slice(), &baseline].concat());
+            assert_eq!(
+                items(&context, tab),
+                [expected.as_slice(), &baseline].concat()
+            );
         }
         assert_eq!(
-            items(&MenuContext {
-                can_go_back: true,
-                can_go_forward: true,
-                ..default
-            })[..2],
+            items(
+                &MenuContext {
+                    can_go_back: true,
+                    can_go_forward: true,
+                    ..MenuContext::default()
+                },
+                tab
+            )[..2],
             [(Navigate(Back), true), (Navigate(Forward), true)]
+        );
+        // A web page can be saved and its source shown.
+        let page = MenuContext {
+            page_url: "https://example.org/".into(),
+            ..MenuContext::default()
+        };
+        assert!(items(&page, tab).contains(&(SavePage, true)));
+        assert!(items(&page, tab).contains(&(ViewSource, true)));
+        // Only a Flecha window's tab opens a link in a split.
+        let link = MenuContext {
+            link_url: "https://example.org/".into(),
+            ..MenuContext::default()
+        };
+        let elsewhere = MenuPlace {
+            splits: false,
+            ..tab
+        };
+        assert!(
+            !items(&link, elsewhere)
+                .iter()
+                .any(|(item, _)| *item == SplitLink)
+        );
+    }
+
+    #[test]
+    fn the_search_row_names_the_engine_and_quotes_the_selection_on_one_line() {
+        let place = MenuPlace {
+            engine: SearchEngine::Google,
+            splits: true,
+        };
+        let label = |selection: &str| {
+            Item::Search.label(
+                &MenuContext {
+                    selection_text: selection.into(),
+                    ..MenuContext::default()
+                },
+                place,
+            )
+        };
+        assert_eq!(
+            label("  rust\n  borrow checker "),
+            format!(
+                "Search {} for “rust borrow checker”",
+                SearchEngine::Google.name()
+            )
+        );
+        let long = "a".repeat(SEARCH_LABEL_SELECTION + 10);
+        assert_eq!(
+            label(&long),
+            format!(
+                "Search {} for “{}…”",
+                SearchEngine::Google.name(),
+                "a".repeat(SEARCH_LABEL_SELECTION)
+            )
         );
     }
 

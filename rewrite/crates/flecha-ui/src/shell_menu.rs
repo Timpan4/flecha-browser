@@ -34,6 +34,7 @@ pub(crate) enum Run {
     EditSpace(SpaceId),
     NewFolder(SpaceId),
     DeleteSpace(SpaceId),
+    About,
 }
 
 pub(crate) enum Entry {
@@ -149,6 +150,7 @@ pub(crate) fn window_entries(incognito: bool, bindings: &Keybindings) -> Vec<Ent
                 ),
             ],
         },
+        shortcut("Print…", Shortcut::Print, fixed("CmdOrCtrl+P")),
         shortcut("Developer tools", Shortcut::DevTools, keys("devTools")),
         Entry::Separator,
         shortcut(
@@ -161,6 +163,15 @@ pub(crate) fn window_entries(incognito: bool, bindings: &Keybindings) -> Vec<Ent
             Shortcut::Command(Command::OpenSettings),
             keys("settings"),
         ),
+        Entry::Submenu {
+            label: "Help".into(),
+            entries: vec![shortcut(
+                "Keyboard shortcuts",
+                Shortcut::SettingsTab(SettingsTab::Shortcuts),
+                keys("shortcuts"),
+            )],
+        },
+        Entry::item("About Flecha", Run::About, String::new()),
         Entry::Separator,
         shortcut("Quit Flecha", Shortcut::Quit, keys("quit")),
     ]);
@@ -238,6 +249,7 @@ impl Shell {
             Run::EditSpace(id) => self.open_space_editor(&id, window, cx),
             Run::NewFolder(id) => self.new_folder_in(&id, window, cx),
             Run::DeleteSpace(id) => self.confirm_delete_space(&id, window, cx),
+            Run::About => self.open_about(window, cx),
         }
         cx.notify();
     }
@@ -455,14 +467,8 @@ mod tests {
     const OMITTED: &[&str] = &[
         // No extensions in the rewrite.
         "Extensions",
-        // CEF prints from an off-screen browser only through a CefPrintHandler, which the
-        // rewrite does not have on Linux.
-        "Print…",
-        // No help pages and no About page in the rewrite.
-        "Help",
-        "Keyboard shortcuts",
+        // Shipping opens the upstream project's page, which is not this fork's.
         "Flecha help",
-        "About Flecha",
     ];
     /// Rows the rewrite adds: the archive, which the shipping shell reaches from its sidebar.
     const ADDED: &[&str] = &["Archive"];
@@ -514,8 +520,6 @@ mod tests {
             .into_iter()
             .filter(|label| !OMITTED.contains(&label.as_str()))
             .collect();
-        // A separator left without rows after it (the omitted Help and About) goes too.
-        expected.dedup_by(|a, b| a == "-" && b == "-");
         let history = expected
             .iter()
             .position(|label| label == "History")

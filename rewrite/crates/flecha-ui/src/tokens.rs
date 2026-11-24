@@ -233,6 +233,12 @@ pub(crate) const SHADOWS: &[Css] = &[
         "inset 0 0 0 0.5px rgba(0, 0, 0, 0.12)",
     ),
     both("main", SETTINGS, 141, "inset 0.5px 0 0 var(--card-line)"),
+    both(
+        "#address.editing",
+        FLECHINHA,
+        138,
+        "inset 0 0 0 1px var(--focus), 0 1px 2px rgba(11, 37, 69, 0.08)",
+    ),
 ];
 
 /// One size or timing of a shipping rule: its value, and the declaration it comes from.
@@ -415,6 +421,20 @@ cited! {
     MINI_SELECT = 24., STYLES: 2114 "height: 24px";
     MINI_SELECT_PAD = 6., STYLES: 2115 "padding: 0 6px";
     ZOOM_VALUE = 24., STYLES: 2143 "height: 24px";
+    /// The column the site panel's controls share on the right (`--control`).
+    SITE_CONTROL = 76., STYLES: 1965 "--control: 76px";
+    SITE_ACTIONS_GAP = 6., STYLES: 2010 "gap: 6px";
+    SITE_ACTION_GAP = 8., STYLES: 2018 "gap: 8px";
+    SITE_ACTION = 32., STYLES: 2019 "height: 32px";
+    SITE_ACTION_PAD = 10., STYLES: 2021 "padding: 0 10px";
+    SITE_ACTION_ICON = 14., STYLES: 2037 "width: 14px";
+    ZOOM_STEP = 22., STYLES: 2125 "grid-template-columns: 22px 1fr 22px";
+    ZOOM_STEP_ICON = 12., STYLES: 2138 "width: 12px";
+    SITE_FOOTER_MARGIN = 6., STYLES: 2153 "margin-top: 6px";
+    SITE_FOOTER_PAD_TOP = 8., STYLES: 2154 "padding: 8px var(--inset) 10px";
+    SITE_FOOTER_PAD_BOTTOM = 10., STYLES: 2154 "padding: 8px var(--inset) 10px";
+    SITE_FOOTER_BUTTON_GAP = 6., STYLES: 2160 "gap: 6px";
+    SITE_FOOTER_ICON = 13., STYLES: 2165 "width: 13px";
 
     // Peek.
     PILL_GAP = 6., STYLES: 1193 "gap: 6px";
@@ -535,6 +555,28 @@ cited! {
     FLECHINHA_CTA_PAD_LEFT = 10., FLECHINHA: 329 "padding: 0 12px 0 10px";
     FLECHINHA_CTA_PAD_RIGHT = 12., FLECHINHA: 329 "padding: 0 12px 0 10px";
     FLECHINHA_ADDRESS_MARGIN = 6., FLECHINHA: 122 "margin: 0 6px";
+    FLECHINHA_ADDRESS_PAD_RIGHT = 2., FLECHINHA: 123 "padding-right: 2px";
+    FLECHINHA_ADDRESS_SHOW_PAD_RIGHT = 4., FLECHINHA: 148 "padding: 0 4px 0 10px";
+    FLECHINHA_ADDRESS_SHOW_PAD_LEFT = 10., FLECHINHA: 148 "padding: 0 4px 0 10px";
+    FLECHINHA_SITE_ICON = 16., FLECHINHA: 161 "width: 16px";
+    FLECHINHA_SITE_ICON_RADIUS = 3., FLECHINHA: 170 "border-radius: 3px";
+    FLECHINHA_SITE_GLYPH = 14., FLECHINHA: 174 "width: 14px";
+    /// The host's widest share of the address, in percent.
+    FLECHINHA_HOST_MAX_WIDTH = 60., FLECHINHA: 184 "max-width: 60%";
+    FLECHINHA_EDIT_PAD_RIGHT = 8., FLECHINHA: 215 "padding: 0 8px 0 10px";
+    FLECHINHA_ADDRESS_ACTION = 26., FLECHINHA: 244 "width: 26px";
+    FLECHINHA_ADDRESS_ACTION_ICON = 15., FLECHINHA: 264 "width: 15px";
+    /// The page title's `—` before it, in `--text-3` at this opacity.
+    FLECHINHA_TITLE_DASH_GAP = 6., FLECHINHA: 202 "margin-right: 6px";
+    FLECHINHA_TITLE_DASH_OPACITY = 0.6, FLECHINHA: 204 "opacity: 0.6";
+    FLECHINHA_DISABLED_OPACITY = 0.55, FLECHINHA: 109 "opacity: 0.55";
+    /// The loading line along the address's bottom.
+    FLECHINHA_LOADING = 2., FLECHINHA: 278 "height: 2px";
+    /// Its share of the address, in percent, how far right it travels in percent of its own
+    /// width, and how long one pass takes.
+    FLECHINHA_LOADING_WIDTH = 30., FLECHINHA: 279 "width: 30%";
+    FLECHINHA_LOADING_TRAVEL = 340., FLECHINHA: 291 "translateX(340%)";
+    FLECHINHA_LOADING_SECONDS = 1.1, FLECHINHA: 282 "loading 1.1s";
 
     // The page area the browser frame lays out (chromium/patches).
     PAGE_GAP = 8., FRAME_API: 69 "kFlechaGap = 8";
@@ -744,7 +786,7 @@ pub(crate) fn parse_shadow(value: &str, dark: bool) -> Option<Vec<BoxShadow>> {
     Some(layers)
 }
 
-static SHADOW_CACHE: LazyLock<[[Vec<BoxShadow>; 2]; 8]> = LazyLock::new(|| {
+static SHADOW_CACHE: LazyLock<[[Vec<BoxShadow>; 2]; 9]> = LazyLock::new(|| {
     let both = |name| {
         [false, true].map(|dark| {
             let value = css(SHADOWS, name, dark);
@@ -760,8 +802,14 @@ static SHADOW_CACHE: LazyLock<[[Vec<BoxShadow>; 2]; 8]> = LazyLock::new(|| {
         both(".button"),
         both(".nav-icon"),
         both("main"),
+        both("#address.editing"),
     ]
 });
+
+/// A Flechinha address being edited: the focus ring and a slight lift.
+pub(crate) fn shadow_address_editing(dark: bool) -> Vec<BoxShadow> {
+    SHADOW_CACHE[8][usize::from(dark)].clone()
+}
 
 /// `--shadow-row`: the selected row's lift.
 pub(crate) fn shadow_row(dark: bool) -> Vec<BoxShadow> {

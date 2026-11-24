@@ -234,6 +234,26 @@ impl TextField {
         field.child(self.render_line(0..self.text.len()))
     }
 
+    /// The field's line without a box of its own, for a control that draws the box around it,
+    /// as Flechinha's address does around `#address-input` (ui/flechinha.css:224-238).
+    pub(crate) fn render_inline(&self, placeholder: &'static str) -> Div {
+        let field = div()
+            .flex()
+            .flex_1()
+            .items_center()
+            .min_w_0()
+            .h_full()
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .text_color(palette().text);
+        if self.text.is_empty() {
+            return field
+                .child(caret())
+                .child(div().text_color(palette().text_3).child(placeholder));
+        }
+        field.child(self.render_line(0..self.text.len()))
+    }
+
     fn render_line(&self, line: Range<usize>) -> Div {
         let selection = self.selection();
         let start = selection.start.clamp(line.start, line.end);

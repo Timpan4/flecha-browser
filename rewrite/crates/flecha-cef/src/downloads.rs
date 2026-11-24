@@ -15,7 +15,7 @@
 //! [`Downloads`] never touches one: it returns [`Act`]s, which [`run`] carries out once the
 //! `RefCell` borrow has ended. That covers releasing a callback too.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
 
@@ -303,6 +303,8 @@ pub(crate) struct Downloads {
     /// Where each incognito session last answered a save dialog. It lives as long as the session
     /// and never becomes the regular folder.
     prompt_folders: BTreeMap<IncognitoSession, PathBuf>,
+    /// Addresses a tab's "Save … as" asked for, which ask where to save once when they arrive.
+    save_as: BTreeSet<(TabId, String)>,
 }
 
 fn same(browser: &Weak<Slot>, slot: &Slot) -> bool {
@@ -451,6 +453,12 @@ impl Downloads {
             .filter_map(|url| Url::parse(url).ok())
             .collect();
         let initiator = offer.initiator.and_then(|url| Url::parse(url).ok());
+        let save_as = browser.upgrade().is_some_and(|slot| {
+            let tab = slot.key.borrow().tab.clone();
+            [offer.url, offer.original_url]
+                .into_iter()
+                .any(|url| self.save_as.remove(&(tab.clone(), url.to_owned())))
+        });
         #[cfg(unix)]
         let max_name_length = flecha_downloads::name_max(&config.settings.folder);
         #[cfg(not(unix))]
@@ -464,7 +472,7 @@ impl Downloads {
                 },
                 settings: &config.settings,
                 last_prompt_folder: self.prompt_folder(self.handle_session(handle)),
-                save_as: false,
+                save_as,
                 max_name_length,
                 started: offer.started,
                 danger: DANGER,
@@ -810,6 +818,8 @@ impl Downloads {
 
     /// `browser` closed: cancel what it started, as CEF does with a destroyed browser's items.
     pub fn browser_closed(&mut self, browser: &Slot) -> Vec<Act> {
+        let tab = browser.key.borrow().tab.clone();
+        self.save_as.retain(|(asked, _)| *asked != tab);
         let mut acts = Vec::new();
         let waiting: Vec<_> = self
             .waiting
@@ -868,9 +878,27 @@ impl Downloads {
     pub fn is_idle(&self) -> bool {
         self.waiting.is_empty() && self.items.is_empty() && self.handles.is_empty()
     }
+
+    /// The next download of `url` from `tab` asks where to save, as Chromium's "Save … as" does.
+    fn ask_where_to_save(&mut self, tab: TabId, url: &str) {
+        self.save_as.insert((tab, url.to_owned()));
+    }
 }
 
 impl crate::Engine {
+    /// Downloads `url` from the tab's page and asks where to save it ("Save link as…", "Save
+    /// image as…", "Save as…"). A page saves as the file its address serves.
+    pub fn save_as(&self, tab: &TabId, url: &str) -> anyhow::Result<()> {
+        use anyhow::Context as _;
+        let host = self.host(tab).context("The page has closed")?;
+        self.services()
+            .downloads
+            .borrow_mut()
+            .ask_where_to_save(tab.clone(), url);
+        host.start_download(Some(&CefString::from(url)));
+        Ok(())
+    }
+
     /// The folder and prompt settings downloads follow. `None` refuses every download.
     pub fn set_download_config(&self, config: Option<DownloadConfig>) {
         self.services().downloads.borrow_mut().config = config;
@@ -1279,6 +1307,56 @@ mod tests {
         });
         downloads.name(offer.handle.0, offer.handle);
         settle(downloads.before(browser, offer, proceed, |_| false))
+    }
+
+    #[test]
+    fn save_as_asks_where_once_for_its_own_tab() {
+        let mut downloads = downloads(false);
+        let log = Log::default();
+        let slots = crate::tests::slots(&["page", "other"]);
+        let url = "https://files.example/report.pdf";
+        downloads.ask_where_to_save(TabId::new("page"), url);
+
+        // Another tab's download of the same address saves without asking.
+        let events = before(
+            &mut downloads,
+            &log,
+            offer(1, url, "https://files.example/"),
+            Rc::downgrade(&slots[1]),
+        );
+        assert!(matches!(events[..], [DownloadEvent::Started { .. }]));
+
+        let events = before(
+            &mut downloads,
+            &log,
+            offer(2, url, "https://files.example/"),
+            Rc::downgrade(&slots[0]),
+        );
+        assert!(
+            matches!(
+                &events[..],
+                [DownloadEvent::AskPath {
+                    handle: DownloadHandle(2),
+                    reason: AskReason::SaveAs,
+                    ..
+                }]
+            ),
+            "{events:?}"
+        );
+
+        // The request is used up: the next download of the address saves without asking.
+        let events = before(
+            &mut downloads,
+            &log,
+            offer(3, url, "https://files.example/"),
+            Rc::downgrade(&slots[0]),
+        );
+        assert!(matches!(events[..], [DownloadEvent::Started { .. }]));
+
+        // A closed browser's pending request goes with it.
+        downloads.ask_where_to_save(TabId::new("other"), url);
+        settle(downloads.browser_closed(&slots[1]));
+        assert!(downloads.save_as.is_empty());
     }
 
     #[test]

@@ -70,6 +70,8 @@ pub(crate) enum Shortcut {
     SelectSpace(usize),
     NewSpace,
     ExitSplit,
+    /// Opens or closes the phone-sized mirror beside the shown tab.
+    Responsive,
     // The command bar's actions without a key of their own.
     EditSpace,
     Archive,
@@ -210,6 +212,7 @@ pub(crate) fn shortcut_for_id(id: &str) -> Option<Shortcut> {
         "previousSpace" => Shortcut::StepSpace(true),
         "newSpace" => Shortcut::NewSpace,
         "exitSplit" => Shortcut::ExitSplit,
+        "responsive" => Shortcut::Responsive,
         "viewSource" => Shortcut::ViewSource,
         id => {
             if let Some(number) = id.strip_prefix("selectSpace:") {
@@ -284,17 +287,23 @@ impl Controller {
         }
         self.pending_reloads
             .retain(|_, key| self.engine.key(&key.tab).as_ref() == Some(key));
-        self.toolbars.retain(|id, _| self.model.state(id).is_some());
-        for window in self
+        self.toolbars.retain(|id, _| {
+            self.model.state(id).is_some() || self.model.flechinhas.contains_key(id)
+        });
+        // Flecha windows' toolbars, and Flechinha's own (ui/flechinha.html).
+        let windows: Vec<WindowId> = self
             .model
             .core
             .windows()
             .iter()
             .chain(self.model.incognito_windows())
-        {
+            .map(|window| window.id.clone())
+            .chain(self.model.flechinhas.keys().cloned())
+            .collect();
+        for window in windows {
             let next =
                 self.model
-                    .keyboard_pane(&window.id)
+                    .keyboard_pane(&window)
                     .map_or_else(Toolbar::default, |(_, tab)| Toolbar {
                         back: self.engine.can_go_back(tab),
                         forward: self.engine.can_go_forward(tab),
@@ -307,11 +316,11 @@ impl Controller {
                             .filter(|value| *value != 100),
                         blocked: self.engine.blocked_count(tab),
                     });
-            if let Some(current) = self.toolbars.get_mut(&window.id) {
+            if let Some(current) = self.toolbars.get_mut(&window) {
                 changed |= *current != next;
                 *current = next;
             } else {
-                self.toolbars.insert(window.id.clone(), next);
+                self.toolbars.insert(window, next);
                 changed = true;
             }
         }
@@ -348,6 +357,14 @@ impl Controller {
     }
 
     pub(crate) fn navigate_tab(&mut self, window: &WindowId, url: String) -> anyhow::Result<()> {
+        // A Flechinha's address bar loads its own page.
+        if let Some(page) = self.model.flechinhas.get_mut(window) {
+            if page.tab.url != url && !self.engine.navigate(&page.id, &url) {
+                page.tab.title.clone_from(&url);
+                page.tab.url = url;
+            }
+            return Ok(());
+        }
         let Some(id) = self.model.active(window).cloned() else {
             self.model.open(window, url, true)?;
             return Ok(());
@@ -391,7 +408,7 @@ impl Shell {
         )
     }
 
-    fn zoom(&self, action: PageZoom, cx: &mut Context<Self>) -> bool {
+    pub(crate) fn zoom(&self, action: PageZoom, cx: &mut Context<Self>) -> bool {
         let Some(key) = self.active_browser() else {
             return false;
         };
@@ -471,6 +488,7 @@ impl Shell {
                 Overlay::SpaceEditor(..) => self.space_editor_key(stroke, window, cx),
                 Overlay::Settings(_) => self.settings_key(stroke, cx),
                 Overlay::Downloads(_) => self.downloads_key(stroke, cx),
+                Overlay::FlechinhaAddress(_) => self.flechinha_address_key(stroke, window, cx),
                 _ => {}
             }
             cx.stop_propagation();
@@ -514,6 +532,15 @@ impl Shell {
                 return true;
             }
             Shortcut::Escape if self.find.is_some() && !self.overlay.is_open() => return false,
+            // A Flechinha edits its own address and copies its own page's (ui/flechinhaApi.ts).
+            Shortcut::Command(Command::EditLocation) if self.edit_flechinha_address(window, cx) => {
+                return true;
+            }
+            Shortcut::CopyLink(false)
+                if self.state.borrow().model.flechinhas.contains_key(&self.id) =>
+            {
+                return self.copy_link(cx);
+            }
             Shortcut::Command(command) => return self.open_command(command, window, cx),
             Shortcut::SettingsTab(tab) => return self.toggle_settings(tab, window, cx),
             Shortcut::History if self.state.borrow().model.core.window(&self.id).is_some() => {
@@ -654,6 +681,7 @@ impl Shell {
             }
             Shortcut::ClearToday => Action::ClearToday,
             Shortcut::ExitSplit => Action::ExitSplit,
+            Shortcut::Responsive => Action::ToggleResponsive,
             Shortcut::StepSpace(back) => {
                 let count = shown.spaces.len();
                 let Some(index) = shown.spaces.iter().position(|id| *id == shown.space) else {
@@ -694,6 +722,8 @@ pub(crate) struct ShownWindow {
     space: flecha_core::SpaceId,
     spaces: Vec<flecha_core::SpaceId>,
     split: bool,
+    /// Whether the split is the responsive view's.
+    responsive: bool,
 }
 
 impl ShownWindow {
@@ -723,6 +753,13 @@ impl ShownWindow {
             space: current.active_space_id.clone(),
             spaces: core.spaces().iter().map(|space| space.id.clone()).collect(),
             split: current.visible_tabs().len() > 1,
+            responsive: current
+                .spaces
+                .get(&current.active_space_id)
+                .is_some_and(|space| {
+                    space.split.is_some()
+                        && space.split_mode == Some(flecha_core::SplitMode::Responsive)
+                }),
         })
     }
 
@@ -745,6 +782,8 @@ impl ShownWindow {
             | Shortcut::CopyLink(_)
             | Shortcut::Browser(_)
             | Shortcut::DevTools => self.tab.is_some(),
+            // The mirror closes from a responsive split, and opens beside the shown tab.
+            Shortcut::Responsive => self.responsive || self.tab.is_some(),
             Shortcut::ViewSource => self.web_page,
             Shortcut::ExitSplit => self.split,
             _ => true,
@@ -780,6 +819,7 @@ fn runs_once(shortcut: Shortcut) -> bool {
             | Shortcut::CopyLink(_)
             | Shortcut::NewSpace
             | Shortcut::ExitSplit
+            | Shortcut::Responsive
             | Shortcut::ViewSource
             | Shortcut::EditSpace
             | Shortcut::Archive
@@ -883,6 +923,7 @@ mod tests {
             "previousSpace",
             "newSpace",
             "exitSplit",
+            "responsive",
             "viewSource",
         ] {
             assert!(has_action(id), "{id}");

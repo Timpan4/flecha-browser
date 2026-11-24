@@ -9,6 +9,7 @@ publish.workspace = true
 anyhow.workspace = true
 async-channel = "2"
 async-io = "2"
+base64 = "0.23"
 cef.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 flecha-adblock = { path = "../flecha-adblock" }

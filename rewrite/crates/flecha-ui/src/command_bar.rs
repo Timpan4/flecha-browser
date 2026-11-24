@@ -630,6 +630,13 @@ pub(crate) const ACTIONS: &[BarAction] = &[
         Shortcut::Command(Command::OpenSettings),
     ),
     bar_action(
+        "Responsive View",
+        "mobile phone responsive device split",
+        "phone",
+        Some("responsive"),
+        Shortcut::Responsive,
+    ),
+    bar_action(
         "Toggle Sidebar",
         "sidebar hide show",
         "sidebar",
