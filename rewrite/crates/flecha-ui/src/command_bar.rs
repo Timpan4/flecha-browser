@@ -441,28 +441,69 @@ impl CommandMatches {
             .is_some_and(|latest| Arc::ptr_eq(latest, request))
     }
 
+    /// Shows `previous`'s search suggestions until this query's own answer replaces them, so the
+    /// list keeps its height while typing. Only a query that will be answered keeps them: one
+    /// that asks nothing (empty, an address, private, suggestions off) or asks another engine
+    /// shows its local rows alone.
+    fn keep_remote(&mut self, previous: &CommandMatches) {
+        if self.request.is_none() || previous.engine != self.engine {
+            return;
+        }
+        let kept = previous
+            .remote()
+            .filter(|row| !self.rows.iter().any(|local| local.target == row.target))
+            .map(|row| remote_row(row.label.clone(), row.target.clone()))
+            .collect::<Vec<_>>();
+        let insert = self.rows.partition_point(|row| row.score > REMOTE_SCORE);
+        self.rows.splice(insert..insert, kept);
+    }
+
+    fn remote(&self) -> impl Iterator<Item = &Suggestion> {
+        self.rows.iter().filter(|row| row.kind == REMOTE_KIND)
+    }
+
+    /// Replaces the suggestions shown so far with `request`'s answer, if it is still the query's.
+    /// A selection the arrows moved stays on its row, or at its place when that row was replaced.
     fn complete(&mut self, request: &Arc<SuggestionRequest>, terms: Vec<String>) -> bool {
         if !self.expects(request) {
             return false;
         }
         self.request = None;
+        let selected = self
+            .selection_moved
+            .then(|| self.rows.get(self.selected).map(|row| row.target.clone()))
+            .flatten();
+        self.rows.retain(|row| row.kind != REMOTE_KIND);
         let insert = self.rows.partition_point(|row| row.score > REMOTE_SCORE);
-        if self.selection_moved && self.selected >= insert && self.selected < self.rows.len() {
-            self.selected += terms.len();
-        }
         let engine = request.engine;
         self.rows.splice(
             insert..insert,
-            terms.into_iter().map(|term| Suggestion {
-                target: Target::Search(engine.search_url(&term)),
-                label: term,
-                detail: String::new(),
-                kind: "Search suggestion",
-                score: REMOTE_SCORE,
-                recency: 0,
+            terms.into_iter().map(|term| {
+                let target = Target::Search(engine.search_url(&term));
+                remote_row(term, target)
             }),
         );
+        if let Some(target) = selected {
+            self.selected = self
+                .rows
+                .iter()
+                .position(|row| row.target == target)
+                .unwrap_or(self.selected.min(self.rows.len().saturating_sub(1)));
+        }
         true
+    }
+}
+
+const REMOTE_KIND: &str = "Search suggestion";
+
+fn remote_row(label: String, target: Target) -> Suggestion {
+    Suggestion {
+        target,
+        label,
+        detail: String::new(),
+        kind: REMOTE_KIND,
+        score: REMOTE_SCORE,
+        recency: 0,
     }
 }
 
@@ -490,8 +531,11 @@ impl CommandBar {
         let Some(sources) = state.command_sources(window) else {
             return;
         };
-        self.matches =
-            CommandMatches::for_window(state, sources, window, &self.typed, may_complete);
+        let previous = std::mem::replace(
+            &mut self.matches,
+            CommandMatches::for_window(state, sources, window, &self.typed, may_complete),
+        );
+        self.matches.keep_remote(&previous);
         self.show_selected_completion();
         self.scroll.scroll_to_item(0);
     }
