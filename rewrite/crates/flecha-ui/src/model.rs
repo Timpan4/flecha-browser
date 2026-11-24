@@ -167,6 +167,16 @@ impl Model {
         Ok(window)
     }
 
+    /// A new regular window showing `space` ("Open in New Window", background.ts:1172).
+    pub(crate) fn open_space_window(&mut self, space: &SpaceId) -> Result<WindowId> {
+        let window = window_id();
+        ensure!(
+            self.core.open_window(window.clone(), Some(space)),
+            "could not open window"
+        );
+        Ok(window)
+    }
+
     /// The incognito windows, while a session lasts.
     pub(crate) fn incognito_windows(&self) -> &[flecha_core::Window] {
         self.incognito

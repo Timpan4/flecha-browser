@@ -23,7 +23,7 @@ use crate::text_field::TextField;
 use crate::theme::palette;
 use crate::tokens;
 use crate::view::{
-    Overlay, Shell, hairline, icon_button, icon_square, is_dev_url, kbd, letter_favicon, menu_item,
+    Overlay, Shell, hairline, icon_button, icon_square, is_dev_url, kbd, letter_favicon,
     overlay_panel, primary_button, site, sized_icon_button, text_button, tinted_icon_button,
 };
 use crate::window_chrome::TitleBar;
@@ -671,17 +671,7 @@ impl Shell {
             .when(!incognito, |sidebar| {
                 sidebar.children(self.favorites(&rows, cx))
             })
-            .child(space_header(space).when(!incognito, |header| {
-                let isolated = space.isolated;
-                header.on_mouse_down(
-                    MouseButton::Right,
-                    cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                        let entries = shell_menu::space_entries(isolated);
-                        this.open_menu(entries, MenuAnchor::At(event.position), window, cx);
-                        cx.stop_propagation();
-                    }),
-                )
-            }))
+            .child(self.space_header(space, cx))
             .child(tabs)
             .child(
                 // `footer` (ui/styles.css:917-922).
@@ -704,8 +694,8 @@ impl Shell {
                     .when(!incognito, |footer| {
                         footer.child(self.space_dots(core, space, cx)).child(
                             icon_button("new-space", "plus", "New Space").on_click(cx.listener(
-                                |this, _: &ClickEvent, _, cx| {
-                                    dispatch(&this.state, &this.id, Action::NewSpace, cx);
+                                |this, _: &ClickEvent, window, cx| {
+                                    this.new_space(window, cx);
                                 },
                             )),
                         )
@@ -925,7 +915,8 @@ impl Shell {
                     tokens::FAVORITE_ICON_RADIUS,
                     tokens::FAVORITE_LETTER,
                 ));
-            let tile = div()
+            let tile = self
+                .tab_pointer(div(), id, cx)
                 .group(group.clone())
                 .relative()
                 .when(rows.dragging.is_some(), |tile| tile.occlude())
@@ -1232,7 +1223,7 @@ impl Shell {
                     .when(selected, |title| title.font_weight(FontWeight::MEDIUM))
                     .child(tab_label(tab)),
             );
-        row(&group, selected, Some(in_split))
+        self.tab_pointer(row(&group, selected, Some(in_split)), id, cx)
             .when(paired, |row| row.flex_1().my_0().relative())
             .child(self.tab_drag_source(label, rows.space, id, tab, cx))
             .when(hovered, |row| {
@@ -1356,6 +1347,7 @@ impl Shell {
         for candidate in core.spaces() {
             let selected = candidate.id == shown.id;
             let action = Action::Switch(candidate.id.clone());
+            let menu = candidate.id.clone();
             let label = match &candidate.emoji {
                 Some(emoji) if !emoji.is_empty() => div()
                     .text_size(px(tokens::SPACE_EMOJI))
@@ -1400,6 +1392,14 @@ impl Shell {
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         dispatch(&this.state, &this.id, action.clone(), cx);
                     }))
+                    // `oncontextmenu` on `.space-dot` (ui/app.ts:215-218).
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                            this.open_space_menu(&menu, event.position, window, cx);
+                            cx.stop_propagation();
+                        }),
+                    )
                     .child(label),
             );
         }
@@ -1517,6 +1517,28 @@ impl Shell {
         }))
     }
 
+    /// `#space-header` (ui/app.ts:1862-1866): a double click opens the Space editor, a right
+    /// click the Space's menu.
+    fn space_header(&self, space: &flecha_core::Space, cx: &Context<Self>) -> gpui::Stateful<Div> {
+        let id = space.id.clone();
+        let menu = space.id.clone();
+        space_title(space)
+            .id("space-header")
+            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                if event.click_count() >= 2 {
+                    this.open_space_editor(&id, window, cx);
+                }
+            }))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    this.open_space_menu(&menu, event.position, window, cx);
+                    cx.stop_propagation();
+                }),
+            )
+    }
+
+    /// The row's menu button opens the tab's menu (`tabMenu`) where it was clicked.
     fn tab_menu_button(&self, id: &TabId, cx: &Context<Self>) -> gpui::Stateful<Div> {
         let tab = id.clone();
         sized_icon_button(
@@ -1526,86 +1548,31 @@ impl Shell {
             tokens::ROW_CLOSE,
             tokens::ROW_CLOSE_ICON,
         )
-        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-            this.show_overlay(Overlay::TabActions(tab.clone()), window, cx);
+        .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+            this.open_tab_menu(&tab, event.position(), window, cx);
         }))
     }
 
-    fn command_item(
-        &self,
-        id: &'static str,
-        label: &'static str,
-        mode: Command,
-        cx: &Context<Self>,
-    ) -> gpui::Stateful<Div> {
-        menu_item(id, label).on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-            this.open_command(mode, window, cx);
-        }))
-    }
-
-    /// A tab's actions, as the shipping shell's tab menu lists them (`.shell-menu`,
-    /// chromium/shell/shell.css:72-135).
-    pub(crate) fn tab_actions_panel(&self, tab_id: &TabId, cx: &Context<Self>) -> Div {
-        let state = self.state.borrow();
-        let Some(core) = state.model.state(&self.id) else {
-            return overlay_panel();
-        };
-        let Some(tab) = core.tab(tab_id) else {
-            return overlay_panel();
-        };
-        let placement = core.locate(tab_id);
-        let mut actions = Vec::new();
-        let id = tab_id.clone();
-        if matches!(placement, Some(Placement::Pinned { .. })) {
-            actions.push(("Unpin", Action::Sidebar(SidebarAction::ToToday(id.clone()))));
-        } else {
-            actions.push((
-                "Pin in Space",
-                Action::Sidebar(SidebarAction::Pin(id.clone(), None)),
-            ));
-        }
-        if matches!(placement, Some(Placement::Favorite)) {
-            actions.push((
-                "Remove favorite",
-                Action::Sidebar(SidebarAction::ToToday(id.clone())),
-            ));
-        } else {
-            actions.push((
-                "Add to favorites",
-                Action::Sidebar(SidebarAction::Favorite(id.clone())),
-            ));
-        }
-        // `tabMenu` (chromium/shell/background.ts): a tab in the split offers to end it.
-        let split = core
-            .window(&self.id)
-            .map(flecha_core::Window::visible_tabs)
-            .filter(|shown| shown.len() > 1);
-        if split.is_some_and(|shown| shown.contains(tab_id)) {
-            actions.push(("Exit split view", Action::ExitSplit));
-        }
-        actions.extend([
-            ("Open in Peek", Action::PeekTab(id.clone())),
-            ("Move to Flechinha", Action::DetachTab(id.clone())),
-            ("Close tab", Action::CloseTab(id)),
-        ]);
-        if state.model.is_incognito(&self.id) {
-            actions.retain(|(_, action)| crate::incognito::refusal(action).is_none());
-        }
-        overlay_panel()
-            .gap_0()
-            .p(px(tokens::MENU_PAD))
-            .rounded(px(tokens::RADIUS_MD))
-            .child(group_header().child(div().min_w_0().truncate().child(tab_label(tab))))
-            .children(actions.into_iter().map(|(label, action)| {
-                menu_item(label, label).on_click(cx.listener(
-                    move |this, _: &ClickEvent, window, cx| {
-                        this.dismiss_overlay(window, cx);
-                        dispatch(&this.state, &this.id, action.clone(), cx);
-                    },
-                ))
-            }))
-            .child(self.command_item("split-new", "Split with a new tab", Command::Split, cx))
-            .child(self.command_item("peek-url", "Peek at another address", Command::Peek, cx))
+    /// `wireTab` (ui/app.ts:688-695): a right click opens the tab's menu at the pointer, and a
+    /// middle click closes the tab, as `auxclick` does on release.
+    fn tab_pointer(&self, element: Div, id: &TabId, cx: &Context<Self>) -> Div {
+        let menu = id.clone();
+        let close = Action::CloseTab(id.clone());
+        element
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    this.open_tab_menu(&menu, event.position, window, cx);
+                    cx.stop_propagation();
+                }),
+            )
+            .on_mouse_up(
+                MouseButton::Middle,
+                cx.listener(move |this, _: &MouseUpEvent, _, cx| {
+                    dispatch(&this.state, &this.id, close.clone(), cx);
+                    cx.stop_propagation();
+                }),
+            )
     }
 
     pub(crate) fn folder_key(
@@ -1735,7 +1702,7 @@ pub(crate) fn group_header() -> Div {
 
 /// `#space-header` (ui/styles.css:493-542): the Space's emoji and name, and a padlock when it
 /// keeps its own cookies.
-fn space_header(space: &flecha_core::Space) -> Div {
+fn space_title(space: &flecha_core::Space) -> Div {
     let palette = palette();
     div()
         .flex()

@@ -9,7 +9,7 @@ use flecha_core::{EpochMillis, TabId};
 
 use cef::ImplBrowserHost as _;
 
-use crate::{Frozen, Owner, Partition};
+use crate::{Owner, Partition};
 
 /// One tab's sleep transition from [`crate::Engine::evaluate_sleep`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,16 +60,12 @@ impl crate::Engine {
         let Some(session) = self.browsers.get(tab) else {
             return false;
         };
-        if session.frozen != Frozen::No {
+        if session.frozen {
             return true;
         }
         self.set_visible(tab, false);
-        let host = self.host(tab);
-        let muted = host.as_ref().is_some_and(|host| host.is_audio_muted() == 0);
-        if let Some(host) = &host {
-            if muted {
-                host.set_audio_muted(1);
-            }
+        if let Some(host) = &self.host(tab) {
+            host.set_audio_muted(1);
             let slot = self.browsers[tab].slot.clone();
             let (method, params) = lifecycle(true);
             // A page that refuses the lifecycle change stays hidden and muted.
@@ -82,20 +78,22 @@ impl crate::Engine {
             );
         }
         if let Some(session) = self.browsers.get_mut(tab) {
-            session.frozen = Frozen::Yes { muted };
+            session.frozen = true;
         }
         true
     }
 
-    /// Undoes [`Self::freeze_tab`]. The tab stays hidden until it is shown.
+    /// Undoes [`Self::freeze_tab`]. The tab stays hidden until it is shown, and its audio
+    /// returns to the tab's own mute, which may have changed while it slept.
     pub fn thaw_tab(&mut self, tab: &TabId) -> bool {
         let Some(session) = self.browsers.get_mut(tab) else {
             return false;
         };
-        let Frozen::Yes { muted } = std::mem::take(&mut session.frozen) else {
+        if !std::mem::take(&mut session.frozen) {
             return false;
-        };
+        }
         let slot = session.slot.clone();
+        let muted = session.muted;
         if let Some(host) = self.host(tab) {
             let (method, params) = lifecycle(false);
             let _ = crate::devtools::send(
@@ -105,17 +103,28 @@ impl crate::Engine {
                 Some(&params),
                 Some(crate::devtools::Internal::Ignore),
             );
-            if muted {
-                host.set_audio_muted(0);
-            }
+            host.set_audio_muted(i32::from(muted));
         }
         true
     }
 
     pub fn is_frozen(&self, tab: &TabId) -> bool {
-        self.browsers
-            .get(tab)
-            .is_some_and(|session| session.frozen != Frozen::No)
+        self.browsers.get(tab).is_some_and(|session| session.frozen)
+    }
+
+    /// Mutes or unmutes the tab's audio. A frozen browser stays silent and takes the setting when
+    /// it thaws. Returns whether the tab has a browser.
+    pub fn set_audio_muted(&mut self, tab: &TabId, muted: bool) -> bool {
+        let Some(session) = self.browsers.get_mut(tab) else {
+            return false;
+        };
+        session.muted = muted;
+        if !session.frozen
+            && let Some(host) = self.host(tab)
+        {
+            host.set_audio_muted(i32::from(muted));
+        }
+        true
     }
 
     /// Closes the tab's browser and keeps its page, owner and partition for

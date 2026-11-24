@@ -118,7 +118,11 @@ impl Controller {
 /// name a site to the regular profile (`siteControls.ts` `setSiteAdBlock`).
 pub(crate) fn refusal(action: &Action) -> Option<&'static str> {
     match action {
-        Action::Switch(_) | Action::NewSpace | Action::Isolate => {
+        Action::Switch(_)
+        | Action::NewSpace
+        | Action::Isolate
+        | Action::Space(..)
+        | Action::Tab(_, crate::tab_menu::TabAction::MoveToSpace(_)) => {
             Some("An incognito window has one Space")
         }
         Action::RestoreArchive(_) | Action::ClearArchive => {

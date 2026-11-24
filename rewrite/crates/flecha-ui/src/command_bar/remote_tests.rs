@@ -257,6 +257,7 @@ fn typing_keeps_the_shown_suggestions_until_the_newer_answer_replaces_them() {
     let window = controller.model.core.focused_window().id.clone();
     let mut bar = CommandBar {
         mode: Command::NewTab,
+        actions: false,
         input: TextField::new(String::new(), false),
         typed: String::new(),
         matches: CommandMatches::default(),
