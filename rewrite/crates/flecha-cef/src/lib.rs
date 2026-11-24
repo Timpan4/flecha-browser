@@ -243,7 +243,9 @@ impl Engine {
         for (tab, error) in failed {
             self.popups.compositor.turn_off(&format!("{error:#}"));
             let frame = self.browsers[&tab].slot.surface.borrow().view.clone();
-            eprintln!("page frames: reopening a page with CPU copies: {error:#}");
+            compositor::log(format_args!(
+                "page frames: reopening a page with CPU copies: {error:#}"
+            ));
             // A page with no address yet opens again at the tab's address.
             if self.discard_tab(&tab).is_none() {
                 self.close(&tab);

@@ -1,11 +1,71 @@
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use flecha_core::suggestions::{
-    EnvironmentTone, InputResolution, MAX_SUGGESTIONS, MatchQuality, SuggestionAction,
-    describe_environment, developer_suggestions, format_targets, match_quality, parse_suggestions,
-    parse_targets, resolve_input, suggestable,
+    EnvironmentTone, InputResolution, MAX_SUGGESTIONS, MatchQuality, SuggestionAction, VisitedPage,
+    describe_environment, developer_suggestions, format_targets, inline_completion, match_quality,
+    parse_suggestions, parse_targets, resolve_input, suggestable,
 };
 use flecha_core::{Environment, SearchEngine};
 use serde_json::{Value, json};
+
+#[test]
+fn inline_completion_uses_the_local_site_or_page() {
+    let visited = || {
+        [
+            (
+                "https://support.1password.com/import-safari/",
+                "Import from Safari",
+                9,
+            ),
+            ("https://1password.com/", "1Password", 2),
+            ("https://1password.com/pricing", "Pricing", 7),
+            ("https://www.example.org/a", "Article", 2),
+            ("chrome://settings/", "Settings", 3),
+        ]
+        .into_iter()
+        .map(|(url, title, weight)| VisitedPage { url, title, weight })
+    };
+    for (typed, text, url, title) in [
+        (
+            "1pass",
+            "1password.com",
+            "https://1password.com/",
+            Some("1Password"),
+        ),
+        (
+            "1password.com/p",
+            "1password.com/pricing",
+            "https://1password.com/pricing",
+            Some("Pricing"),
+        ),
+        (
+            "supp",
+            "support.1password.com",
+            "https://support.1password.com/",
+            None,
+        ),
+        ("exam", "example.org", "https://www.example.org/", None),
+    ] {
+        let completion = inline_completion(typed, visited()).unwrap();
+        assert_eq!(
+            (
+                completion.text.as_str(),
+                completion.url.as_str(),
+                completion.title.as_deref()
+            ),
+            (text, url, title)
+        );
+    }
+    for typed in [
+        "",
+        "exa mple",
+        "example.org",
+        "https://exa",
+        "chrome",
+        "WWW.EXAM",
+    ] {
+        assert!(inline_completion(typed, visited()).is_none(), "{typed:?}");
+    }
+}
 
 #[test]
 fn whitespace_and_format_characters_around_credential_separator_stay_local() {

@@ -374,18 +374,34 @@ async function sidebarFocus(app, left) {
   await app.present();
   await capture('focus-left', ['#147A70', '#FFCC49']);
 
-  // Xvfb fixture geometry with one Space: the page marker, the first tab's
-  // Split button, and the second tab's label.
+  // Xvfb fixture geometry with one Space and the Site Controls row visible.
   execFileSync(x11Driver, ['click', 340, 110]);
-  execFileSync(x11Driver, ['click', 235, 189]);
+  execFileSync(x11Driver, ['click', 235, 228]);
   const split = await waitForSelection(app, right, 'sidebar Split selected pane B');
 
   assert.deepEqual(active(split).split, [left, right]);
   await keyDelivery(app, { A: left, B: right }, 'y', 'sidebar split', 'B');
 
-  execFileSync(x11Driver, ['click', 95, 227]);
+  execFileSync(x11Driver, ['click', 95, 265]);
   await waitForSelection(app, left, 'sidebar selected pane A');
   await keyDelivery(app, { A: left, B: right }, 'z', 'sidebar select', 'A');
+
+  const ready = site.probe('command-keys-ready');
+  await app.command('script', { tab: left, source: `
+    window.commandKeys = [];
+    addEventListener('keydown', event => {
+      if (['ArrowDown', 'Escape'].includes(event.key)) window.commandKeys.push(event.key);
+    });
+    fetch('/probe/command-keys-ready?value=ready');
+  ` });
+  assert.equal(await ready, 'ready');
+  execFileSync(x11Driver, ['chord', 'Control_L', 'l']);
+  execFileSync(x11Driver, ['key', 'Down']);
+  execFileSync(x11Driver, ['key', 'Escape']);
+  await keyDelivery(app, { A: left, B: right }, 'u', 'command bar dismissed', 'A');
+  const commandKeys = site.probe('command-keys');
+  await app.command('script', { tab: left, source: `fetch('/probe/command-keys?value=' + JSON.stringify(window.commandKeys));` });
+  assert.deepEqual(JSON.parse(await commandKeys), [], 'command bar keys reached pane A');
 }
 
 async function cookie(app, expected, op = 'open') {

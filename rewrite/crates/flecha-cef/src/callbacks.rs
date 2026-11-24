@@ -257,7 +257,10 @@ wrap_render_handler! {
             drop(frames);
             match frame {
                 Ok(frame) => self.slot.store(kind, frame, Delivery::CpuCopy),
-                Err(_) => self.slot.emit(Event::PaintFailed),
+                Err(error) => {
+                    compositor::log(format_args!("CEF {kind:?} frame copy ({width}x{height}): {error:#}"));
+                    self.slot.emit(Event::PaintFailed);
+                }
             }
         }
 

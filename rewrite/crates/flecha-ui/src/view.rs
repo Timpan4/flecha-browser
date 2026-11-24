@@ -2,6 +2,7 @@ use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Instant;
 
 use flecha_cef::{BrowserKey, Owner, Viewport};
 use flecha_core::{FolderId, TabId, WindowId};
@@ -17,8 +18,12 @@ use gpui::{
 
 use crate::{Action, Shared, dispatch};
 use crate::{
-    command_bar::CommandBar, downloads_view::DownloadsPanel, history_view::HistoryPanel,
-    settings_view::SettingsPanel, shortcuts::Bindings, text_field::TextField,
+    command_bar::{CommandBar, SuggestionClient},
+    downloads_view::DownloadsPanel,
+    history_view::HistoryPanel,
+    settings_view::SettingsPanel,
+    shortcuts::Bindings,
+    text_field::TextField,
 };
 
 /// A popup's read-only address bar, as tall as the Peek toolbar.
@@ -52,6 +57,8 @@ pub(crate) struct Shell {
     selected_pane: Option<(Owner, TabId)>,
     focused_browser: Option<BrowserKey>,
     pub(crate) overlay: Overlay,
+    pub(crate) suggestion_client: Arc<SuggestionClient>,
+    pub(crate) last_suggestion_sent: Option<Instant>,
     pub(crate) bindings: Bindings,
     pub(crate) consumed_keys: BTreeSet<String>,
     images: BTreeMap<TabId, Vec<Arc<RenderImage>>>,
@@ -91,6 +98,8 @@ impl Shell {
                 selected_pane: None,
                 focused_browser: None,
                 overlay: Overlay::None,
+                suggestion_client: Arc::default(),
+                last_suggestion_sent: None,
                 bindings,
                 consumed_keys: BTreeSet::new(),
                 images: BTreeMap::new(),
@@ -355,6 +364,7 @@ impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.bindings
             .refresh(&self.state.borrow().model.core.settings.keybindings);
+        self.sync_command_preferences(cx);
         let _ = self.sync_page_focus(window, cx);
         let popup_title = (self.state.borrow().model.popups.get(&self.id))
             .map(|popup| popup.page.tab.title.clone());

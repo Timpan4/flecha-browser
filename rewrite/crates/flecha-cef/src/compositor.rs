@@ -7,8 +7,8 @@
 //! every browser gets CPU copies through `OnPaint`.
 //!
 //! CEF fixes a browser's mode when it creates the browser. When a shared texture cannot
-//! be imported, the engine reopens that browser's page in a software browser, and every
-//! browser created after that gets software frames. CEF also falls back to `OnPaint` by
+//! be imported, the engine reopens that browser's page with CPU copies, and every
+//! browser created after that gets CPU copies. CEF also falls back to `OnPaint` by
 //! itself when GPU compositing becomes unavailable, and the render handler accepts those
 //! frames in either mode.
 
@@ -16,6 +16,17 @@ use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 
 use flecha_surface::SurfaceTarget;
+
+/// Writes one diagnostic line to stderr. CEF callbacks cannot unwind, and `eprintln!`
+/// panics when stderr rejects the write, so a lost line must not abort the browser.
+pub(crate) fn log(line: std::fmt::Arguments<'_>) {
+    use std::io::Write as _;
+    let _ = writeln!(std::io::stderr(), "{line}");
+}
+
+macro_rules! log {
+    ($($arg:tt)*) => { log(format_args!($($arg)*)) };
+}
 
 /// How this process's browsers receive frames. The app decides once, before CEF starts.
 #[derive(Clone, Default)]
@@ -45,7 +56,7 @@ impl Compositing {
             let target = SurfaceTarget::for_window(window);
             match target.render_node(ozone) {
                 Ok(render_node) => {
-                    eprintln!("page frames: shared textures on {}", render_node.display());
+                    log!("page frames: shared textures on {}", render_node.display());
                     Self {
                         shared: Some(Shared {
                             target,
@@ -55,9 +66,7 @@ impl Compositing {
                     }
                 }
                 Err(error) => {
-                    eprintln!(
-                        "page frames: CPU copies, shared textures are unavailable: {error:#}"
-                    );
+                    log!("page frames: CPU copies, shared textures are unavailable: {error:#}");
                     Self::software()
                 }
             }
@@ -121,7 +130,7 @@ impl Compositor {
     /// Gives browsers created from now on CPU copies. Logs only the change.
     pub fn turn_off(&self, reason: &str) {
         if self.for_new_browsers.replace(false) {
-            eprintln!("page frames: CPU copies for new browsers from now on: {reason}");
+            log!("page frames: CPU copies for new browsers from now on: {reason}");
         }
     }
 
@@ -170,8 +179,8 @@ pub(crate) fn delivered(last: &Cell<Option<Delivery>>, delivery: Delivery, brows
             Delivery::CpuCopy => "CPU copies",
         };
         match browser {
-            Some(id) => eprintln!("page frames: browser {id} receives {what}"),
-            None => eprintln!("page frames: a new browser receives {what}"),
+            Some(id) => log!("page frames: browser {id} receives {what}"),
+            None => log!("page frames: a new browser receives {what}"),
         }
     }
 }
