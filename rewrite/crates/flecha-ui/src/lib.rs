@@ -37,7 +37,7 @@ use flecha_core::{
     suggestions::pinnable_address,
 };
 use flecha_services::StateStore;
-use gpui::{App, Bounds, WindowBounds, WindowHandle, WindowOptions, px, size};
+use gpui::{App, AppContext as _, Bounds, WindowBounds, WindowHandle, WindowOptions, px, size};
 
 use boosts::ProfileBoosts;
 use downloads_view::{DownloadCommand, Downloads};
@@ -60,9 +60,40 @@ pub fn validate_initial_address(input: &str) -> Result<String> {
     pinnable_address(input).context("--open requires a browser address")
 }
 
+/// The window Flecha opens before CEF starts. GPUI picks its GPU when it opens a window,
+/// and its windows share that GPU, so this window decides where page frames are shared.
+/// A launch that CEF forwards to a running Flecha closes it by exiting. Otherwise the first
+/// main window takes it over.
+pub struct FirstWindow {
+    handle: gpui::AnyWindowHandle,
+    compositing: flecha_cef::Compositing,
+}
+
+impl FirstWindow {
+    pub fn open(cx: &mut App) -> Result<Self> {
+        let handle = cx.open_window(WindowOptions::default(), |window, cx| {
+            window.set_window_title("Flecha");
+            cx.new(|_| view::Starting)
+        })?;
+        let compositing = handle.update(cx, |_, window, _| {
+            flecha_cef::Compositing::for_window(window)
+        })?;
+        Ok(Self {
+            handle: handle.into(),
+            compositing,
+        })
+    }
+
+    pub fn compositing(&self) -> &flecha_cef::Compositing {
+        &self.compositing
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn start(
     cx: &mut App,
     runtime: &mut Runtime,
+    first: Option<FirstWindow>,
     cef_profile: PathBuf,
     store: StateStore,
     loaded: LoadedState,
@@ -77,6 +108,23 @@ pub fn start(
         options.adblock_fixture_port,
         failure,
     )?));
+    match first {
+        Some(first) => {
+            controller
+                .borrow()
+                .engine
+                .start_compositing(&first.compositing);
+            controller.borrow_mut().first_window = Some(first.handle);
+        }
+        // The profile looked held, so no window probed the GPU, yet CEF started here.
+        None => {
+            use std::io::Write as _;
+            let _ = writeln!(
+                std::io::stderr(),
+                "page frames: CPU copies, another process held the profile when Flecha started"
+            );
+        }
+    }
     sync_windows(&controller, cx)?;
     if options.verify {
         verify::install(&controller, cx);
@@ -188,6 +236,8 @@ struct Controller {
     session_dir: PathBuf,
     snapshots: LoadedState,
     windows: BTreeMap<WindowId, WindowHandle<Shell>>,
+    /// The window opened before CEF started, until a main window takes it over.
+    first_window: Option<gpui::AnyWindowHandle>,
     front: Option<WindowId>,
     ready: bool,
     quitting: bool,
@@ -278,6 +328,7 @@ impl Controller {
             store,
             snapshots,
             windows: BTreeMap::new(),
+            first_window: None,
             front: None,
             ready: false,
             quitting: false,
@@ -733,6 +784,7 @@ impl Controller {
                 Event::Created(_) => {}
             }
         }
+        changed |= self.engine.take_reopened();
         changed |= self.finish_history();
         changed |= self.drain_downloads();
         changed |= self.poll_permissions();
@@ -877,35 +929,56 @@ fn sync_windows(controller: &Shared, cx: &mut App) -> Result<()> {
         };
         let bounds =
             content.map(|content| WindowBounds::Windowed(Bounds::centered(None, content, cx)));
-        let handle = cx.open_window(
-            WindowOptions {
-                window_bounds: bounds,
-                ..Default::default()
-            },
-            {
-                let controller = controller.clone();
-                let id = id.clone();
-                move |window, cx| {
-                    window.set_window_title(match kind {
-                        Kind::Main => "Flecha",
-                        Kind::Incognito => "Flecha Incognito",
-                        Kind::Flechinha => "Flechinha",
-                        // The Shell names it after its page.
-                        Kind::Popup(_) => "",
-                    });
-                    window.on_window_should_close(cx, {
-                        let controller = controller.clone();
-                        let id = id.clone();
-                        move |_, cx| {
-                            dispatch(&controller, &id, Action::CloseWindow, cx);
-                            false
-                        }
-                    });
-                    Shell::new(controller, id, window, cx)
-                }
-            },
-        )?;
+        let shell = {
+            let controller = controller.clone();
+            let id = id.clone();
+            move |window: &mut gpui::Window, cx: &mut gpui::Context<Shell>| {
+                window.set_window_title(match kind {
+                    Kind::Main => "Flecha",
+                    Kind::Incognito => "Flecha Incognito",
+                    Kind::Flechinha => "Flechinha",
+                    // The Shell names it after its page.
+                    Kind::Popup(_) => "",
+                });
+                window.on_window_should_close(cx, {
+                    let controller = controller.clone();
+                    let id = id.clone();
+                    move |_, cx| {
+                        dispatch(&controller, &id, Action::CloseWindow, cx);
+                        false
+                    }
+                });
+                Shell::build(controller, id, window, cx)
+            }
+        };
+        // The first main window takes over the window that opened before CEF, which
+        // has GPUI's default size like every main window.
+        let first = matches!(kind, Kind::Main)
+            .then(|| controller.borrow_mut().first_window.take())
+            .flatten();
+        let handle = match first {
+            Some(first) => {
+                first.update(cx, |_, window, cx| {
+                    window.replace_root(cx, shell);
+                })?;
+                // The root is a Shell now, which `WindowHandle::new` does not check.
+                WindowHandle::<Shell>::new(first.window_id())
+            }
+            None => cx.open_window(
+                WindowOptions {
+                    window_bounds: bounds,
+                    ..Default::default()
+                },
+                |window, cx| cx.new(|cx| shell(window, cx)),
+            )?,
+        };
         controller.borrow_mut().windows.insert(id, handle);
+    }
+    // No main window wanted it, as when only an incognito window is restored. The GPU
+    // stays in use by the windows that just opened.
+    let unused = controller.borrow_mut().first_window.take();
+    if let Some(first) = unused {
+        let _ = first.update(cx, |_, window, _| window.remove_window());
     }
     let front = {
         let mut state = controller.borrow_mut();

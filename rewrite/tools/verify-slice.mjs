@@ -352,6 +352,7 @@ async function nativeContextMenu(app) {
     join(out, 'open.png'), '-transparent', '#FFCC49', '-alpha', 'extract', '-negate',
     '-trim', '-format', '%X %Y', 'info:',
   ], { encoding: 'utf8' }).trim().split(' ').map(Number);
+
   assert(Number.isFinite(x) && Number.isFinite(y), 'missing page marker');
   execFileSync(x11Driver, ['right-click', x + 1, y + 1]);
   await app.present();
@@ -360,7 +361,9 @@ async function nativeContextMenu(app) {
   await app.present();
   await captureUntil('page-context-menu-dismissed', 'root', path => {
     const colors = execFileSync('magick', [path, '-format', '%c', 'histogram:info:'], { encoding: 'utf8' });
+
     if (colors.includes('#405863')) return 'menu border is still visible';
+
     if (!colors.includes('#FFCC49')) return 'page is missing';
   });
   pass('right-click opened the GPUI page menu and Escape dismissed it');
@@ -1215,7 +1218,13 @@ async function verifySlice() {
   pass(`checked /proc environ for the app and its CEF descendants (${checked} processes, including a renderer or zygote child)`);
   await capture('open', ['#147A70', '#FFCC49']);
   pass('opened a durable tab, received CEF load and paint, and captured the GPUI fixture frame');
+  // Under Xvfb GPUI's adapter cannot import Vulkan dma-bufs, so these checks cover the CPU
+  // copy path, not shared textures.
+  const frames = /^page frames: .*$/m.exec(readFileSync(join(out, 'first.log'), 'utf8'))?.[0] ?? '';
+  assert.match(frames, /^page frames: CPU copies, shared textures are unavailable: /, 'Xvfb run did not use CPU copies');
+  pass(`Xvfb pages use CPU copies (${frames})`);
   await nativeInput(app, left);
+
   if (mode === 'slice') await nativeContextMenu(app);
 
   if (mode === 'focus') {

@@ -1,6 +1,7 @@
 mod adblock;
 mod boosts;
 mod callbacks;
+mod compositor;
 mod context_menu;
 mod devtools;
 mod downloads;
@@ -30,6 +31,8 @@ use gpui::{Bounds, Pixels, Point, point, px};
 
 pub use callbacks::Frames;
 use callbacks::{Queue, Slot, Stage};
+pub use compositor::Compositing;
+use compositor::Compositor;
 pub use context_menu::{
     ContextMenuEvent, ContextMenuId, ContextMenuRequest, FrameEdit, MenuContext,
 };
@@ -44,7 +47,7 @@ pub use permissions::{PermissionEvent, PermissionPrompt};
 pub use popup::{Disposition, Opened};
 use popup::{Pending, Popups};
 use runtime::path_string;
-pub use runtime::{Relaunches, Runtime, Start};
+pub use runtime::{Relaunches, Runtime, Start, profile_in_use};
 use services::Services;
 pub use sleep::{Discarded, SleepChange};
 pub use zoom::{PageZoom, zoom_percentage};
@@ -180,6 +183,11 @@ pub struct Engine {
     discarded: BTreeMap<TabId, Discarded>,
     /// Sites where ad blocking is off (`Settings::ad_block_allowed`).
     adblock_allowed: Vec<String>,
+    /// The last page frame of tabs whose browser is reopening with CPU copies, shown
+    /// until the new browser paints.
+    retained: BTreeMap<TabId, flecha_surface::Frame>,
+    /// Set when pages closed for CPU copies, until the shell takes it.
+    reopened: bool,
 }
 
 impl Engine {
@@ -192,6 +200,7 @@ impl Engine {
             pending: RefCell::new(Vec::new()),
             live: Cell::new(0),
             services: Rc::new(Services::new()),
+            compositor: Compositor::default(),
         });
         Self {
             profile,
@@ -204,6 +213,80 @@ impl Engine {
             popups,
             discarded: BTreeMap::new(),
             adblock_allowed: Vec::new(),
+            retained: BTreeMap::new(),
+            reopened: false,
+        }
+    }
+
+    /// Starts giving new browsers frames as `compositing` says. Call once CEF runs with
+    /// the same `compositing`.
+    pub fn start_compositing(&self, compositing: &Compositing) {
+        self.popups.compositor.start(compositing);
+    }
+
+    /// Follows the GPUI device of a window that shows pages. When GPUI recreates its
+    /// device on the same GPU, browsers repaint for the new one. When it moves to another
+    /// GPU, browsers that share textures reopen with CPU copies.
+    #[cfg(target_os = "linux")]
+    pub fn follow_window_device(&self, target: flecha_surface::SurfaceTarget) {
+        let change = self.popups.compositor.follow(target);
+        if change == compositor::DeviceChange::None {
+            return;
+        }
+        for session in self.browsers.values() {
+            let slot = &session.slot;
+            if !slot.shares_textures.get() {
+                continue;
+            }
+            if change == compositor::DeviceChange::Lost {
+                slot.import_failure
+                    .replace(Some(anyhow::anyhow!("GPUI changed GPU")));
+            } else if let Some(host) = slot.browser.borrow().as_ref().and_then(|b| b.host()) {
+                host.invalidate(cef::PaintElementType::VIEW);
+            }
+        }
+    }
+
+    /// Makes the next shared-texture import fail, so the display harness can check the
+    /// switch to CPU copies.
+    #[doc(hidden)]
+    pub fn reject_next_shared_texture(&self) {
+        self.popups.compositor.reject_next_import();
+    }
+
+    /// Whether pages closed for CPU copies since the last call. The shell must draw them
+    /// again so its panes recreate their browsers, because the closed browsers' own
+    /// queued events no longer reach it.
+    pub fn take_reopened(&mut self) -> bool {
+        std::mem::take(&mut self.reopened)
+    }
+
+    /// Closes each page whose shared texture could not be imported, for the shell to
+    /// reopen with CPU copies. Runs only once the shell has every queued event, so a
+    /// popup's placement reaches it before its browser closes.
+    fn reopen_failed_imports(&mut self) {
+        let failed: Vec<_> = self
+            .browsers
+            .iter()
+            .filter_map(|(tab, session)| {
+                let error = session.slot.import_failure.borrow_mut().take()?;
+                Some((tab.clone(), error))
+            })
+            .collect();
+        self.reopened |= !failed.is_empty();
+        for (tab, error) in failed {
+            self.popups.compositor.turn_off(&format!("{error:#}"));
+            let frame = self.browsers[&tab].slot.surface.borrow().view.clone();
+            compositor::log(format_args!(
+                "page frames: reopening a page with CPU copies: {error:#}"
+            ));
+            // A page with no address yet opens again at the tab's address.
+            if self.discard_tab(&tab).is_none() {
+                self.close(&tab);
+            }
+            if let Some(frame) = frame {
+                self.retained.insert(tab, frame);
+            }
         }
     }
 
@@ -250,10 +333,14 @@ impl Engine {
             self.popups.clone(),
         ));
         slot.partition.replace(Some(partition.clone()));
+        let shared = self.popups.compositor.shares_textures();
+        slot.shares_textures.set(shared);
+        slot.surface.borrow_mut().view = self.retained.remove(&tab);
         let mut client = callbacks::client(slot.clone());
         let info = WindowInfo {
             runtime_style: RuntimeStyle::ALLOY,
             windowless_rendering_enabled: 1,
+            shared_texture_enabled: i32::from(shared),
             ..Default::default()
         };
         let browser = browser_host_create_browser_sync(
@@ -380,7 +467,10 @@ impl Engine {
     }
 
     pub fn frames(&self, tab: &TabId) -> Option<Frames> {
-        Some(self.browsers.get(tab)?.slot.surface.borrow().clone())
+        match self.browsers.get(tab) {
+            Some(session) => Some(session.slot.surface.borrow().clone()),
+            None => self.retained.get(tab).cloned().map(Frames::page),
+        }
     }
 
     pub fn host(&self, tab: &TabId) -> Option<BrowserHost> {
@@ -570,6 +660,7 @@ impl Engine {
     /// Closes the tab's browser and forgets the tab, discarded page included.
     pub fn close(&mut self, tab: &TabId) {
         self.discarded.remove(tab);
+        self.retained.remove(tab);
         self.close_browser(tab);
     }
 
@@ -674,6 +765,7 @@ impl Engine {
         while let Some(tab) = self.browsers.first_key_value().map(|(tab, _)| tab.clone()) {
             self.close(&tab);
         }
+        self.retained.clear();
     }
 
     /// CEF must call `on_before_close` for every browser before the app exits.
@@ -687,7 +779,11 @@ impl Engine {
     pub fn next_event(&mut self) -> Option<BrowserEvent> {
         self.adopt_popups();
         loop {
-            let message = self.events.borrow_mut().pop_front()?;
+            let next = self.events.borrow_mut().pop_front();
+            let Some(message) = next else {
+                self.reopen_failed_imports();
+                return None;
+            };
             if message.event == Event::Closed && self.closing.remove(&message.key) {
                 // Always finish a retired generation's shutdown bookkeeping.
                 if self.generations.current(&message.key.tab).is_none() {
@@ -871,6 +967,86 @@ mod tests {
         child.destroyed();
         assert!(drain(&mut engine).is_empty());
         assert!(engine.is_drained());
+    }
+
+    #[test]
+    fn a_failed_import_closes_the_browser_and_keeps_its_last_frame() {
+        let mut engine = Engine::new(PathBuf::new(), || TabId::new("popup"));
+        let (opener, _child) = opener_with_pending_popup(&mut engine);
+        let tab = TabId::new("opener");
+        let pixel = [0x10_u8, 0x20, 0x30, 0xff];
+        // SAFETY: `pixel` holds width * height * 4 bytes.
+        let frame = unsafe {
+            flecha_surface::Frame::copy_bgra(
+                pixel.as_ptr(),
+                1,
+                1,
+                &flecha_surface::SurfaceTarget::default(),
+                None,
+                &[],
+            )
+        }
+        .unwrap();
+        opener.surface.borrow_mut().view = Some(frame);
+        opener.shares_textures.set(true);
+        opener
+            .import_failure
+            .replace(Some(anyhow::anyhow!("import failed")));
+
+        drain(&mut engine);
+
+        assert!(
+            !engine.browsers.contains_key(&tab),
+            "the browser stays open"
+        );
+        assert!(
+            engine
+                .frames(&tab)
+                .is_some_and(|frames| frames.view.is_some()),
+            "the page goes blank until its new browser paints"
+        );
+    }
+
+    #[test]
+    fn a_popup_whose_first_import_fails_is_placed_before_it_closes() {
+        let mut engine = Engine::new(PathBuf::new(), || TabId::new("popup"));
+        let (_opener, child) = opener_with_pending_popup(&mut engine);
+        let popup = TabId::new("popup");
+        let opened = popup::Opened {
+            url: "https://example.test/popup".into(),
+            disposition: popup::Disposition::Popup,
+            size: Some((480, 360)),
+        };
+        // CEF's order: OnBeforePopup, OnAfterCreated, then a first frame that fails.
+        child.emit(Event::Opened(opened.clone()));
+        assert!(!child.created(2));
+        child.shares_textures.set(true);
+        child
+            .import_failure
+            .replace(Some(anyhow::anyhow!("import failed")));
+
+        let mut events = Vec::new();
+        while let Some(message) = engine.next_event() {
+            if matches!(message.event, Event::Opened(_)) {
+                assert_eq!(message.key.tab, popup);
+                assert!(
+                    engine.opener(&popup).is_some(),
+                    "the shell cannot place a popup whose browser closed"
+                );
+            }
+            events.push(message.event);
+        }
+
+        assert_eq!(
+            events,
+            [Event::Created(1), Event::Opened(opened), Event::Created(2)]
+        );
+        assert!(
+            !engine.browsers.contains_key(&popup),
+            "the popup kept the browser that failed"
+        );
+        assert!(engine.take_reopened(), "the shell is not told to redraw");
+        assert!(!engine.take_reopened());
     }
 
     #[test]

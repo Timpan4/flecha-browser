@@ -7,6 +7,7 @@ use std::rc::Rc;
 use anyhow::{Context as _, Result, ensure};
 use cef::{rc::Rc as _, *};
 
+use crate::compositor::Compositing;
 use crate::pump::{Pump, Schedule};
 
 /// The switch that carries a launch's `--open` address. CEF forwards a second launch's command
@@ -38,6 +39,10 @@ wrap_app! {
         ready: Rc<Cell<bool>>,
         relaunches: Relaunches,
         open: Rc<RefCell<Option<String>>>,
+        // GPUI's GPU, where Chromium must allocate the textures it shares.
+        render_node: Rc<RefCell<Option<String>>>,
+        // GPUI's display connection, once `initialize` knows it.
+        ozone: Rc<Cell<Option<&'static str>>>,
     }
     impl App {
         fn browser_process_handler(&self) -> Option<BrowserProcessHandler> {
@@ -65,11 +70,24 @@ wrap_app! {
                     Some(&"password-store".into()),
                     Some(&"basic".into()),
                 );
+                // Child processes inherit the browser process's platform.
                 #[cfg(target_os = "linux")]
-                command_line.append_switch_with_value(
-                    Some(&"ozone-platform".into()),
-                    Some(&if std::env::var_os("WAYLAND_DISPLAY").is_some() { "wayland" } else { "x11" }.into()),
-                );
+                if command_line.has_switch(Some(&"ozone-platform".into())) == 0 {
+                    let ozone = self
+                        .ozone
+                        .get()
+                        .unwrap_or_else(|| Compositing::software().ozone());
+                    command_line.append_switch_with_value(
+                        Some(&"ozone-platform".into()),
+                        Some(&ozone.into()),
+                    );
+                }
+                if let Some(node) = self.render_node.borrow().as_deref() {
+                    command_line.append_switch_with_value(
+                        Some(&"render-node-override".into()),
+                        Some(&node.into()),
+                    );
+                }
             }
         }
     }
@@ -110,6 +128,9 @@ pub struct Runtime {
     ready: Rc<Cell<bool>>,
     relaunches: Relaunches,
     open: Rc<RefCell<Option<String>>>,
+    render_node: Rc<RefCell<Option<String>>>,
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    ozone: Rc<Cell<Option<&'static str>>>,
     pump: Option<Pump>,
     initialized: bool,
     #[cfg(target_os = "macos")]
@@ -140,7 +161,16 @@ impl Runtime {
         let ready = Rc::new(Cell::new(false));
         let relaunches = Relaunches::default();
         let open = Rc::new(RefCell::new(None));
-        let mut app = FlechaApp::new(schedule, ready.clone(), relaunches.clone(), open.clone());
+        let render_node = Rc::new(RefCell::new(None));
+        let ozone = Rc::new(Cell::new(None));
+        let mut app = FlechaApp::new(
+            schedule,
+            ready.clone(),
+            relaunches.clone(),
+            open.clone(),
+            render_node.clone(),
+            ozone.clone(),
+        );
         let args = args::Args::new();
         let code = execute_process(Some(args.as_main_args()), Some(&mut app), ptr::null_mut());
         if code >= 0 {
@@ -151,6 +181,8 @@ impl Runtime {
             ready,
             relaunches,
             open,
+            render_node,
+            ozone,
             pump: Some(pump),
             initialized: false,
             #[cfg(target_os = "macos")]
@@ -159,9 +191,23 @@ impl Runtime {
     }
 
     /// Starts CEF on `profile`. `open` is the address this launch asks for, which reaches the
-    /// running Flecha when CEF forwards the launch.
-    pub fn initialize(&mut self, profile: &Path, open: Option<&str>) -> Result<Start> {
+    /// running Flecha when CEF forwards the launch. Chromium starts its GPU process here and
+    /// reads `compositing`'s render node from its command line, so the GPU it shares
+    /// textures on is fixed for the process.
+    pub fn initialize(
+        &mut self,
+        profile: &Path,
+        open: Option<&str>,
+        compositing: &Compositing,
+    ) -> Result<Start> {
         *self.open.borrow_mut() = open.map(str::to_owned);
+        *self.render_node.borrow_mut() = compositing
+            .render_node()
+            .map(|node| node.to_str().context("render node path must be UTF-8"))
+            .transpose()?
+            .map(str::to_owned);
+        #[cfg(target_os = "linux")]
+        self.ozone.set(Some(compositing.ozone()));
         let mut settings = Settings {
             windowless_rendering_enabled: 1,
             external_message_pump: 1,
@@ -227,6 +273,32 @@ impl Drop for Runtime {
             cef::shutdown();
         }
     }
+}
+
+/// Whether a process on this host holds `profile`, so CEF would forward a launch on it.
+/// Chromium's process singleton links `SingletonLock` in the profile to `<hostname>-<pid>`
+/// while it runs. A stale link to a live, unrelated process reads as held; that launch then
+/// starts with CPU copies.
+#[cfg(target_os = "linux")]
+pub fn profile_in_use(profile: &Path) -> bool {
+    let Ok(target) = std::fs::read_link(profile.join("SingletonLock")) else {
+        return false;
+    };
+    let Some((host, pid)) = target.to_str().and_then(|target| target.rsplit_once('-')) else {
+        return false;
+    };
+    let Ok(hostname) = std::fs::read_to_string("/proc/sys/kernel/hostname") else {
+        return false;
+    };
+    host == hostname.trim()
+        && pid
+            .parse::<u32>()
+            .is_ok_and(|pid| Path::new("/proc").join(pid.to_string()).exists())
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn profile_in_use(_profile: &Path) -> bool {
+    false
 }
 
 pub(crate) fn path_string(path: &Path) -> Result<CefString> {

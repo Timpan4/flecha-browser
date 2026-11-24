@@ -12,3 +12,9 @@ cef = { workspace = true, features = ["accelerated_osr"] }
 image = { version = "0.25", default-features = false }
 smallvec = "1"
 wgpu.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ash = "0.38"
+libc = "0.2"
+raw-window-handle = "0.6"
+x11rb = { version = "0.13", features = ["dri3"] }
