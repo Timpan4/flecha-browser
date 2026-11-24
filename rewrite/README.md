@@ -127,7 +127,11 @@ On Linux, CEF hands page frames to GPUI as shared GPU textures (`OnAcceleratedPa
 
 CEF fixes a browser's mode when it creates it. If a shared texture cannot be imported, the engine discards that browser and reopens its page with CPU copies. The engine keeps the browser's last page frame and shows it until the new browser paints. Reopening loses what a discarded tab loses: back and forward history, form state and `window.opener`. Browsers created after that also get CPU copies. If GPUI recreates its device on the same GPU, browsers repaint for it. If GPUI moves to another GPU, browsers that share textures reopen with CPU copies. Each change logs one `page frames:` line on stderr.
 
-`tools/verify-gpu-frames.sh` checks the shared-texture path under the isolated launcher's headless weston. It needs a GPU and runs on the workstation, not CI. It checks a page, a `<select>` popup, split view, Peek, a window resize and a scripted popup window by counting the fixture marker's pixels. `tools/verify-gpu-frames.sh fallback` waits until a page paints from shared textures, then sends the `reject_next_shared_texture` verify command so the next import fails. It checks that the page reopens with CPU copies and that the next browser gets CPU copies too.
+`tools/verify-gpu-frames.sh` checks the shared-texture path under the isolated launcher's headless weston. It needs a GPU and runs on the workstation, not CI. It checks a page, a `<select>` popup, split view, Peek, a window resize and a scripted popup window by counting the fixture marker's pixels. `tools/verify-gpu-frames.sh fallback` opens two pages in split view that share textures. It then sends the `reject_next_shared_texture` verify command and repaints the left page, so that page's next import fails. The check confirms three things:
+
+- the left page reopens with CPU copies
+- the right page keeps sharing and repainting
+- the next new browser gets CPU copies
 
 ### CEF pump and GPUI timer guard
 

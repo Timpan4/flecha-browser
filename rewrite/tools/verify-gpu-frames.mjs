@@ -178,11 +178,22 @@ await capture(app, 'select-page', exactly(markers.select));
 pass('the /select page rendered at its own size');
 
 if (mode === 'fallback') {
+  // Two browsers share textures before one import fails.
+  const split = await app.command('split', { url: base + '/split' });
+  const [, right] = active(split).split;
+
+  await app.loaded(right, '/split');
+
+  await capture(app, 'shared-split', exactly(markers.select, markers.split));
+
   const { browser } = await browserOf(selectTab);
+  const { browser: survivor } = await browserOf(right);
 
   await logged(new RegExp(`^page frames: browser ${browser} receives shared textures$`));
 
-  // Fails the import of the next frame, which the heading change paints.
+  await logged(new RegExp(`^page frames: browser ${survivor} receives shared textures$`));
+
+  // Fails the import of the next frame, which the left page's heading change paints.
   await app.command('reject_next_shared_texture');
 
   const since = app.events.length;
@@ -201,24 +212,36 @@ if (mode === 'fallback') {
 
   await logged(new RegExp(`^page frames: browser ${reopened.browser} receives CPU copies$`));
 
-  await capture(app, 'fallback-select', exactly(markers.select));
+  // A colour no fixture page uses, so only a new frame from the surviving browser has it.
+  const repainted = '#E07A1F';
 
-  pass('after a failed import the page reopened with CPU copies at its own size');
+  await app.command('script', { tab: right, source: `document.querySelector("#marker").style.background = "${repainted}"` });
 
-  const split = await app.command('split', { url: base + '/split' });
-  const [, right] = active(split).split;
+  await capture(app, 'fallback-split', exactly(markers.select, repainted));
 
-  await app.loaded(right, '/split');
+  assert(!app.events.slice(since).some(event => event.type === 'created' && event.tab === right),
+    'the browser that still imported was reopened');
 
-  await capture(app, 'fallback-split', exactly(markers.select, markers.split));
+  pass('after a failed import that page reopened with CPU copies, and the other page kept sharing and repainting');
+
+  const peek = await app.command('peek', { url: base + '/peek' });
+  const [{ tab: peekTab }] = peek.peeks;
+
+  await app.loaded(peekTab, '/peek');
+
+  await capture(app, 'fallback-peek', exactly(markers.peek));
+
+  const { browser: next } = await browserOf(peekTab);
+
+  await logged(new RegExp(`^page frames: browser ${next} receives CPU copies$`));
 
   const lines = frameLines();
   const afterFailure = lines.slice(lines.findIndex(line => line.startsWith('page frames: reopening')));
 
-  assert(!afterFailure.some(line => /receives shared textures/.test(line)),
-    `a browser received shared textures after the failure:\n${lines.join('\n')}`);
+  assert(!afterFailure.some(line => /receives shared textures/.test(line) || line.includes(`browser ${survivor} `)),
+    `a browser changed to or from shared textures after the failure:\n${lines.join('\n')}`);
 
-  pass(`the next browser used CPU copies too:\n  ${lines.join('\n  ')}`);
+  pass(`the next new browser used CPU copies:\n  ${lines.join('\n  ')}`);
 
   await app.quit();
 
