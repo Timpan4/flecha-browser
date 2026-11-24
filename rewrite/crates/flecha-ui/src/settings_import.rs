@@ -167,6 +167,9 @@ impl ImportPanel {
 impl Controller {
     fn apply_import(&mut self, import: PreparedImport, window: &WindowId) -> Result<String> {
         self.check_import_storage()?;
+        if let PreparedImport::Export(export) = &import {
+            self.check_incognito_id_collisions(export.state())?;
+        }
         let replace = matches!(import, PreparedImport::Export(_));
         let (next, message) = import.apply(&self.model.core, window, &self.store)?;
         self.save_import_state(next, replace, message)
@@ -270,7 +273,13 @@ impl Controller {
                     .filter(|(_, popup)| popup.page.partition.is_incognito())
                     .map(|(window, _)| window),
             )
-            .any(|id| next.window(id).is_some());
+            .any(|id| {
+                next.window(id).is_some()
+                    || next
+                        .closed_windows()
+                        .iter()
+                        .any(|closed| &closed.window.id == id)
+            });
         ensure!(
             !private_window_collision,
             "Close incognito windows before importing a state that reuses an open incognito window ID"
@@ -958,6 +967,8 @@ mod tests {
         )?;
         let original = state.model.core.clone();
         let disk_before = fs::read(profile.path().join("session/state.json"))?;
+        let backup_path = profile.path().join("session/before-import.json");
+        fs::write(&backup_path, b"sentinel-backup")?;
 
         state.act(&regular_window, Action::NewIncognitoWindow)?;
         let incognito_window = state
@@ -975,7 +986,8 @@ mod tests {
         )?;
         let incognito_tab = state.model.active(&incognito_window).unwrap().clone();
 
-        // A replacement reusing a live incognito window ID must be rejected before saving.
+        // A replacement reusing a live incognito window ID must be rejected before saving or
+        // overwriting the pre-import backup.
         let mut window_collision =
             BrowserState::new(flecha_core::SpaceId::new("space"), incognito_window.clone());
         window_collision.open_today(
@@ -998,6 +1010,33 @@ mod tests {
             fs::read(profile.path().join("session/state.json"))?,
             disk_before
         );
+        assert_eq!(fs::read(&backup_path)?, b"sentinel-backup");
+
+        // A replacement whose closed_windows history reuses a live incognito window ID must
+        // also be rejected so reopen_last cannot collide with the live private window.
+        let mut closed_window_collision = BrowserState::new(
+            flecha_core::SpaceId::new("space"),
+            flecha_core::WindowId::new("imported-open-window"),
+        );
+        closed_window_collision.open_window(incognito_window.clone(), None);
+        closed_window_collision.open_today(
+            flecha_core::TabId::new("closed-window-tab"),
+            flecha_core::Tab::new("https://closed.example/", 0),
+            &incognito_window,
+            None,
+            true,
+        );
+        let _ = closed_window_collision.close_window(&incognito_window, 1);
+        let export = FlechaExport::parse(&storage::encode(&closed_window_collision)?)?;
+        let err = state
+            .apply_import(PreparedImport::Export(export), &regular_window)
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("incognito window ID"),
+            "{err:#}"
+        );
+        assert_eq!(state.model.core, original);
+        assert_eq!(fs::read(&backup_path)?, b"sentinel-backup");
 
         // A replacement reusing a live incognito tab ID must also be rejected before saving.
         let mut tab_collision = BrowserState::new(
