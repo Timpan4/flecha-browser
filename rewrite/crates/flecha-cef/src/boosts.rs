@@ -1,4 +1,4 @@
-//! Boosts and ad-hiding styles on web pages, from flecha-boosts' store.
+//! Boosts styles and scripts on web pages, from flecha-boosts' store.
 //!
 //! Styles go in as constructed style sheets on `document.adoptedStyleSheets`, which a page's
 //! `style-src` CSP doesn't govern. They're applied when the main frame commits and again when it
@@ -12,9 +12,8 @@ use serde_json::json;
 
 use crate::services::Services;
 
-/// The registries the style payload keeps its sheets in, one per source.
+/// The page registry that holds the style Boosts' adopted style sheets.
 pub(crate) const BOOST_SHEETS: &str = "flecha.boost/styles";
-pub(crate) const ADBLOCK_SHEETS: &str = "flecha.adblock/styles";
 
 /// Whether Boosts and cosmetic filters may touch the page: flecha-boosts' web-only rule.
 pub(crate) fn is_web_page(url: &str) -> bool {
@@ -69,7 +68,9 @@ pub(crate) fn scripts_for(boosts: &Boosts, url: &str) -> Vec<(String, String)> {
     boosts
         .scripts_for(BoostFrame::Main, url)
         .iter()
-        .map(|script: &ScriptInjection| (format!("flecha-boost/{}", script.name()), script.source()))
+        .map(|script: &ScriptInjection| {
+            (format!("flecha-boost/{}", script.name()), script.source())
+        })
         .collect()
 }
 
@@ -137,7 +138,7 @@ pub(crate) fn page_committed(services: &Services, frame: &Frame, url: &str) {
 }
 
 /// The main frame finished loading `url`: styles again, in case the document replaced what the
-/// commit applied, then ad hiding and script Boosts.
+/// commit applied, then script Boosts.
 pub(crate) fn page_loaded(services: &Services, frame: &Frame, url: &str) {
     if !is_web_page(url) {
         return;
@@ -149,12 +150,6 @@ pub(crate) fn page_loaded(services: &Services, frame: &Frame, url: &str) {
     if let Some(styles) = styles {
         run(frame, "flecha-boost/styles", &styles);
     }
-    let cosmetic = services.adblock.cosmetic_filters(url).stylesheet();
-    let sheets: Vec<(String, String)> = (!cosmetic.is_empty())
-        .then(|| ("cosmetic".to_owned(), cosmetic))
-        .into_iter()
-        .collect();
-    run(frame, "flecha-adblock/cosmetic", &style_payload(ADBLOCK_SHEETS, &sheets));
     for (script_url, source) in scripts {
         run(frame, &script_url, &source);
     }
@@ -176,7 +171,9 @@ mod tests {
 
     fn store() -> Boosts {
         let mut boosts = Boosts::new();
-        boosts.save("example.com.css", "body { color: red }", None, false).unwrap();
+        boosts
+            .save("example.com.css", "body { color: red }", None, false)
+            .unwrap();
         boosts
             .save(
                 "example.com.ts",
@@ -196,13 +193,19 @@ mod tests {
         let boosts = store();
         let styles = styles_for(&boosts, "https://www.example.com/page").unwrap();
         assert!(styles.contains(r#"Symbol.for("flecha.boost/styles")"#));
-        assert!(styles.contains(r#"[["example.com.css","body { color: red }"]]"#), "{styles}");
+        assert!(
+            styles.contains(r#"[["example.com.css","body { color: red }"]]"#),
+            "{styles}"
+        );
 
         let scripts = scripts_for(&boosts, "https://www.example.com/page");
         assert_eq!(scripts.len(), 1);
         assert_eq!(scripts[0].0, "flecha-boost/example.com.ts");
         assert!(scripts[0].1.contains("document.body.dataset.boosted"));
-        assert!(scripts[0].1.contains("Object.hasOwn(globalThis"), "runs once per document");
+        assert!(
+            scripts[0].1.contains("Object.hasOwn(globalThis"),
+            "runs once per document"
+        );
 
         // Another site's page gets an empty sheet set, which removes stale sheets.
         let other = styles_for(&boosts, "https://other.test/").unwrap();

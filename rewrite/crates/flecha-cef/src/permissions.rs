@@ -84,14 +84,21 @@ impl Permissions {
     }
 
     /// Reports each touched queue whose front prompt changed.
-    fn refresh(&mut self, touched: BTreeSet<QueueId>, events: &services::Mailbox<Option<PermissionPrompt>>) {
+    fn refresh(
+        &mut self,
+        touched: BTreeSet<QueueId>,
+        events: &services::Mailbox<Option<PermissionPrompt>>,
+    ) {
         for queue in touched {
-            let front = self.manager.pending_prompt(&queue).map(|view| PermissionPrompt {
-                request: view.request,
-                origin: view.origin.clone(),
-                requested: view.requested,
-                ask: view.ask,
-            });
+            let front = self
+                .manager
+                .pending_prompt(&queue)
+                .map(|view| PermissionPrompt {
+                    request: view.request,
+                    origin: view.origin.clone(),
+                    requested: view.requested,
+                    ask: view.ask,
+                });
             let front_id = front.as_ref().map(|prompt| prompt.request);
             if self.shown.get(&queue).copied() == front_id {
                 continue;
@@ -111,12 +118,14 @@ impl Permissions {
     }
 
     pub fn pending(&self, queue: &QueueId) -> Option<PermissionPrompt> {
-        self.manager.pending_prompt(queue).map(|view| PermissionPrompt {
-            request: view.request,
-            origin: view.origin.clone(),
-            requested: view.requested,
-            ask: view.ask,
-        })
+        self.manager
+            .pending_prompt(queue)
+            .map(|view| PermissionPrompt {
+                request: view.request,
+                origin: view.origin.clone(),
+                requested: view.requested,
+                ask: view.ask,
+            })
     }
 }
 
@@ -135,7 +144,10 @@ impl crate::Engine {
     /// The prompt the tab's banner shows now.
     pub fn pending_permission_prompt(&self, tab: &TabId) -> Option<PermissionPrompt> {
         let identifier = self.browsers.get(tab)?.slot.identifier.get()?;
-        self.services().permissions.borrow().pending(&queue_id(identifier))
+        self.services()
+            .permissions
+            .borrow()
+            .pending(&queue_id(identifier))
     }
 
     /// Answers the banner's prompt and every request the answer decides.
@@ -187,7 +199,11 @@ pub(crate) fn partition(partition: &crate::Partition) -> Partition {
 /// document must be too; and the requesting frame's document, when CEF names it, must be that
 /// origin. A sandboxed frame's origin is opaque even when its URL is `https:`, so it fails the
 /// first or the last check.
-pub(crate) fn eligible_origin(requesting: &str, frame_url: Option<&str>, top_url: &str) -> Option<Origin> {
+pub(crate) fn eligible_origin(
+    requesting: &str,
+    frame_url: Option<&str>,
+    top_url: &str,
+) -> Option<Origin> {
     let origin = Origin::parse(requesting).ok()?;
     let top = Origin::parse(top_url).ok()?;
     if !origin.is_potentially_trustworthy() || !top.is_potentially_trustworthy() {
@@ -208,7 +224,13 @@ const MEDIA_VIDEO: u32 =
 
 /// The kinds of a `getUserMedia` request. Desktop capture has no kind, so it is denied.
 pub(crate) fn media_kinds(bits: u32) -> Option<PermissionSet> {
-    kinds(bits, &[(MEDIA_AUDIO, PermissionKind::Microphone), (MEDIA_VIDEO, PermissionKind::Camera)])
+    kinds(
+        bits,
+        &[
+            (MEDIA_AUDIO, PermissionKind::Microphone),
+            (MEDIA_VIDEO, PermissionKind::Camera),
+        ],
+    )
 }
 
 /// The kinds of a permission prompt. A request with any other bit is denied whole.
@@ -217,11 +239,26 @@ pub(crate) fn prompt_kinds(bits: u32) -> Option<PermissionSet> {
     kinds(
         bits,
         &[
-            (T::CEF_PERMISSION_TYPE_GEOLOCATION as u32, PermissionKind::Geolocation),
-            (T::CEF_PERMISSION_TYPE_NOTIFICATIONS as u32, PermissionKind::Notifications),
-            (T::CEF_PERMISSION_TYPE_CLIPBOARD as u32, PermissionKind::ClipboardRead),
-            (T::CEF_PERMISSION_TYPE_CAMERA_STREAM as u32, PermissionKind::Camera),
-            (T::CEF_PERMISSION_TYPE_MIC_STREAM as u32, PermissionKind::Microphone),
+            (
+                T::CEF_PERMISSION_TYPE_GEOLOCATION as u32,
+                PermissionKind::Geolocation,
+            ),
+            (
+                T::CEF_PERMISSION_TYPE_NOTIFICATIONS as u32,
+                PermissionKind::Notifications,
+            ),
+            (
+                T::CEF_PERMISSION_TYPE_CLIPBOARD as u32,
+                PermissionKind::ClipboardRead,
+            ),
+            (
+                T::CEF_PERMISSION_TYPE_CAMERA_STREAM as u32,
+                PermissionKind::Camera,
+            ),
+            (
+                T::CEF_PERMISSION_TYPE_MIC_STREAM as u32,
+                PermissionKind::Microphone,
+            ),
         ],
     )
 }
@@ -250,13 +287,17 @@ pub(crate) struct Ask {
 }
 
 pub(crate) fn request(services: &Services, ask: Ask, answer: Box<dyn Answer>) {
-    let (Some(partition), Some(origin), Some(kinds)) = (ask.partition, ask.origin, ask.kinds) else {
+    let (Some(partition), Some(origin), Some(kinds)) = (ask.partition, ask.origin, ask.kinds)
+    else {
         answer.answer(Verdict::Block);
         return;
     };
     let now = {
         let mut state = services.permissions.borrow_mut();
-        match state.manager.evaluate(&partition, &ask.queue, &origin, kinds) {
+        match state
+            .manager
+            .evaluate(&partition, &ask.queue, &origin, kinds)
+        {
             Evaluation::Resolved(verdict) => Some((answer, verdict)),
             Evaluation::Prompt(request) => {
                 state.held.insert(
@@ -305,9 +346,11 @@ pub(crate) fn resolve(
     request: RequestId,
     outcome: PromptOutcome,
 ) -> Result<(), PermissionError> {
-    apply(services, |manager| match manager.resolve_prompt(request, outcome) {
-        Ok(completions) => (Ok(()), completions),
-        Err(error) => (Err(error), Vec::new()),
+    apply(services, |manager| {
+        match manager.resolve_prompt(request, outcome) {
+            Ok(completions) => (Ok(()), completions),
+            Err(error) => (Err(error), Vec::new()),
+        }
     })
 }
 
@@ -328,7 +371,10 @@ pub(crate) fn dismissed(services: &Services, prompt: u64) {
         state.manager.withdraw(request);
         let held = state.held.remove(&request);
         if let Some(held) = &held {
-            state.refresh(BTreeSet::from([held.queue.clone()]), &services.permission_events);
+            state.refresh(
+                BTreeSet::from([held.queue.clone()]),
+                &services.permission_events,
+            );
         }
         held
     };
@@ -368,7 +414,12 @@ fn top_url(browser: &Browser) -> Option<String> {
     Some(CefString::from(&frame.url()).to_string())
 }
 
-fn ask(slot: &std::rc::Rc<Slot>, browser: &Browser, requesting: Option<&CefString>, frame_url: Option<String>) -> Ask {
+fn ask(
+    slot: &std::rc::Rc<Slot>,
+    browser: &Browser,
+    requesting: Option<&CefString>,
+    frame_url: Option<String>,
+) -> Ask {
     let origin = requesting
         .map(ToString::to_string)
         .zip(top_url(browser))
@@ -426,7 +477,7 @@ pub(crate) fn handler(slot: std::rc::Rc<Slot>) -> PermissionHandler {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -434,9 +485,9 @@ mod tests {
 
     use super::*;
 
-    type Log = Rc<RefCell<Vec<(&'static str, Option<Verdict>)>>>;
+    pub(crate) type Log = Rc<RefCell<Vec<(&'static str, Option<Verdict>)>>>;
 
-    struct Recorder {
+    pub(crate) struct Recorder {
         name: &'static str,
         log: Log,
         answered: bool,
@@ -457,11 +508,15 @@ mod tests {
         }
     }
 
-    fn recorder(name: &'static str, log: &Log) -> Box<Recorder> {
-        Box::new(Recorder { name, log: log.clone(), answered: false })
+    pub(crate) fn recorder(name: &'static str, log: &Log) -> Box<Recorder> {
+        Box::new(Recorder {
+            name,
+            log: log.clone(),
+            answered: false,
+        })
     }
 
-    fn camera_ask(queue: &str, origin: &str) -> Ask {
+    pub(crate) fn camera_ask(queue: &str, origin: &str) -> Ask {
         Ask {
             browser: Weak::new(),
             queue: QueueId::new(queue),
@@ -482,7 +537,9 @@ mod tests {
     fn origins_are_checked_before_anything_is_granted() {
         let secure = "https://meet.example/room";
         assert!(eligible_origin("https://meet.example/", Some(secure), secure).is_some());
-        assert!(eligible_origin("http://localhost:8080/", None, "http://localhost:8080/").is_some());
+        assert!(
+            eligible_origin("http://localhost:8080/", None, "http://localhost:8080/").is_some()
+        );
         // Opaque requesters, such as sandboxed frames, never qualify.
         assert!(eligible_origin("null", Some(secure), secure).is_none());
         assert!(eligible_origin("data:text/html,hi", None, secure).is_none());
@@ -491,15 +548,26 @@ mod tests {
         assert!(eligible_origin("http://meet.example/", None, "http://meet.example/").is_none());
         assert!(eligible_origin("https://meet.example/", None, "http://news.example/").is_none());
         // The frame's document must be the requesting origin.
-        assert!(eligible_origin("https://meet.example/", Some("https://evil.example/"), secure).is_none());
+        assert!(
+            eligible_origin(
+                "https://meet.example/",
+                Some("https://evil.example/"),
+                secure
+            )
+            .is_none()
+        );
         assert!(eligible_origin("https://meet.example/", Some("about:blank"), secure).is_none());
     }
 
     #[test]
     fn unknown_kinds_deny_the_whole_request() {
         let desktop =
-            sys::cef_media_access_permission_types_t::CEF_MEDIA_PERMISSION_DESKTOP_VIDEO_CAPTURE as u32;
-        assert_eq!(media_kinds(MEDIA_AUDIO | MEDIA_VIDEO).map(|set| set.iter().count()), Some(2));
+            sys::cef_media_access_permission_types_t::CEF_MEDIA_PERMISSION_DESKTOP_VIDEO_CAPTURE
+                as u32;
+        assert_eq!(
+            media_kinds(MEDIA_AUDIO | MEDIA_VIDEO).map(|set| set.iter().count()),
+            Some(2)
+        );
         assert_eq!(media_kinds(desktop), None);
         assert_eq!(media_kinds(MEDIA_VIDEO | desktop), None);
         assert_eq!(media_kinds(0), None);
@@ -514,12 +582,22 @@ mod tests {
         let services = Services::new();
         let log = Log::default();
         let mut sandboxed = camera_ask("browser-1", "https://meet.example/");
-        sandboxed.origin = eligible_origin("null", Some("https://meet.example/"), "https://meet.example/");
+        sandboxed.origin = eligible_origin(
+            "null",
+            Some("https://meet.example/"),
+            "https://meet.example/",
+        );
         request(&services, sandboxed, recorder("sandboxed", &log));
         let mut no_partition = camera_ask("browser-1", "https://meet.example/");
         no_partition.partition = None;
         request(&services, no_partition, recorder("unplaced", &log));
-        assert_eq!(*log.borrow(), [("sandboxed", Some(Verdict::Block)), ("unplaced", Some(Verdict::Block))]);
+        assert_eq!(
+            *log.borrow(),
+            [
+                ("sandboxed", Some(Verdict::Block)),
+                ("unplaced", Some(Verdict::Block))
+            ]
+        );
         assert!(events(&services).is_empty());
     }
 
@@ -527,14 +605,32 @@ mod tests {
     fn prompts_queue_per_browser_and_answer_every_waiter_once() {
         let services = Services::new();
         let log = Log::default();
-        request(&services, camera_ask("browser-1", "https://meet.example/"), recorder("first", &log));
-        request(&services, camera_ask("browser-1", "https://meet.example/"), recorder("joined", &log));
-        let front = services.permissions.borrow().pending(&QueueId::new("browser-1")).unwrap();
+        request(
+            &services,
+            camera_ask("browser-1", "https://meet.example/"),
+            recorder("first", &log),
+        );
+        request(
+            &services,
+            camera_ask("browser-1", "https://meet.example/"),
+            recorder("joined", &log),
+        );
+        let front = services
+            .permissions
+            .borrow()
+            .pending(&QueueId::new("browser-1"))
+            .unwrap();
         assert!(log.borrow().is_empty(), "held until the banner is answered");
         assert_eq!(events(&services), [Some(front.request)]);
 
         resolve(&services, front.request, PromptOutcome::AllowOnce).unwrap();
-        assert_eq!(*log.borrow(), [("first", Some(Verdict::Allow)), ("joined", Some(Verdict::Allow))]);
+        assert_eq!(
+            *log.borrow(),
+            [
+                ("first", Some(Verdict::Allow)),
+                ("joined", Some(Verdict::Allow))
+            ]
+        );
         assert_eq!(events(&services), [None]);
         assert_eq!(
             resolve(&services, front.request, PromptOutcome::AllowOnce),
@@ -542,7 +638,11 @@ mod tests {
         );
 
         // The one-time answer holds for the page.
-        request(&services, camera_ask("browser-1", "https://meet.example/"), recorder("again", &log));
+        request(
+            &services,
+            camera_ask("browser-1", "https://meet.example/"),
+            recorder("again", &log),
+        );
         assert_eq!(log.borrow().last(), Some(&("again", Some(Verdict::Allow))));
     }
 
@@ -550,12 +650,32 @@ mod tests {
     fn leaving_the_page_or_closing_the_tab_denies_what_it_holds() {
         let services = Services::new();
         let log = Log::default();
-        request(&services, camera_ask("browser-1", "https://meet.example/"), recorder("navigated", &log));
-        request(&services, camera_ask("browser-2", "https://meet.example/"), recorder("other tab", &log));
+        request(
+            &services,
+            camera_ask("browser-1", "https://meet.example/"),
+            recorder("navigated", &log),
+        );
+        request(
+            &services,
+            camera_ask("browser-2", "https://meet.example/"),
+            recorder("other tab", &log),
+        );
         leave(&services, &QueueId::new("browser-1"));
         assert_eq!(*log.borrow(), [("navigated", Some(Verdict::Block))]);
-        assert!(services.permissions.borrow().pending(&QueueId::new("browser-1")).is_none());
-        assert!(services.permissions.borrow().pending(&QueueId::new("browser-2")).is_some());
+        assert!(
+            services
+                .permissions
+                .borrow()
+                .pending(&QueueId::new("browser-1"))
+                .is_none()
+        );
+        assert!(
+            services
+                .permissions
+                .borrow()
+                .pending(&QueueId::new("browser-2"))
+                .is_some()
+        );
     }
 
     #[test]
@@ -567,17 +687,30 @@ mod tests {
         request(&services, ask, recorder("dismissed", &log));
         dismissed(&services, 41);
         assert_eq!(*log.borrow(), [("dismissed", None)]);
-        assert!(services.permissions.borrow().pending(&QueueId::new("browser-1")).is_none());
+        assert!(
+            services
+                .permissions
+                .borrow()
+                .pending(&QueueId::new("browser-1"))
+                .is_none()
+        );
         dismissed(&services, 41);
 
         // A prompt the engine answered first: CEF's later dismissal changes nothing.
         let mut ask = camera_ask("browser-1", "https://meet.example/");
         ask.prompt = Some(42);
         request(&services, ask, recorder("answered", &log));
-        let front = services.permissions.borrow().pending(&QueueId::new("browser-1")).unwrap();
+        let front = services
+            .permissions
+            .borrow()
+            .pending(&QueueId::new("browser-1"))
+            .unwrap();
         resolve(&services, front.request, PromptOutcome::BlockOnce).unwrap();
         dismissed(&services, 42);
-        assert_eq!(log.borrow().last(), Some(&("answered", Some(Verdict::Block))));
+        assert_eq!(
+            log.borrow().last(),
+            Some(&("answered", Some(Verdict::Block)))
+        );
         assert_eq!(log.borrow().len(), 2);
     }
 
@@ -585,11 +718,20 @@ mod tests {
     fn a_site_panel_change_answers_the_requests_it_decides() {
         let services = Services::new();
         let log = Log::default();
-        request(&services, camera_ask("browser-1", "https://meet.example/"), recorder("held", &log));
+        request(
+            &services,
+            camera_ask("browser-1", "https://meet.example/"),
+            recorder("held", &log),
+        );
         let origin = Origin::parse("https://meet.example/").unwrap();
         apply(&services, |manager| {
             let completions = manager
-                .set_setting(&Partition::Shared, &origin, SiteControl::Media, Decision::Block)
+                .set_setting(
+                    &Partition::Shared,
+                    &origin,
+                    SiteControl::Media,
+                    Decision::Block,
+                )
                 .unwrap();
             ((), completions)
         });

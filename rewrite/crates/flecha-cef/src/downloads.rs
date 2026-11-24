@@ -101,7 +101,9 @@ pub enum DownloadError {
 impl std::fmt::Display for DownloadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NotWaiting(handle) => write!(f, "download {} isn't waiting for an answer", handle.0),
+            Self::NotWaiting(handle) => {
+                write!(f, "download {} isn't waiting for an answer", handle.0)
+            }
             Self::Unknown(handle) => write!(f, "no live download {}", handle.0),
             Self::InvalidPath(path) => write!(f, "{} is not an absolute file path", path.display()),
             Self::KeepsDecidedPath(handle) => {
@@ -158,8 +160,15 @@ impl Delivery {
         let Ok(url) = Url::parse(&self.url) else {
             return InsecureVerdict::SilentBlock;
         };
-        let redirects: Vec<Url> = self.redirects.iter().filter_map(|url| Url::parse(url).ok()).collect();
-        let initiator = self.initiator.as_deref().and_then(|url| Url::parse(url).ok());
+        let redirects: Vec<Url> = self
+            .redirects
+            .iter()
+            .filter_map(|url| Url::parse(url).ok())
+            .collect();
+        let initiator = self
+            .initiator
+            .as_deref()
+            .and_then(|url| Url::parse(url).ok());
         insecure_verdict(
             name,
             InsecureSignals {
@@ -245,7 +254,13 @@ impl Downloads {
         let blocked = |browser: Weak<Slot>, proceed| {
             vec![
                 Act::Cancel(proceed),
-                Act::Emit(browser, DownloadEvent::Blocked { handle, url: offer.url.into() }),
+                Act::Emit(
+                    browser,
+                    DownloadEvent::Blocked {
+                        handle,
+                        url: offer.url.into(),
+                    },
+                ),
             ]
         };
         let (Some(config), Ok(download_url)) = (self.config.clone(), Url::parse(offer.url)) else {
@@ -259,7 +274,11 @@ impl Downloads {
                 .collect(),
             initiator: offer.initiator.map(Into::into),
         };
-        let redirects: Vec<Url> = delivery.redirects.iter().filter_map(|url| Url::parse(url).ok()).collect();
+        let redirects: Vec<Url> = delivery
+            .redirects
+            .iter()
+            .filter_map(|url| Url::parse(url).ok())
+            .collect();
         let initiator = offer.initiator.and_then(|url| Url::parse(url).ok());
         #[cfg(unix)]
         let max_name_length = flecha_downloads::name_max(&config.settings.folder);
@@ -295,15 +314,27 @@ impl Downloads {
         let mut waiting = Waiting {
             proceed,
             browser: browser.clone(),
-            stage: Stage::Ask { suggested: PathBuf::new() },
+            stage: Stage::Ask {
+                suggested: PathBuf::new(),
+            },
             delivery,
             started_at: offer.started_at,
         };
         match decision.target {
             TargetDecision::Ask { suggested, reason } => {
-                waiting.stage = Stage::Ask { suggested: suggested.clone() };
+                waiting.stage = Stage::Ask {
+                    suggested: suggested.clone(),
+                };
                 self.waiting.insert(handle, waiting);
-                vec![Act::Emit(browser, DownloadEvent::AskPath { handle, url: offer.url.into(), suggested, reason })]
+                vec![Act::Emit(
+                    browser,
+                    DownloadEvent::AskPath {
+                        handle,
+                        url: offer.url.into(),
+                        suggested,
+                        reason,
+                    },
+                )]
             }
             TargetDecision::Save(path) => {
                 let warning = match decision.verdict {
@@ -335,13 +366,23 @@ impl Downloads {
         });
         let Ok(id) = begun else {
             let url = waiting.delivery.url.clone();
-            return vec![Act::Cancel(waiting.proceed), Act::Emit(browser, DownloadEvent::Blocked { handle, url })];
+            return vec![
+                Act::Cancel(waiting.proceed),
+                Act::Emit(browser, DownloadEvent::Blocked { handle, url }),
+            ];
         };
         match warning {
             Some(warning) => {
                 waiting.stage = Stage::Held { id, path };
                 self.waiting.insert(handle, waiting);
-                vec![Act::Emit(browser, DownloadEvent::Held { handle, id, warning })]
+                vec![Act::Emit(
+                    browser,
+                    DownloadEvent::Held {
+                        handle,
+                        id,
+                        warning,
+                    },
+                )]
             }
             None => vec![
                 Act::Proceed(waiting.proceed, path.clone()),
@@ -351,12 +392,21 @@ impl Downloads {
     }
 
     /// Saves where the person chose, or keeps a held download.
-    pub fn accept(&mut self, handle: DownloadHandle, path: Option<PathBuf>) -> Result<Vec<Act>, DownloadError> {
-        let waiting = self.waiting.remove(&handle).ok_or(DownloadError::NotWaiting(handle))?;
+    pub fn accept(
+        &mut self,
+        handle: DownloadHandle,
+        path: Option<PathBuf>,
+    ) -> Result<Vec<Act>, DownloadError> {
+        let waiting = self
+            .waiting
+            .remove(&handle)
+            .ok_or(DownloadError::NotWaiting(handle))?;
         match &waiting.stage {
             Stage::Ask { suggested } => {
                 let target = path.unwrap_or_else(|| suggested.clone());
-                let name = target.file_name().map(|name| name.to_string_lossy().into_owned());
+                let name = target
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned());
                 let Some(name) = name.filter(|_| target.is_absolute()) else {
                     self.waiting.insert(handle, waiting);
                     return Err(DownloadError::InvalidPath(target));
@@ -365,16 +415,24 @@ impl Downloads {
                     // The next save dialog starts where this one was answered.
                     self.list.downloads_folder_changed(folder);
                 }
-                let https_first = self.config.as_ref().is_some_and(|config| config.https_first_mode);
+                let https_first = self
+                    .config
+                    .as_ref()
+                    .is_some_and(|config| config.https_first_mode);
                 // Choosing the path approves the file type, as in Chromium, but the new name can
                 // still make an insecure delivery one Chromium holds or blocks.
                 match waiting.delivery.verdict(&name, https_first) {
                     InsecureVerdict::SilentBlock => {
                         let url = waiting.delivery.url.clone();
                         let browser = waiting.browser.clone();
-                        Ok(vec![Act::Cancel(waiting.proceed), Act::Emit(browser, DownloadEvent::Blocked { handle, url })])
+                        Ok(vec![
+                            Act::Cancel(waiting.proceed),
+                            Act::Emit(browser, DownloadEvent::Blocked { handle, url }),
+                        ])
                     }
-                    InsecureVerdict::Hold => Ok(self.start(handle, waiting, target, Some(Warning::Insecure))),
+                    InsecureVerdict::Hold => {
+                        Ok(self.start(handle, waiting, target, Some(Warning::Insecure)))
+                    }
                     InsecureVerdict::Safe => Ok(self.start(handle, waiting, target, None)),
                 }
             }
@@ -390,7 +448,14 @@ impl Downloads {
                 }
                 Ok(vec![
                     Act::Proceed(waiting.proceed, decided.clone()),
-                    Act::Emit(waiting.browser, DownloadEvent::Started { handle, id, path: decided }),
+                    Act::Emit(
+                        waiting.browser,
+                        DownloadEvent::Started {
+                            handle,
+                            id,
+                            path: decided,
+                        },
+                    ),
                 ])
             }
         }
@@ -426,8 +491,14 @@ impl Downloads {
     }
 
     fn live(&self, handle: DownloadHandle) -> Result<(DownloadId, Rc<dyn Control>), DownloadError> {
-        let id = self.list.id_for_cef(handle.0).ok_or(DownloadError::Unknown(handle))?;
-        let item = self.items.get(&handle).ok_or(DownloadError::Unknown(handle))?;
+        let id = self
+            .list
+            .id_for_cef(handle.0)
+            .ok_or(DownloadError::Unknown(handle))?;
+        let item = self
+            .items
+            .get(&handle)
+            .ok_or(DownloadError::Unknown(handle))?;
         Ok((id, item.control.clone()))
     }
 
@@ -436,18 +507,24 @@ impl Downloads {
         &mut self,
         browser: Weak<Slot>,
         handle: DownloadHandle,
-        state: Option<SnapshotState>,
-        received: i64,
-        total: i64,
-        full_path: &Path,
+        report: Option<Snapshot<'_>>,
         control: Rc<dyn Control>,
     ) -> Vec<Act> {
-        let Some(state) = state else { return Vec::new() };
+        let Some(snapshot) = report else {
+            return Vec::new();
+        };
+        let state = snapshot.state;
         let ended = matches!(state, SnapshotState::Complete | SnapshotState::Cancelled);
         if ended {
             self.items.remove(&handle);
         } else {
-            self.items.insert(handle, Item { control, browser: browser.clone() });
+            self.items.insert(
+                handle,
+                Item {
+                    control,
+                    browser: browser.clone(),
+                },
+            );
         }
         let mut acts = Vec::new();
         if state == SnapshotState::Cancelled
@@ -457,11 +534,13 @@ impl Downloads {
                 Stage::Held { id, .. } => self.list.discard(id).ok().map(|_| id),
                 Stage::Ask { .. } => None,
             };
-            acts.push(Act::Emit(browser.clone(), DownloadEvent::Cancelled { handle, id }));
+            acts.push(Act::Emit(
+                browser.clone(),
+                DownloadEvent::Cancelled { handle, id },
+            ));
             acts.push(Act::Cancel(waiting.proceed));
             return acts;
         }
-        let snapshot = Snapshot { state, received, total, full_path };
         // CEF may report a download before `OnBeforeDownload`; the list ignores it until then.
         if self.list.update(handle.0, snapshot).is_ok()
             && let Some(id) = self.list.id_for_cef(handle.0)
@@ -490,10 +569,15 @@ impl Downloads {
             .map(|(handle, _)| *handle)
             .collect();
         for handle in items {
-            let Some(item) = self.items.remove(&handle) else { continue };
+            let Some(item) = self.items.remove(&handle) else {
+                continue;
+            };
             let id = self.list.id_for_cef(handle.0);
             if let Some(entry) = id.and_then(|id| self.list.get(id))
-                && matches!(entry.state(), State::InProgress | State::Paused | State::Interrupted)
+                && matches!(
+                    entry.state(),
+                    State::InProgress | State::Paused | State::Interrupted
+                )
             {
                 let (received, total) = (entry.received(), entry.total());
                 let snapshot = Snapshot {
@@ -505,7 +589,10 @@ impl Downloads {
                 let _ = self.list.update(handle.0, snapshot);
             }
             acts.push(Act::CancelItem(item.control));
-            acts.push(Act::Emit(item.browser, DownloadEvent::Cancelled { handle, id }));
+            acts.push(Act::Emit(
+                item.browser,
+                DownloadEvent::Cancelled { handle, id },
+            ));
         }
         acts
     }
@@ -524,7 +611,9 @@ impl crate::Engine {
 
     /// The sidebar's list. Change it through the engine so CEF and the list agree.
     pub fn downloads(&self) -> std::cell::Ref<'_, DownloadList> {
-        std::cell::Ref::map(self.services().downloads.borrow(), |downloads| &downloads.list)
+        std::cell::Ref::map(self.services().downloads.borrow(), |downloads| {
+            &downloads.list
+        })
     }
 
     /// Installs the list loaded at startup (`flecha_downloads::persist::load`). Call it before
@@ -705,13 +794,16 @@ wrap_download_handler! {
             );
             let full_path = PathBuf::from(text(&item.full_path()));
             let services = services::of(&self.slot);
+            let report = state.map(|state| Snapshot {
+                state,
+                received: item.received_bytes(),
+                total: item.total_bytes(),
+                full_path: &full_path,
+            });
             let acts = services.downloads.borrow_mut().updated(
                 Rc::downgrade(&self.slot),
                 DownloadHandle(item.id()),
-                state,
-                item.received_bytes(),
-                item.total_bytes(),
-                &full_path,
+                report,
                 Rc::new(callback.clone()),
             );
             run(&services, acts);
@@ -739,7 +831,9 @@ mod tests {
     impl Proceed for FakeBefore {
         fn proceed(mut self: Box<Self>, path: &Path) {
             self.done = true;
-            self.log.borrow_mut().push(format!("continue {}", path.display()));
+            self.log
+                .borrow_mut()
+                .push(format!("continue {}", path.display()));
         }
     }
 
@@ -775,7 +869,10 @@ mod tests {
     fn downloads(ask: bool) -> Downloads {
         Downloads {
             config: Some(DownloadConfig {
-                settings: DownloadSettings { folder: folder(), ask_where_to_save: ask },
+                settings: DownloadSettings {
+                    folder: folder(),
+                    ask_where_to_save: ask,
+                },
                 https_first_mode: false,
             }),
             ..Downloads::default()
@@ -798,6 +895,20 @@ mod tests {
         }
     }
 
+    fn report(
+        state: SnapshotState,
+        received: i64,
+        total: i64,
+        full_path: &Path,
+    ) -> Option<Snapshot<'_>> {
+        Some(Snapshot {
+            state,
+            received,
+            total,
+            full_path,
+        })
+    }
+
     /// Runs the acts against the fakes and returns the events.
     fn settle(acts: Vec<Act>) -> Vec<DownloadEvent> {
         let mut events = Vec::new();
@@ -814,8 +925,16 @@ mod tests {
         events
     }
 
-    fn before(downloads: &mut Downloads, log: &Log, offer: Offer<'_>, browser: Weak<Slot>) -> Vec<DownloadEvent> {
-        let proceed = Box::new(FakeBefore { log: log.clone(), done: false });
+    fn before(
+        downloads: &mut Downloads,
+        log: &Log,
+        offer: Offer<'_>,
+        browser: Weak<Slot>,
+    ) -> Vec<DownloadEvent> {
+        let proceed = Box::new(FakeBefore {
+            log: log.clone(),
+            done: false,
+        });
         settle(downloads.before(browser, offer, proceed, |_| false))
     }
 
@@ -823,18 +942,44 @@ mod tests {
     fn a_safe_download_continues_at_once_to_its_decided_path() {
         let mut downloads = downloads(false);
         let log = Log::default();
-        let events = before(&mut downloads, &log, offer(1, "https://files.example/report.pdf", "https://files.example/"), Weak::new());
+        let events = before(
+            &mut downloads,
+            &log,
+            offer(
+                1,
+                "https://files.example/report.pdf",
+                "https://files.example/",
+            ),
+            Weak::new(),
+        );
         let path = folder().join("report.pdf");
-        assert_eq!(events, [DownloadEvent::Started { handle: DownloadHandle(1), id: 1, path: path.clone() }]);
+        assert_eq!(
+            events,
+            [DownloadEvent::Started {
+                handle: DownloadHandle(1),
+                id: 1,
+                path: path.clone()
+            }]
+        );
         assert_eq!(*log.borrow(), [format!("continue {}", path.display())]);
 
         // CEF's intermediate name never replaces the decided path.
         let item = Rc::new(FakeItem(log.clone()));
         let intermediate = folder().join("Unconfirmed 123.crdownload");
-        settle(downloads.updated(Weak::new(), DownloadHandle(1), Some(SnapshotState::InProgress), 10, 100, &intermediate, item.clone()));
+        settle(downloads.updated(
+            Weak::new(),
+            DownloadHandle(1),
+            report(SnapshotState::InProgress, 10, 100, &intermediate),
+            item.clone(),
+        ));
         assert_eq!(downloads.list.get(1).unwrap().path(), path);
         assert!(downloads.list.reserves(&path, Platform::current()));
-        settle(downloads.updated(Weak::new(), DownloadHandle(1), Some(SnapshotState::Complete), 100, 100, &path, item));
+        settle(downloads.updated(
+            Weak::new(),
+            DownloadHandle(1),
+            report(SnapshotState::Complete, 100, 100, &path),
+            item,
+        ));
         assert_eq!(downloads.list.get(1).unwrap().state(), State::Complete);
         assert!(downloads.is_idle());
     }
@@ -844,24 +989,64 @@ mod tests {
         let mut downloads = downloads(false);
         let log = Log::default();
         // A type Chromium allows only on a user gesture CEF could vouch for.
-        let events = before(&mut downloads, &log, offer(2, &format!("https://files.example/setup.{RISKY}"), "https://files.example/"), Weak::new());
-        assert_eq!(events, [DownloadEvent::Held { handle: DownloadHandle(2), id: 1, warning: Warning::Dangerous }]);
+        let events = before(
+            &mut downloads,
+            &log,
+            offer(
+                2,
+                &format!("https://files.example/setup.{RISKY}"),
+                "https://files.example/",
+            ),
+            Weak::new(),
+        );
+        assert_eq!(
+            events,
+            [DownloadEvent::Held {
+                handle: DownloadHandle(2),
+                id: 1,
+                warning: Warning::Dangerous
+            }]
+        );
         assert!(log.borrow().is_empty(), "nothing saved while held");
 
         assert_eq!(
-            downloads.accept(DownloadHandle(2), Some(folder().join("renamed.txt"))).err(),
+            downloads
+                .accept(DownloadHandle(2), Some(folder().join("renamed.txt")))
+                .err(),
             Some(DownloadError::KeepsDecidedPath(DownloadHandle(2)))
         );
         let events = settle(downloads.accept(DownloadHandle(2), None).unwrap());
         let path = folder().join(format!("setup.{RISKY}"));
-        assert_eq!(events, [DownloadEvent::Started { handle: DownloadHandle(2), id: 1, path: path.clone() }]);
+        assert_eq!(
+            events,
+            [DownloadEvent::Started {
+                handle: DownloadHandle(2),
+                id: 1,
+                path: path.clone()
+            }]
+        );
         assert_eq!(*log.borrow(), [format!("continue {}", path.display())]);
         assert_eq!(downloads.list.get(1).unwrap().warning(), None);
 
         // Discarding a second one cancels it and drops its row.
-        before(&mut downloads, &log, offer(3, &format!("https://files.example/other.{RISKY}"), "https://files.example/"), Weak::new());
+        before(
+            &mut downloads,
+            &log,
+            offer(
+                3,
+                &format!("https://files.example/other.{RISKY}"),
+                "https://files.example/",
+            ),
+            Weak::new(),
+        );
         let events = settle(downloads.cancel(DownloadHandle(3)).unwrap());
-        assert_eq!(events, [DownloadEvent::Cancelled { handle: DownloadHandle(3), id: Some(2) }]);
+        assert_eq!(
+            events,
+            [DownloadEvent::Cancelled {
+                handle: DownloadHandle(3),
+                id: Some(2)
+            }]
+        );
         assert_eq!(log.borrow().last().map(String::as_str), Some("cancelled"));
         assert!(downloads.list.get(2).is_none());
     }
@@ -871,7 +1056,12 @@ mod tests {
         let mut downloads = downloads(true);
         let log = Log::default();
         // Plain HTTP from an HTTP page: a .txt is safe, an executable is held.
-        let events = before(&mut downloads, &log, offer(4, "http://files.example/notes.txt", "http://files.example/"), Weak::new());
+        let events = before(
+            &mut downloads,
+            &log,
+            offer(4, "http://files.example/notes.txt", "http://files.example/"),
+            Weak::new(),
+        );
         let suggested = folder().join("notes.txt");
         assert_eq!(
             events,
@@ -883,30 +1073,66 @@ mod tests {
             }]
         );
         assert_eq!(
-            downloads.accept(DownloadHandle(4), Some("relative.txt".into())).err(),
+            downloads
+                .accept(DownloadHandle(4), Some("relative.txt".into()))
+                .err(),
             Some(DownloadError::InvalidPath("relative.txt".into()))
         );
         let chosen = PathBuf::from("/home/person/Desktop/notes.exe");
-        let events = settle(downloads.accept(DownloadHandle(4), Some(chosen.clone())).unwrap());
-        assert_eq!(events, [DownloadEvent::Held { handle: DownloadHandle(4), id: 1, warning: Warning::Insecure }]);
+        let events = settle(
+            downloads
+                .accept(DownloadHandle(4), Some(chosen.clone()))
+                .unwrap(),
+        );
+        assert_eq!(
+            events,
+            [DownloadEvent::Held {
+                handle: DownloadHandle(4),
+                id: 1,
+                warning: Warning::Insecure
+            }]
+        );
         assert!(log.borrow().is_empty());
         assert_eq!(downloads.list.get(1).unwrap().path(), chosen);
-        assert_eq!(downloads.list.last_prompt_folder(), Some(Path::new("/home/person/Desktop")));
+        assert_eq!(
+            downloads.list.last_prompt_folder(),
+            Some(Path::new("/home/person/Desktop"))
+        );
 
         let events = settle(downloads.accept(DownloadHandle(4), None).unwrap());
-        assert_eq!(events, [DownloadEvent::Started { handle: DownloadHandle(4), id: 1, path: chosen.clone() }]);
+        assert_eq!(
+            events,
+            [DownloadEvent::Started {
+                handle: DownloadHandle(4),
+                id: 1,
+                path: chosen.clone()
+            }]
+        );
     }
 
     #[test]
     fn mixed_content_downloads_and_missing_settings_are_refused() {
         let log = Log::default();
         let mut downloads = downloads(false);
-        let events = before(&mut downloads, &log, offer(5, "http://files.example/setup.zip", "https://shop.example/"), Weak::new());
-        assert!(matches!(events[..], [DownloadEvent::Blocked { .. }]), "{events:?}");
+        let events = before(
+            &mut downloads,
+            &log,
+            offer(5, "http://files.example/setup.zip", "https://shop.example/"),
+            Weak::new(),
+        );
+        assert!(
+            matches!(events[..], [DownloadEvent::Blocked { .. }]),
+            "{events:?}"
+        );
         assert_eq!(*log.borrow(), ["cancelled"]);
 
         let mut unconfigured = Downloads::default();
-        let events = before(&mut unconfigured, &log, offer(6, "https://files.example/a.pdf", "https://files.example/"), Weak::new());
+        let events = before(
+            &mut unconfigured,
+            &log,
+            offer(6, "https://files.example/a.pdf", "https://files.example/"),
+            Weak::new(),
+        );
         assert!(matches!(events[..], [DownloadEvent::Blocked { .. }]));
         assert!(unconfigured.list.iter().next().is_none());
     }
@@ -918,13 +1144,41 @@ mod tests {
         let log = Log::default();
         let mut downloads = downloads(false);
         let browser = Rc::downgrade(&slot);
-        before(&mut downloads, &log, offer(7, &format!("https://files.example/run.{RISKY}"), "https://files.example/"), browser.clone());
-        before(&mut downloads, &log, offer(8, "https://files.example/a.pdf", "https://files.example/"), browser.clone());
-        before(&mut downloads, &log, offer(9, "https://files.example/b.pdf", "https://files.example/"), Rc::downgrade(&other));
+        before(
+            &mut downloads,
+            &log,
+            offer(
+                7,
+                &format!("https://files.example/run.{RISKY}"),
+                "https://files.example/",
+            ),
+            browser.clone(),
+        );
+        before(
+            &mut downloads,
+            &log,
+            offer(8, "https://files.example/a.pdf", "https://files.example/"),
+            browser.clone(),
+        );
+        before(
+            &mut downloads,
+            &log,
+            offer(9, "https://files.example/b.pdf", "https://files.example/"),
+            Rc::downgrade(&other),
+        );
         for handle in [8, 9] {
-            let owner = if handle == 8 { browser.clone() } else { Rc::downgrade(&other) };
+            let owner = if handle == 8 {
+                browser.clone()
+            } else {
+                Rc::downgrade(&other)
+            };
             let item = Rc::new(FakeItem(log.clone()));
-            settle(downloads.updated(owner, DownloadHandle(handle), Some(SnapshotState::InProgress), 1, 10, Path::new(""), item));
+            settle(downloads.updated(
+                owner,
+                DownloadHandle(handle),
+                report(SnapshotState::InProgress, 1, 10, Path::new("")),
+                item,
+            ));
         }
         log.borrow_mut().clear();
 
@@ -932,22 +1186,84 @@ mod tests {
         assert_eq!(
             events,
             [
-                DownloadEvent::Cancelled { handle: DownloadHandle(7), id: Some(1) },
-                DownloadEvent::Cancelled { handle: DownloadHandle(8), id: Some(2) },
+                DownloadEvent::Cancelled {
+                    handle: DownloadHandle(7),
+                    id: Some(1)
+                },
+                DownloadEvent::Cancelled {
+                    handle: DownloadHandle(8),
+                    id: Some(2)
+                },
             ]
         );
         assert_eq!(*log.borrow(), ["cancelled", "item cancel"]);
-        assert!(downloads.list.get(1).is_none(), "the held download is discarded");
+        assert!(
+            downloads.list.get(1).is_none(),
+            "the held download is discarded"
+        );
         assert_eq!(downloads.list.get(2).unwrap().state(), State::Cancelled);
-        assert_eq!(downloads.list.get(3).unwrap().state(), State::InProgress, "other tabs keep theirs");
+        assert_eq!(
+            downloads.list.get(3).unwrap().state(),
+            State::InProgress,
+            "other tabs keep theirs"
+        );
         assert!(downloads.accept(DownloadHandle(7), None).is_err());
 
         // Pausing and resuming go through the list's rules to CEF's item callback.
         log.borrow_mut().clear();
         settle(downloads.pause(DownloadHandle(9)).unwrap());
-        settle(downloads.updated(Rc::downgrade(&other), DownloadHandle(9), Some(SnapshotState::Paused), 1, 10, Path::new(""), Rc::new(FakeItem(log.clone()))));
+        settle(downloads.updated(
+            Rc::downgrade(&other),
+            DownloadHandle(9),
+            report(SnapshotState::Paused, 1, 10, Path::new("")),
+            Rc::new(FakeItem(log.clone())),
+        ));
         settle(downloads.resume(DownloadHandle(9)).unwrap());
         assert_eq!(*log.borrow(), ["item pause", "item resume"]);
         assert!(downloads.resume(DownloadHandle(8)).is_err());
+    }
+
+    #[test]
+    fn cef_destroying_a_browser_denies_its_held_permissions_and_cancels_its_held_downloads() {
+        use crate::permissions::{self, tests as asks};
+
+        let slot = crate::tests::slot("destroyed");
+        slot.identifier.set(Some(4));
+        let services = crate::services::of(&slot);
+        let log = Log::default();
+        let mut held = downloads(false);
+        let risky = format!("https://files.example/run.{RISKY}");
+        let events = before(
+            &mut held,
+            &log,
+            offer(1, &risky, "https://files.example/"),
+            Rc::downgrade(&slot),
+        );
+        assert!(
+            matches!(events[..], [DownloadEvent::Held { .. }]),
+            "{events:?}"
+        );
+        services.downloads.replace(held);
+
+        let answers = asks::Log::default();
+        let mut ask = asks::camera_ask("", "https://meet.example/");
+        ask.queue = permissions::queue_id(4);
+        permissions::request(&services, ask, asks::recorder("held", &answers));
+        assert!(
+            answers.borrow().is_empty(),
+            "the prompt waits for the banner"
+        );
+
+        slot.destroyed();
+        assert_eq!(
+            *answers.borrow(),
+            [("held", Some(flecha_permissions::Verdict::Block))]
+        );
+        assert_eq!(*log.borrow(), ["cancelled"]);
+        assert!(
+            services.downloads.borrow().list.get(1).is_none(),
+            "the held download is discarded"
+        );
+        assert!(services.downloads.borrow().waiting.is_empty());
     }
 }

@@ -65,9 +65,7 @@ impl crate::Engine {
         }
         self.set_visible(tab, false);
         let host = self.host(tab);
-        let muted = host
-            .as_ref()
-            .is_some_and(|host| host.is_audio_muted() == 0);
+        let muted = host.as_ref().is_some_and(|host| host.is_audio_muted() == 0);
         if let Some(host) = &host {
             if muted {
                 host.set_audio_muted(1);
@@ -75,7 +73,13 @@ impl crate::Engine {
             let slot = self.browsers[tab].slot.clone();
             let (method, params) = lifecycle(true);
             // A page that refuses the lifecycle change stays hidden and muted.
-            let _ = crate::devtools::send(&slot, host, method, Some(&params), true);
+            let _ = crate::devtools::send(
+                &slot,
+                host,
+                method,
+                Some(&params),
+                Some(crate::devtools::Internal::Ignore),
+            );
         }
         if let Some(session) = self.browsers.get_mut(tab) {
             session.frozen = Frozen::Yes { muted };
@@ -94,7 +98,13 @@ impl crate::Engine {
         let slot = session.slot.clone();
         if let Some(host) = self.host(tab) {
             let (method, params) = lifecycle(false);
-            let _ = crate::devtools::send(&slot, &host, method, Some(&params), true);
+            let _ = crate::devtools::send(
+                &slot,
+                &host,
+                method,
+                Some(&params),
+                Some(crate::devtools::Internal::Ignore),
+            );
             if muted {
                 host.set_audio_muted(0);
             }
@@ -259,7 +269,10 @@ mod tests {
             .map(|change| change.tab.as_str())
             .collect();
         // The oldest tab and the one with no activity time are the only unprotected ones.
-        assert_eq!(discarded, [format!("tab-{PROTECTED_RECENT}").as_str(), "never active"]);
+        assert_eq!(
+            discarded,
+            [format!("tab-{PROTECTED_RECENT}").as_str(), "never active"]
+        );
         assert_eq!(changes.len(), tabs.len());
     }
 

@@ -297,10 +297,12 @@ wrap_load_handler! {
             }
         }
 
-        fn on_load_end(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, status: i32) {
+        fn on_load_end(&self, browser: Option<&mut Browser>, frame: Option<&mut Frame>, status: i32) {
             if let Some(frame) = frame.filter(|frame| frame.is_main() != 0) {
                 let url = CefString::from(&frame.url()).to_string();
                 if !self.slot.retired.get() {
+                    let host = browser.and_then(|browser| browser.host());
+                    crate::adblock::hide_ads(&self.slot, host, frame, &url);
                     boosts::page_loaded(&services::of(&self.slot), frame, &url);
                 }
                 self.slot.emit(Event::Loaded { url, status });

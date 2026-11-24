@@ -43,8 +43,10 @@ impl crate::Engine {
         params_json: Option<&str>,
     ) -> Result<i32> {
         let session = self.browsers.get(tab).context("no browser for this tab")?;
-        let host = self.host(tab).context("the tab's browser isn't created yet")?;
-        send(&session.slot, &host, method, params_json, false)
+        let host = self
+            .host(tab)
+            .context("the tab's browser isn't created yet")?;
+        send(&session.slot, &host, method, params_json, None)
     }
 
     /// The next CDP reply or event from a browser the engine still owns.
@@ -101,23 +103,39 @@ fn utf8(bytes: Option<&[u8]>) -> String {
     String::from_utf8_lossy(bytes.unwrap_or_default()).into_owned()
 }
 
+/// A CDP call the engine made itself, whose reply the shell never sees.
+pub(crate) enum Internal {
+    /// The reply needs no handling, such as freezing a tab's page.
+    Ignore,
+    /// The page's classes and ids, for generic ad hiding.
+    Generic(crate::adblock::Generic),
+}
+
 wrap_dev_tools_message_observer! {
     pub(crate) struct Observer { slot: Weak<Slot> }
     impl DevToolsMessageObserver {
         fn on_dev_tools_method_result(
-            &self, _browser: Option<&mut Browser>, message_id: ::std::os::raw::c_int,
+            &self, browser: Option<&mut Browser>, message_id: ::std::os::raw::c_int,
             success: ::std::os::raw::c_int, result: Option<&[u8]>,
         ) {
             let Some(slot) = self.slot.upgrade() else { return };
             let services = services::of(&slot);
-            if services.devtools_internal.borrow_mut().remove(&message_id) {
-                return;
+            let internal = services.devtools_internal.borrow_mut().remove(&message_id);
+            match internal {
+                None => services.devtools_events.push(self.slot.clone(), DevToolsEvent::Result {
+                    id: message_id,
+                    success: success != 0,
+                    result: utf8(result),
+                }),
+                Some(Internal::Ignore) => {}
+                Some(Internal::Generic(generic)) => {
+                    let frame = browser.and_then(|browser| browser.main_frame());
+                    if let Some(frame) = frame.filter(|_| !slot.retired.get()) {
+                        let reply = result.filter(|_| success != 0);
+                        crate::adblock::reported(&services.adblock, &frame, generic, reply);
+                    }
+                }
             }
-            services.devtools_events.push(self.slot.clone(), DevToolsEvent::Result {
-                id: message_id,
-                success: success != 0,
-                result: utf8(result),
-            });
         }
 
         fn on_dev_tools_event(
@@ -139,7 +157,7 @@ pub(crate) fn send(
     host: &BrowserHost,
     method: &str,
     params: Option<&str>,
-    internal: bool,
+    internal: Option<Internal>,
 ) -> Result<i32> {
     let services = services::of(slot);
     if slot.devtools.borrow().is_none() {
@@ -150,8 +168,8 @@ pub(crate) fn send(
     }
     let id = services.next_devtools_id();
     let message = frame(id, method, params)?;
-    if internal {
-        services.devtools_internal.borrow_mut().insert(id);
+    if let Some(internal) = internal {
+        services.devtools_internal.borrow_mut().insert(id, internal);
     }
     let sent = host.send_dev_tools_message(Some(&message)) != 0;
     if !sent {
@@ -167,8 +185,12 @@ mod tests {
 
     #[test]
     fn cdp_calls_frame_as_one_json_object_with_id_method_and_params() {
-        let bytes = frame(7, "Runtime.evaluate", Some(r#"{"expression":"navigator.webdriver"}"#))
-            .unwrap();
+        let bytes = frame(
+            7,
+            "Runtime.evaluate",
+            Some(r#"{"expression":"navigator.webdriver"}"#),
+        )
+        .unwrap();
         let message: Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(
             message,
@@ -180,7 +202,10 @@ mod tests {
         );
 
         let bare: Value = serde_json::from_slice(&frame(1, "Page.enable", None).unwrap()).unwrap();
-        assert_eq!(bare, serde_json::json!({ "id": 1, "method": "Page.enable" }));
+        assert_eq!(
+            bare,
+            serde_json::json!({ "id": 1, "method": "Page.enable" })
+        );
     }
 
     #[test]

@@ -11,6 +11,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use cef::{rc::Rc as _, *};
 use flecha_adblock::{AdBlocker, Request as AdRequest, RequestType, UpdateReport};
 
+use crate::callbacks::Slot;
+use crate::{devtools, services};
+
 /// What the IO thread may touch for one browser.
 #[derive(Clone)]
 pub(crate) struct Io {
@@ -58,17 +61,24 @@ pub(crate) fn check(io: &Io, subject: Subject<'_>) -> bool {
 }
 
 fn is_web(url: &str) -> bool {
-    ["http:", "https:", "ws:", "wss:"]
-        .iter()
-        .any(|scheme| url.get(..scheme.len()).is_some_and(|s| s.eq_ignore_ascii_case(scheme)))
+    ["http:", "https:", "ws:", "wss:"].iter().any(|scheme| {
+        url.get(..scheme.len())
+            .is_some_and(|s| s.eq_ignore_ascii_case(scheme))
+    })
 }
 
 pub(crate) fn request_type(kind: ResourceType) -> RequestType {
     let pairs = [
         (ResourceType::MAIN_FRAME, RequestType::MainFrame),
-        (ResourceType::NAVIGATION_PRELOAD_MAIN_FRAME, RequestType::MainFrame),
+        (
+            ResourceType::NAVIGATION_PRELOAD_MAIN_FRAME,
+            RequestType::MainFrame,
+        ),
         (ResourceType::SUB_FRAME, RequestType::SubFrame),
-        (ResourceType::NAVIGATION_PRELOAD_SUB_FRAME, RequestType::SubFrame),
+        (
+            ResourceType::NAVIGATION_PRELOAD_SUB_FRAME,
+            RequestType::SubFrame,
+        ),
         (ResourceType::STYLESHEET, RequestType::Stylesheet),
         (ResourceType::SCRIPT, RequestType::Script),
         (ResourceType::WORKER, RequestType::Script),
@@ -116,7 +126,9 @@ impl crate::Engine {
         if disabled {
             self.adblock_allowed.push(host.to_owned());
         }
-        self.services().adblock.set_allowed_sites(&self.adblock_allowed)
+        self.services()
+            .adblock
+            .set_allowed_sites(&self.adblock_allowed)
     }
 
     /// The sites where blocking is off, as last set.
@@ -222,6 +234,106 @@ pub(crate) fn handler(io: Io) -> RequestHandler {
     Requests::new(Filter::new(io))
 }
 
+/// The page registry that holds ad hiding's adopted style sheets.
+const HIDING_SHEETS: &str = "flecha.adblock/styles";
+
+/// Collects the page's distinct classes and ids. The value returns by CDP's own serialization,
+/// so a page that replaces `JSON.stringify` can't change its shape.
+const REPORT_CLASSES_AND_IDS: &str = "(() => {
+  const classes = new Set(), ids = new Set();
+  for (const element of document.querySelectorAll('[class], [id]')) {
+    for (const name of element.classList) classes.add(name);
+    if (element.id) ids.add(element.id);
+  }
+  return { classes: [...classes], ids: [...ids] };
+})()";
+
+/// Ad hiding waiting for the page at `url` to report its classes and ids.
+pub(crate) struct Generic {
+    url: String,
+    /// The page's own hiding, which stays applied next to the generic sheet.
+    own: String,
+    exceptions: std::collections::HashSet<String>,
+}
+
+/// Hides ads on the main frame that finished loading `url`: the selectors the lists give the
+/// page right away, then generic class and id selectors once the page reports what it has,
+/// through an internal CDP call. Off the web it does nothing, as Boosts.
+pub(crate) fn hide_ads(
+    slot: &std::rc::Rc<Slot>,
+    host: Option<BrowserHost>,
+    frame: &Frame,
+    url: &str,
+) {
+    if !crate::boosts::is_web_page(url) {
+        return;
+    }
+    let filters = services::of(slot).adblock.cosmetic_filters(url);
+    let own = filters.stylesheet();
+    apply(frame, &own, "");
+    let Some(host) = host.filter(|_| !filters.generic_hide) else {
+        return;
+    };
+    let params = serde_json::json!({ "expression": REPORT_CLASSES_AND_IDS, "returnByValue": true });
+    let generic = Generic {
+        url: url.to_owned(),
+        own,
+        exceptions: filters.exceptions,
+    };
+    // Without the report the page keeps its own hiding only.
+    let _ = devtools::send(
+        slot,
+        &host,
+        "Runtime.evaluate",
+        Some(&params.to_string()),
+        Some(devtools::Internal::Generic(generic)),
+    );
+}
+
+/// The page answered [`hide_ads`]'s report: adds the generic sheet unless it navigated since.
+pub(crate) fn reported(blocker: &AdBlocker, frame: &Frame, generic: Generic, reply: Option<&[u8]>) {
+    if text(&frame.url()) != generic.url {
+        return;
+    }
+    let sheet = generic_sheet(blocker, &generic, reply);
+    apply(frame, &generic.own, &sheet);
+}
+
+/// The generic class and id hiding for the classes and ids in a `Runtime.evaluate` reply.
+fn generic_sheet(blocker: &AdBlocker, generic: &Generic, reply: Option<&[u8]>) -> String {
+    let report: serde_json::Value = reply
+        .and_then(|reply| serde_json::from_slice(reply).ok())
+        .unwrap_or_default();
+    let names = |key: &str| -> Vec<String> {
+        report["result"]["value"][key]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|name| name.as_str().map(str::to_owned))
+            .collect()
+    };
+    let selectors = blocker.hidden_class_id_selectors(
+        &generic.url,
+        &names("classes"),
+        &names("ids"),
+        &generic.exceptions,
+    );
+    flecha_adblock::stylesheet(&selectors)
+}
+
+fn apply(frame: &Frame, own: &str, generic: &str) {
+    let sheets: Vec<(String, String)> = [("own", own), ("generic", generic)]
+        .into_iter()
+        .filter(|(_, css)| !css.is_empty())
+        .map(|(name, css)| (name.to_owned(), css.to_owned()))
+        .collect();
+    crate::boosts::run(
+        frame,
+        "flecha-adblock/cosmetic",
+        &crate::boosts::style_payload(HIDING_SHEETS, &sheets),
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,20 +380,39 @@ mod tests {
         // The filter runs on CEF's IO thread, not the thread that built it.
         let worker = io.clone();
         std::thread::spawn(move || {
-            assert!(check(&worker, subject("https://ads.example/banner.png", RequestType::Image)));
-            assert!(check(&worker, subject("https://cdn.example/flecha-ad-probe.js", RequestType::Script)));
-            assert!(!check(&worker, subject("https://cdn.example/app.js", RequestType::Script)));
+            assert!(check(
+                &worker,
+                subject("https://ads.example/banner.png", RequestType::Image)
+            ));
+            assert!(check(
+                &worker,
+                subject(
+                    "https://cdn.example/flecha-ad-probe.js",
+                    RequestType::Script
+                )
+            ));
+            assert!(!check(
+                &worker,
+                subject("https://cdn.example/app.js", RequestType::Script)
+            ));
         })
         .join()
         .unwrap();
         assert_eq!(io.blocked.load(Ordering::Relaxed), 2);
 
         // Never a top-level navigation, and a new page starts a new count.
-        assert!(!check(&io, subject("https://ads.example/", RequestType::MainFrame)));
+        assert!(!check(
+            &io,
+            subject("https://ads.example/", RequestType::MainFrame)
+        ));
         assert_eq!(io.blocked.load(Ordering::Relaxed), 0);
 
         // Internal and non-web URLs always load.
-        for url in ["chrome://ads.example/", "data:text/plain,ads.example", "file:///ads.example"] {
+        for url in [
+            "chrome://ads.example/",
+            "data:text/plain,ads.example",
+            "file:///ads.example",
+        ] {
             assert!(!check(&io, subject(url, RequestType::Image)), "{url}");
         }
     }
@@ -297,7 +428,10 @@ mod tests {
         assert!(check(&io, ad));
 
         io.blocker.set_allowed_sites(&["news.example".into()]);
-        assert!(!check(&io, ad), "the site shield allows ads on news.example");
+        assert!(
+            !check(&io, ad),
+            "the site shield allows ads on news.example"
+        );
         let elsewhere = Subject {
             top_level_url: "https://other.example/",
             source_url: "https://other.example/",
@@ -311,10 +445,48 @@ mod tests {
     }
 
     #[test]
+    fn generic_hiding_uses_the_classes_and_ids_the_page_reports() {
+        let cache = tempdir();
+        let rules = "||ads.example^\n##.ad-banner\n###sponsor\n##.unused\nnews.example##.site-ad\n";
+        let blocker = blocker_with(rules, cache.path());
+        let url = "https://news.example/article";
+        let filters = blocker.cosmetic_filters(url);
+        assert!(!filters.generic_hide);
+        assert_eq!(filters.stylesheet(), ".site-ad{display:none!important}");
+
+        let generic = Generic {
+            url: url.into(),
+            own: filters.stylesheet(),
+            exceptions: filters.exceptions,
+        };
+        // A `Runtime.evaluate` reply with `returnByValue`.
+        let reply = br#"{"result":{"type":"object","value":{"classes":["ad-banner","story"],"ids":["sponsor",7]}}}"#;
+        assert_eq!(
+            generic_sheet(&blocker, &generic, Some(reply)),
+            "#sponsor{display:none!important}\n.ad-banner{display:none!important}"
+        );
+        // A failed or malformed reply hides nothing generic.
+        assert_eq!(generic_sheet(&blocker, &generic, None), "");
+        assert_eq!(
+            generic_sheet(&blocker, &generic, Some(b"{\"result\":{}}")),
+            ""
+        );
+        assert_eq!(generic_sheet(&blocker, &generic, Some(b"not json")), "");
+
+        // The site shield turns generic hiding off as well.
+        blocker.set_allowed_sites(&["news.example".into()]);
+        assert_eq!(generic_sheet(&blocker, &generic, Some(reply)), "");
+        assert!(blocker.cosmetic_filters(url).generic_hide);
+    }
+
+    #[test]
     fn cef_resource_types_map_onto_the_lists_request_types() {
         assert_eq!(request_type(ResourceType::SCRIPT), RequestType::Script);
         assert_eq!(request_type(ResourceType::XHR), RequestType::XmlHttpRequest);
-        assert_eq!(request_type(ResourceType::MAIN_FRAME), RequestType::MainFrame);
+        assert_eq!(
+            request_type(ResourceType::MAIN_FRAME),
+            RequestType::MainFrame
+        );
         assert_eq!(request_type(ResourceType::SUB_RESOURCE), RequestType::Other);
         assert_eq!(request_type(ResourceType::PREFETCH), RequestType::Other);
     }

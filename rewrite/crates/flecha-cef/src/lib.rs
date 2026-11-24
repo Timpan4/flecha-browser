@@ -415,6 +415,16 @@ impl Engine {
         self.browsers.get(tab)?.slot.browser.borrow().clone()
     }
 
+    /// Loads `url` in the tab's main frame as a browser-initiated navigation, as the address bar
+    /// does. Returns whether the tab has a main frame.
+    pub fn navigate(&self, tab: &TabId, url: &str) -> bool {
+        let frame = self.browser(tab).and_then(|browser| browser.main_frame());
+        if let Some(frame) = &frame {
+            frame.load_url(Some(&CefString::from(url)));
+        }
+        frame.is_some()
+    }
+
     pub fn go_back(&self, tab: &TabId) {
         if let Some(browser) = self.browser(tab) {
             browser.go_back();

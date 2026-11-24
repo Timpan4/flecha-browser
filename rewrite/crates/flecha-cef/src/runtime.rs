@@ -128,6 +128,11 @@ impl Runtime {
         Ok(())
     }
 
+    /// Whether CEF's global context is initialized, so browsers can be created.
+    pub fn is_ready(&self) -> bool {
+        self.ready.get()
+    }
+
     pub fn drive(
         &mut self,
         cx: &mut gpui::App,

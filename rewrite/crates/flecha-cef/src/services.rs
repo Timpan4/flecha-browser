@@ -5,7 +5,7 @@
 //! first: CEF can re-enter a handler synchronously, and a second borrow aborts the process.
 
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 use std::rc::{Rc, Weak};
 
 use crate::callbacks::{Slot, Stage};
@@ -14,7 +14,7 @@ use flecha_adblock::AdBlocker;
 use flecha_boosts::Boosts;
 use flecha_core::TabId;
 
-use crate::devtools::DevToolsEvent;
+use crate::devtools::{DevToolsEvent, Internal};
 use crate::downloads::{DownloadEvent, Downloads};
 use crate::permissions::{PermissionPrompt, Permissions};
 
@@ -28,8 +28,8 @@ pub(crate) struct Services {
     pub devtools_events: Mailbox<DevToolsEvent>,
     /// The next CDP message id. CDP ids are positive 32-bit integers.
     pub devtools_next: Cell<i32>,
-    /// CDP calls the engine made itself (freezing a tab), whose replies the shell never sees.
-    pub devtools_internal: RefCell<BTreeSet<i32>>,
+    /// CDP calls the engine made itself, by message id, whose replies the shell never sees.
+    pub devtools_internal: RefCell<BTreeMap<i32, Internal>>,
 }
 
 impl Services {
@@ -45,7 +45,7 @@ impl Services {
             permission_events: Mailbox::default(),
             devtools_events: Mailbox::default(),
             devtools_next: Cell::new(1),
-            devtools_internal: RefCell::new(BTreeSet::new()),
+            devtools_internal: RefCell::new(BTreeMap::new()),
         }
     }
 
