@@ -28,7 +28,7 @@ static int tap(Display *display, KeySym symbol)
     return press(display, symbol, True) && press(display, symbol, False);
 }
 
-static int click(Display *display, int x, int y)
+static int click(Display *display, int x, int y, unsigned int button)
 {
     Window root = DefaultRootWindow(display);
     Window child, ignored_window;
@@ -40,8 +40,8 @@ static int click(Display *display, int x, int y)
         child == None)
         return 0;
     XSetInputFocus(display, child, RevertToParent, CurrentTime);
-    return XTestFakeButtonEvent(display, 1, True, CurrentTime) &&
-           XTestFakeButtonEvent(display, 1, False, CurrentTime);
+    return XTestFakeButtonEvent(display, button, True, CurrentTime) &&
+           XTestFakeButtonEvent(display, button, False, CurrentTime);
 }
 
 // The one viewable top-level window named `title`, or None.
@@ -153,9 +153,10 @@ int main(int argc, char **argv)
     if (display == NULL)
         return EXIT_FAILURE;
     int ok = 0;
-    if (argc == 4 && strcmp(argv[1], "click") == 0) {
+    if (argc == 4 && (strcmp(argv[1], "click") == 0 || strcmp(argv[1], "right-click") == 0)) {
         int x = coordinate(argv[2]), y = coordinate(argv[3]);
-        ok = x >= 0 && y >= 0 && click(display, x, y);
+        unsigned int button = strcmp(argv[1], "click") == 0 ? 1 : 3;
+        ok = x >= 0 && y >= 0 && click(display, x, y, button);
     } else if (argc == 3 && strcmp(argv[1], "key") == 0) {
         ok = tap(display, XStringToKeysym(argv[2]));
     } else if (argc == 4 && strcmp(argv[1], "chord") == 0) {

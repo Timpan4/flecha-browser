@@ -150,7 +150,12 @@ impl Shell {
                 .occlude()
                 .rounded_md()
                 .bg(rgb(0x202a30))
-                .child(self.action_button("sidebar-toggle", "Show sidebar", toggle, cx));
+                .flex()
+                .items_center()
+                .child(self.action_button("sidebar-toggle", "Show sidebar", toggle, cx))
+                .when(!state.model.peeks.contains_key(&self.id), |bar| {
+                    bar.children(self.zoom_badge(cx))
+                });
         }
         let Some(space) = core.space(&current.active_space_id) else {
             return div();
@@ -356,6 +361,13 @@ impl Shell {
                         cx,
                     )),
             )
+            .when(!state.model.peeks.contains_key(&self.id), |sidebar| {
+                sidebar.children(
+                    self.zoom_badge(cx)
+                        .into_iter()
+                        .map(|badge| div().self_start().child(badge)),
+                )
+            })
             .when(toolbar.loading, |sidebar| {
                 sidebar.child(
                     div()

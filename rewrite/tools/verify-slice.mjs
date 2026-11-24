@@ -347,6 +347,28 @@ async function nativeInput(app, tab) {
   pass('an X11 click and key passed through GPUI into the CEF input field');
 }
 
+async function nativeContextMenu(app) {
+  const [x, y] = execFileSync('magick', [
+    join(out, 'open.png'), '-transparent', '#FFCC49', '-alpha', 'extract', '-negate',
+    '-trim', '-format', '%X %Y', 'info:',
+  ], { encoding: 'utf8' }).trim().split(' ').map(Number);
+
+  assert(Number.isFinite(x) && Number.isFinite(y), 'missing page marker');
+  execFileSync(x11Driver, ['right-click', x + 1, y + 1]);
+  await app.present();
+  await capture('page-context-menu', ['#405863']);
+  execFileSync(x11Driver, ['key', 'Escape']);
+  await app.present();
+  await captureUntil('page-context-menu-dismissed', 'root', path => {
+    const colors = execFileSync('magick', [path, '-format', '%c', 'histogram:info:'], { encoding: 'utf8' });
+
+    if (colors.includes('#405863')) return 'menu border is still visible';
+
+    if (!colors.includes('#FFCC49')) return 'page is missing';
+  });
+  pass('right-click opened the GPUI page menu and Escape dismissed it');
+}
+
 async function keyDelivery(app, tabs, key, step, expected) {
   const received = site.probe(`${step}-key`);
 
@@ -1202,6 +1224,8 @@ async function verifySlice() {
   assert.match(frames, /^page frames: CPU copies, shared textures are unavailable: /, 'Xvfb run did not use CPU copies');
   pass(`Xvfb pages use CPU copies (${frames})`);
   await nativeInput(app, left);
+
+  if (mode === 'slice') await nativeContextMenu(app);
 
   if (mode === 'focus') {
     await sidebarFocus(app, left);

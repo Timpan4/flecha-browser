@@ -4,7 +4,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
-use flecha_cef::{BrowserKey, Owner, Viewport};
+use flecha_cef::{BrowserKey, ContextMenuRequest, Owner, Viewport};
 use flecha_core::{FolderId, TabId, WindowId};
 use flecha_surface::{Frame, input, surface};
 use gpui::prelude::FluentBuilder as _;
@@ -19,6 +19,7 @@ use crate::{Action, Shared, dispatch};
 use crate::{
     command_bar::{CommandBar, SuggestionClient},
     downloads_view::DownloadsPanel,
+    find_bar::FindSession,
     history_view::HistoryPanel,
     settings_view::SettingsPanel,
     shortcuts::Bindings,
@@ -40,6 +41,7 @@ pub(crate) enum Overlay {
     TabActions(TabId),
     Downloads(DownloadsPanel),
     SiteControls,
+    ContextMenu(ContextMenuRequest),
 }
 
 impl Overlay {
@@ -51,11 +53,12 @@ impl Overlay {
 pub(crate) struct Shell {
     pub(crate) state: Shared,
     pub(crate) id: WindowId,
-    focus: FocusHandle,
-    page_focus: FocusHandle,
+    pub(crate) focus: FocusHandle,
+    pub(crate) page_focus: FocusHandle,
     selected_pane: Option<(Owner, TabId)>,
     focused_browser: Option<BrowserKey>,
     pub(crate) overlay: Overlay,
+    pub(crate) find: Option<FindSession>,
     pub(crate) suggestion_client: Arc<SuggestionClient>,
     pub(crate) last_suggestion_sent: Option<Instant>,
     pub(crate) bindings: Bindings,
@@ -105,6 +108,7 @@ impl Shell {
             selected_pane: None,
             focused_browser: None,
             overlay: Overlay::None,
+            find: None,
             suggestion_client: Arc::default(),
             last_suggestion_sent: None,
             bindings,
@@ -133,6 +137,7 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.cancel_context_menu();
         self.overlay = overlay;
         self.focus.focus(window, cx);
         let _ = self.sync_page_focus(window, cx);
@@ -147,6 +152,7 @@ impl Shell {
             return;
         }
         if self.overlay.is_open() {
+            self.cancel_context_menu();
             self.overlay = Overlay::None;
             if self.selected_pane.is_some() {
                 self.page_focus.focus(window, cx);
@@ -154,6 +160,21 @@ impl Shell {
             let _ = self.sync_page_focus(window, cx);
             cx.notify();
         }
+    }
+
+    fn cancel_context_menu(&self) {
+        if let Overlay::ContextMenu(request) = &self.overlay {
+            self.state.borrow().engine.dismiss_context_menu(&request.id);
+        }
+    }
+
+    pub(crate) fn active_browser(&self) -> Option<BrowserKey> {
+        let state = self.state.borrow();
+        let (owner, tab) = state.model.keyboard_pane(&self.id)?;
+        if state.engine.owner(tab) != Some(&owner) || state.model.page(&owner, tab).is_none() {
+            return None;
+        }
+        state.engine.key(tab)
     }
 
     pub(crate) fn navigate_from_overlay(
@@ -176,12 +197,26 @@ impl Shell {
         window: &mut Window,
         cx: &mut App,
     ) -> Option<BrowserKey> {
-        let state = self.state.borrow();
-        let pane = state.model.keyboard_pane(&self.id);
-        let selection = pane
+        let selection = self
+            .state
+            .borrow()
+            .model
+            .keyboard_pane(&self.id)
+            .map(|(owner, tab)| (owner, tab.clone()));
+        let browser = self.active_browser();
+        let find_left = self
+            .find
             .as_ref()
-            .map(|(owner, tab)| (owner.clone(), (*tab).clone()));
-        if self.selected_pane != selection {
+            .is_some_and(|find| browser.as_ref() != Some(&find.browser));
+        let menu_left = matches!(&self.overlay, Overlay::ContextMenu(request) if browser.as_ref() != Some(&request.id.key));
+        if find_left {
+            self.stop_find();
+        }
+        if menu_left {
+            self.cancel_context_menu();
+            self.overlay = Overlay::None;
+        }
+        if self.selected_pane != selection || find_left || menu_left {
             self.selected_pane = selection;
             if self.selected_pane.is_some() && !self.overlay.is_open() {
                 self.page_focus.focus(window, cx);
@@ -190,18 +225,10 @@ impl Shell {
             }
         }
 
-        let focused = pane.and_then(|(owner, tab)| {
-            if window.is_window_active()
-                && self.page_focus.is_focused(window)
-                && state.engine.owner(tab) == Some(&owner)
-                && state.model.page(&owner, tab).is_some()
-            {
-                state.engine.key(tab)
-            } else {
-                None
-            }
-        });
+        let focused =
+            browser.filter(|_| window.is_window_active() && self.page_focus.is_focused(window));
         if self.focused_browser != focused {
+            let state = self.state.borrow();
             // A transfer can leave the previous browser live in another window.
             if let Some(old) = self.focused_browser.take()
                 && state.engine.key(&old.tab).as_ref() == Some(&old)
@@ -355,6 +382,11 @@ impl Shell {
                     }),
                 );
         }
+        if let Some(find) = &self.find
+            && find.browser.tab == id
+        {
+            element = element.child(self.find_panel(find, cx));
+        }
         div()
             .flex()
             .flex_col()
@@ -414,8 +446,10 @@ impl Render for Shell {
                         .px_2()
                         .flex()
                         .items_center()
+                        .gap_2()
                         .min_w_0()
-                        .child(div().truncate().child(popup.page.tab.url.clone())),
+                        .child(div().flex_1().truncate().child(popup.page.tab.url.clone()))
+                        .children(self.zoom_badge(cx)),
                 )
                 .child(div().flex_1().min_h_0().child(self.pane(
                     Owner::Popup(self.id.clone()),
@@ -430,6 +464,7 @@ impl Render for Shell {
                         .flex()
                         .gap_2()
                         .p_2()
+                        .children(self.zoom_badge(cx))
                         .child(self.action_button("return", "Open in Flecha", Action::Return, cx))
                         .child(self.action_button("close", "Close", Action::Close, cx)),
                 )
@@ -484,6 +519,7 @@ impl Render for Shell {
                                 .flex()
                                 .items_center()
                                 .gap_2()
+                                .children(self.zoom_badge(cx))
                                 .child(self.action_button(
                                     "promote",
                                     "Open in tab",
@@ -543,7 +579,7 @@ impl Render for Shell {
             panel.refresh(&self.state.borrow().downloads);
         }
         let overlay = match &self.overlay {
-            Overlay::None => None,
+            Overlay::None | Overlay::ContextMenu(_) => None,
             Overlay::Command(bar) => Some(self.command_panel(bar, cx)),
             Overlay::History(panel) => Some(self.history_panel(panel, cx)),
             Overlay::Settings(panel) => Some(self.settings_panel(panel, cx)),
@@ -585,6 +621,9 @@ impl Render for Shell {
                             .child(panel.when(drawer, |drawer| drawer.h_full().w(px(420.)))),
                     ),
             ));
+        }
+        if let Overlay::ContextMenu(menu) = &self.overlay {
+            main = main.child(self.context_menu_panel(menu, window, cx));
         }
         for (tab, retired) in std::mem::replace(&mut self.images, images) {
             for image in retired {

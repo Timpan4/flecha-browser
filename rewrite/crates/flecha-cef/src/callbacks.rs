@@ -11,7 +11,7 @@ use gpui::{Bounds, Pixels, point, px, size};
 use crate::compositor::{self, Delivery};
 use crate::popup::{self, Popups};
 use crate::{BrowserEvent, BrowserKey, Event, Partition, Viewport};
-use crate::{adblock, boosts, downloads, permissions, services};
+use crate::{adblock, boosts, context_menu, downloads, find, permissions, services};
 
 pub(crate) type Queue = Rc<RefCell<VecDeque<BrowserEvent>>>;
 
@@ -46,6 +46,8 @@ pub(crate) struct Slot {
     pub events: Queue,
     pub popups: Rc<Popups>,
     pub stage: Cell<Stage>,
+    pub finding: Cell<bool>,
+    pub menu: context_menu::Menu,
     /// Popups this browser has asked CEF for that CEF hasn't created yet, by popup ID.
     pub opening: RefCell<BTreeMap<i32, Rc<Slot>>>,
     /// For a popup still being created: its opener and its popup ID there.
@@ -80,6 +82,8 @@ impl Slot {
             events,
             popups,
             stage: Cell::new(Stage::Pending),
+            finding: Cell::new(false),
+            menu: context_menu::Menu::default(),
             opening: RefCell::new(BTreeMap::new()),
             origin: RefCell::new(None),
             identifier: Cell::new(None),
@@ -114,6 +118,8 @@ impl Slot {
     /// denied.
     pub fn destroyed(&self) {
         self.browser.take();
+        find::forget(self);
+        context_menu::cancel(self);
         self.devtools.take();
         // Frames can hold textures on GPUI's device, which must not outlive the windows.
         self.surface.take();
@@ -324,6 +330,17 @@ wrap_life_span_handler! {
         fn on_before_popup_aborted(&self, _browser: Option<&mut Browser>, popup_id: i32) {
             popup::aborted(&self.slot, popup_id);
         }
+
+        fn on_before_dev_tools_popup(
+            &self, _browser: Option<&mut Browser>, _window: Option<&mut WindowInfo>,
+            _client: Option<&mut Option<Client>>, _settings: Option<&mut BrowserSettings>,
+            _extra: Option<&mut Option<DictionaryValue>>, use_default_window: Option<&mut i32>,
+        ) {
+            // Registering a CEF life span handler makes the native DevTools window opt-in.
+            if let Some(use_default_window) = use_default_window {
+                *use_default_window = 1;
+            }
+        }
     }
 }
 
@@ -351,6 +368,7 @@ wrap_load_handler! {
             &self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, _transition_type: TransitionType,
         ) {
             let Some(frame) = frame.filter(|frame| frame.is_main() != 0) else { return };
+            context_menu::cancel(&self.slot);
             let services = services::of(&self.slot);
             // The page this tab's permission requests came from is gone.
             if let Some(identifier) = self.slot.identifier.get() {
@@ -385,24 +403,33 @@ wrap_load_handler! {
     }
 }
 
+#[derive(Clone)]
+struct PageHandlers {
+    display: DisplayHandler,
+    load: LoadHandler,
+    find: FindHandler,
+    context_menu: ContextMenuHandler,
+}
+
 wrap_client! {
     pub(crate) struct OsrClient {
         render: RenderHandler,
         life: LifeSpanHandler,
-        display: DisplayHandler,
-        load: LoadHandler,
         request: RequestHandler,
         download: DownloadHandler,
         permission: PermissionHandler,
+        page: PageHandlers,
     }
     impl Client {
         fn render_handler(&self) -> Option<RenderHandler> { Some(self.render.clone()) }
         fn life_span_handler(&self) -> Option<LifeSpanHandler> { Some(self.life.clone()) }
-        fn display_handler(&self) -> Option<DisplayHandler> { Some(self.display.clone()) }
-        fn load_handler(&self) -> Option<LoadHandler> { Some(self.load.clone()) }
+        fn display_handler(&self) -> Option<DisplayHandler> { Some(self.page.display.clone()) }
+        fn load_handler(&self) -> Option<LoadHandler> { Some(self.page.load.clone()) }
         fn request_handler(&self) -> Option<RequestHandler> { Some(self.request.clone()) }
         fn download_handler(&self) -> Option<DownloadHandler> { Some(self.download.clone()) }
         fn permission_handler(&self) -> Option<PermissionHandler> { Some(self.permission.clone()) }
+        fn find_handler(&self) -> Option<FindHandler> { Some(self.page.find.clone()) }
+        fn context_menu_handler(&self) -> Option<ContextMenuHandler> { Some(self.page.context_menu.clone()) }
     }
 }
 
@@ -415,10 +442,14 @@ pub(crate) fn client(slot: Rc<Slot>) -> Client {
     OsrClient::new(
         Osr::new(slot.clone()),
         Life::new(slot.clone()),
-        Display::new(slot.clone()),
-        Load::new(slot.clone()),
         adblock::handler(io),
         downloads::handler(slot.clone()),
-        permissions::handler(slot),
+        permissions::handler(slot.clone()),
+        PageHandlers {
+            display: Display::new(slot.clone()),
+            load: Load::new(slot.clone()),
+            find: find::handler(slot.clone()),
+            context_menu: context_menu::handler(slot),
+        },
     )
 }
