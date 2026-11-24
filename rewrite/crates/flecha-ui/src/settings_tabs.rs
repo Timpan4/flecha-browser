@@ -10,11 +10,12 @@ use gpui::{
     prelude::FluentBuilder as _, px,
 };
 
-use super::{SettingsPanel, muted, row};
+use super::{SettingsPanel, muted, row, settings_button};
 use crate::sidebar::tab_label;
 use crate::text_field::TextField;
 use crate::theme::palette;
-use crate::view::{Overlay, Shell, button};
+use crate::tokens;
+use crate::view::{Overlay, Shell, ring};
 use crate::{Controller, now};
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -466,7 +467,9 @@ impl Shell {
             .flex_1()
             .min_w_0()
             .when(manager.search_focused, |field| {
-                field.border_b_1().border_color(palette().accent_strong)
+                field
+                    .rounded(px(tokens::RADIUS_MD))
+                    .shadow(vec![ring(palette().focus, tokens::FOCUS_RING)])
             })
             .child(if manager.search_focused {
                 manager.search.render("Search tabs and folders")
@@ -495,23 +498,25 @@ impl Shell {
             toolbar = toolbar
                 .child(muted(count))
                 .when(can_move, |bar| {
-                    bar.child(button("manager-move", "Move to…").on_click(
+                    bar.child(settings_button("manager-move", "Move to…").on_click(
                         cx.listener(|this, _: &ClickEvent, _, cx| this.tabs_menu(Menu::Move, cx)),
                     ))
                 })
                 .when(folder.is_some(), |bar| {
-                    bar.child(button("manager-delete-folder", "Delete folder…").on_click(
-                        cx.listener(|this, _: &ClickEvent, _, cx| {
-                            this.tabs_menu(Menu::DeleteFolder, cx)
-                        }),
-                    ))
+                    bar.child(
+                        settings_button("manager-delete-folder", "Delete folder…").on_click(
+                            cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.tabs_menu(Menu::DeleteFolder, cx)
+                            }),
+                        ),
+                    )
                 })
                 .when(folder.is_none(), |bar| {
-                    bar.child(button("manager-close-tabs", "Close").on_click(
+                    bar.child(settings_button("manager-close-tabs", "Close").on_click(
                         cx.listener(|this, _: &ClickEvent, _, cx| this.edit_tabs(Edit::Close, cx)),
                     ))
                     .child(
-                        button("manager-archive-tabs", "Archive").on_click(cx.listener(
+                        settings_button("manager-archive-tabs", "Archive").on_click(cx.listener(
                             |this, _: &ClickEvent, _, cx| this.edit_tabs(Edit::Archive, cx),
                         )),
                     )
@@ -529,24 +534,23 @@ impl Shell {
                 .child(
                     row()
                         .child(
-                            button("manager-keep-folder-tabs", "Keep contents").on_click(
+                            settings_button("manager-keep-folder-tabs", "Keep contents").on_click(
                                 cx.listener(|this, _: &ClickEvent, _, cx| {
                                     this.edit_tabs(Edit::DeleteFolder { keep_tabs: true }, cx)
                                 }),
                             ),
                         )
                         .child(
-                            button("manager-archive-folder-tabs", "Archive tabs").on_click(
-                                cx.listener(|this, _: &ClickEvent, _, cx| {
+                            settings_button("manager-archive-folder-tabs", "Archive tabs")
+                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                                     this.edit_tabs(Edit::DeleteFolder { keep_tabs: false }, cx)
-                                }),
-                            ),
+                                })),
                         )
-                        .child(
-                            button("manager-cancel-folder", "Cancel").on_click(cx.listener(
-                                |this, _: &ClickEvent, _, cx| this.tabs_menu(Menu::None, cx),
-                            )),
-                        ),
+                        .child(settings_button("manager-cancel-folder", "Cancel").on_click(
+                            cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.tabs_menu(Menu::None, cx)
+                            }),
+                        )),
                 )
                 .into_any_element(),
             _ => {
@@ -593,7 +597,10 @@ impl Shell {
     ) -> Div {
         let (id, title, detail, depth) = match row {
             Row::Heading(name) => {
-                return div().pt_2().text_color(palette().muted).child(name.clone());
+                return div()
+                    .pt_2()
+                    .text_color(palette().text_2)
+                    .child(name.clone());
             }
             Row::Tab(id, depth) => {
                 let Some(tab) = core.tab(id) else {
@@ -627,9 +634,10 @@ impl Shell {
                 .py_1()
                 .rounded_md()
                 .cursor_pointer()
-                .hover(|row| row.bg(palette().hover))
+                .hover(|row| row.bg(palette().surface_2))
                 .when(manager.selected.contains(&item), |row| {
-                    row.bg(palette().accent)
+                    row.bg(palette().selection)
+                        .text_color(palette().selection_text)
                 })
                 .child(div().flex_1().min_w_0().truncate().child(title))
                 .child(muted(detail).min_w_0().truncate().text_xs())
@@ -654,19 +662,18 @@ impl Shell {
         folder: Option<&FolderId>,
         cx: &Context<Self>,
     ) -> gpui::AnyElement {
-        let mut menu =
-            div()
-                .id("manager-destinations")
-                .flex()
-                .flex_col()
-                .gap_2()
-                .min_h_0()
-                .overflow_y_scroll()
-                .child(row().child("Move to").child(
-                    button("manager-cancel-move", "Cancel").on_click(
-                        cx.listener(|this, _: &ClickEvent, _, cx| this.tabs_menu(Menu::None, cx)),
-                    ),
-                ));
+        let mut menu = div()
+            .id("manager-destinations")
+            .flex()
+            .flex_col()
+            .gap_2()
+            .min_h_0()
+            .overflow_y_scroll()
+            .child(row().child("Move to").child(
+                settings_button("manager-cancel-move", "Cancel").on_click(
+                    cx.listener(|this, _: &ClickEvent, _, cx| this.tabs_menu(Menu::None, cx)),
+                ),
+            ));
         if folder.is_none() {
             menu = menu.child(self.move_button(
                 "manager-move-favorite",
@@ -721,7 +728,7 @@ impl Shell {
         destination: Destination,
         cx: &Context<Self>,
     ) -> gpui::Stateful<Div> {
-        button(id, label).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+        settings_button(id, label).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
             this.edit_tabs(Edit::Move(destination.clone()), cx);
         }))
     }

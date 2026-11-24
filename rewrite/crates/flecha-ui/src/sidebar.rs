@@ -1,16 +1,23 @@
-use flecha_core::{BrowserState, FolderId, PinnedNode, Placement, TabId, WindowId};
+use std::time::Duration;
+
+use flecha_core::{BrowserState, FolderId, PinnedNode, Placement, TabId, WindowId, shortcuts};
 use gpui::{
-    ClickEvent, Context, Div, InteractiveElement as _, ParentElement as _,
-    StatefulInteractiveElement as _, Styled as _, Window, div, prelude::FluentBuilder as _, px,
-    rgb,
+    Animation, AnimationExt as _, ClickEvent, Context, Div, FontWeight, InteractiveElement as _,
+    ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _, Transformation,
+    Window, div, percentage, prelude::FluentBuilder as _, px, relative,
 };
 use uuid::Uuid;
 
 use crate::command_bar::Command;
-use crate::shortcuts::Navigation;
+use crate::icons::icon;
+use crate::shortcuts::{Navigation, platform};
 use crate::text_field::TextField;
 use crate::theme::palette;
-use crate::view::{Overlay, Shell, button, overlay_panel};
+use crate::tokens;
+use crate::view::{
+    Overlay, Shell, hairline, icon_button, icon_square, kbd, letter_favicon, menu_item,
+    overlay_panel, primary_button, site, sized_icon_button, text_button, tinted_icon_button,
+};
 use crate::{Action, Controller, dispatch, now};
 
 #[derive(Clone)]
@@ -132,6 +139,8 @@ impl Controller {
 }
 
 impl Shell {
+    /// `#sidebar` (ui/styles.css:25-36) and what it holds, in the shipping order: the toolbar,
+    /// the address, Favorites, the Space's name, its pinned and Today tabs, and the footer.
     pub(crate) fn sidebar(
         &self,
         state: &Controller,
@@ -141,19 +150,23 @@ impl Shell {
         let Some(core) = state.model.state(&self.id) else {
             return div();
         };
+        let palette = palette();
         let incognito = state.model.is_incognito(&self.id);
         let toggle = Action::Sidebar(SidebarAction::Toggle);
         if !core.sidebar_visible(&self.id) {
+            // The shipping shell has no control here: its sidebar comes back by shortcut or menu.
             return div()
                 .absolute()
-                .top_2()
-                .left_2()
+                .top(px(tokens::SIDEBAR_PAD_TOP))
+                .left(px(tokens::SIDEBAR_PAD_LEFT))
                 .occlude()
-                .rounded_md()
-                .bg(palette().sidebar)
                 .flex()
                 .items_center()
-                .child(self.action_button("sidebar-toggle", "Show sidebar", toggle, cx))
+                .gap(px(tokens::TOOLBAR_GAP))
+                .rounded(px(tokens::RADIUS_SM))
+                .bg(palette.tint)
+                .shadow(palette.shadow_row())
+                .child(self.toolbar_button("sidebar-toggle", "sidebar", "Show sidebar", toggle, cx))
                 .when(!state.model.peeks.contains_key(&self.id), |bar| {
                     bar.children(self.zoom_badge(cx))
                 });
@@ -163,145 +176,45 @@ impl Shell {
         };
         let window_space = current.spaces.get(&space.id);
         let active = window_space.and_then(|space| space.active_tab_id.as_ref());
-        let tab = active.and_then(|id| core.tab(id));
-        let address = tab.map(|tab| flecha_core::suggestions::display_url(&tab.url));
-        let tint = u32::from_str_radix(space.color.trim_start_matches('#'), 16).unwrap_or(0xcdd9f7);
-        let mut favorites = div()
-            .id("favorites-strip")
-            .flex()
-            .flex_shrink_0()
-            .gap_1()
-            .overflow_x_scroll();
-        for id in core.favorites() {
-            if let Some(tab) = core.tab(id) {
-                let action = Action::Select(id.clone());
-                let label = tab_label(tab);
-                favorites = favorites.child(
-                    button(format!("favorite-{}", id.as_str()), label)
-                        .max_w(px(120.))
-                        .truncate()
-                        .flex_shrink_0()
-                        .bg(if active == Some(id) {
-                            palette().hover
-                        } else {
-                            palette().surface
-                        })
-                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            dispatch(&this.state, &this.id, action.clone(), cx);
-                        })),
-                );
-            }
-        }
-        if let Some(id) = active.filter(|id| core.favorites().contains(id)) {
-            favorites = favorites.child(self.tab_menu_button(id, cx));
-        }
-        let add_favorite = active.filter(|id| !core.favorites().contains(id));
-        let favorites = div()
+        let split = current.visible_tabs();
+        let toolbar = state.toolbars.get(&self.id).copied().unwrap_or_default();
+        let rows = Rows {
+            core,
+            active,
+            split,
+        };
+
+        let mut tabs = div()
+            .id("sidebar-tabs")
             .flex()
             .flex_col()
-            .flex_shrink_0()
-            .child(
-                div()
-                    .h(px(22.))
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .child(section("Favorites"))
-                    .when_some(add_favorite, |row, id| {
-                        row.child(
-                            self.row_action(
-                                "add-favorite",
-                                id.as_str(),
-                                "+ Favorite",
-                                Action::Sidebar(SidebarAction::Favorite(id.clone())),
-                                cx,
-                            )
-                            .text_xs(),
-                        )
-                    }),
-            )
-            .when(!core.favorites().is_empty(), |row| row.child(favorites));
-
-        let mut tabs =
-            div()
-                .id("sidebar-tabs")
-                .min_h_0()
-                .flex_1()
-                .overflow_y_scroll()
-                .when(!incognito, |tabs| {
-                    tabs.child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .gap_1()
-                            .child(self.section_button(
-                                "pinned-toggle",
-                                if space.pinned_collapsed {
-                                    "▸ Pinned"
-                                } else {
-                                    "▾ Pinned"
-                                },
-                                SidebarAction::TogglePinned(!space.pinned_collapsed),
-                                cx,
-                            ))
-                            .child(button("new-folder", "+ Folder").text_xs().on_click(
-                                cx.listener(|this, _: &ClickEvent, window, cx| {
-                                    this.show_overlay(
-                                        Overlay::Folder(None, TextField::default()),
-                                        window,
-                                        cx,
-                                    );
-                                }),
-                            )),
-                    )
-                });
-        if !space.pinned_collapsed && !incognito {
-            tabs = tabs.children(self.pinned_rows(core, &space.pinned, active, cx));
+            .min_h_0()
+            .flex_1()
+            .overflow_y_scroll();
+        if !incognito {
+            tabs = tabs.child(self.pinned_header(space, cx));
+            if !space.pinned_collapsed {
+                tabs = tabs.children(self.pinned_rows(&rows, &space.pinned, cx));
+            }
         }
-        tabs = tabs.child(section("Today"));
+        tabs = tabs
+            .child(
+                // `.today-header` (ui/styles.css:475-481): a hairline above, a little apart.
+                group_header()
+                    .mt(px(tokens::SPACE_2))
+                    .pt(px(tokens::SPACE_2))
+                    .h(px(tokens::TODAY_HEADER))
+                    .border_t(px(tokens::TODAY_RULE))
+                    .border_color(palette.line)
+                    .child("Today"),
+            )
+            .child(self.new_tab_row(state, cx));
         if let Some(ws) = window_space {
             for id in &ws.today {
-                tabs = tabs.child(self.tab_row(core, id, active, cx));
+                tabs = tabs.child(self.tab_row(&rows, id, cx));
             }
         }
 
-        let mut spaces = div()
-            .id("spaces")
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .gap_1()
-            .overflow_x_scroll();
-        for candidate in core.spaces() {
-            let selected = candidate.id == space.id;
-            let tint =
-                u32::from_str_radix(candidate.color.trim_start_matches('#'), 16).unwrap_or(tint);
-            let action = Action::Switch(candidate.id.clone());
-            spaces = spaces.child(
-                div()
-                    .id(format!("space-{}", candidate.id.as_str()))
-                    .flex()
-                    .gap_1()
-                    .items_center()
-                    .flex_shrink_0()
-                    .px_2()
-                    .py_1()
-                    .rounded_md()
-                    .cursor_pointer()
-                    .when(selected, |row| row.bg(palette().row))
-                    .hover(|row| row.bg(palette().hover))
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        dispatch(&this.state, &this.id, action.clone(), cx);
-                    }))
-                    .child(tint_dot(tint))
-                    .child(candidate.name.clone())
-                    .when(candidate.isolated, |row| {
-                        row.child(div().text_xs().child("Isolated"))
-                    }),
-            );
-        }
-        let toolbar = state.toolbars.get(&self.id).copied().unwrap_or_default();
         let downloads = state
             .downloads
             .count(state.model.incognito_session(&self.id));
@@ -311,400 +224,787 @@ impl Shell {
             .w(px(state.model.core.settings.sidebar_width.pixels() as f32))
             .flex_shrink_0()
             .min_h_0()
-            .p_2()
-            .gap_2()
-            .bg(palette().sidebar)
-            .text_sm()
-            .when(incognito, |sidebar| {
-                sidebar.child(
-                    div()
-                        .id("incognito-label")
-                        .flex()
-                        .gap_1()
-                        .items_center()
-                        .px_2()
-                        .text_color(rgb(crate::incognito::LABEL))
-                        .child(format!(
-                            "{} {}",
-                            space.emoji.as_deref().unwrap_or_default(),
-                            space.name
-                        )),
-                )
-            })
+            .pt(px(tokens::SIDEBAR_PAD_TOP))
+            .pr(px(tokens::SIDEBAR_PAD_RIGHT))
+            .pb(px(tokens::SIDEBAR_PAD_BOTTOM))
+            .pl(px(tokens::SIDEBAR_PAD_LEFT))
+            .gap(px(tokens::SPACE_2))
+            .bg(palette.tint)
             .child(
+                // `.toolbar` (ui/styles.css:51-73).
                 div()
                     .flex()
                     .flex_shrink_0()
                     .items_center()
-                    .justify_between()
-                    .child(self.action_button("sidebar-toggle", "Hide", toggle, cx))
-                    .child(self.navigation_button("back", "←", Navigation::Back, toolbar.back, cx))
+                    .gap(px(tokens::TOOLBAR_GAP))
+                    .h(px(tokens::TOOLBAR_HEIGHT))
+                    .child(self.toolbar_button(
+                        "sidebar-toggle",
+                        "sidebar",
+                        "Hide sidebar",
+                        toggle,
+                        cx,
+                    ))
+                    .child(div().flex_1())
+                    .when(!state.model.peeks.contains_key(&self.id), |bar| {
+                        bar.children(self.zoom_badge(cx))
+                    })
+                    .child(self.navigation_button(
+                        "back",
+                        "arrowLeft",
+                        Navigation::Back,
+                        toolbar.back,
+                        cx,
+                    ))
                     .child(self.navigation_button(
                         "forward",
-                        "→",
+                        "arrowRight",
                         Navigation::Forward,
                         toolbar.forward,
                         cx,
                     ))
-                    .child(self.navigation_button(
-                        "reload",
-                        if toolbar.loading { "■" } else { "↻" },
-                        if toolbar.loading {
-                            Navigation::Stop
-                        } else {
-                            Navigation::Reload
-                        },
-                        toolbar.available,
-                        cx,
-                    )),
+                    .child(if toolbar.loading {
+                        self.navigation_button("reload", "close", Navigation::Stop, true, cx)
+                    } else {
+                        self.navigation_button(
+                            "reload",
+                            "reload",
+                            Navigation::Reload,
+                            toolbar.available,
+                            cx,
+                        )
+                    }),
             )
-            .when(!state.model.peeks.contains_key(&self.id), |sidebar| {
-                sidebar.children(
-                    self.zoom_badge(cx)
-                        .into_iter()
-                        .map(|badge| div().self_start().child(badge)),
-                )
-            })
-            .when(toolbar.loading, |sidebar| {
-                sidebar.child(
-                    div()
-                        .px_2()
-                        .text_xs()
-                        .text_color(palette().muted)
-                        .child("Loading…"),
-                )
-            })
-            .child(
-                button(
-                    "sidebar-address",
-                    address.unwrap_or_else(|| "Address or search".into()),
-                )
-                .truncate()
-                .bg(palette().surface)
-                .flex_shrink_0()
-                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                    this.open_command(Command::EditLocation, window, cx);
-                })),
-            )
-            .when(state.site_for_window(&self.id).is_some(), |sidebar| {
-                sidebar.child(
-                    button("site-controls", "Site Controls")
-                        .self_start()
-                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                            this.toggle_site_controls(window, cx)
-                        })),
-                )
-            })
-            .when(!incognito, |sidebar| sidebar.child(favorites))
-            .child(tabs)
+            .child(self.urlbar(state, &rows, toolbar.loading, cx))
             .when(!incognito, |sidebar| {
-                sidebar.child(
-                    div()
-                        .flex()
-                        .min_w_0()
-                        .gap_1()
-                        .child(div().flex_1().min_w_0().child(spaces))
-                        .child(self.action_button("new-space", "+ Space", Action::NewSpace, cx)),
-                )
+                sidebar.children(self.favorites(&rows, cx))
             })
+            .child(space_header(space))
+            .child(tabs)
+            .child(self.sidebar_extras(current, &rows, space.isolated, incognito, cx))
             .child(
+                // `footer` (ui/styles.css:917-922).
                 div()
                     .flex()
-                    .flex_wrap()
                     .flex_shrink_0()
-                    .gap_1()
-                    .border_t_1()
-                    .border_color(palette().divider)
-                    .pt_1()
-                    .when(!incognito, |row| {
-                        row.child(button("show-history", "History").on_click(cx.listener(
-                            |this, _: &ClickEvent, window, cx| this.toggle_history(window, cx),
-                        )))
-                    })
+                    .items_center()
+                    .gap(px(tokens::SPACE_1))
+                    .pt(px(tokens::SPACE_1))
                     .child(
-                        button("show-downloads", "Downloads")
+                        icon_button("show-downloads", "download", "Downloads")
+                            .relative()
                             .when(downloads > 0, |button| {
-                                button.flex().gap_1().items_center().child(
-                                    div()
-                                        .px_1()
-                                        .text_xs()
-                                        .rounded_md()
-                                        .bg(palette().hover)
-                                        .child(downloads.to_string()),
-                                )
+                                button.child(downloads_badge(downloads))
                             })
                             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                                 this.toggle_downloads(window, cx)
                             })),
                     )
-                    .when(!incognito, |row| {
-                        row.child(button("show-archive", "Archive").on_click(cx.listener(
-                            |this, _: &ClickEvent, window, cx| this.toggle_archive(window, cx),
-                        )))
-                    })
-                    .child(self.command_button(
-                        "open-settings",
-                        "Settings",
-                        Command::OpenSettings,
-                        cx,
-                    ))
-                    .child(self.command_button("new-tab", "+ Tab", Command::NewTab, cx))
-                    .when(!incognito, |row| {
-                        row.child(self.action_button(
-                            "isolation",
-                            if space.isolated {
-                                "Isolated cookies"
-                            } else {
-                                "Shared cookies"
-                            },
-                            Action::Isolate,
-                            cx,
-                        ))
-                    })
-                    .when(current.visible_tabs().len() > 1, |row| {
-                        row.child(self.action_button(
-                            "unsplit",
-                            "Exit split",
-                            Action::ExitSplit,
-                            cx,
-                        ))
-                    })
-                    // Last, so the regular controls keep the places the harness measured.
-                    .child(self.action_button(
-                        "new-incognito-window",
-                        "+ Incognito",
-                        Action::NewIncognitoWindow,
-                        cx,
-                    )),
+                    .when(!incognito, |footer| {
+                        footer.child(self.space_dots(core, space, cx)).child(
+                            icon_button("new-space", "plus", "New Space").on_click(cx.listener(
+                                |this, _: &ClickEvent, _, cx| {
+                                    dispatch(&this.state, &this.id, Action::NewSpace, cx);
+                                },
+                            )),
+                        )
+                    }),
             )
     }
 
-    fn navigation_button(
+    /// `#urlbar-wrap` (ui/styles.css:174-276): the shown page's host behind a padlock, the site
+    /// controls revealed on hover, and the loading line along its bottom.
+    fn urlbar(
         &self,
-        id: &'static str,
-        label: &'static str,
-        navigation: Navigation,
-        enabled: bool,
+        state: &Controller,
+        rows: &Rows<'_>,
+        loading: bool,
         cx: &Context<Self>,
     ) -> gpui::Stateful<Div> {
-        button(id, label)
-            .px_1()
-            .aria_label(match navigation {
-                Navigation::Back => "Back",
-                Navigation::Forward => "Forward",
-                Navigation::Reload => "Reload",
-                Navigation::HardReload => "Reload without cache",
-                Navigation::Stop => "Stop loading",
-            })
-            .when_else(
-                enabled,
-                |button| {
-                    button.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        dispatch(&this.state, &this.id, Action::Browser(navigation), cx)
+        let palette = palette();
+        let url = rows
+            .active
+            .and_then(|id| rows.core.tab(id))
+            .map(|tab| tab.url.as_str())
+            .filter(|url| *url != "about:blank");
+        let insecure = url.is_some_and(|url| url.starts_with("http:") && !is_dev_url(url));
+        let kind = match url {
+            None => "search",
+            Some(url) if is_dev_url(url) => "code",
+            Some(url) if url.starts_with("https:") => "lock",
+            Some(url) if url.starts_with("http:") => "unlocked",
+            Some(_) => "globe",
+        };
+        let group = SharedString::new_static("urlbar");
+        div()
+            .id("urlbar-wrap")
+            .group(group.clone())
+            .relative()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .h(px(tokens::URLBAR_HEIGHT))
+            .pr(px(tokens::URLBAR_PAD_RIGHT))
+            .rounded(px(tokens::RADIUS_LG))
+            .bg(palette.fill_subtle)
+            .shadow(vec![hairline(palette.line)])
+            .hover(|wrap| wrap.bg(palette.fill_hover))
+            .child(
+                div()
+                    .id("sidebar-address")
+                    .flex()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .items_center()
+                    .gap(px(tokens::SPACE_2))
+                    .pl(px(tokens::URLBAR_PAD_LEFT))
+                    .pr(px(tokens::URLBAR_PAD_RIGHT))
+                    .cursor_pointer()
+                    .aria_label("Open location")
+                    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                        this.open_command(Command::EditLocation, window, cx);
                     }))
-                },
-                |button| button.opacity(0.5).cursor_default(),
+                    .child(icon(
+                        kind,
+                        tokens::URLBAR_ICON,
+                        if insecure {
+                            palette.amber
+                        } else {
+                            palette.text_3
+                        },
+                    ))
+                    .child(div().flex_1().min_w_0().truncate().map(|text| {
+                        match url {
+                            Some(url) => text
+                                .font_weight(FontWeight::MEDIUM)
+                                .child(site(url).to_owned()),
+                            None => text.text_color(palette.text_3).child("Search or enter URL"),
+                        }
+                    })),
             )
+            .when(state.site_for_window(&self.id).is_some(), |wrap| {
+                wrap.child(
+                    tinted_icon_button(
+                        "site-controls",
+                        "sliders",
+                        "Site controls",
+                        (tokens::URL_ACTION, tokens::URL_ACTION_ICON),
+                        palette.text_3,
+                    )
+                    .opacity(0.)
+                    .group_hover(group, |action| action.opacity(1.))
+                    .on_click(cx.listener(
+                        |this, _: &ClickEvent, window, cx| this.toggle_site_controls(window, cx),
+                    )),
+                )
+            })
+            .when_some(rows.active.filter(|_| loading), |wrap, tab| {
+                wrap.child(
+                    div()
+                        .absolute()
+                        .bottom_0()
+                        .left_0()
+                        .h(px(tokens::URLBAR_PROGRESS))
+                        .bg(palette.blue)
+                        .with_animation(
+                            SharedString::from(format!("urlbar-progress-{}", tab.as_str())),
+                            Animation::new(Duration::from_millis(tokens::PROGRESS_MS as u64)),
+                            |line, delta| line.w(relative(tokens::progress(delta))),
+                        ),
+                )
+            })
     }
 
-    fn section_button(
-        &self,
-        id: &'static str,
-        label: &'static str,
-        action: SidebarAction,
-        cx: &Context<Self>,
-    ) -> gpui::Stateful<Div> {
-        button(id, label)
-            .text_xs()
-            .text_color(palette().muted)
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                dispatch(&this.state, &this.id, Action::Sidebar(action.clone()), cx);
-            }))
-    }
-
-    fn pinned_rows(
-        &self,
-        core: &BrowserState,
-        nodes: &[PinnedNode],
-        active: Option<&TabId>,
-        cx: &Context<Self>,
-    ) -> Vec<Div> {
-        let mut rows = Vec::new();
-        let mut levels = vec![nodes.iter()];
-        while let Some(level) = levels.last_mut() {
-            let Some(node) = level.next() else {
-                levels.pop();
+    /// `#favorites` (ui/styles.css:414-457): a grid of four site tiles.
+    fn favorites(&self, rows: &Rows<'_>, cx: &Context<Self>) -> Option<Div> {
+        let favorites = rows.core.favorites();
+        if favorites.is_empty() {
+            return None;
+        }
+        let palette = palette();
+        let mut grid = div()
+            .id("favorites-strip")
+            .grid()
+            .grid_cols(4)
+            .flex_shrink_0()
+            .gap(px(tokens::FAVORITES_GAP));
+        for id in favorites {
+            let Some(tab) = rows.core.tab(id) else {
                 continue;
             };
-            let inset = px((levels.len() - 1) as f32 * 8.);
-            let row = match node {
-                PinnedNode::Tab { tab_id } => self.tab_row(core, tab_id, active, cx),
+            let selected = rows.active == Some(id);
+            let action = Action::Select(id.clone());
+            let group = SharedString::from(format!("favorite-{}", id.as_str()));
+            grid = grid.child(
+                div()
+                    .group(group.clone())
+                    .relative()
+                    .child(
+                        div()
+                            .id(group.clone())
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .h(px(tokens::FAVORITE_HEIGHT))
+                            .rounded(px(tokens::RADIUS_LG))
+                            .cursor_pointer()
+                            .aria_label(tab_label(tab))
+                            .map(|tile| {
+                                if selected {
+                                    tile.bg(palette.fill_active).shadow(palette.shadow_row())
+                                } else {
+                                    tile.bg(palette.fill_subtle)
+                                        .hover(|tile| tile.bg(palette.fill_hover))
+                                }
+                            })
+                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                dispatch(&this.state, &this.id, action.clone(), cx);
+                            }))
+                            .child(letter_favicon(
+                                &tab.url,
+                                tokens::FAVORITE_ICON,
+                                tokens::FAVORITE_ICON_RADIUS,
+                                tokens::FAVORITE_LETTER,
+                            )),
+                    )
+                    .when(selected, |tile| {
+                        tile.child(
+                            div()
+                                .absolute()
+                                .top_0()
+                                .right_0()
+                                .opacity(0.)
+                                .group_hover(group, |menu| menu.opacity(1.))
+                                .child(self.tab_menu_button(id, cx)),
+                        )
+                    }),
+            );
+        }
+        Some(div().flex_shrink_0().child(grid))
+    }
+
+    /// The Pinned group's header (ui/index.html:72-75): its toggle and, in the rewrite, a way to
+    /// make a folder that the shipping shell offers from its context menu.
+    fn pinned_header(&self, space: &flecha_core::Space, cx: &Context<Self>) -> Div {
+        let collapsed = space.pinned_collapsed;
+        let action = Action::Sidebar(SidebarAction::TogglePinned(!collapsed));
+        group_header()
+            .child(
+                text_button("pinned-toggle", "Pinned")
+                    .aria_label(if collapsed {
+                        "Show pinned tabs"
+                    } else {
+                        "Hide pinned tabs"
+                    })
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        dispatch(&this.state, &this.id, action.clone(), cx);
+                    })),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(tokens::TOOLBAR_GAP))
+                    // `#pinned-count` (ui/app.ts:243-244), while the group is folded away.
+                    .when(collapsed && !space.pinned.is_empty(), |end| {
+                        end.child(space.pinned.len().to_string())
+                    })
+                    .child(text_button("new-folder", "+ Folder").on_click(cx.listener(
+                        |this, _: &ClickEvent, window, cx| {
+                            this.show_overlay(
+                                Overlay::Folder(None, TextField::default()),
+                                window,
+                                cx,
+                            );
+                        },
+                    ))),
+            )
+    }
+
+    /// The pinned tabs and folders; an open folder's contents sit indented past a hairline
+    /// guide (`.folder-children`, ui/styles.css:776-790).
+    fn pinned_rows(&self, rows: &Rows<'_>, nodes: &[PinnedNode], cx: &Context<Self>) -> Vec<Div> {
+        let palette = palette();
+        nodes
+            .iter()
+            .map(|node| match node {
+                PinnedNode::Tab { tab_id } => self.tab_row(rows, tab_id, cx),
                 PinnedNode::Folder {
                     id,
                     name,
                     open,
                     children,
-                } => {
-                    let toggle = Action::Sidebar(SidebarAction::ToggleFolder(id.clone(), !open));
-                    let rename = id.clone();
-                    let folder_name = name.clone();
-                    let mut row = div()
-                        .flex()
-                        .min_w_0()
-                        .child(
-                            button(
-                                format!("folder-{}", id.as_str()),
-                                format!("{} {name}", if *open { "▾" } else { "▸" }),
-                            )
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .on_click(cx.listener(
-                                move |this, _: &ClickEvent, _, cx| {
-                                    dispatch(&this.state, &this.id, toggle.clone(), cx);
-                                },
-                            )),
+                } => div()
+                    .flex()
+                    .flex_col()
+                    .child(self.folder_row(rows, id, name, *open, cx))
+                    .when(*open, |folder| {
+                        folder.child(
+                            div()
+                                .relative()
+                                .flex()
+                                .flex_col()
+                                .pl(px(tokens::FOLDER_INDENT))
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .left(px(tokens::FOLDER_INDENT))
+                                        .top(px(tokens::FOLDER_GUIDE_INSET))
+                                        .bottom(px(tokens::FOLDER_GUIDE_INSET))
+                                        .w(px(tokens::FOLDER_GUIDE))
+                                        .bg(palette.line),
+                                )
+                                .children(self.pinned_rows(rows, children, cx)),
                         )
-                        .child(
-                            button(format!("rename-{}", id.as_str()), "Rename")
-                                .text_xs()
-                                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                                    this.show_overlay(
-                                        Overlay::Folder(
-                                            Some(rename.clone()),
-                                            TextField::new(folder_name.clone(), true),
-                                        ),
-                                        window,
-                                        cx,
-                                    );
-                                })),
-                        )
-                        .child(self.row_action(
-                            "remove-folder",
-                            id.as_str(),
-                            "×",
-                            Action::Sidebar(SidebarAction::RemoveFolder(id.clone())),
-                            cx,
-                        ));
-                    if let Some(active) = active {
-                        row = row.child(self.row_action(
-                            "pin-in-folder",
-                            id.as_str(),
-                            "+",
-                            Action::Sidebar(SidebarAction::Pin(active.clone(), Some(id.clone()))),
-                            cx,
-                        ));
-                    }
-                    rows.push(row.pl(inset));
-                    if *open {
-                        levels.push(children.iter());
-                    }
-                    continue;
-                }
-            };
-            rows.push(row.pl(inset));
-        }
-        rows
+                    }),
+            })
+            .collect()
     }
 
-    fn tab_row(
+    /// A folder's row: its icon, name and a chevron that turns when it opens
+    /// (ui/styles.css:760-774, ui/app.ts:431-448).
+    fn folder_row(
         &self,
-        core: &BrowserState,
-        id: &TabId,
-        active: Option<&TabId>,
+        rows: &Rows<'_>,
+        id: &FolderId,
+        name: &str,
+        open: bool,
         cx: &Context<Self>,
     ) -> Div {
-        let Some(tab) = core.tab(id) else {
-            return div();
-        };
-        let selected = active == Some(id);
-        let select = Action::Select(id.clone());
-        let address = flecha_core::suggestions::display_url(&tab.url);
-        let mut row = div()
-            .flex()
-            .items_center()
-            .min_w_0()
-            .h(px(38.))
-            .rounded_md()
-            .when(selected, |row| row.bg(palette().hover))
+        let palette = palette();
+        let toggle = Action::Sidebar(SidebarAction::ToggleFolder(id.clone(), !open));
+        let rename = id.clone();
+        let folder_name = name.to_owned();
+        let group = SharedString::from(format!("folder-row-{}", id.as_str()));
+        let chevron = icon("chevron", tokens::ICON, palette.text_3).when(open, |chevron| {
+            chevron.with_transformation(Transformation::rotate(percentage(0.25)))
+        });
+        row(&group, false, None)
             .child(
                 div()
-                    .id(format!("tab-{}", id.as_str()))
+                    .id(format!("folder-{}", id.as_str()))
+                    .flex()
                     .flex_1()
                     .min_w_0()
                     .h_full()
-                    .flex()
-                    .flex_col()
-                    .justify_center()
-                    .px_2()
+                    .items_center()
+                    .gap(px(tokens::ROW_GAP))
                     .cursor_pointer()
-                    .rounded_md()
-                    .hover(|row| row.bg(palette().row))
+                    .aria_label(if open { "Close folder" } else { "Open folder" })
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        dispatch(&this.state, &this.id, toggle.clone(), cx);
+                    }))
+                    .child(row_icon(if open { "folderOpen" } else { "folder" }))
+                    .child(div().min_w_0().truncate().child(name.to_owned()))
+                    .child(
+                        div()
+                            .flex()
+                            .ml_auto()
+                            .opacity(0.)
+                            .group_hover(group.clone(), |chevron| chevron.opacity(1.))
+                            .child(chevron),
+                    ),
+            )
+            .child(
+                row_action(
+                    &group,
+                    sized_icon_button(
+                        format!("rename-{}", id.as_str()),
+                        "pencil",
+                        "Rename folder",
+                        tokens::ROW_CLOSE,
+                        tokens::ROW_CLOSE_ICON,
+                    ),
+                )
+                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    this.show_overlay(
+                        Overlay::Folder(
+                            Some(rename.clone()),
+                            TextField::new(folder_name.clone(), true),
+                        ),
+                        window,
+                        cx,
+                    );
+                })),
+            )
+            .child(self.row_action(
+                &group,
+                "remove-folder",
+                id.as_str(),
+                ("close", "Remove folder"),
+                Action::Sidebar(SidebarAction::RemoveFolder(id.clone())),
+                cx,
+            ))
+            .when_some(rows.active, |row, active| {
+                row.child(self.row_action(
+                    &group,
+                    "pin-in-folder",
+                    id.as_str(),
+                    ("plus", "Pin the shown tab here"),
+                    Action::Sidebar(SidebarAction::Pin(active.clone(), Some(id.clone()))),
+                    cx,
+                ))
+            })
+    }
+
+    /// `.row` (ui/styles.css:578-650): the site's letter, the title, and the row's actions on
+    /// hover.
+    fn tab_row(&self, rows: &Rows<'_>, id: &TabId, cx: &Context<Self>) -> Div {
+        let Some(tab) = rows.core.tab(id) else {
+            return div();
+        };
+        let selected = rows.active == Some(id);
+        let in_split = rows.split.len() > 1 && rows.split.contains(id);
+        let select = Action::Select(id.clone());
+        let group = SharedString::from(format!("row-{}", id.as_str()));
+        row(&group, selected, Some(in_split))
+            .child(
+                div()
+                    .id(format!("tab-{}", id.as_str()))
+                    .flex()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .items_center()
+                    .gap(px(tokens::ROW_GAP))
+                    .cursor_pointer()
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         dispatch(&this.state, &this.id, select.clone(), cx);
                     }))
-                    .child(div().truncate().child(tab_label(tab)))
+                    .child(letter_favicon(
+                        &tab.url,
+                        tokens::FAVICON,
+                        tokens::FAVICON_RADIUS,
+                        tokens::FAVICON_LETTER,
+                    ))
                     .child(
                         div()
-                            .text_xs()
+                            .flex_1()
+                            .min_w_0()
                             .truncate()
-                            .text_color(palette().muted)
-                            .child(address),
+                            .when(selected, |title| title.font_weight(FontWeight::MEDIUM))
+                            .child(tab_label(tab)),
                     ),
-            );
-        row = row.child(self.tab_menu_button(id, cx));
-        row = row.child(self.row_action(
-            "close-tab",
-            id.as_str(),
-            "×",
-            Action::CloseTab(id.clone()),
-            cx,
-        ));
-        if !selected && active.is_some() {
-            row = row.child(
-                self.row_action("split", id.as_str(), "Split", Action::Split(id.clone()), cx)
-                    .text_xs(),
-            );
-        }
-        row
+            )
+            .when(!selected && rows.active.is_some(), |row| {
+                row.child(
+                    row_action(
+                        &group,
+                        text_button(format!("split-{}", id.as_str()), "Split"),
+                    )
+                    .on_click({
+                        let split = Action::Split(id.clone());
+                        cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            dispatch(&this.state, &this.id, split.clone(), cx);
+                        })
+                    }),
+                )
+            })
+            .child(row_action(&group, self.tab_menu_button(id, cx)))
+            .child(self.row_action(
+                &group,
+                "close-tab",
+                id.as_str(),
+                ("close", "Close tab"),
+                Action::CloseTab(id.clone()),
+                cx,
+            ))
     }
 
-    fn row_action(
+    /// `#btn-newtab` (ui/index.html:83, ui/styles.css:704-722): a row in `--text-2` with its
+    /// shortcut shown on hover.
+    fn new_tab_row(&self, state: &Controller, cx: &Context<Self>) -> Div {
+        let group = SharedString::new_static("new-tab-row");
+        let keys = shortcuts::display_keys(
+            shortcuts::keys_for(&state.model.core.settings.keybindings, "newTab", platform()),
+            platform(),
+        );
+        row(&group, false, None).text_color(palette().text_2).child(
+            div()
+                .id("new-tab")
+                .flex()
+                .flex_1()
+                .min_w_0()
+                .h_full()
+                .items_center()
+                .gap(px(tokens::ROW_GAP))
+                .cursor_pointer()
+                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                    this.open_command(Command::NewTab, window, cx);
+                }))
+                .child(row_icon("plus"))
+                .child(div().flex_1().child("New Tab"))
+                .when(!keys.is_empty(), |row| {
+                    row.child(
+                        div()
+                            .opacity(0.)
+                            .group_hover(group, |keys| keys.opacity(1.))
+                            .child(kbd(keys)),
+                    )
+                }),
+        )
+    }
+
+    /// The footer's Space buttons (ui/styles.css:924-990): each Space's emoji or initial, the
+    /// shown one raised.
+    fn space_dots(
         &self,
-        kind: &'static str,
-        id: &str,
+        core: &BrowserState,
+        shown: &flecha_core::Space,
+        cx: &Context<Self>,
+    ) -> gpui::Stateful<Div> {
+        let palette = palette();
+        let mut spaces = div()
+            .id("spaces")
+            .flex()
+            .flex_1()
+            .min_w_0()
+            .justify_center()
+            .gap(px(tokens::TOOLBAR_GAP))
+            .overflow_x_scroll();
+        for candidate in core.spaces() {
+            let selected = candidate.id == shown.id;
+            let action = Action::Switch(candidate.id.clone());
+            let label = match &candidate.emoji {
+                Some(emoji) if !emoji.is_empty() => div()
+                    .text_size(px(tokens::SPACE_EMOJI))
+                    .child(emoji.clone()),
+                _ => div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .size(px(tokens::SPACE_INITIAL))
+                    .rounded(px(tokens::SPACE_INITIAL_RADIUS))
+                    .bg(palette.text_2)
+                    .text_color(palette.tint)
+                    .text_size(px(tokens::SPACE_INITIAL_TEXT))
+                    .font_weight(FontWeight::BOLD)
+                    .child(
+                        candidate
+                            .name
+                            .chars()
+                            .next()
+                            .map_or_else(|| "•".to_owned(), |c| c.to_uppercase().collect()),
+                    ),
+            };
+            spaces = spaces.child(
+                div()
+                    .id(format!("space-{}", candidate.id.as_str()))
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .justify_center()
+                    .size(px(tokens::SPACE_DOT))
+                    .rounded(px(tokens::RADIUS_SM))
+                    .cursor_pointer()
+                    .aria_label(candidate.name.clone())
+                    .map(|dot| {
+                        if selected {
+                            dot.bg(palette.fill_active).shadow(palette.shadow_row())
+                        } else {
+                            dot.opacity(tokens::SPACE_DOT_IDLE_OPACITY)
+                                .hover(|dot| dot.opacity(1.).bg(palette.fill_hover))
+                        }
+                    })
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        dispatch(&this.state, &this.id, action.clone(), cx);
+                    }))
+                    .child(label),
+            );
+        }
+        spaces
+    }
+
+    /// The rewrite's controls that the shipping shell keeps in menus, which the rewrite does not
+    /// have yet: shown as the shell's small text buttons.
+    fn sidebar_extras(
+        &self,
+        current: &flecha_core::Window,
+        rows: &Rows<'_>,
+        isolated: bool,
+        incognito: bool,
+        cx: &Context<Self>,
+    ) -> Div {
+        let add_favorite = rows
+            .active
+            .filter(|id| !incognito && !rows.core.favorites().contains(id));
+        div()
+            .flex()
+            .flex_wrap()
+            .flex_shrink_0()
+            .gap(px(tokens::TOOLBAR_GAP))
+            .when_some(add_favorite, |extras, id| {
+                extras.child(self.text_action(
+                    format!("add-favorite-{}", id.as_str()),
+                    "+ Favorite",
+                    Action::Sidebar(SidebarAction::Favorite(id.clone())),
+                    cx,
+                ))
+            })
+            .when(!incognito, |extras| {
+                extras
+                    .child(text_button("show-history", "History").on_click(cx.listener(
+                        |this, _: &ClickEvent, window, cx| this.toggle_history(window, cx),
+                    )))
+                    .child(text_button("show-archive", "Archive").on_click(cx.listener(
+                        |this, _: &ClickEvent, window, cx| this.toggle_archive(window, cx),
+                    )))
+            })
+            .child(
+                text_button("open-settings", "Settings").on_click(cx.listener(
+                    |this, _: &ClickEvent, window, cx| {
+                        this.open_command(Command::OpenSettings, window, cx);
+                    },
+                )),
+            )
+            .when(!incognito, |extras| {
+                extras.child(self.text_action(
+                    "isolation",
+                    if isolated {
+                        "Isolated cookies"
+                    } else {
+                        "Shared cookies"
+                    },
+                    Action::Isolate,
+                    cx,
+                ))
+            })
+            .when(current.visible_tabs().len() > 1, |extras| {
+                extras.child(self.text_action("unsplit", "Exit split", Action::ExitSplit, cx))
+            })
+            .child(self.text_action(
+                "new-incognito-window",
+                "+ Incognito",
+                Action::NewIncognitoWindow,
+                cx,
+            ))
+    }
+
+    fn text_action(
+        &self,
+        id: impl Into<gpui::ElementId>,
         label: &'static str,
         action: Action,
         cx: &Context<Self>,
     ) -> gpui::Stateful<Div> {
-        button(format!("{kind}-{id}"), label)
-            .flex_shrink_0()
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                dispatch(&this.state, &this.id, action.clone(), cx);
-            }))
+        text_button(id, label).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+            dispatch(&this.state, &this.id, action.clone(), cx);
+        }))
+    }
+
+    /// A sidebar toolbar button (ui/styles.css:65-73): 30px, its icon 18px.
+    fn toolbar_button(
+        &self,
+        id: &'static str,
+        name: &'static str,
+        label: &'static str,
+        action: Action,
+        cx: &Context<Self>,
+    ) -> gpui::Stateful<Div> {
+        sized_icon_button(
+            id,
+            name,
+            label,
+            tokens::TOOLBAR_BUTTON,
+            tokens::TOOLBAR_ICON,
+        )
+        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+            dispatch(&this.state, &this.id, action.clone(), cx);
+        }))
+    }
+
+    fn navigation_button(
+        &self,
+        id: &'static str,
+        name: &'static str,
+        navigation: Navigation,
+        enabled: bool,
+        cx: &Context<Self>,
+    ) -> gpui::Stateful<Div> {
+        let label = match navigation {
+            Navigation::Back => "Back",
+            Navigation::Forward => "Forward",
+            Navigation::Reload => "Reload",
+            Navigation::HardReload => "Reload without cache",
+            Navigation::Stop => "Stop",
+        };
+        if !enabled {
+            // `.icon-button:disabled` (ui/styles.css:152-155).
+            return icon_square(
+                id,
+                name,
+                label,
+                (tokens::TOOLBAR_BUTTON, tokens::TOOLBAR_ICON),
+                palette().text_3,
+            )
+            .opacity(tokens::ICON_BUTTON_DISABLED_OPACITY);
+        }
+        sized_icon_button(
+            id,
+            name,
+            label,
+            tokens::TOOLBAR_BUTTON,
+            tokens::TOOLBAR_ICON,
+        )
+        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+            dispatch(&this.state, &this.id, Action::Browser(navigation), cx)
+        }))
+    }
+
+    /// A row's icon button, shown while the pointer is over its row.
+    fn row_action(
+        &self,
+        group: &SharedString,
+        kind: &'static str,
+        id: &str,
+        (name, label): (&'static str, &'static str),
+        action: Action,
+        cx: &Context<Self>,
+    ) -> gpui::Stateful<Div> {
+        row_action(
+            group,
+            sized_icon_button(
+                format!("{kind}-{id}"),
+                name,
+                label,
+                tokens::ROW_CLOSE,
+                tokens::ROW_CLOSE_ICON,
+            ),
+        )
+        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+            dispatch(&this.state, &this.id, action.clone(), cx);
+        }))
     }
 
     fn tab_menu_button(&self, id: &TabId, cx: &Context<Self>) -> gpui::Stateful<Div> {
         let tab = id.clone();
-        button(format!("tab-actions-{}", id.as_str()), "⋯")
-            .flex_shrink_0()
-            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                this.show_overlay(Overlay::TabActions(tab.clone()), window, cx);
-            }))
+        sized_icon_button(
+            format!("tab-actions-{}", id.as_str()),
+            "menu",
+            "Tab actions",
+            tokens::ROW_CLOSE,
+            tokens::ROW_CLOSE_ICON,
+        )
+        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+            this.show_overlay(Overlay::TabActions(tab.clone()), window, cx);
+        }))
     }
 
-    fn command_button(
+    fn command_item(
         &self,
         id: &'static str,
         label: &'static str,
         mode: Command,
         cx: &Context<Self>,
     ) -> gpui::Stateful<Div> {
-        button(id, label).on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+        menu_item(id, label).on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
             this.open_command(mode, window, cx);
         }))
     }
 
+    /// A tab's actions, as the shipping shell's tab menu lists them (`.shell-menu`,
+    /// chromium/shell/shell.css:72-135).
     pub(crate) fn tab_actions_panel(&self, tab_id: &TabId, cx: &Context<Self>) -> Div {
         let state = self.state.borrow();
         let Some(core) = state.model.state(&self.id) else {
@@ -744,17 +1044,20 @@ impl Shell {
             actions.retain(|(_, action)| crate::incognito::refusal(action).is_none());
         }
         overlay_panel()
-            .child(div().truncate().child(tab_label(tab)))
+            .gap_0()
+            .p(px(tokens::MENU_PAD))
+            .rounded(px(tokens::RADIUS_MD))
+            .child(group_header().child(div().min_w_0().truncate().child(tab_label(tab))))
             .children(actions.into_iter().map(|(label, action)| {
-                button(label, label).on_click(cx.listener(
+                menu_item(label, label).on_click(cx.listener(
                     move |this, _: &ClickEvent, window, cx| {
                         this.dismiss_overlay(window, cx);
                         dispatch(&this.state, &this.id, action.clone(), cx);
                     },
                 ))
             }))
-            .child(self.command_button("split-new", "Split with a new tab", Command::Split, cx))
-            .child(self.command_button("peek-url", "Peek at another address", Command::Peek, cx))
+            .child(self.command_item("split-new", "Split with a new tab", Command::Split, cx))
+            .child(self.command_item("peek-url", "Peek at another address", Command::Peek, cx))
     }
 
     pub(crate) fn folder_key(
@@ -787,35 +1090,175 @@ impl Shell {
         cx: &Context<Self>,
     ) -> Div {
         overlay_panel()
-            .child(if id.is_some() {
-                "Rename folder"
-            } else {
-                "New folder"
-            })
+            .child(
+                div()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(if id.is_some() {
+                        "Rename folder"
+                    } else {
+                        "New folder"
+                    }),
+            )
             .child(input.render("Folder name"))
-            .child(button("save-folder", "Save").on_click(cx.listener(
-                |this, _: &ClickEvent, window, cx| {
-                    this.save_folder(window, cx);
-                },
-            )))
+            .child(div().flex().justify_end().child(
+                primary_button("save-folder", "Save").on_click(cx.listener(
+                    |this, _: &ClickEvent, window, cx| {
+                        this.save_folder(window, cx);
+                    },
+                )),
+            ))
     }
 }
 
-fn tint_dot(tint: u32) -> Div {
-    div()
-        .size(px(8.))
-        .rounded_full()
-        .flex_shrink_0()
-        .bg(rgb(tint))
+/// What every row needs to know about the window it sits in.
+struct Rows<'a> {
+    core: &'a BrowserState,
+    active: Option<&'a TabId>,
+    split: &'a [TabId],
 }
 
-fn section(label: &'static str) -> Div {
+/// `.row` (ui/styles.css:578-603): 32 tall, raised while it is the shown tab, tinted while it
+/// shares the page area with it. `in_split` is `None` for rows that are not tabs.
+fn row(group: &SharedString, selected: bool, in_split: Option<bool>) -> Div {
+    let palette = palette();
     div()
-        .px_2()
-        .py_1()
-        .text_xs()
-        .text_color(palette().muted)
-        .child(label)
+        .group(group.clone())
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(tokens::ROW_GAP))
+        .min_w_0()
+        .h(px(tokens::ROW))
+        .my(px(tokens::ROW_MARGIN))
+        .pl(px(tokens::ROW_PAD_LEFT))
+        .pr(px(tokens::ROW_PAD_RIGHT))
+        .rounded(px(tokens::RADIUS_MD))
+        .map(|row| {
+            if selected {
+                row.bg(palette.fill_active).shadow(palette.shadow_row())
+            } else {
+                let row = if in_split == Some(true) {
+                    let mut fill = palette.fill_active;
+                    fill.a *= tokens::IN_SPLIT_SHARE / 100.;
+                    row.bg(fill)
+                } else {
+                    row
+                };
+                row.hover(|row| row.bg(palette.fill_hover))
+            }
+        })
+}
+
+/// `.row-icon` (ui/styles.css:620-625): a 16px column in `--text-2`.
+fn row_icon(name: &'static str) -> Div {
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .w(px(tokens::FAVICON))
+        .child(icon(name, tokens::ICON, palette().text_2))
+}
+
+/// Hidden until the pointer is over the row, and keeping its place meanwhile so the controls
+/// beside it stay put.
+fn row_action(group: &SharedString, button: gpui::Stateful<Div>) -> gpui::Stateful<Div> {
+    button
+        .opacity(0.)
+        .group_hover(group.clone(), |action| action.opacity(1.))
+}
+
+/// `.group-header` (ui/styles.css:466-474).
+fn group_header() -> Div {
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_between()
+        .h(px(tokens::GROUP_HEADER))
+        .pl(px(tokens::GROUP_HEADER_PAD_LEFT))
+        .pr(px(tokens::GROUP_HEADER_PAD_RIGHT))
+        .text_size(px(tokens::TEXT_XS))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(palette().text_3)
+}
+
+/// `#space-header` (ui/styles.css:493-542): the Space's emoji and name, and a padlock when it
+/// keeps its own cookies.
+fn space_header(space: &flecha_core::Space) -> Div {
+    let palette = palette();
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(tokens::SPACE_HEADER_GAP))
+        .h(px(tokens::SPACE_HEADER))
+        .px(px(tokens::SPACE_HEADER_PAD))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(palette.text)
+        .children(
+            space
+                .emoji
+                .as_ref()
+                .filter(|emoji| !emoji.is_empty())
+                .map(|emoji| {
+                    div()
+                        .text_size(px(tokens::SPACE_EMOJI))
+                        .child(emoji.clone())
+                }),
+        )
+        .child(div().min_w_0().truncate().child(space.name.clone()))
+        .when(space.isolated, |header| {
+            header.child(div().flex().child(icon(
+                "lock",
+                tokens::SPACE_ISOLATED_ICON,
+                palette.text_3,
+            )))
+        })
+}
+
+/// `#downloads-badge` (ui/styles.css:991-1002): how many downloads are running, on the
+/// Downloads button's corner.
+fn downloads_badge(count: usize) -> Div {
+    let palette = palette();
+    div()
+        .absolute()
+        .top_0()
+        .right_0()
+        .min_w(px(tokens::DOWNLOADS_BADGE))
+        .h(px(tokens::DOWNLOADS_BADGE))
+        .px(px(tokens::DOWNLOADS_BADGE_PAD))
+        .rounded(px(tokens::DOWNLOADS_BADGE_RADIUS))
+        .bg(palette.selection)
+        .text_color(gpui::white())
+        .font_family(tokens::MONO)
+        .font_weight(FontWeight::BOLD)
+        .text_size(px(tokens::DOWNLOADS_BADGE_TEXT))
+        .line_height(px(tokens::DOWNLOADS_BADGE))
+        .flex()
+        .justify_center()
+        .child(count.to_string())
+}
+
+/// `isDevUrl` (ui/app.ts:611-619): a local or test host, which the address marks with a code
+/// icon instead of a padlock.
+fn is_dev_url(url: &str) -> bool {
+    let host = site(url)
+        .rsplit_once(':')
+        .map_or(site(url), |(host, port)| {
+            if port.chars().all(|c| c.is_ascii_digit()) {
+                host
+            } else {
+                site(url)
+            }
+        });
+    let host = host.to_ascii_lowercase();
+    matches!(
+        host.as_str(),
+        "localhost" | "local" | "test" | "127.0.0.1" | "[::1]"
+    ) || [".localhost", ".local", ".test"]
+        .iter()
+        .any(|suffix| host.ends_with(suffix))
 }
 
 pub(crate) fn tab_label(tab: &flecha_core::Tab) -> String {

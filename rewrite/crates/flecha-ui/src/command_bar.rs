@@ -14,15 +14,17 @@ use flecha_core::{
 };
 use flecha_history::{HistoryStore, PAGE};
 use gpui::{
-    AppContext as _, ClickEvent, ClipboardItem, Context, Div, InteractiveElement as _,
-    ParentElement as _, ScrollHandle, StatefulInteractiveElement as _, Styled as _, Task, Window,
-    div, prelude::FluentBuilder as _,
+    AppContext as _, ClickEvent, ClipboardItem, Context, Div, FontWeight, InteractiveElement as _,
+    IntoElement as _, ParentElement as _, ScrollHandle, StatefulInteractiveElement as _,
+    Styled as _, Task, Window, div, prelude::FluentBuilder as _, px,
 };
 
+use crate::icons::icon;
 use crate::settings_view::{RESTORE_BEFORE_IMPORT, SettingsTab};
 use crate::text_field::TextField;
 use crate::theme::palette;
-use crate::view::{Overlay, Shell, button, overlay_panel};
+use crate::tokens;
+use crate::view::{Overlay, Shell, kbd, letter_favicon, overlay_panel};
 use crate::{Action, Controller, now};
 
 mod remote;
@@ -694,67 +696,208 @@ impl Shell {
     }
 
     pub(crate) fn command_panel(&self, bar: &CommandBar, cx: &Context<Self>) -> Div {
+        // #palette-results .item (ui/styles.css:1315-1397).
         let rows = bar.matches.rows.iter().enumerate().map(|(index, row)| {
             let target = row.target.clone();
+            let selected = index == bar.matches.selected;
+            let icon_color = if selected {
+                palette().selection_text
+            } else {
+                palette().text_2
+            };
+            let chip = match &row.target {
+                Target::Tab(_, url) | Target::Address(url) => letter_favicon(
+                    url,
+                    tokens::FAVICON,
+                    tokens::FAVICON_RADIUS,
+                    tokens::FAVICON_LETTER,
+                )
+                .into_any_element(),
+                Target::Search(_) => icon("search", tokens::ICON, icon_color).into_any_element(),
+                Target::Copy(_) => icon("copy", tokens::ICON, icon_color).into_any_element(),
+                Target::RestoreBeforeImport => {
+                    icon("import", tokens::ICON, icon_color).into_any_element()
+                }
+            };
+            let go = match (&row.target, bar.mode) {
+                (Target::Tab(..), Command::Split) => Some("Split with Tab"),
+                (Target::Tab(..), _) => Some("Switch to Tab"),
+                _ => None,
+            };
             div()
                 .id(("suggestion", index))
                 .flex()
-                .gap_3()
+                .flex_none()
+                .gap(px(tokens::SPACE_3))
                 .items_center()
                 .min_w_0()
-                .px_3()
-                .py_2()
-                .rounded_md()
+                .h(px(tokens::PALETTE_ITEM))
+                .pl(px(tokens::PALETTE_ITEM_PAD_LEFT))
+                .pr(px(tokens::SPACE_3))
+                .rounded(px(tokens::RADIUS_MD))
                 .cursor_pointer()
-                .when(index == bar.matches.selected, |row| {
-                    row.bg(palette().accent)
+                .when(selected, |row| {
+                    row.bg(palette().selection)
+                        .text_color(palette().selection_text)
                 })
-                .hover(|style| style.bg(palette().row))
+                .when(!selected, |row| {
+                    row.hover(|style| style.bg(palette().surface_2))
+                })
                 .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                     this.choose_suggestion(&target, window, cx);
                 }))
                 .child(
                     div()
-                        .flex_1()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .child(div().truncate().child(row.label.clone()))
-                        .when(!row.detail.is_empty(), |label| {
-                            label.child(
-                                div()
-                                    .truncate()
-                                    .text_xs()
-                                    .text_color(palette().muted)
-                                    .child(row.detail.clone()),
-                            )
-                        }),
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .justify_center()
+                        .size(px(tokens::PALETTE_ITEM_ICON))
+                        .rounded(px(tokens::RADIUS_SM))
+                        .bg(if selected {
+                            palette().selected_chip
+                        } else {
+                            palette().surface_2
+                        })
+                        .child(chip),
                 )
                 .child(
                     div()
-                        .flex_shrink_0()
-                        .text_xs()
-                        .text_color(palette().text_secondary)
-                        .child(row.kind),
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .child(row.label.clone())
+                        .when(!row.detail.is_empty(), |label| {
+                            label.child(
+                                div()
+                                    .flex_none()
+                                    .text_color(if selected {
+                                        palette().selected_sub
+                                    } else {
+                                        palette().text_3
+                                    })
+                                    .child(format!(" — {}", row.detail)),
+                            )
+                        })
+                        .flex()
+                        .overflow_hidden(),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .gap(px(tokens::SPACE_2))
+                        .text_size(px(tokens::TEXT_SM))
+                        .text_color(if selected {
+                            palette().selected_sub
+                        } else {
+                            palette().text_3
+                        })
+                        .child(go.unwrap_or(row.kind))
+                        .when(go.is_some(), |go| {
+                            go.child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .size(px(tokens::PALETTE_GO_ARROW))
+                                    .rounded(px(tokens::RADIUS_SM))
+                                    .bg(if selected {
+                                        palette().selected_chip
+                                    } else {
+                                        palette().surface_2
+                                    })
+                                    .child(icon("arrowRight", tokens::PALETTE_GO_ICON, icon_color)),
+                            )
+                        }),
                 )
         });
+        let field_icon = match bar
+            .matches
+            .rows
+            .get(bar.matches.selected)
+            .map(|row| &row.target)
+        {
+            Some(Target::Tab(_, url) | Target::Address(url)) => letter_favicon(
+                url,
+                tokens::PALETTE_ICON,
+                tokens::FAVICON_RADIUS,
+                tokens::FAVICON_LETTER,
+            )
+            .into_any_element(),
+            Some(Target::Copy(_)) => {
+                icon("copy", tokens::PALETTE_ICON, palette().text_3).into_any_element()
+            }
+            Some(Target::RestoreBeforeImport) => {
+                icon("import", tokens::PALETTE_ICON, palette().text_3).into_any_element()
+            }
+            Some(Target::Search(_)) | None => {
+                icon("search", tokens::PALETTE_ICON, palette().text_3).into_any_element()
+            }
+        };
         overlay_panel()
+            .p_0()
+            .gap_0()
+            .overflow_hidden()
+            .rounded(px(tokens::RADIUS_XL))
             .child(
+                // .palette-field (ui/styles.css:1251-1301).
                 div()
                     .flex()
+                    .flex_none()
                     .items_center()
-                    .justify_between()
-                    .child(bar.mode.label())
-                    .child(button("close-overlay", "Esc").on_click(cx.listener(
-                        |this, _: &ClickEvent, window, cx| {
-                            this.dismiss_overlay(window, cx);
-                        },
-                    ))),
+                    .gap(px(tokens::SPACE_3))
+                    .h(px(tokens::PALETTE_FIELD))
+                    .pl(px(tokens::PALETTE_FIELD_PAD_LEFT))
+                    .pr(px(tokens::SPACE_4))
+                    .border_b(px(0.5))
+                    .border_color(palette().surface_line)
+                    .text_color(palette().text_3)
+                    .child(field_icon)
+                    .child(
+                        bar.input
+                            .render("Search or Enter URL…")
+                            .flex_1()
+                            .h_auto()
+                            .px_0()
+                            .bg(gpui::transparent_black())
+                            .shadow(Vec::new())
+                            .text_color(palette().text)
+                            .text_size(px(tokens::TEXT_XL))
+                            .font_weight(FontWeight::NORMAL),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .px(px(tokens::PALETTE_MODE_PAD_X))
+                            .py(px(tokens::PALETTE_MODE_PAD_Y))
+                            .rounded(px(tokens::RADIUS_SM))
+                            .bg(palette().surface_2)
+                            .text_size(px(tokens::TEXT_XS))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(palette().text_2)
+                            .child(bar.mode.label()),
+                    )
+                    .child(
+                        div()
+                            .id("close-overlay")
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                                this.dismiss_overlay(window, cx);
+                            }))
+                            .child(kbd("Esc")),
+                    ),
             )
-            .child(bar.input.render("Enter an address or search"))
             .child(
                 div()
                     .id("suggestions")
-                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .h(px(
+                        5. * tokens::PALETTE_ITEM + 2. * tokens::PALETTE_RESULTS_PAD
+                    ))
+                    .p(px(tokens::PALETTE_RESULTS_PAD))
                     .overflow_y_scroll()
                     .track_scroll(&bar.scroll)
                     .children(rows),

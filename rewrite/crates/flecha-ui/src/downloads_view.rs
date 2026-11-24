@@ -598,7 +598,7 @@ fn download_card(title: impl Into<gpui::SharedString>) -> Div {
         .p_2()
         .min_w_0()
         .rounded_md()
-        .bg(palette().inset)
+        .bg(palette().surface_2)
         .child(div().truncate().child(title.into()))
 }
 

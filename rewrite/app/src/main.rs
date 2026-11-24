@@ -33,6 +33,7 @@ fn main() -> Result<()> {
     let app_failure = failure.clone();
     let app_runtime = runtime.clone();
     gpui_platform::application()
+        .with_assets(flecha_ui::Assets)
         .with_quit_mode(gpui::QuitMode::Explicit)
         .run(move |cx| {
             let mut runtime = app_runtime.borrow_mut();

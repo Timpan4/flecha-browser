@@ -7,14 +7,14 @@ use flecha_core::{
     suggestions::{format_targets, parse_targets},
 };
 use gpui::{
-    ClickEvent, Context, Div, ElementId, ParentElement as _, SharedString, Stateful,
+    ClickEvent, Context, Div, ElementId, FontWeight, ParentElement as _, SharedString, Stateful,
     StatefulInteractiveElement as _, Styled as _, div, prelude::FluentBuilder as _,
 };
 use uuid::Uuid;
 
-use super::{Draft, Field, SettingsPanel, muted, row, section};
+use super::{Draft, Field, SettingsPanel, muted, row, section, settings_button, switch};
 use crate::theme::palette;
-use crate::view::{Shell, button};
+use crate::view::Shell;
 
 #[derive(Clone, PartialEq, Eq)]
 pub(super) enum GeneralField {
@@ -383,8 +383,12 @@ impl Shell {
         edit: impl Fn(&mut Settings) + 'static,
         cx: &Context<Self>,
     ) -> Stateful<Div> {
-        button(id, label)
-            .when(selected, |button| button.bg(palette().accent))
+        settings_button(id, label)
+            .when(selected, |button| {
+                button
+                    .bg(palette().selection)
+                    .text_color(palette().selection_text)
+            })
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 let result = this.state.borrow_mut().edit_settings(|settings| {
                     edit(settings);
@@ -407,14 +411,19 @@ impl Shell {
     ) -> Div {
         row()
             .justify_between()
-            .child(div().child(label))
-            .child(self.preference(
-                id,
-                if enabled { "On" } else { "Off" },
-                enabled,
-                move |settings| edit(settings, !enabled),
-                cx,
-            ))
+            .child(div().font_weight(FontWeight::MEDIUM).child(label))
+            .child(switch(id, enabled, label).on_click(cx.listener(
+                move |this, _: &ClickEvent, _, cx| {
+                    let result = this.state.borrow_mut().edit_settings(|settings| {
+                        edit(settings, !enabled);
+                        Ok(String::new())
+                    });
+                    if let Some(panel) = this.settings_mut() {
+                        panel.result(result);
+                    }
+                    cx.refresh_windows();
+                },
+            )))
     }
 
     fn edit_value(
@@ -432,7 +441,7 @@ impl Shell {
             && *active == field
         {
             let content = row().child(div().child(label.to_owned())).child(
-                button("general-save", "Save").on_click(cx.listener(
+                settings_button("general-save", "Save").on_click(cx.listener(
                     move |this, _: &ClickEvent, _, cx| {
                         let Some(Draft {
                             field: Field::General(field),
@@ -462,7 +471,7 @@ impl Shell {
         row()
             .justify_between()
             .child(div().child(label.to_owned()))
-            .child(button(field.id(), action).on_click(cx.listener(
+            .child(settings_button(field.id(), action).on_click(cx.listener(
                 move |this, _: &ClickEvent, _, cx| {
                     if let Some(panel) = this.settings_mut() {
                         panel.begin(Field::General(field.clone()), value.clone());

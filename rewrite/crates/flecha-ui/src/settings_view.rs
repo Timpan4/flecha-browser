@@ -14,15 +14,17 @@ pub(crate) use import::RESTORE_BEFORE_IMPORT;
 use anyhow::Result;
 use flecha_core::Settings;
 use gpui::{
-    ClickEvent, Context, Div, InteractiveElement as _, Keystroke, Modifiers, ParentElement as _,
-    ScrollHandle, StatefulInteractiveElement as _, Styled as _, Window, div,
-    prelude::FluentBuilder as _, px,
+    ClickEvent, Context, Div, FontWeight, InteractiveElement as _, Keystroke, Modifiers,
+    ParentElement as _, ScrollHandle, StatefulInteractiveElement as _, Styled as _, Window, div,
+    linear_color_stop, linear_gradient, prelude::FluentBuilder as _, px,
 };
 
 use crate::Controller;
+use crate::icons::icon;
 use crate::text_field::TextField;
 use crate::theme::palette;
-use crate::view::{Overlay, Shell, button, overlay_panel};
+use crate::tokens;
+use crate::view::{Overlay, Shell, text_button};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SettingsTab {
@@ -258,26 +260,60 @@ impl Shell {
         cx.notify();
     }
 
+    /// Settings as the shipping settings page lays it out (ui/settings.css:46-170): a list of
+    /// panes on the left and the shown pane's cards on `--pane-bg`.
     pub(crate) fn settings_panel(&self, panel: &SettingsPanel, cx: &Context<Self>) -> Div {
-        let tabs = [
-            SettingsTab::General,
-            SettingsTab::Shortcuts,
-            SettingsTab::Boosts,
-            SettingsTab::Import,
-            SettingsTab::TabsSpaces,
-        ]
-        .into_iter()
-        .map(|tab| {
-            let selected = tab == panel.tab;
-            button(tab.label(), tab.label())
-                .when(selected, |tab| tab.bg(palette().accent))
-                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    if let Some(panel) = this.settings_mut() {
-                        panel.select(tab);
-                        cx.notify();
-                    }
-                }))
-        });
+        let palette = palette();
+        // The panes in the order and under the headings of settings.html:19-34, with the icon
+        // and colour each has there.
+        let groups: [(
+            Option<&'static str>,
+            &[(SettingsTab, &'static str, &'static str)],
+        ); 3] = [
+            (
+                None,
+                &[
+                    (SettingsTab::General, "settings", "gray"),
+                    (SettingsTab::TabsSpaces, "stack", "indigo"),
+                    (SettingsTab::Import, "import", "teal"),
+                ],
+            ),
+            (Some("Developer"), &[(SettingsTab::Boosts, "zap", "orange")]),
+            (
+                Some("Help"),
+                &[(SettingsTab::Shortcuts, "keyboard", "gray")],
+            ),
+        ];
+        let mut nav = div()
+            .id("settings-nav")
+            .flex()
+            .flex_col()
+            .flex_none()
+            .w(px(tokens::SETTINGS_NAV))
+            .h_full()
+            .gap(px(tokens::SETTINGS_NAV_GAP))
+            .px(px(tokens::SETTINGS_NAV_PAD_X))
+            .pb(px(tokens::SETTINGS_NAV_PAD_BOTTOM))
+            .rounded_l(px(tokens::PAGE_RADIUS))
+            .bg(palette.surface)
+            .child(div().flex_none().h(px(tokens::SETTINGS_TITLEBAR)));
+        for (heading, tabs) in groups {
+            if let Some(heading) = heading {
+                nav = nav.child(
+                    div()
+                        .mt(px(tokens::SETTINGS_NAV_LABEL_TOP))
+                        .mb(px(tokens::SETTINGS_NAV_LABEL_BOTTOM))
+                        .px(px(tokens::SETTINGS_NAV_LABEL_PAD))
+                        .text_size(px(tokens::TEXT_XS))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(palette.text_3)
+                        .child(heading),
+                );
+            }
+            for &(tab, glyph, tint) in tabs {
+                nav = nav.child(nav_item(tab, glyph, tint, tab == panel.tab, cx));
+            }
+        }
         let content = match panel.tab {
             SettingsTab::General => self.general_settings(panel, cx),
             SettingsTab::Shortcuts => self.shortcut_settings(panel, cx),
@@ -285,61 +321,231 @@ impl Shell {
             SettingsTab::Import => self.import_settings(panel, cx),
             SettingsTab::TabsSpaces => self.tabs_settings(panel, cx),
         };
-        overlay_panel()
-            .w(px(680.))
-            .h_full()
-            .gap_3()
-            .child(
-                row()
-                    .justify_between()
-                    .flex_shrink_0()
-                    .child(div().text_lg().child("Settings"))
-                    .child(button("settings-close", "Close").on_click(cx.listener(
-                        |this, _: &ClickEvent, window, cx| this.dismiss_overlay(window, cx),
-                    ))),
-            )
-            .child(row().children(tabs).flex_shrink_0())
-            .when_some(panel.message.as_ref(), |frame, (text, error)| {
-                frame.child(
-                    div()
-                        .rounded_md()
-                        .p_2()
-                        .bg(if *error {
-                            palette().destructive
-                        } else {
-                            palette().surface
-                        })
-                        .child(text.clone()),
-                )
-            })
+        div()
+            .flex()
+            .size_full()
+            .min_h_0()
+            .occlude()
+            .text_color(palette.text)
+            .child(nav)
             .child(
                 div()
-                    .id("settings-content")
+                    .flex()
+                    .flex_col()
                     .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .track_scroll(&panel.scroll)
-                    .pr_2()
-                    .child(content),
+                    .min_w_0()
+                    .h_full()
+                    .rounded_r(px(tokens::PAGE_RADIUS))
+                    .bg(palette.pane_bg)
+                    .shadow(tokens::shadow_pane_edge(palette.dark))
+                    .child(
+                        // `.pane-titlebar` and its `h1` (ui/settings.css:144-161).
+                        div()
+                            .flex()
+                            .flex_none()
+                            .items_center()
+                            .justify_between()
+                            .h(px(tokens::SETTINGS_TITLEBAR))
+                            .px(px(tokens::SETTINGS_PANE_PAD_X))
+                            .child(
+                                div()
+                                    .text_size(px(tokens::TEXT_LG))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(panel.tab.label()),
+                            )
+                            .child(text_button("settings-close", "Close").on_click(cx.listener(
+                                |this, _: &ClickEvent, window, cx| this.dismiss_overlay(window, cx),
+                            ))),
+                    )
+                    .when_some(panel.message.as_ref(), |pane, (text, error)| {
+                        pane.child(
+                            div()
+                                .mx(px(tokens::SETTINGS_PANE_PAD_X))
+                                .mb(px(tokens::SETTINGS_CARD_GAP))
+                                .px(px(tokens::SETTINGS_ROW_PAD_X))
+                                .py(px(tokens::SETTINGS_ROW_PAD_Y))
+                                .rounded(px(tokens::RADIUS_LG))
+                                .bg(palette.card)
+                                .shadow(tokens::shadow_card(palette.dark))
+                                .when(*error, |message| message.text_color(palette.red))
+                                .child(text.clone()),
+                        )
+                    })
+                    .child(
+                        div()
+                            .id("settings-content")
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_y_scroll()
+                            .track_scroll(&panel.scroll)
+                            .pt(px(tokens::SETTINGS_PANE_PAD_TOP))
+                            .px(px(tokens::SETTINGS_PANE_PAD_X))
+                            .pb(px(tokens::SETTINGS_PANE_PAD_BOTTOM))
+                            .child(content),
+                    ),
             )
     }
 }
 
-fn row() -> Div {
-    div().flex().items_center().flex_wrap().gap_2()
+/// `.nav-item` (ui/settings.css:74-92) with its coloured `.nav-icon` (ui/settings.css:94-131).
+fn nav_item(
+    tab: SettingsTab,
+    glyph: &'static str,
+    tint: &'static str,
+    selected: bool,
+    cx: &Context<Shell>,
+) -> gpui::Stateful<Div> {
+    let palette = palette();
+    let stop = |end: &str| tokens::color(&format!(".nav-icon.{tint} {end}"), false);
+    div()
+        .id(tab.label())
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(tokens::SETTINGS_NAV_ITEM_GAP))
+        .h(px(tokens::SETTINGS_NAV_ITEM))
+        .px(px(tokens::SETTINGS_NAV_ITEM_PAD))
+        .rounded(px(tokens::RADIUS_SM))
+        .font_weight(FontWeight::MEDIUM)
+        .cursor_pointer()
+        .map(|item| {
+            if selected {
+                item.bg(palette.selection)
+                    .text_color(palette.selection_text)
+            } else {
+                item.hover(|item| item.bg(palette.fill_hover))
+            }
+        })
+        .child(
+            div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .justify_center()
+                .size(px(tokens::SETTINGS_NAV_ICON))
+                .rounded(px(tokens::SETTINGS_NAV_ICON_RADIUS))
+                .bg(linear_gradient(
+                    180.,
+                    linear_color_stop(stop("top"), 0.),
+                    linear_color_stop(stop("bottom"), 1.),
+                ))
+                .shadow(tokens::shadow_nav_icon())
+                .child(icon(
+                    glyph,
+                    tokens::SETTINGS_NAV_GLYPH,
+                    tokens::color(".nav-icon color", false),
+                )),
+        )
+        .child(tab.label())
+        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+            if let Some(panel) = this.settings_mut() {
+                panel.select(tab);
+                cx.notify();
+            }
+        }))
 }
 
+fn row() -> Div {
+    div()
+        .flex()
+        .items_center()
+        .flex_wrap()
+        .gap(px(tokens::SPACE_2))
+}
+
+/// A group of settings on a `.card` (ui/settings.css:218-226), under its name in the style of
+/// `.nav-label` (ui/settings.css:66-72): the shipping panes put one topic on each card.
 fn section(label: &'static str) -> Div {
+    let palette = palette();
     div()
         .flex()
         .flex_col()
-        .gap_2()
-        .py_2()
-        .border_t_1()
-        .border_color(palette().border)
-        .child(div().text_base().child(label))
+        .gap(px(tokens::SETTINGS_ROW_PAD_Y))
+        .mb(px(tokens::SETTINGS_CARD_GAP))
+        .px(px(tokens::SETTINGS_ROW_PAD_X))
+        .py(px(tokens::SETTINGS_ROW_PAD_Y))
+        .rounded(px(tokens::RADIUS_LG))
+        .bg(palette.card)
+        .shadow(tokens::shadow_card(palette.dark))
+        .child(
+            div()
+                .text_size(px(tokens::TEXT_XS))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(palette.text_3)
+                .child(label),
+        )
 }
 
+/// `.row-text small` (ui/settings.css:264-270).
 fn muted(label: impl Into<gpui::SharedString>) -> Div {
-    div().text_color(palette().muted).child(label.into())
+    div()
+        .text_size(px(tokens::TEXT_SM))
+        .text_color(palette().text_2)
+        .child(label.into())
+}
+
+/// `.button` (ui/settings.css:282-304): a raised button on a card.
+pub(crate) fn settings_button(
+    id: impl Into<gpui::ElementId>,
+    name: impl Into<gpui::SharedString>,
+) -> gpui::Stateful<Div> {
+    let palette = palette();
+    div()
+        .id(id)
+        .flex()
+        .flex_none()
+        .items_center()
+        .h(px(tokens::SETTINGS_BUTTON))
+        .px(px(tokens::SETTINGS_BUTTON_PAD))
+        .rounded(px(tokens::RADIUS_SM))
+        .bg(palette.card)
+        .shadow(tokens::shadow_button(palette.dark))
+        .font_weight(FontWeight::MEDIUM)
+        .whitespace_nowrap()
+        .cursor_pointer()
+        .hover(|button| button.bg(palette.surface_2))
+        .child(name.into())
+}
+
+/// `.switch` (ui/settings.css:323-356): on in the selection colour, its knob slid across.
+pub(crate) fn switch(
+    id: impl Into<gpui::ElementId>,
+    on: bool,
+    label: &'static str,
+) -> gpui::Stateful<Div> {
+    let palette = palette();
+    let inset = tokens::SETTINGS_SWITCH_KNOB_INSET;
+    div()
+        .id(id)
+        .relative()
+        .flex_none()
+        .w(px(tokens::SETTINGS_SWITCH_WIDTH))
+        .h(px(tokens::SETTINGS_SWITCH_HEIGHT))
+        .rounded(px(tokens::SETTINGS_SWITCH_HEIGHT / 2.))
+        .cursor_pointer()
+        .aria_label(label)
+        .map(|track| {
+            if on {
+                track.bg(palette.selection)
+            } else {
+                track
+                    .bg(palette.surface_line)
+                    .shadow(vec![crate::view::hairline(palette.surface_line)])
+            }
+        })
+        .child(
+            div()
+                .absolute()
+                .top(px(inset))
+                .left(px(inset
+                    + if on {
+                        tokens::SETTINGS_SWITCH_TRAVEL
+                    } else {
+                        0.
+                    }))
+                .size(px(tokens::SETTINGS_SWITCH_KNOB))
+                .rounded_full()
+                .bg(tokens::color(".switch::after background", false))
+                .shadow(tokens::shadow_knob()),
+        )
 }

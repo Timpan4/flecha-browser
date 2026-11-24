@@ -213,7 +213,11 @@ impl Shell {
                             ]
                             .map(|(value, label)| {
                                 button(format!("permission-{}-{label}", kind.name()), label)
-                                    .when(decision == value, |button| button.bg(palette().accent))
+                                    .when(decision == value, |button| {
+                                        button
+                                            .bg(palette().selection)
+                                            .text_color(palette().selection_text)
+                                    })
                                     .on_click(self.site_click(
                                         &site,
                                         SiteChange::Permission(kind, value),

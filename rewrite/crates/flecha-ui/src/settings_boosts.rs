@@ -8,12 +8,12 @@ use gpui::{
     prelude::FluentBuilder as _, px,
 };
 
-use super::{Draft, Field, SettingsPanel, muted, row, section};
+use super::{Draft, Field, SettingsPanel, muted, row, section, settings_button};
 use crate::Controller;
 use crate::boosts::compile_script;
 use crate::text_field::TextField;
 use crate::theme::palette;
-use crate::view::{Shell, button};
+use crate::view::Shell;
 
 #[derive(Default)]
 pub(super) struct Editor {
@@ -120,7 +120,7 @@ impl Shell {
         } else {
             create = create.child(
                 row().child(div().child("Host")).child(
-                    button(
+                    settings_button(
                         "boost-host",
                         if host.is_empty() {
                             "Enter hostname"
@@ -153,7 +153,7 @@ impl Shell {
                 ]
                 .into_iter()
                 .map(|(id, label, kind)| {
-                    button(id, label).on_click(
+                    settings_button(id, label).on_click(
                         cx.listener(move |this, _: &ClickEvent, _, cx| this.create_boost(kind, cx)),
                     )
                 }),
@@ -181,13 +181,17 @@ impl Shell {
                         && flecha_boosts::user_script_matches(url, name.host()))
             });
             let selected = editor.selected.as_ref() == Some(name);
-            let select = button(format!("select-boost-{name}"), name.to_string())
-                .when(selected, |button| button.bg(palette().accent))
+            let select = settings_button(format!("select-boost-{name}"), name.to_string())
+                .when(selected, |button| {
+                    button
+                        .bg(palette().selection)
+                        .text_color(palette().selection_text)
+                })
                 .on_click(cx.listener({
                     let name = name.clone();
                     move |this, _: &ClickEvent, _, cx| this.select_boost(name.clone(), cx)
                 }));
-            let toggle = button(
+            let toggle = settings_button(
                 format!("toggle-boost-{name}"),
                 if enabled { "Disable" } else { "Enable" },
             )
@@ -233,7 +237,8 @@ impl Shell {
                     div()
                         .rounded_md()
                         .p_2()
-                        .bg(palette().destructive)
+                        .bg(palette().surface_2)
+                        .text_color(palette().red)
                         .child(div().child("Compile error"))
                         .child(div().whitespace_normal().child(build_error.clone())),
                 );
@@ -263,7 +268,7 @@ impl Shell {
                 actions = actions.child(muted("Compiling…"));
             } else if current.is_some() {
                 actions = actions.child(
-                    button(
+                    settings_button(
                         "boost-save",
                         if name.kind() == BoostKind::Styles {
                             "Save CSS"
@@ -276,7 +281,7 @@ impl Shell {
             }
             if editor.dirty() {
                 actions = actions.child(muted("Unsaved changes")).child(
-                    button("boost-discard", "Discard changes").on_click(
+                    settings_button("boost-discard", "Discard changes").on_click(
                         cx.listener(|this, _: &ClickEvent, _, cx| this.discard_boost(cx)),
                     ),
                 );
@@ -288,18 +293,19 @@ impl Shell {
                     "Delete…"
                 };
                 actions = actions
-                    .child(button("boost-delete", label).on_click(
+                    .child(settings_button("boost-delete", label).on_click(
                         cx.listener(|this, _: &ClickEvent, _, cx| this.delete_boost(cx)),
                     ));
                 if editor.confirm_delete {
-                    actions = actions.child(button("boost-cancel-delete", "Cancel").on_click(
-                        cx.listener(|this, _: &ClickEvent, _, cx| {
-                            if let Some(panel) = this.settings_mut() {
-                                panel.boosts.confirm_delete = false;
-                                cx.notify();
-                            }
-                        }),
-                    ));
+                    actions =
+                        actions.child(settings_button("boost-cancel-delete", "Cancel").on_click(
+                            cx.listener(|this, _: &ClickEvent, _, cx| {
+                                if let Some(panel) = this.settings_mut() {
+                                    panel.boosts.confirm_delete = false;
+                                    cx.notify();
+                                }
+                            }),
+                        ));
                 }
             }
             content = content.child(edit.child(actions));

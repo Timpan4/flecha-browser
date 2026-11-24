@@ -14,9 +14,9 @@ use gpui::{
 };
 use uuid::Uuid;
 
-use super::{Draft, Field, SettingsPanel, SettingsTab, muted, row, section};
+use super::{Draft, Field, SettingsPanel, SettingsTab, muted, row, section, settings_button};
 use crate::theme::palette;
-use crate::view::{Overlay, Shell, button};
+use crate::view::{Overlay, Shell};
 use crate::{Controller, now};
 
 pub(crate) const RESTORE_BEFORE_IMPORT: &str = "Restore Spaces From Before Import";
@@ -376,18 +376,20 @@ impl Shell {
                 .child(
                     row()
                         .child(
-                            button("import-cancel-restore", "Cancel").on_click(cx.listener(
+                            settings_button("import-cancel-restore", "Cancel").on_click(cx.listener(
                                 |this, _: &ClickEvent, _, cx| this.prompt_restore(false, cx),
                             )),
                         )
-                        .child(button("import-confirm-restore", "Restore").on_click(
+                        .child(settings_button("import-confirm-restore", "Restore").on_click(
                             cx.listener(|this, _: &ClickEvent, _, cx| this.confirm_restore(cx)),
                         )),
                 )
             } else if self.state.borrow().store.has_before_import() {
-                restore.child(button("import-restore", RESTORE_BEFORE_IMPORT).on_click(
-                    cx.listener(|this, _: &ClickEvent, _, cx| this.prompt_restore(true, cx)),
-                ))
+                restore.child(
+                    settings_button("import-restore", RESTORE_BEFORE_IMPORT).on_click(
+                        cx.listener(|this, _: &ClickEvent, _, cx| this.prompt_restore(true, cx)),
+                    ),
+                )
             } else {
                 restore.child(muted("A backup will appear here after your first import."))
             };
@@ -399,11 +401,11 @@ impl Shell {
             browsers = browsers.child(muted("Detecting browsers…"));
         } else {
             browsers =
-                browsers.child(
-                    row().child(button("detect-browsers", "Detect browsers").on_click(
+                browsers.child(row().child(
+                    settings_button("detect-browsers", "Detect browsers").on_click(
                         cx.listener(|this, _: &ClickEvent, _, cx| this.detect_browsers(cx)),
-                    )),
-                );
+                    ),
+                ));
         }
         if let Some(detected) = &import.detected {
             if detected.is_empty() {
@@ -432,9 +434,11 @@ impl Shell {
         let formats = [Format::Bookmarks, Format::Arc, Format::Flecha]
             .into_iter()
             .map(|format| {
-                button(format.label(), format.label())
+                settings_button(format.label(), format.label())
                     .when(import.format == format, |button| {
-                        button.bg(palette().accent)
+                        button
+                            .bg(palette().selection)
+                            .text_color(palette().selection_text)
                     })
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         if let Some(panel) = this.settings_mut() {
@@ -459,7 +463,7 @@ impl Shell {
             source = source.child(text.render("Path to the import file"));
         } else {
             source = source.child(
-                button(
+                settings_button(
                     "import-type-path",
                     if import.path.as_os_str().is_empty() {
                         "Enter a file path".into()
@@ -479,14 +483,14 @@ impl Shell {
             );
         }
         let mut actions = row().child(
-            button("import-browse", "Browse…")
+            settings_button("import-browse", "Browse…")
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.browse_import(cx))),
         );
         if import.preview_task.is_some() {
             actions = actions.child(muted("Reading import file…"));
         } else {
             actions = actions.child(
-                button("import-preview", "Preview")
+                settings_button("import-preview", "Preview")
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.preview_import(cx))),
             );
         }
@@ -502,7 +506,7 @@ impl Shell {
                 .child(div().child(preview.description.clone()))
                 .children(preview.notes.iter().cloned().map(muted))
                 .when_some(preview.apply_label, |summary, label| {
-                    summary.child(row().child(button("import-apply", label).on_click(
+                    summary.child(row().child(settings_button("import-apply", label).on_click(
                         cx.listener(|this, _: &ClickEvent, _, cx| this.confirm_import(cx)),
                     )))
                 });

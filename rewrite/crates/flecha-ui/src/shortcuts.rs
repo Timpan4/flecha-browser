@@ -331,7 +331,7 @@ impl Shell {
                 .flex_shrink_0()
                 .bg(palette().surface)
                 .text_xs()
-                .text_color(palette().muted)
+                .text_color(palette().text_2)
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                     this.zoom(PageZoom::Reset, cx);
                 })),

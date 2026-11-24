@@ -25,13 +25,8 @@ use crate::{Action, Controller};
 const SPACE_ID: &str = "incognito";
 const SPACE_NAME: &str = "Incognito";
 const SPACE_EMOJI: &str = "🕶️";
-const SPACE_COLOR: &str = "#ddd5f3";
-
-/// An incognito window never looks like a regular one (patch 0032 draws its pages dark): its
-/// window and sidebar take the incognito Space's violet, darkened.
-pub(crate) const BACKGROUND: u32 = 0x1c1727;
-pub(crate) const SIDEBAR: u32 = 0x2a2338;
-pub(crate) const LABEL: u32 = 0xddd5f3;
+/// Its colour; `Palette::resolve` darkens it, since an incognito window is always Dark.
+pub(crate) const SPACE_COLOR: &str = "#ddd5f3";
 
 pub(crate) struct Incognito {
     pub(crate) session: IncognitoSession,

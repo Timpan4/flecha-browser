@@ -13,7 +13,8 @@ use crate::model::tab_id;
 use crate::popup::{Place, place};
 use crate::shortcuts::Navigation;
 use crate::theme::palette;
-use crate::view::{Overlay, Shell, button};
+use crate::tokens;
+use crate::view::{Overlay, Shell, menu_item};
 use crate::{Action, Controller, dispatch};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -276,9 +277,12 @@ impl Shell {
         cx: &Context<Self>,
     ) -> impl IntoElement {
         const WIDTH: Pixels = px(218.);
-        const ROW: Pixels = px(28.);
-        const PADDING: Pixels = px(4.);
-        const BORDER: Pixels = px(1.);
+        // `.shell-menu` and `.shell-menu-item` (chromium/shell/shell.css:72-113): one line of
+        // body text with 4px above and below, in a 5px padded box ringed by `--shadow-pop`.
+        const ROW: Pixels =
+            px(tokens::MENU_ITEM_PAD_Y * 2. + tokens::TEXT_MD * tokens::LINE_HEIGHT);
+        const PADDING: Pixels = px(tokens::MENU_PAD);
+        const BORDER: Pixels = px(0.);
         let rows = items(&menu.context);
         let viewport = window.viewport_size();
         let width = WIDTH.min(viewport.width);
@@ -307,16 +311,14 @@ impl Shell {
                         .occlude()
                         .overflow_y_scroll()
                         .p(PADDING)
-                        .rounded_lg()
-                        .border_1()
-                        .border_color(palette().border)
-                        .bg(palette().panel)
-                        .shadow_lg()
-                        .text_sm()
+                        .rounded(px(tokens::RADIUS_MD))
+                        .bg(palette().surface)
+                        .text_color(palette().text)
+                        .shadow(palette().shadow_pop())
                         .children(rows.into_iter().map(|(item, enabled)| {
                             let label = item.label();
                             if enabled {
-                                button(label, label)
+                                menu_item(label, label)
                                     .h(ROW)
                                     .on_click(cx.listener(
                                         move |this, _: &ClickEvent, window, cx| {
@@ -327,9 +329,9 @@ impl Shell {
                             } else {
                                 div()
                                     .h(ROW)
-                                    .px_2()
-                                    .py_1()
-                                    .text_color(palette().disabled)
+                                    .px(px(tokens::MENU_ITEM_PAD_X))
+                                    .py(px(tokens::MENU_ITEM_PAD_Y))
+                                    .opacity(tokens::MENU_DISABLED_OPACITY)
                                     .child(label)
                                     .into_any_element()
                             }

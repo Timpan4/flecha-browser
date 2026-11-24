@@ -356,7 +356,7 @@ impl Shell {
                         .mt_2()
                         .px_2()
                         .text_xs()
-                        .text_color(palette().muted)
+                        .text_color(palette().text_2)
                         .child(day_label(day, today)),
                 );
                 previous = Some(day);
@@ -431,7 +431,7 @@ impl Shell {
             .child(
                 div()
                     .border_t_1()
-                    .border_color(palette().row)
+                    .border_color(palette().surface_2)
                     .pt_2()
                     .child(div().text_sm().child("Clear browsing data"))
                     .child(clear),
@@ -492,7 +492,7 @@ fn entry_link(id: impl Into<gpui::ElementId>, title: &str, url: &str) -> gpui::S
         .py_1()
         .cursor_pointer()
         .rounded_md()
-        .hover(|row| row.bg(palette().row))
+        .hover(|row| row.bg(palette().surface_2))
         .child(
             div()
                 .flex_1()
@@ -502,7 +502,7 @@ fn entry_link(id: impl Into<gpui::ElementId>, title: &str, url: &str) -> gpui::S
                     div()
                         .truncate()
                         .text_xs()
-                        .text_color(palette().muted)
+                        .text_color(palette().text_2)
                         .child(address),
                 ),
         )
