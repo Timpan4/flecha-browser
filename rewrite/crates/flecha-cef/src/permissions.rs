@@ -216,8 +216,9 @@ impl crate::Engine {
     }
 
     /// The site panel's setter: saves `decision` for `kinds`, or forgets it for
-    /// [`Decision::Ask`]. Chromium follows at once in every ready context of the partition, and
-    /// waiting requests the setting decides are answered.
+    /// [`Decision::Ask`]. It replaces one-time answers for those kinds too. Chromium follows at
+    /// once in every ready context of the partition, open pages included, and waiting requests
+    /// the setting decides are answered.
     pub fn set_site_permission(
         &mut self,
         partition: &crate::Partition,
@@ -225,21 +226,25 @@ impl crate::Engine {
         kinds: impl Into<PermissionSet>,
         decision: Decision,
     ) -> Result<(), PermissionError> {
-        let partition = self::partition(partition);
-        let kinds = kinds.into();
-        self.edit_permissions(|manager| {
-            match manager.set_setting(&partition, origin, kinds, decision) {
-                Ok(completions) => (Ok(()), completions),
-                Err(error) => (Err(error), Vec::new()),
-            }
-        })
+        set_site(
+            self.services(),
+            &self.permission_contexts(),
+            &self::partition(partition),
+            origin,
+            kinds.into(),
+            decision,
+        )
     }
 
     /// Forgets every saved and one-time decision for `origin` in `partition`, as clearing the
-    /// site's data does.
+    /// site's data does. Open pages of the site ask again at once.
     pub fn clear_site_permissions(&mut self, partition: &crate::Partition, origin: &Origin) {
-        let partition = self::partition(partition);
-        self.edit_permissions(|manager| ((), manager.clear_origin(&partition, origin)));
+        clear_site(
+            self.services(),
+            &self.permission_contexts(),
+            &self::partition(partition),
+            origin,
+        );
     }
 
     /// The saved decisions to write to disk (`SnapshotFile::save`).
@@ -284,7 +289,9 @@ impl crate::Engine {
 
     /// Changes decisions with the manager's own methods. `change` returns its result and the
     /// manager's completions, which the engine answers. Saved decisions `change` adds, changes
-    /// or forgets reach every ready context at once.
+    /// or forgets reach every ready context at once. One-time answers `change` drops stay in
+    /// Chromium until their document goes away; [`Self::set_site_permission`] and
+    /// [`Self::clear_site_permissions`] end them at once.
     pub fn edit_permissions<R>(
         &mut self,
         change: impl FnOnce(&mut PermissionManager) -> (R, Vec<Completion>),
@@ -476,6 +483,66 @@ fn saved(services: &Services, partition: &Partition) -> Saved {
         .saved_decisions(partition)
         .map(|(origin, kind, verdict)| ((origin.clone(), kind), verdict))
         .collect()
+}
+
+/// The site panel's setter. A one-time answer the setting replaces is in Chromium but not in
+/// the saved decisions, so the site's state is written whatever changed.
+pub(crate) fn set_site(
+    services: &Services,
+    contexts: &[(Partition, impl ContentSettings)],
+    partition: &Partition,
+    origin: &Origin,
+    kinds: PermissionSet,
+    decision: Decision,
+) -> Result<(), PermissionError> {
+    edit(services, contexts, |manager| {
+        match manager.set_setting(partition, origin, kinds, decision) {
+            Ok(completions) => (Ok(()), completions),
+            Err(error) => (Err(error), Vec::new()),
+        }
+    })?;
+    write_site(services, contexts, partition, origin, kinds);
+    Ok(())
+}
+
+/// Forgets the site's saved and one-time decisions, in Chromium too.
+pub(crate) fn clear_site(
+    services: &Services,
+    contexts: &[(Partition, impl ContentSettings)],
+    partition: &Partition,
+    origin: &Origin,
+) {
+    edit(services, contexts, |manager| {
+        ((), manager.clear_origin(partition, origin))
+    });
+    let every_kind = PermissionKind::ALL.into_iter().collect();
+    write_site(services, contexts, partition, origin, every_kind);
+}
+
+/// Writes `origin`'s saved decision for each of `kinds`, or Chromium's default where there is
+/// none, to the partition's contexts.
+fn write_site(
+    services: &Services,
+    contexts: &[(Partition, impl ContentSettings)],
+    partition: &Partition,
+    origin: &Origin,
+    kinds: PermissionSet,
+) {
+    let saved = services
+        .permissions
+        .borrow()
+        .manager
+        .site_settings(partition, origin);
+    for (_, settings) in contexts.iter().filter(|(owner, _)| owner == partition) {
+        for kind in kinds.iter() {
+            settings.set(
+                origin.as_str(),
+                origin.as_str(),
+                kind,
+                saved_verdict(&saved, kind),
+            );
+        }
+    }
 }
 
 /// Applies a manager change like [`apply`], then writes the saved decisions it added, changed
@@ -694,15 +761,22 @@ pub(crate) fn forget_one_time(slot: &Slot) {
     };
     for (answer, saved) in resets {
         for kind in answer.kinds.iter() {
-            let verdict = match saved.decision(kind) {
-                Decision::Allow => Some(Verdict::Allow),
-                Decision::Block => Some(Verdict::Block),
-                Decision::Ask => None,
-            };
-            answer
-                .settings
-                .set(&answer.requesting, &answer.top, kind, verdict);
+            answer.settings.set(
+                &answer.requesting,
+                &answer.top,
+                kind,
+                saved_verdict(&saved, kind),
+            );
         }
+    }
+}
+
+/// The saved verdict for `kind`, or `None` to ask.
+fn saved_verdict(saved: &SiteSettings, kind: PermissionKind) -> Option<Verdict> {
+    match saved.decision(kind) {
+        Decision::Allow => Some(Verdict::Allow),
+        Decision::Block => Some(Verdict::Block),
+        Decision::Ask => None,
     }
 }
 
@@ -965,12 +1039,16 @@ pub(crate) mod tests {
         ];
         let maps = origin("https://maps.example/");
         let set = |decision| {
-            edit(&services, &contexts, |manager| {
-                let done = manager
-                    .set_setting(&Partition::Shared, &maps, Geolocation, decision)
-                    .unwrap();
-                ((), done)
-            });
+            let kinds = Geolocation.into();
+            set_site(
+                &services,
+                &contexts,
+                &Partition::Shared,
+                &maps,
+                kinds,
+                decision,
+            )
+            .unwrap();
         };
         let dirty = || {
             let mut state = services.permissions.borrow_mut();
@@ -995,12 +1073,43 @@ pub(crate) mod tests {
 
         set(Decision::Allow);
         assert!(dirty());
-        edit(&services, &contexts, |manager| {
-            ((), manager.clear_origin(&Partition::Shared, &maps))
-        });
+        clear_site(&services, &contexts, &Partition::Shared, &maps);
         assert!(shared.holds().is_empty(), "clearing the site forgets it");
         assert!(dirty());
         assert!(work.holds().is_empty(), "other partitions never change");
+
+        // An Allow once is only in Chromium and the tab's one-time answers. Ask and clearing
+        // the site end it at once, though no saved decision changed.
+        let allow_once = |url: &str| {
+            request(
+                &services,
+                camera_ask("browser-2", url),
+                recorder("once", &Log::default()),
+            );
+            let front = services
+                .permissions
+                .borrow()
+                .pending(&QueueId::new("browser-2"))
+                .unwrap();
+            resolve(&services, front.request, PromptOutcome::AllowOnce).unwrap();
+            shared.set(url, url, PermissionKind::Camera, Some(Verdict::Allow));
+        };
+        let call = origin("https://call.example/");
+        allow_once("https://call.example/");
+        set_site(
+            &services,
+            &contexts,
+            &Partition::Shared,
+            &call,
+            PermissionKind::Camera.into(),
+            Decision::Ask,
+        )
+        .unwrap();
+        assert!(shared.holds().is_empty(), "Ask ended the Allow once");
+        allow_once("https://call.example/");
+        clear_site(&services, &contexts, &Partition::Shared, &call);
+        assert!(shared.holds().is_empty(), "clearing ended the Allow once");
+        assert!(!dirty(), "no saved decision changed");
 
         // Allow always from a prompt is a saved decision too.
         request(

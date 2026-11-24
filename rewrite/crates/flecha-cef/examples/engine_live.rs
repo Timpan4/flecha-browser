@@ -473,6 +473,24 @@ impl Live<'_> {
             "PASS Allow once granted geolocation to the page only; the next document asks again"
         );
 
+        // The site panel's Ask ends an Allow once on the open page, with no saved decision
+        // changing.
+        self.ask_geolocation(tab, PromptOutcome::AllowOnce)?;
+        self.wait_permission_state(tab, "geolocation", "granted")?;
+        let site = Origin::parse(&self.base)?;
+        self.engine.set_site_permission(
+            &Partition::Shared,
+            &site,
+            PermissionKind::Geolocation,
+            Decision::Ask,
+        )?;
+        self.wait_permission_state(tab, "geolocation", "prompt")?;
+        ensure!(
+            !self.engine.permissions_dirty(),
+            "ending an Allow once changed a saved decision"
+        );
+        println!("PASS the site panel's Ask ended the open page's Allow once at once");
+
         self.ask_geolocation(tab, PromptOutcome::AllowAlways)?;
         ensure!(
             self.engine.navigate(tab, &format!("{}/page", self.base)),
