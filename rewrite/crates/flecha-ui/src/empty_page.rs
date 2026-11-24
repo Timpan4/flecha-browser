@@ -74,14 +74,18 @@ impl Controller {
         if !due {
             return false;
         }
-        self.top_sites.fetched = Some(revision);
-        let Some(sites) = self
-            .history
-            .store()
-            .and_then(|store| store.top_sites().ok())
-        else {
-            return false;
+        let Some(store) = self.history.store() else {
+            self.top_sites.fetched = Some(revision);
+            let changed = !self.top_sites.sites.is_empty();
+            self.top_sites.sites.clear();
+            return changed;
         };
+        let Ok(sites) = store.top_sites() else {
+            let changed = !self.top_sites.sites.is_empty();
+            self.top_sites.sites.clear();
+            return changed;
+        };
+        self.top_sites.fetched = Some(revision);
         let changed = sites != self.top_sites.sites;
         self.top_sites.sites = sites;
         changed
