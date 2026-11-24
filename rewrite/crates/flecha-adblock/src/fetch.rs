@@ -69,7 +69,7 @@ pub trait Download: Send + Sync {
 /// Where a list's text came from.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ListSource {
-    /// A cached copy younger than [`MAX_AGE`].
+    /// A cached copy used without fetching.
     Cache,
     Downloaded,
     /// The download failed; the cached copy, of any age, was used.
@@ -118,6 +118,10 @@ pub enum ListFailure {
         id: &'static str,
         error: String,
     },
+    CacheRead {
+        id: &'static str,
+        error: String,
+    },
 }
 
 impl std::fmt::Display for ListFailure {
@@ -138,6 +142,9 @@ impl std::fmt::Display for ListFailure {
             Self::CacheWrite { id, error } => {
                 write!(f, "adblock: could not cache {id}: {error}")
             }
+            Self::CacheRead { id, error } => {
+                write!(f, "adblock: could not read cached {id}: {error}")
+            }
         }
     }
 }
@@ -153,38 +160,60 @@ pub struct FetchReport {
 }
 
 pub fn fetch_lists(cache: &Path, refresh: bool, download: &dyn Download) -> FetchReport {
-    let results: Vec<_> = std::thread::scope(|scope| {
-        let handles: Vec<_> = LISTS
-            .iter()
-            .map(|&list| scope.spawn(move || fetch_list(list, refresh, cache, download)))
-            .collect();
-        handles
-            .into_iter()
-            .map(|handle| {
-                handle
-                    .join()
-                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
-            })
-            .collect()
-    });
-    let mut warnings = Vec::new();
-    let mut lists = Vec::new();
-    let mut failures = Vec::new();
-    for (result, list_warnings) in results {
-        warnings.extend(list_warnings);
-        match result {
-            Ok(list) => lists.push(list),
-            Err(failure) => failures.push(failure),
+    FetchReport::from_attempts(fetch_each(|_, list| {
+        attempt(list, refresh, cache, download)
+    }))
+}
+
+pub(crate) fn fetch_each(
+    fetch: impl Fn(usize, FilterList) -> ListAttempt + Sync,
+) -> [ListAttempt; LISTS.len()] {
+    std::thread::scope(|scope| {
+        let handles = std::array::from_fn(|index| {
+            let fetch = &fetch;
+            scope.spawn(move || fetch(index, LISTS[index]))
+        });
+        handles.map(|handle| {
+            handle
+                .join()
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+        })
+    })
+}
+
+impl FetchReport {
+    pub(crate) fn from_attempts(attempts: [ListAttempt; LISTS.len()]) -> Self {
+        let mut warnings = Vec::new();
+        let mut lists = Vec::new();
+        let mut failures = Vec::new();
+        for attempt in attempts {
+            warnings.extend(attempt.warnings);
+            match attempt.list {
+                Ok(list) => lists.push(list),
+                Err(failure) => failures.push(failure),
+            }
+        }
+        Self {
+            lists: if failures.is_empty() {
+                Ok(lists)
+            } else {
+                Err(failures)
+            },
+            warnings,
         }
     }
-    FetchReport {
-        lists: if failures.is_empty() {
-            Ok(lists)
-        } else {
-            Err(failures)
-        },
-        warnings,
-    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum Retry {
+    Transport,
+    Refresh,
+}
+
+pub(crate) struct ListAttempt {
+    list: Result<FetchedList, ListFailure>,
+    warnings: Vec<ListWarning>,
+    pub retry: Option<Retry>,
 }
 
 pub fn cache_file(cache: &Path, id: &str) -> PathBuf {
@@ -203,13 +232,40 @@ pub fn fetch_list(
     cache: &Path,
     download: &dyn Download,
 ) -> (Result<FetchedList, ListFailure>, Vec<ListWarning>) {
+    let attempt = attempt(list, refresh, cache, download);
+    (attempt.list, attempt.warnings)
+}
+
+fn cached_text(list: FilterList, file: &Path) -> Result<String, String> {
+    let bytes = fs::read(file).map_err(|error| error.to_string())?;
+    checked_text(list.id, &bytes, false).map_err(|error| error.to_string())
+}
+
+pub(crate) fn cache_only(list: FilterList, cache: &Path) -> ListAttempt {
+    let result = cached_text(list, &cache_file(cache, list.id))
+        .map(|text| FetchedList {
+            id: list.id,
+            text,
+            source: ListSource::Cache,
+        })
+        .map_err(|error| ListFailure::CacheRead { id: list.id, error });
+    ListAttempt {
+        list: result,
+        warnings: Vec::new(),
+        retry: None,
+    }
+}
+
+pub(crate) fn attempt(
+    list: FilterList,
+    refresh: bool,
+    cache: &Path,
+    download: &dyn Download,
+) -> ListAttempt {
     let mut warnings = Vec::new();
     let file = cache_file(cache, list.id);
     let age = cache_age(&file, SystemTime::now());
-    let cached = || -> Result<String, String> {
-        let bytes = fs::read(&file).map_err(|error| error.to_string())?;
-        checked_text(list.id, &bytes, false).map_err(|error| error.to_string())
-    };
+    let cached = || cached_text(list, &file);
     let fetched = |text, source| FetchedList {
         id: list.id,
         text,
@@ -217,37 +273,46 @@ pub fn fetch_list(
     };
     if !refresh && age.is_some_and(|age| age < MAX_AGE) {
         match cached() {
-            Ok(text) => return (Ok(fetched(text, ListSource::Cache)), warnings),
+            Ok(text) => {
+                return ListAttempt {
+                    list: Ok(fetched(text, ListSource::Cache)),
+                    warnings,
+                    retry: None,
+                };
+            }
             Err(error) => warnings.push(ListWarning::InvalidCache { id: list.id, error }),
         }
     }
     let text = match download_text(list, download) {
         Ok(text) => text,
-        Err(download) if age.is_some() => {
-            let result = match cached() {
-                Ok(text) => {
-                    warnings.push(ListWarning::UsedCache {
-                        id: list.id,
-                        error: download,
-                    });
-                    Ok(fetched(text, ListSource::CacheAfterFailedRefresh))
-                }
-                Err(cache) => Err(ListFailure::InvalidCache {
-                    id: list.id,
-                    download,
-                    cache,
-                }),
-            };
-            return (result, warnings);
-        }
         Err(download) => {
-            return (
+            let DownloadError { reason, retry } = download;
+            let result = if age.is_some() {
+                match cached() {
+                    Ok(text) => {
+                        warnings.push(ListWarning::UsedCache {
+                            id: list.id,
+                            error: reason,
+                        });
+                        Ok(fetched(text, ListSource::CacheAfterFailedRefresh))
+                    }
+                    Err(cache) => Err(ListFailure::InvalidCache {
+                        id: list.id,
+                        download: reason,
+                        cache,
+                    }),
+                }
+            } else {
                 Err(ListFailure::NoCache {
                     id: list.id,
-                    download,
-                }),
+                    download: reason,
+                })
+            };
+            return ListAttempt {
+                list: result,
                 warnings,
-            );
+                retry: Some(retry),
+            };
         }
     };
     let written = fs::create_dir_all(cache).and_then(|()| write_atomically(&file, text.as_bytes()));
@@ -258,17 +323,43 @@ pub fn fetch_list(
             error: error.to_string(),
         }),
     };
-    (result, warnings)
+    let retry = result.is_err().then_some(Retry::Refresh);
+    ListAttempt {
+        list: result,
+        warnings,
+        retry,
+    }
 }
 
-fn download_text(list: FilterList, download: &dyn Download) -> Result<String, String> {
+struct DownloadError {
+    reason: String,
+    retry: Retry,
+}
+
+impl DownloadError {
+    fn transport(reason: impl ToString) -> Self {
+        Self {
+            reason: reason.to_string(),
+            retry: Retry::Transport,
+        }
+    }
+
+    fn rejected(reason: impl ToString) -> Self {
+        Self {
+            reason: reason.to_string(),
+            retry: Retry::Refresh,
+        }
+    }
+}
+
+fn download_text(list: FilterList, download: &dyn Download) -> Result<String, DownloadError> {
     let request = DownloadRequest {
         accept_encoding: "gzip",
         deadline: Instant::now() + DOWNLOAD_TIMEOUT,
     };
     let mut response = follow_redirects(list.url, download, &request)?;
     if response.status != 200 {
-        return Err(format!("HTTP {}", response.status));
+        return Err(DownloadError::rejected(format!("HTTP {}", response.status)));
     }
     // Read the wire bytes. Decoding requires complete compression framing.
     let encoding = response.joined("content-encoding").map_or_else(
@@ -278,49 +369,59 @@ fn download_text(list: FilterList, download: &dyn Download) -> Result<String, St
     let compressed = match encoding.as_str() {
         "identity" => false,
         "gzip" | "deflate" | "br" => true,
-        other => return Err(format!("unsupported Content-Encoding: {other}")),
+        other => {
+            return Err(DownloadError::rejected(format!(
+                "unsupported Content-Encoding: {other}"
+            )));
+        }
     };
     let length = response.header("content-length").map(str::to_owned);
     let bytes = read_wire_bytes(&mut response.body, length.as_deref(), request.deadline)?;
     let bytes = if compressed {
-        decode(&encoding, &bytes).map_err(|error| match error.kind() {
-            io::ErrorKind::UnexpectedEof => "unexpected end of file".to_owned(),
-            _ => error.to_string(),
+        decode(&encoding, &bytes).map_err(|error| {
+            if error.kind() == io::ErrorKind::UnexpectedEof {
+                DownloadError::rejected("unexpected end of file")
+            } else {
+                DownloadError::rejected(error)
+            }
         })?
     } else {
         bytes
     };
-    checked_text(list.id, &bytes, !compressed && length.is_none())
-        .map_err(|error| error.to_string())
+    checked_text(list.id, &bytes, !compressed && length.is_none()).map_err(DownloadError::rejected)
 }
 
 fn follow_redirects(
     url: &str,
     download: &dyn Download,
     request: &DownloadRequest,
-) -> Result<WireResponse, String> {
+) -> Result<WireResponse, DownloadError> {
     let mut url = url.to_owned();
     let mut redirects = 0;
     loop {
         if Instant::now() >= request.deadline {
-            return Err("The operation was aborted due to timeout".to_owned());
+            return Err(DownloadError::transport(
+                "The operation was aborted due to timeout",
+            ));
         }
         let response = download
             .get(&url, request)
-            .map_err(|error| error.to_string())?;
+            .map_err(DownloadError::transport)?;
         let location = match response.header("location") {
             Some(location) if REDIRECT_STATUSES.contains(&response.status) => location.to_owned(),
             _ => return Ok(response),
         };
         drop(response);
         if redirects == MAX_REDIRECTS {
-            return Err("too many HTTP redirects".to_owned());
+            return Err(DownloadError::rejected("too many HTTP redirects"));
         }
         let target = Url::parse(&url)
             .and_then(|base| base.join(&location))
-            .map_err(|_| "Invalid URL".to_owned())?;
+            .map_err(|_| DownloadError::rejected("Invalid URL"))?;
         if target.scheme() != "https" {
-            return Err("filter list redirect requires HTTPS".to_owned());
+            return Err(DownloadError::rejected(
+                "filter list redirect requires HTTPS",
+            ));
         }
         url = target.into();
         redirects += 1;
@@ -333,7 +434,7 @@ fn read_wire_bytes(
     body: &mut dyn Read,
     length: Option<&str>,
     deadline: Instant,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, DownloadError> {
     const UNVERIFIED: &str = "could not verify Content-Length";
     // JavaScript's /^\d+$/ is ASCII; a length too large for u128 is never reached.
     let expected = match length {
@@ -341,27 +442,29 @@ fn read_wire_bytes(
         Some(digits) if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) => {
             Some(digits.parse::<u128>().unwrap_or(u128::MAX))
         }
-        Some(_) => return Err(UNVERIFIED.to_owned()),
+        Some(_) => return Err(DownloadError::rejected(UNVERIFIED)),
     };
     let mut bytes = Vec::new();
     let mut chunk = vec![0; READ_CHUNK];
     loop {
         if Instant::now() >= deadline {
-            return Err("The operation was aborted due to timeout".to_owned());
+            return Err(DownloadError::transport(
+                "The operation was aborted due to timeout",
+            ));
         }
         let read = match body.read(&mut chunk) {
             Ok(0) => break,
             Ok(read) => read,
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-            Err(error) => return Err(error.to_string()),
+            Err(error) => return Err(DownloadError::transport(error)),
         };
         bytes.extend_from_slice(&chunk[..read]);
         if expected.is_some_and(|expected| bytes.len() as u128 > expected) {
-            return Err("response exceeded Content-Length".to_owned());
+            return Err(DownloadError::rejected("response exceeded Content-Length"));
         }
     }
     if expected.is_some_and(|expected| bytes.len() as u128 != expected) {
-        return Err(UNVERIFIED.to_owned());
+        return Err(DownloadError::transport(UNVERIFIED));
     }
     Ok(bytes)
 }

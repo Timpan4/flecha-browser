@@ -24,12 +24,14 @@ const openerScript = `
     });
   }`;
 
-export async function fixture() {
+export async function fixture(handle = () => false) {
   const pending = new Map();
   const requests = [];
 
   const server = createServer((request, response) => {
   const path = new URL(request.url, 'http://localhost').pathname;
+
+  if (handle(path, response)) return;
 
   if (path.startsWith('/probe/')) {
     const name = decodeURIComponent(path.slice('/probe/'.length));
