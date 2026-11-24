@@ -434,8 +434,9 @@ impl Shell {
                         | Shortcut::Command(Command::OpenSettings)
                         | Shortcut::SettingsTab(_)
                 ))
+            // A held key repeats where its first press went: the shell keeps it, the page gets it.
             && (if event.is_held && runs_once(shortcut) {
-                true
+                self.consumed_keys.contains(&stroke.key)
             } else {
                 self.invoke_shortcut(shortcut, window, cx)
             })

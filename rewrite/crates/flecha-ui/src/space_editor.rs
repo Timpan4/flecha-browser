@@ -69,6 +69,11 @@ impl Controller {
                 return self.model.open_space_window(id).map(Some);
             }
             SpaceAction::Delete => {
+                // Core keeps the last Space, and then its transients stay open too.
+                let spaces = self.model.core.spaces();
+                if spaces.len() < 2 || spaces.iter().all(|space| &space.id != id) {
+                    return Ok(None);
+                }
                 for tab in self.model.close_space_transients(id) {
                     self.engine.close(&tab);
                 }
@@ -83,6 +88,15 @@ impl Controller {
     /// Gives the Space its own cookies or the shared ones. Its tabs reopen in their new
     /// context, and the Peeks and Flechinhas it opened close.
     pub(crate) fn set_space_isolated(&mut self, id: &SpaceId, isolated: bool) {
+        // A stale menu may ask for the setting the Space already has; nothing changes then.
+        if self
+            .model
+            .core
+            .space(id)
+            .is_none_or(|space| space.isolated == isolated)
+        {
+            return;
+        }
         for tab in self.model.core.set_isolated(id, isolated) {
             self.reconcile_partition(&tab);
         }
@@ -495,9 +509,23 @@ mod tests {
             controller.model.core.focused_window().active_space_id,
             first
         );
-        // The last Space stays.
-        let err = controller.act(&window, Action::Space(first.clone(), SpaceAction::Delete));
-        assert!(err.is_ok());
+        // The last Space stays, and so does the Peek it opened.
+        controller
+            .act(&window, Action::Peek("https://peek.example/".into()))
+            .unwrap();
+        assert!(controller.model.peeks.contains_key(&window));
+        controller
+            .act(&window, Action::Space(first.clone(), SpaceAction::Delete))
+            .unwrap();
         assert!(controller.model.core.space(&first).is_some());
+        assert!(controller.model.peeks.contains_key(&window));
+        // A stale toggle that asks for the current setting leaves the Peek open too.
+        controller
+            .act(
+                &window,
+                Action::Space(first.clone(), SpaceAction::Isolate(false)),
+            )
+            .unwrap();
+        assert!(controller.model.peeks.contains_key(&window));
     }
 }

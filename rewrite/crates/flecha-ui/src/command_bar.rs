@@ -1060,9 +1060,14 @@ impl Shell {
             }
             Target::Archived(url) => {
                 let url = url.clone();
+                // `reopen` opens a new page where the bar's own mode would replace the current one.
                 let action = match mode {
                     Command::Split => Action::SplitNew(url),
-                    _ => Action::Open(url),
+                    Command::Peek => Action::Peek(url),
+                    Command::Flechinha => Action::OpenFlechinha(url),
+                    Command::NewTab | Command::EditLocation | Command::OpenSettings => {
+                        Action::Open(url)
+                    }
                 };
                 self.navigate_from_overlay(action, window, cx);
                 return;

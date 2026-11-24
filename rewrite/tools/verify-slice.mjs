@@ -427,7 +427,11 @@ async function tabRowInput(app, left) {
   await poll('the tab menu to open', async () => {
     const { error } = await app.attempt('menu_row', { label: 'Duplicate' });
 
-    return error === undefined;
+    // Until the tab menu opens, the request falls through to the page menu.
+    if (error === 'no page menu is open') return false;
+    assert.equal(error, undefined);
+
+    return true;
   });
   await duplicated('the tab menu to duplicate the tab');
   pass('right-clicking a tab row opened its menu, and Duplicate opened a copy above it');

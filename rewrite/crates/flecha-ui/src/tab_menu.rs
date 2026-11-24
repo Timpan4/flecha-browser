@@ -6,8 +6,9 @@ use anyhow::{Context as _, Result, ensure};
 use flecha_core::{CloseToday, Placement, SpaceId, TabId, WindowId, suggestions::pinnable_address};
 use gpui::{
     ClickEvent, ClipboardItem, Context, Div, FontWeight, InteractiveElement as _, IntoElement,
-    MouseDownEvent, ParentElement as _, Pixels, Point, StatefulInteractiveElement as _,
-    Styled as _, TextRun, Window, deferred, div, prelude::FluentBuilder as _, px,
+    MouseDownEvent, ParentElement as _, Pixels, Point, ScrollHandle,
+    StatefulInteractiveElement as _, Styled as _, TextRun, Window, deferred, div,
+    prelude::FluentBuilder as _, px,
 };
 
 use crate::sidebar::{SidebarAction, tab_label};
@@ -191,6 +192,8 @@ pub(crate) struct ShellMenu {
     pub(crate) anchor: Point<Pixels>,
     pub(crate) rows: Vec<Row>,
     pub(crate) submenu: Option<usize>,
+    /// A menu taller than the window scrolls, and its submenu opens beside the scrolled row.
+    scroll: ScrollHandle,
 }
 
 impl ShellMenu {
@@ -432,6 +435,7 @@ impl Shell {
             anchor,
             rows,
             submenu: None,
+            scroll: ScrollHandle::new(),
         };
         self.show_overlay(Overlay::Menu(menu), window, cx);
     }
@@ -458,6 +462,10 @@ impl Shell {
         let run = menu
             .find(label)
             .ok_or_else(|| anyhow::anyhow!("the menu has no enabled {label} row"))?;
+        anyhow::ensure!(
+            !matches!(run, Run::Submenu(_)),
+            "the {label} row opens a submenu"
+        );
         self.run_menu(run, window, cx);
         Ok(())
     }
@@ -480,8 +488,18 @@ impl Shell {
             Run::Rename(id) => self.open_rename(&id, window, cx),
             Run::EditSpace(id) => self.open_space_editor(&id, window, cx),
             Run::NewFolder(id) => {
-                dispatch(&self.state, &self.id, Action::Switch(id), cx);
-                self.show_overlay(Overlay::Folder(None, TextField::default()), window, cx);
+                dispatch(&self.state, &self.id, Action::Switch(id.clone()), cx);
+                // The folder editor saves into the shown Space, which must be the one chosen.
+                let shown = self
+                    .state
+                    .borrow()
+                    .model
+                    .state(&self.id)
+                    .and_then(|core| core.window(&self.id))
+                    .is_some_and(|current| current.active_space_id == id);
+                if shown {
+                    self.show_overlay(Overlay::Folder(None, TextField::default()), window, cx);
+                }
             }
             Run::DeleteSpace(id) => self.confirm_delete_space(&id, window, cx),
             Run::Submenu(_) => unreachable!("a submenu row opens its submenu"),
@@ -684,7 +702,6 @@ impl Shell {
                 .w(width)
                 .h(height)
                 .occlude()
-                .overflow_hidden()
                 .p(px(tokens::MENU_PAD))
                 .rounded(px(tokens::RADIUS_MD))
                 .bg(palette.surface)
@@ -699,6 +716,8 @@ impl Shell {
         let top = menu.anchor.y.clamp(px(0.), viewport.height - height);
         let main = frame(left, top, width, height)
             .id("tab-space-menu")
+            .overflow_y_scroll()
+            .track_scroll(&menu.scroll)
             .child(self.menu_rows(&menu.rows, Some(menu.submenu), cx));
         let submenu = menu.submenu.and_then(|index| {
             let Row::Item {
@@ -710,7 +729,9 @@ impl Shell {
             };
             let sub_width = Self::menu_width(rows, window, cx).min(viewport.width);
             let sub_height = Self::menu_height(rows).min(limit);
-            let row_top = top + Self::menu_height(&menu.rows[..index]) - px(tokens::MENU_PAD);
+            // The scroll offset is zero or negative, so a scrolled menu lifts the row.
+            let row_top = top + Self::menu_height(&menu.rows[..index]) - px(tokens::MENU_PAD)
+                + menu.scroll.offset().y;
             let right = left + width;
             let sub_left = if right + sub_width <= viewport.width {
                 right
@@ -721,6 +742,7 @@ impl Shell {
             Some(
                 frame(sub_left, sub_top, sub_width, sub_height)
                     .id("tab-space-submenu")
+                    .overflow_y_scroll()
                     .child(self.menu_rows(rows, None, cx)),
             )
         });
