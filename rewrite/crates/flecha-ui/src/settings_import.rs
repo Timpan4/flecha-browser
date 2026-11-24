@@ -204,6 +204,7 @@ impl Controller {
         replace: bool,
         mut message: String,
     ) -> Result<String> {
+        self.check_incognito_id_collisions(&next)?;
         let write = self.snapshots().save_current(&next)?;
         let synced = self
             .store
@@ -246,6 +247,68 @@ impl Controller {
         }
         self.update_visibility();
         Ok(message)
+    }
+
+    fn check_incognito_id_collisions(&self, next: &BrowserState) -> Result<()> {
+        let private_window_collision = self
+            .model
+            .incognito
+            .as_ref()
+            .into_iter()
+            .flat_map(|incognito| incognito.state.windows().iter().map(|window| &window.id))
+            .chain(
+                self.model
+                    .flechinhas
+                    .iter()
+                    .filter(|(_, page)| page.partition.is_incognito())
+                    .map(|(window, _)| window),
+            )
+            .chain(
+                self.model
+                    .popups
+                    .iter()
+                    .filter(|(_, popup)| popup.page.partition.is_incognito())
+                    .map(|(window, _)| window),
+            )
+            .any(|id| next.window(id).is_some());
+        ensure!(
+            !private_window_collision,
+            "Close incognito windows before importing a state that reuses an open incognito window ID"
+        );
+        let private_tab_collision = self
+            .model
+            .incognito
+            .as_ref()
+            .into_iter()
+            .flat_map(|incognito| incognito.state.open_tabs().into_keys())
+            .chain(
+                self.model
+                    .peeks
+                    .values()
+                    .filter(|page| page.partition.is_incognito())
+                    .map(|page| &page.id),
+            )
+            .chain(
+                self.model
+                    .flechinhas
+                    .values()
+                    .filter(|page| page.partition.is_incognito())
+                    .map(|page| &page.id),
+            )
+            .chain(
+                self.model
+                    .popups
+                    .values()
+                    .filter(|popup| popup.page.partition.is_incognito())
+                    .map(|popup| &popup.page.id),
+            )
+            .chain(self.engine.ids().filter(|id| !self.is_regular_page(id)))
+            .any(|id| next.tab(id).is_some());
+        ensure!(
+            !private_tab_collision,
+            "Close incognito windows before importing a state that reuses an open incognito tab ID"
+        );
+        Ok(())
     }
 }
 
@@ -878,6 +941,85 @@ mod tests {
         assert_eq!(
             Controller::open_test_profile(profile.path())?.model.core,
             original
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn import_rejects_ids_colliding_with_live_incognito_windows_or_tabs() -> Result<()> {
+        use crate::Action;
+
+        let profile = tempfile::tempdir()?;
+        let mut state = Controller::open_test_profile(profile.path())?;
+        let regular_window = state.model.core.focused_window().id.clone();
+        state.act(
+            &regular_window,
+            Action::Open("https://regular.example/".into()),
+        )?;
+        let original = state.model.core.clone();
+        let disk_before = fs::read(profile.path().join("session/state.json"))?;
+
+        state.act(&regular_window, Action::NewIncognitoWindow)?;
+        let incognito_window = state
+            .model
+            .incognito
+            .as_ref()
+            .unwrap()
+            .state
+            .focused_window()
+            .id
+            .clone();
+        state.act(
+            &incognito_window,
+            Action::Open("https://private.example/".into()),
+        )?;
+        let incognito_tab = state.model.active(&incognito_window).unwrap().clone();
+
+        // A replacement reusing a live incognito window ID must be rejected before saving.
+        let mut window_collision =
+            BrowserState::new(flecha_core::SpaceId::new("space"), incognito_window.clone());
+        window_collision.open_today(
+            flecha_core::TabId::new("imported-tab"),
+            flecha_core::Tab::new("https://imported.example/", 0),
+            &incognito_window,
+            None,
+            true,
+        );
+        let export = FlechaExport::parse(&storage::encode(&window_collision)?)?;
+        let err = state
+            .apply_import(PreparedImport::Export(export), &regular_window)
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("incognito window ID"),
+            "{err:#}"
+        );
+        assert_eq!(state.model.core, original);
+        assert_eq!(
+            fs::read(profile.path().join("session/state.json"))?,
+            disk_before
+        );
+
+        // A replacement reusing a live incognito tab ID must also be rejected before saving.
+        let mut tab_collision = BrowserState::new(
+            flecha_core::SpaceId::new("space"),
+            flecha_core::WindowId::new("imported-window"),
+        );
+        tab_collision.open_today(
+            incognito_tab,
+            flecha_core::Tab::new("https://imported.example/", 0),
+            &flecha_core::WindowId::new("imported-window"),
+            None,
+            true,
+        );
+        let export = FlechaExport::parse(&storage::encode(&tab_collision)?)?;
+        let err = state
+            .apply_import(PreparedImport::Export(export), &regular_window)
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("incognito tab ID"), "{err:#}");
+        assert_eq!(state.model.core, original);
+        assert_eq!(
+            fs::read(profile.path().join("session/state.json"))?,
+            disk_before
         );
         Ok(())
     }

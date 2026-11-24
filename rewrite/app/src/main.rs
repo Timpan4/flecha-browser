@@ -11,7 +11,7 @@ use launch::{Environment, Launch, USAGE};
 
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
-    let (profile, options) = match Launch::resolve(&args, &Environment::read())? {
+    let (profile, mut options) = match Launch::resolve(&args, &Environment::read())? {
         Launch::Help => {
             print!("{USAGE}");
             return Ok(());
@@ -22,6 +22,9 @@ fn main() -> Result<()> {
         }
         Launch::Browser { profile, options } => (profile, options),
     };
+    if let Some(input) = options.initial.as_deref() {
+        options.initial = Some(flecha_ui::validate_initial_address(input)?);
+    }
     let runtime = Rc::new(RefCell::new(Runtime::entry()?));
     let (store, loaded) = StateStore::open(&profile.join("session"))?;
     let cef_profile = profile.join("cef");

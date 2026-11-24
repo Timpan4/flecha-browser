@@ -54,6 +54,10 @@ pub struct Options {
     pub adblock_fixture_port: Option<NonZeroU16>,
 }
 
+pub fn validate_initial_address(input: &str) -> Result<String> {
+    pinnable_address(input).context("--open requires a browser address")
+}
+
 pub fn start(
     cx: &mut App,
     runtime: &mut Runtime,
@@ -76,7 +80,7 @@ pub fn start(
         verify::install(&controller, cx);
     }
     if let Some(input) = options.initial {
-        let url = pinnable_address(&input).context("--open requires a browser address")?;
+        let url = validate_initial_address(&input)?;
         let window = controller.borrow().model.core.focused_window().id.clone();
         controller.borrow_mut().act(&window, Action::Open(url))?;
     }
