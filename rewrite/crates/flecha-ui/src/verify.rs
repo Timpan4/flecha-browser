@@ -351,6 +351,9 @@ fn snapshot(state: &Controller) -> Result<Value> {
                 "owner": owner,
                 "partition": partition,
                 "browser": state.engine.browser_id(id),
+                "loading": state.engine.is_loading(id),
+                "audible": state.engine.is_audible(id),
+                "muted": state.engine.is_audio_muted(id),
             })
         })
         .collect::<Vec<_>>();
@@ -522,6 +525,9 @@ pub(super) fn event(message: &BrowserEvent) {
         Event::Fullscreen(fullscreen) => {
             json!({ "type": "fullscreen", "tab": tab, "fullscreen": fullscreen })
         }
+        Event::FaviconUrls(urls) => json!({ "type": "favicon_urls", "tab": tab, "urls": urls }),
+        Event::Loading(loading) => json!({ "type": "loading", "tab": tab, "loading": loading }),
+        Event::Audible(audible) => json!({ "type": "audible", "tab": tab, "audible": audible }),
         Event::DialogChanged => json!({ "type": "dialog_changed", "tab": tab }),
         Event::SecurityChanged => json!({ "type": "security_changed", "tab": tab }),
         Event::PaintFailed | Event::PointerChanged => return,

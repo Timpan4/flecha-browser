@@ -4,6 +4,7 @@ mod command_bar;
 mod context_menu;
 mod dialogs;
 mod downloads_view;
+mod favicons;
 mod find_bar;
 mod fullscreen;
 mod history_view;
@@ -269,6 +270,7 @@ struct Controller {
     downloads: Downloads,
     permissions: PermissionStore,
     sleep: TabSleep,
+    favicons: favicons::Favicons,
     fullscreen: fullscreen::PageFullscreen,
     agents: mcp::Agents,
     toolbars: BTreeMap<WindowId, Toolbar>,
@@ -372,6 +374,7 @@ impl Controller {
             downloads: Downloads::new(&profile, isolated),
             permissions: PermissionStore::open(&profile),
             sleep: TabSleep::new(Instant::now()),
+            favicons: favicons::Favicons::default(),
             fullscreen: fullscreen::PageFullscreen::default(),
             agents: mcp::Agents::default(),
             toolbars: BTreeMap::new(),
@@ -771,6 +774,7 @@ impl Controller {
             }
         }
         self.update_visibility();
+        self.favicons_stale();
         self.save()
     }
 
@@ -930,9 +934,13 @@ impl Controller {
                             self.history.begin(&message.key, &address);
                         }
                         if tab.url != address {
+                            let moved = view::site(&tab.url) != view::site(&address);
                             tab.url = address;
                             save |= durable;
                             changed = true;
+                            if moved {
+                                self.page_site_changed(id);
+                            }
                         }
                     }
                 }
@@ -988,13 +996,33 @@ impl Controller {
                         self.engine.set_audio_muted(id, true);
                     }
                     self.start_download_retries(id);
+                    self.favicons_stale();
                 }
+                Event::FaviconUrls(urls) => {
+                    let (tab_changed, durable) = self.page_favicons(id, urls);
+                    changed |= tab_changed;
+                    save |= tab_changed && durable;
+                }
+                Event::Loading(loading) => {
+                    if loading {
+                        self.page_loading(id);
+                    }
+                    changed = true;
+                }
+                Event::Audible(_) => changed = true,
                 Event::Fullscreen(fullscreen) => {
                     self.page_fullscreen(&message.key, fullscreen);
                     changed = true;
                 }
             }
         }
+        let (icons_changed, icons_save) = self.drain_favicons();
+        changed |= icons_changed;
+        save |= icons_save;
+        if save {
+            self.favicons_stale();
+        }
+        self.sweep_favicons();
         changed |= self.engine.take_reopened();
         changed |= self.sweep_fullscreen();
         changed |= self.serve_agents();

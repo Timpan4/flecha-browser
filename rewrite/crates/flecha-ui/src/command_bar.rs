@@ -26,7 +26,7 @@ use crate::shortcuts::{Navigation, Shortcut, ShownWindow, platform};
 use crate::text_field::TextField;
 use crate::theme::palette;
 use crate::tokens;
-use crate::view::{Overlay, Shell, kbd, letter_favicon, overlay_panel};
+use crate::view::{Overlay, Shell, kbd, overlay_panel};
 use crate::{Action, Controller, now};
 
 mod remote;
@@ -1144,6 +1144,20 @@ impl Shell {
         self.navigate_from_overlay(action, window, cx);
     }
 
+    /// A tab result's own icon, or for an address or archived tab the icon of a tab on its
+    /// site in the partition of the window's shown tab.
+    fn target_favicon(&self, target: &Target) -> Option<Arc<gpui::RenderImage>> {
+        let state = self.state.borrow();
+        match target {
+            Target::Tab(id, _) => state.tab_favicon(id),
+            Target::Address(url) | Target::Archived(url) => {
+                let partition = state.model.partition(state.model.active(&self.id)?)?;
+                state.site_favicon(&partition, url)
+            }
+            _ => None,
+        }
+    }
+
     pub(crate) fn command_panel(&self, bar: &CommandBar, cx: &Context<Self>) -> Div {
         let keybindings = self.state.borrow().model.core.settings.keybindings.clone();
         // An action shows its shortcut where a page shows its kind (`actionItem`'s `hint`).
@@ -1167,15 +1181,16 @@ impl Shell {
                 palette().text_2
             };
             let chip = match &row.target {
-                Target::Tab(_, url) | Target::Address(url) | Target::Archived(url) => {
-                    letter_favicon(
+                Target::Tab(_, url) | Target::Address(url) | Target::Archived(url) => self
+                    .site_icon(
+                        self.target_favicon(&row.target),
                         url,
-                        tokens::FAVICON,
-                        tokens::FAVICON_RADIUS,
-                        tokens::FAVICON_LETTER,
-                    )
-                    .into_any_element()
-                }
+                        (
+                            tokens::FAVICON,
+                            tokens::FAVICON_RADIUS,
+                            tokens::FAVICON_LETTER,
+                        ),
+                    ),
                 target => icon(target_icon(target), tokens::ICON, icon_color).into_any_element(),
             };
             let hint = hint(&row.target);
@@ -1284,14 +1299,16 @@ impl Shell {
             .get(bar.matches.selected)
             .map(|row| &row.target)
         {
-            Some(Target::Tab(_, url) | Target::Address(url) | Target::Archived(url)) => {
-                letter_favicon(
+            Some(target @ (Target::Tab(_, url) | Target::Address(url) | Target::Archived(url))) => {
+                self.site_icon(
+                    self.target_favicon(target),
                     url,
-                    tokens::PALETTE_ICON,
-                    tokens::FAVICON_RADIUS,
-                    tokens::FAVICON_LETTER,
+                    (
+                        tokens::PALETTE_ICON,
+                        tokens::FAVICON_RADIUS,
+                        tokens::FAVICON_LETTER,
+                    ),
                 )
-                .into_any_element()
             }
             Some(target) => {
                 icon(target_icon(target), tokens::PALETTE_ICON, palette().text_3).into_any_element()

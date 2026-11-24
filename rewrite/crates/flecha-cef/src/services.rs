@@ -39,6 +39,8 @@ pub(crate) struct Services {
     pub devtools_internal: RefCell<BTreeMap<i32, (Weak<Slot>, Internal)>>,
     /// Selections read for the shell's clipboard, `None` where nothing may be copied.
     pub copied: Mailbox<Option<String>>,
+    /// Finished icon downloads, by URL ([`crate::Engine::next_favicon`]).
+    pub favicons: RefCell<VecDeque<crate::Favicon>>,
 }
 
 impl Services {
@@ -60,6 +62,7 @@ impl Services {
             devtools_next: Cell::new(1),
             devtools_internal: RefCell::new(BTreeMap::new()),
             copied: Mailbox::default(),
+            favicons: RefCell::default(),
         }
     }
 

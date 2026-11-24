@@ -113,6 +113,26 @@ impl Model {
             .or_else(|| self.incognito.as_ref()?.state.tab(id))
     }
 
+    /// Every open tab and page: regular, incognito, and the transient pages of Peeks,
+    /// Flechinhas and popups.
+    pub(crate) fn all_tabs(&self) -> impl Iterator<Item = (&TabId, &Tab)> {
+        let transient = self
+            .flechinhas
+            .values()
+            .chain(self.peeks.values())
+            .chain(self.popups.values().map(|popup| &popup.page))
+            .map(|page| (&page.id, &page.tab));
+        self.core
+            .open_tabs()
+            .into_iter()
+            .chain(
+                self.incognito
+                    .iter()
+                    .flat_map(|incognito| incognito.state.open_tabs()),
+            )
+            .chain(transient)
+    }
+
     /// Whether this window, or the page in a Flechinha or popup window, is incognito.
     pub(crate) fn is_incognito(&self, window: &WindowId) -> bool {
         self.incognito_session(window).is_some()

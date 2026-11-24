@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { once, EventEmitter } from 'node:events';
 import { copyFileSync, createWriteStream, existsSync, readdirSync, readFileSync, renameSync, utimesSync } from 'node:fs';
 import { createServer as createHttpsServer } from 'node:https';
 import { join, relative } from 'node:path';
 import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
+import { crc32, deflateSync } from 'node:zlib';
 
 import { blankRestartColor, downloadBody, fixture, openerColors } from './fixture.mjs';
 import { checkProcessEnvironment } from './verify-process-env.mjs';
@@ -32,14 +33,118 @@ const stepTimeoutMs = 10_000;
 const shippingTrace = readFileSync(new URL('./slice-ts-replay.jsonl', import.meta.url), 'utf8')
   .trim().split('\n').map(line => JSON.parse(line));
 
-assert(['slice', 'open', 'focus', 'popups', 'adblock', 'incognito', 'fullscreen', 'break-restore', 'clipboard', 'visual'].includes(mode), 'unknown slice check');
+assert(['slice', 'open', 'focus', 'popups', 'adblock', 'incognito', 'fullscreen', 'break-restore', 'clipboard', 'visual', 'tab-status'].includes(mode), 'unknown slice check');
 
 const easylist = '[Adblock Plus 2.0]\n! Title: EasyList\n/fixture-ad$xmlhttprequest\n';
 const easyprivacy = '[Adblock Plus 2.0]\n! Title: EasyPrivacy\n/fixture-tracker$xmlhttprequest\n';
 let listResponse = 'offline';
 const listRequests = new Set();
 
-const site = await fixture((path, response) => {
+// The tab-status check's colours: the icon /icon declares, and `--blue`, which draws the
+// loading spinner (chromium/shell/ui/styles.css:702-709, ui/tokens.css:36).
+const faviconColor = '#D6336C';
+const spinnerColor = '#3AA6D9';
+// Responses to /slow, held open so the page stays loading until the check releases them.
+
+const slowResponses = [];
+
+/** A `size` square PNG in one colour. */
+function solidPng(size, color) {
+  const chunk = (type, data) => {
+    const body = Buffer.concat([Buffer.from(type, 'latin1'), data]);
+    const length = Buffer.alloc(4);
+    const crc = Buffer.alloc(4);
+    length.writeUInt32BE(data.length);
+    crc.writeUInt32BE(crc32(body));
+
+    return Buffer.concat([length, body, crc]);
+  };
+
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(size, 0);
+  header.writeUInt32BE(size, 4);
+  header[8] = 8; // bits per channel
+  header[9] = 2; // RGB
+  const rgb = [1, 3, 5].map(at => parseInt(color.slice(at, at + 2), 16));
+  const row = Buffer.from([0, ...Array.from({ length: size }, () => rgb).flat()]);
+  const pixels = Buffer.concat(Array.from({ length: size }, () => row));
+
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', header), chunk('IDAT', deflateSync(pixels)), chunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+// Each page's head, then its body. Blink reads icon links from the head only.
+const statusPages = {
+  '/icon': ['<link rel="icon" href="/icon.png">', ''],
+  // The click is the user gesture an AudioContext needs to start.
+  '/audio': ['', `<button id="play">Play</button><script>
+    document.querySelector('#play').addEventListener('click', () => {
+      const context = new AudioContext();
+      const tone = context.createOscillator();
+      tone.connect(context.destination);
+      tone.start();
+    });
+  </script>`],
+};
+
+// The partition check's icons: /partition-icon.png answers in the colour of the partition whose
+// cookie the request carries, one colour for each icon URL.
+const partitionColors = { r1: '#7B2FBE', i1: '#E8871E', i2: '#C21F8A', r2: '#2E6FD8', s1: '#1E9E5A' };
+
+const site = await fixture((path, response, request) => {
+  if (path === '/icon.png') {
+    response.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-store' }).end(solidPng(32, faviconColor));
+
+    return true;
+  }
+
+  const query = new URL(request.url, 'http://localhost').searchParams;
+
+  // Names the page's partition in a cookie, then declares that site's icon.
+  if (path === '/partition-icon') {
+    response.writeHead(200, {
+      'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store',
+      'Set-Cookie': `flecha_icon=${query.get('mark')}; Path=/`,
+    }).end(`<!doctype html><title>Flecha fixture /partition-icon</title>
+      <link rel="icon" href="/partition-icon.png?n=${query.get('n')}">`);
+
+    return true;
+  }
+
+  if (path === '/partition-icon.png') {
+    const mark = /(?:^|; )flecha_icon=([a-z])(?:;|$)/.exec(request.headers.cookie ?? '')?.[1];
+    const color = partitionColors[`${mark}${query.get('n')}`];
+
+    if (color) response.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-store' }).end(solidPng(32, color));
+    else response.writeHead(404).end();
+
+    return true;
+  }
+
+  if (path === '/slow') {
+    slowResponses.push(response);
+
+    return true;
+  }
+
+  if (statusPages[path]) {
+    response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }).end(`<!doctype html>
+      <title>Flecha fixture ${path}</title>
+      ${statusPages[path][0]}
+      <style>
+        html { background: #147a70; color: white; font: 24px system-ui; }
+        body { margin: 32px; }
+        #marker { width: 116px; height: 56px; background: #ffcc49; }
+        #play { display: block; width: 320px; height: 64px; margin: 8px 0; font: inherit; }
+      </style>
+      <div id="marker"></div>
+      ${statusPages[path][1]}`);
+
+    return true;
+  }
+
   if (path !== '/easylist.txt' && path !== '/easyprivacy.txt') return false;
 
   listRequests.add(path);
@@ -1283,6 +1388,356 @@ async function pageFullscreen(app, main, other) {
   await app.quit();
 }
 
+// The tab row's status marks as ui/app.ts:543-590 draws them: the icon the page declares once it
+// downloads, a spinner in its place while the page loads, and on a page that plays sound a
+// speaker that mutes the page when clicked.
+async function tabStatus(app, main, left) {
+  const [windowX, windowY, , windowHeight] = execFileSync(x11Driver, ['geometry', 'Flecha'], { encoding: 'utf8' })
+    .trim().split(' ').map(Number);
+
+  const sidebarWidth = (await app.command('snapshot')).core.sidebarWidth;
+  const region = `${sidebarWidth}x${windowHeight}+${windowX}+${windowY}`;
+
+  const crop = (name, path) => {
+    const cropped = join(out, `${name}-sidebar.png`);
+    execFileSync('magick', [path, '-crop', region, '+repage', cropped]);
+
+    // isolated-run.sh binds FLECHA_VISUAL_OUT here; the scratch directory goes when the run passes.
+    if (existsSync('/mnt/visual')) copyFileSync(cropped, join('/mnt/visual', `${name}.png`));
+
+    return cropped;
+  };
+
+  const histogram = path => execFileSync('magick', [path, '-format', '%c', 'histogram:info:'], { encoding: 'utf8' });
+
+  const sidebar = async (name, mismatch) => {
+    await app.present(main);
+    await captureUntil(name, 'root', path => mismatch(histogram(crop(name, path))));
+  };
+
+  const tab = async id => (await app.command('snapshot')).core.tabs[id];
+  const browser = async id => (await app.command('snapshot')).browsers.find(page => page.tab === id);
+
+  let after = app.events.length;
+  const iconTab = await openTab(app, '/icon');
+  // Blink reports the default /favicon.ico until the parser reaches the page's own icon.
+  await app.wait('the page to declare its icon', event => event.type === 'favicon_urls' && event.tab === iconTab &&
+    event.urls.length === 1 && event.urls[0] === base + '/icon.png', after);
+  await poll('the tab to keep its downloaded icon', async () => (await tab(iconTab)).favicon === base + '/icon.png');
+  await sidebar('tab-favicon', colors => colors.includes(faviconColor) ? undefined : 'the row shows no site icon');
+  pass('the tab kept the icon its page declared, and its row drew the downloaded image');
+
+  await app.command('select', { tab: left });
+  await sidebar('tab-idle', colors => colors.includes(spinnerColor) ? 'blue in the sidebar with no page loading' : undefined);
+  after = app.events.length;
+  const slowTab = active(await app.command('open', { url: base + '/slow' })).activeTabId;
+  await app.wait('the slow page to start loading', event =>
+    event.type === 'loading' && event.tab === slowTab && event.loading, after);
+  // Away from the slow tab, so the address bar's loading line is not on screen.
+  await app.command('select', { tab: left });
+  await sidebar('tab-loading', colors => colors.includes(spinnerColor) ? undefined : 'no spinner in the loading row');
+  after = app.events.length;
+
+  for (const response of slowResponses.splice(0)) {
+    response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }).end('<!doctype html><title>Flecha fixture /slow</title>');
+  }
+
+  await app.loaded(slowTab, '/slow', after);
+  await sidebar('tab-loaded', colors => colors.includes(spinnerColor) ? 'the spinner stayed after the load' : undefined);
+  pass('a loading tab showed a spinner in its row that went away once the page loaded');
+
+  const audioTab = await openTab(app, '/audio');
+  await sidebar('tab-silent', colors => colors.includes(spinnerColor) ? 'the page is still loading' : undefined);
+  const silent = join(out, 'tab-silent-sidebar.png');
+  after = app.events.length;
+  await clickElement(app, audioTab, '#play', ['#147A70', '#FFCC49'], 'audio-play', main);
+  await app.wait('the page to become audible', event =>
+    event.type === 'audible' && event.tab === audioTab && event.audible, after, stepTimeoutMs);
+  assert.equal((await browser(audioTab)).audible, true);
+
+  // The speaker is the right end of what the sidebar gained since the page was silent: the title
+  // shortens to make room for it, so the change starts inside the title. The click goes half the
+  // mark's 14px icon (ui/styles.css:2190) in from that end.
+  let mark;
+  await sidebar('tab-audible', () => {
+    const changed = execFileSync('magick', [
+      silent, join(out, 'tab-audible-sidebar.png'), '-compose', 'difference', '-composite',
+      '-separate', '-evaluate-sequence', 'max', '-threshold', '0', '-format', '%@', 'info:',
+    ], { encoding: 'utf8' }).trim();
+
+    const [, width, height, x, y] = /^(\d+)x(\d+)\+(\d+)\+(\d+)$/.exec(changed)?.map(Number) ?? [];
+
+    if (!width || !height) return 'no audio mark in the sidebar';
+    mark = [windowX + x + width - 14 / 2, windowY + y + height / 2];
+  });
+  pass(`the audible page's row showed an audio mark (${mark.map(Math.round).join(', ')})`);
+
+  // The split mark (ui/app.ts:574-576) sits where the close button shows on hover, and hovering
+  // the row hides it (ui/styles.css:660-683). A split pair drawn side by side leaves it out
+  // (ui/styles.css:1955-1958), so the audio tab is pinned first and its split partner stays in
+  // Today. The pinned row is drawn alone and in a split, each time with the pointer on the page
+  // beside the sidebar and then on the row's title. A row is 32px tall (ui/styles.css:6). The
+  // split mark moves the speaker toward the title, so the title's own end is measured: it is the
+  // last pixel before the 20px audio mark (ui/styles.css:2174) that differs from the row's fill,
+  // within the line the 14px speaker icon (ui/styles.css:2190) spans, clear of the row's edges.
+  const rowHeight = 32;
+  const audibleCentre = Math.round(mark[1] - windowY);
+  const beforeSpeaker = join(out, 'tab-audible-title.png');
+
+  execFileSync('magick', [
+    join(out, 'tab-audible-sidebar.png'),
+    '-crop', `${Math.round(mark[0] - windowX - 20 / 2)}x14+0+${audibleCentre - 14 / 2}`,
+    '+repage', beforeSpeaker,
+  ]);
+
+  const rowFill = execFileSync('magick', [beforeSpeaker, '-format', '%[pixel:p{w-1,h/2}]', 'info:'], { encoding: 'utf8' }).trim();
+
+  const titleEnd = execFileSync('magick', [
+    beforeSpeaker, '(', '+clone', '-fill', rowFill, '-colorize', '100', ')',
+    '-compose', 'difference', '-composite',
+    '-separate', '-evaluate-sequence', 'max', '-threshold', '0', '-format', '%@', 'info:',
+  ], { encoding: 'utf8' }).trim();
+
+  const [, endWidth, , endX] = /^(\d+)x(\d+)\+(\d+)\+(\d+)$/.exec(titleEnd)?.map(Number) ?? [];
+
+  assert(endWidth, `no title before the audio mark: ${titleEnd}`);
+
+  const titleWidth = endX + endWidth;
+  const click = ([x, y]) => execFileSync(x11Driver, ['click', Math.round(x), Math.round(y)]);
+  const awayPoint = [windowX + sidebarWidth + 40, windowY + windowHeight - 40];
+  const titlePoint = centre => [windowX + titleWidth / 2, windowY + centre];
+
+  const rowBand = (name, path, centre) => {
+    const band = join(out, `${name}-row.png`);
+    execFileSync('magick', [path, '-crop', `${sidebarWidth}x${rowHeight}+0+${centre - rowHeight / 2}`, '+repage', band]);
+
+    return band;
+  };
+
+  // `magick compare` exits 0 for similar images, 1 for different ones and 2 on an error, and
+  // writes its metric to stderr. Anything else fails the check rather than reading as a match.
+  const compare = (...args) => {
+    const run = spawnSync('magick', ['compare', ...args, 'null:'], { encoding: 'utf8' });
+
+    assert(!run.error && (run.status === 0 || run.status === 1), `magick compare failed: ${run.error ?? run.stderr}`);
+
+    const metric = Number(run.stderr.split(' ')[0]);
+
+    assert(Number.isFinite(metric), `magick compare gave no metric: ${run.stderr}`);
+
+    return { metric, output: run.stderr };
+  };
+
+  const differing = (a, b) => compare('-metric', 'AE', a, b).metric;
+
+  const shot = async (name, check) => {
+    await app.present(main);
+    await captureUntil(name, 'root', path => check(crop(name, path)));
+  };
+
+  // Where `part` best matches in `path`, and whether it matches there exactly.
+  const search = (path, metric, part) => {
+    const { metric: different, output } = compare('-metric', metric, '-subimage-search', path, part);
+    const [, x, y] = /@ (\d+),(\d+)/.exec(output) ?? [];
+
+    assert(x !== undefined, `magick compare gave no match location: ${output}`);
+
+    return { at: [Number(x), Number(y)], exact: different === 0 };
+  };
+
+  // A split pair drawn side by side keeps the speaker in the row's narrower half, and it still
+  // mutes the page. The speaker is found by its 14px icon (ui/styles.css:2190).
+  const speaker = join(out, 'split-speaker.png');
+
+  execFileSync('magick', [
+    join(out, 'tab-audible-sidebar.png'), '-crop', `14x14+${Math.round(mark[0] - windowX - 14 / 2)}+${audibleCentre - 14 / 2}`,
+    '+repage', speaker,
+  ]);
+
+  // The row draws its actions after the speaker only while the pointer is on it, and an X11
+  // click presses before GPUI draws that hover, so a click aimed at the resting speaker can land
+  // on the close button. The pointer first rests on the title, and the clicks go where the
+  // speaker is drawn then. A half of a split pair moves the icon by a fraction of a pixel, so the
+  // match is the closest one, and the clicks show whether it was the speaker.
+  const findSpeaker = path => search(path, 'RMSE', speaker)?.at;
+  const restingX = Math.round(mark[0] - windowX - 14 / 2);
+  let hoveredSpeaker;
+
+  click(titlePoint(audibleCentre));
+  await shot('tab-audible-hover', path => {
+    const moved = findSpeaker(path);
+
+    if (!moved || moved[0] >= restingX) return 'the hovered row made no room for its actions';
+    hoveredSpeaker = [windowX + moved[0] + 14 / 2, windowY + moved[1] + 14 / 2];
+  });
+  click(hoveredSpeaker);
+  await poll('the mark to mute the page', async () =>
+    (await tab(audioTab)).muted === true && (await browser(audioTab)).muted);
+  click(hoveredSpeaker);
+  await poll('the mark to unmute the page', async () =>
+    (await tab(audioTab)).muted === undefined && !(await browser(audioTab)).muted);
+  pass('clicking the audio mark muted the page in CEF and the saved tab, and clicking again unmuted it');
+
+  const tabsBefore = Object.keys((await app.command('snapshot')).core.tabs);
+
+  await app.command('split', { url: base + '/split' });
+  const partner = Object.keys((await app.command('snapshot')).core.tabs).find(id => !tabsBefore.includes(id));
+
+  await app.command('select', { tab: audioTab });
+  click(awayPoint);
+
+  let resting;
+  let pairSpeaker;
+
+  await shot('split-pair', path => {
+    resting = findSpeaker(path);
+
+    return resting ? undefined : 'no match for the speaker';
+  });
+
+  // Until the pointer is on the row, the pair's actions float invisibly over its end, speaker
+  // included. An X11 click presses before GPUI draws the hover, so the pointer first rests on
+  // the title, and the speaker moves aside to make room for the actions.
+  click([windowX + resting[0] / 2, windowY + resting[1] + 14 / 2]);
+  await shot('split-pair-hover', path => {
+    const moved = findSpeaker(path);
+
+    if (!moved || moved[0] >= resting[0]) return 'the paired row made no room for its actions';
+    pairSpeaker = [windowX + moved[0] + 14 / 2, windowY + moved[1] + 14 / 2];
+  });
+  click(pairSpeaker);
+  await poll('the paired row\'s speaker to mute the page', async () => (await tab(audioTab)).muted === true);
+  click(pairSpeaker);
+  await poll('the paired row\'s speaker to unmute the page', async () => (await tab(audioTab)).muted === undefined);
+  pass('a split pair drawn side by side kept the speaker, and it muted and unmuted the page');
+
+  await app.command('select', { tab: partner });
+  await app.command('close');
+  await app.command('select', { tab: audioTab });
+
+  // Pinning and the split's new tab move the row, so it is found again by its icon and title.
+  const titleOnly = join(out, 'split-title.png');
+
+  execFileSync('magick', [
+    join(out, 'tab-audible-sidebar.png'), '-crop', `${titleWidth}x${rowHeight}+0+${audibleCentre - rowHeight / 2}`,
+    '+repage', titleOnly,
+  ]);
+
+  const findRow = path => {
+    const found = search(path, 'AE', titleOnly);
+
+    return found?.exact ? found.at[1] + rowHeight / 2 : undefined;
+  };
+
+  await app.command('pin', { tab: audioTab });
+  click(awayPoint);
+  let aloneCentre;
+  let alone;
+  let aloneHovered;
+
+  await shot('split-alone', path => {
+    aloneCentre = findRow(path);
+
+    if (aloneCentre === undefined) return 'the pinned audio row is not in the sidebar';
+    alone = rowBand('split-alone', path, aloneCentre);
+  });
+  click(titlePoint(aloneCentre));
+  await shot('split-alone-hover', path => {
+    aloneHovered = rowBand('split-alone-hover', path, aloneCentre);
+
+    return differing(alone, aloneHovered) ? undefined : 'the row shows no actions on hover';
+  });
+
+  // The close button is the right end of what hovering the row shows.
+  const actions = execFileSync('magick', [
+    alone, aloneHovered, '-compose', 'difference', '-composite',
+    '-separate', '-evaluate-sequence', 'max', '-threshold', '0', '-format', '%@', 'info:',
+  ], { encoding: 'utf8' }).trim();
+
+  const [, actionsWidth, , actionsX] = /^(\d+)x(\d+)\+(\d+)\+(\d+)$/.exec(actions).map(Number);
+  // Half the close button's 13px icon (ui/styles.css:648) in from that end.
+  const closeX = windowX + actionsX + actionsWidth - 13 / 2;
+
+  await app.command('split', { url: base + '/split' });
+  await app.command('select', { tab: audioTab });
+  click(awayPoint);
+  let splitCentre;
+  let split;
+
+  await shot('split-joined', path => {
+    splitCentre = findRow(path);
+
+    if (splitCentre === undefined) return 'the audio row is not in the sidebar';
+    split = rowBand('split-joined', path, splitCentre);
+
+    if (!differing(split, aloneHovered)) return 'the row still shows its hover actions';
+
+    return differing(split, alone) ? undefined : 'the split row shows no split mark';
+  });
+  click(titlePoint(splitCentre));
+  await shot('split-joined-hover', path => differing(rowBand('split-joined-hover', path, splitCentre), aloneHovered)
+    ? 'hovering the split row did not swap its split mark for the row actions'
+    : undefined);
+  pass('a tab in a split showed the split mark, and hovering its row swapped the mark for the row actions');
+
+  // Closing a pinned tab closes its page, whatever happens to the pin.
+  click([closeX, windowY + splitCentre]);
+  await poll('the close button under the split mark to close the page', async () => !(await browser(audioTab)));
+  pass('the close button under the split mark closed the page');
+}
+
+
+// Each partition fetches its own copy of a site's icon, since the response can depend on that
+// partition's cookies: an icon one partition downloaded never shows in another. Each page names
+// its partition in a cookie, and the icon answers in that partition's colour.
+async function partitionIcons(app, main) {
+  const histogram = path => execFileSync('magick', [path, '-format', '%c', 'histogram:info:'], { encoding: 'utf8' });
+
+  const shows = (name, title, window, expected, foreign) => poll(`the ${title} window to draw ${name}`, async () => {
+    execFileSync(x11Driver, ['focus', title]);
+    await app.present(window);
+
+    const [x, y, width, height] = execFileSync(x11Driver, ['geometry', title], { encoding: 'utf8' })
+      .trim().split(' ').map(Number);
+
+    const full = join(out, `${name}-root.png`);
+    const cropped = join(out, `${name}.png`);
+    execFileSync('magick', ['import', '-window', 'root', full]);
+    execFileSync('magick', [full, '-crop', `${width}x${height}+${x}+${y}`, '+repage', cropped]);
+
+    // isolated-run.sh binds FLECHA_VISUAL_OUT here; the scratch directory goes when the run passes.
+    if (existsSync('/mnt/visual')) copyFileSync(cropped, join('/mnt/visual', `${name}.png`));
+
+    const colors = histogram(cropped);
+    assert(!colors.includes(foreign), `${name}: the ${title} window drew another partition's icon`);
+
+    return colors.includes(expected);
+  });
+
+  const page = (mark, n) => `${base}/partition-icon?mark=${mark}&n=${n}`;
+
+  await app.command('open', { url: page('r', 1), window: main });
+  await shows('partition-regular', 'Flecha', main, partitionColors.r1, partitionColors.i1);
+
+  const { window: incognito } = await openIncognito(app);
+
+  await app.command('open', { url: page('i', 1), window: incognito });
+  await shows('partition-incognito-after-regular', 'Flecha Incognito', incognito, partitionColors.i1, partitionColors.r1);
+  pass('an incognito tab fetched its own copy of an icon the regular partition had downloaded');
+
+  await app.command('open', { url: page('i', 2), window: incognito });
+  await shows('partition-incognito', 'Flecha Incognito', incognito, partitionColors.i2, partitionColors.r2);
+  await app.command('open', { url: page('r', 2), window: main });
+  await shows('partition-regular-after-incognito', 'Flecha', main, partitionColors.r2, partitionColors.i2);
+  pass('a regular tab fetched its own copy of an icon an incognito tab had downloaded');
+
+  await app.command('new_space', { window: main });
+  await app.command('isolate', { window: main });
+  await app.command('open', { url: page('s', 1), window: main });
+  await shows('partition-isolated-after-regular', 'Flecha', main, partitionColors.s1, partitionColors.r1);
+  pass('a tab in an isolated Space fetched its own copy of an icon the regular partition had downloaded');
+}
+
 // Incognito windows: one in-memory cookie jar per session, kept apart from the regular one,
 // gone when the last incognito window closes, and nowhere in the profile on disk afterwards.
 function incognitoTab(snapshot, window) {
@@ -2120,6 +2575,10 @@ async function verifySlice() {
     await incognitoChecks(app, main);
   } else if (mode === 'fullscreen') {
     await pageFullscreen(app, main, left);
+  } else if (mode === 'tab-status') {
+    await tabStatus(app, main, left);
+    await partitionIcons(app, main);
+    await app.quit();
   } else if (mode === 'visual') {
     await visualParity(app, left);
     await app.quit();
