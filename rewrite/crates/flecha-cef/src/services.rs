@@ -35,6 +35,8 @@ pub(crate) struct Services {
     /// CDP calls the engine made itself, by message id with the browser they went to. The shell
     /// never sees their replies.
     pub devtools_internal: RefCell<BTreeMap<i32, (Weak<Slot>, Internal)>>,
+    /// Selections read for the shell's clipboard, `None` where nothing may be copied.
+    pub copied: Mailbox<Option<String>>,
 }
 
 impl Services {
@@ -53,6 +55,7 @@ impl Services {
             devtools_events: Mailbox::default(),
             devtools_next: Cell::new(1),
             devtools_internal: RefCell::new(BTreeMap::new()),
+            copied: Mailbox::default(),
         }
     }
 

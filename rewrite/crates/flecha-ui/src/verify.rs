@@ -79,6 +79,21 @@ enum Command {
         tab: TabId,
         x: f32,
         y: f32,
+        #[serde(default)]
+        right: bool,
+    },
+    /// Writes `text`, when given, to GPUI's clipboard, then reads the clipboard's text back.
+    Clipboard {
+        text: Option<String>,
+    },
+    /// Dispatches a keystroke such as `ctrl-v` to the window, for displays without an input
+    /// injection protocol. It runs after the reply.
+    Key {
+        keystroke: String,
+    },
+    /// Chooses the open page menu's enabled row labelled `label`. It runs after the reply.
+    MenuRow {
+        label: String,
     },
     /// Makes the next shared-texture import fail, to check the switch to CPU copies.
     RejectNextSharedTexture,
@@ -216,19 +231,54 @@ impl Command {
                 state.engine.reject_next_shared_texture();
                 return Ok(Value::Null);
             }
-            Self::Click { tab, x, y } => {
+            Self::Click { tab, x, y, right } => {
                 let host = state.engine.host(&tab).context("missing CEF host")?;
                 state.engine.focused(&tab, true);
+                let button = if right {
+                    gpui::MouseButton::Right
+                } else {
+                    gpui::MouseButton::Left
+                };
                 for up in [false, true] {
                     flecha_surface::input::click(
                         &host,
                         gpui::point(gpui::px(x), gpui::px(y)),
                         gpui::Modifiers::default(),
-                        gpui::MouseButton::Left,
+                        button,
                         1,
                         up,
                     );
                 }
+                return Ok(Value::Null);
+            }
+            Self::Clipboard { text } => {
+                if let Some(text) = text {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                }
+                let text = cx.read_from_clipboard().and_then(|item| item.text());
+                return Ok(json!({ "text": text }));
+            }
+            Self::Key { keystroke } => {
+                let keystroke = gpui::Keystroke::parse_with_os(&keystroke, cx.platform_info().os)
+                    .map_err(|_| anyhow::anyhow!("not a keystroke"))?;
+                let handle = *state.windows.get(window).context("no GPUI window")?;
+                // The shell borrows the controller this command holds, and dispatching renders
+                // the shell, so neither may be held here.
+                cx.defer(move |cx| {
+                    let _ = gpui::AppContext::update_window(cx, handle.into(), |_, window, cx| {
+                        window.dispatch_keystroke(keystroke, cx);
+                    });
+                });
+                return Ok(Value::Null);
+            }
+            Self::MenuRow { label } => {
+                let handle = *state.windows.get(window).context("no GPUI window")?;
+                let row = handle.read_with(cx, |shell, _| shell.context_menu_row(&label))??;
+                cx.defer(move |cx| {
+                    let _ = handle.update(cx, |shell, window, cx| {
+                        shell.use_context_menu(row, window, cx);
+                    });
+                });
                 return Ok(Value::Null);
             }
         };
@@ -368,6 +418,11 @@ pub(super) fn ready() {
 /// The shell asked the platform to bring this window to the front.
 pub(super) fn activated(window: &WindowId) {
     emit(json!({ "type": "activated", "window": window }));
+}
+
+/// A page's Copy or Cut finished reading its selection. The text itself is never reported.
+pub(super) fn page_copy(tab: &TabId, copied: bool) {
+    emit(json!({ "type": "page_copy", "tab": tab, "copied": copied }));
 }
 
 /// Every CEF browser has closed and the app is about to quit.

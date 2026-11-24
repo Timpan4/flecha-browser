@@ -126,6 +126,21 @@ export async function fixture(handle = () => false) {
         window.opener?.postMessage('hello-from-popup', '*');${beforeUnload}
       </script>`,
     '/unload': `<script>${beforeUnload}</script>`,
+    // Editable fields for the clipboard checks. The page counts Chromium's own paste events.
+    '/clipboard': `
+      <input id="text" aria-label="Text">
+      <input id="password" type="password" aria-label="Password">
+      <textarea id="area" aria-label="Notes"></textarea>
+      <div id="editable" contenteditable="true">x</div>
+      <script>
+        window.pastes = 0;
+        addEventListener('paste', () => window.pastes++, true);
+        // Ctrl+C and Ctrl+X that reached the page as keystrokes.
+        window.editKeys = 0;
+        addEventListener('keydown', event => {
+          if (event.ctrlKey && ['c', 'x'].includes(event.key)) window.editKeys++;
+        }, true);
+      </script>`,
     '/select': `
       <style>
         #choice { position: absolute; left: 400px; top: 32px; width: 240px; height: 48px; font: 24px system-ui; }

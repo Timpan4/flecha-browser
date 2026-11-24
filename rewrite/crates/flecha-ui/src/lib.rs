@@ -1,4 +1,5 @@
 mod boosts;
+mod clipboard;
 mod command_bar;
 mod context_menu;
 mod downloads_view;
@@ -790,6 +791,7 @@ impl Controller {
         changed |= self.poll_permissions();
         changed |= self.poll_toolbars();
         self.poll_page_overlays(cx);
+        self.poll_clipboard(cx);
         if self.ready && !self.quitting {
             changed |= self.poll_sleep(Instant::now());
         }

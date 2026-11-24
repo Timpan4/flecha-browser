@@ -19,7 +19,7 @@ const stepTimeoutMs = 10_000;
 const shippingTrace = readFileSync(new URL('./slice-ts-replay.jsonl', import.meta.url), 'utf8')
   .trim().split('\n').map(line => JSON.parse(line));
 
-assert(['slice', 'open', 'focus', 'popups', 'adblock', 'incognito', 'break-restore'].includes(mode), 'unknown slice check');
+assert(['slice', 'open', 'focus', 'popups', 'adblock', 'incognito', 'break-restore', 'clipboard'].includes(mode), 'unknown slice check');
 
 const easylist = '[Adblock Plus 2.0]\n! Title: EasyList\n/fixture-ad$xmlhttprequest\n';
 const easyprivacy = '[Adblock Plus 2.0]\n! Title: EasyPrivacy\n/fixture-tracker$xmlhttprequest\n';
@@ -93,7 +93,8 @@ function browser(name, fixturePort) {
     }
   }
 
-  async function command(op, detail = {}) {
+  /** The reply to one request, which may carry an error. */
+  async function attempt(op, detail = {}) {
     const request = ++seq;
     const sent = events.length;
     child.stdin.write(JSON.stringify({ seq: request, op, ...detail }) + '\n');
@@ -103,13 +104,19 @@ function browser(name, fixturePort) {
       (event.type === 'reply' && event.seq === request) || event.type === 'invalid_request', sent);
 
     assert.notEqual(reply.type, 'invalid_request', `Flecha does not understand the ${op} request`);
+
+    return reply;
+  }
+
+  async function command(op, detail = {}) {
+    const reply = await attempt(op, detail);
     assert.equal(reply.error, undefined, reply.error);
 
     return reply.result;
   }
 
   return {
-    events, command, wait, pid: child.pid,
+    events, attempt, command, wait, pid: child.pid,
     async exited() {
       child.stdin.end();
       assert.deepEqual(await closed, [0, null]);
@@ -1388,9 +1395,163 @@ async function verifySlice() {
   pass('CEF shut down cleanly');
 }
 
+/**
+ * Copy, Cut and Paste between web pages and GPUI's clipboard, from the keyboard and the page
+ * menu. Under X11 the keys go through XTest; a display without input injection dispatches them
+ * to the GPUI window. Every string is a fixture value.
+ */
+async function verifyClipboard() {
+  const x11 = process.env.DISPLAY !== undefined;
+  const app = launch('clipboard');
+  await app.wait('CEF context ready', event => event.type === 'ready');
+  const opened = await app.command('open', { url: base + '/clipboard' });
+  const tab = active(opened).activeTabId;
+  await app.loaded(tab, '/clipboard');
+  await app.wait('CEF paint for the clipboard page', event => event.type === 'paint' && event.tab === tab);
+  await app.present();
+
+  if (x11) {
+    execFileSync('cc', [
+      '-std=c17', '-Wall', '-Wextra', '-Werror', 'spikes/gpui-cef-compositor/x11-input.c',
+      '-lX11', '-lXtst', '-o', x11Driver,
+    ]);
+    execFileSync(x11Driver, ['focus', 'Flecha']);
+  }
+
+  const backend = x11 ? 'X11' : 'Wayland';
+
+  const press = async key => {
+    if (x11) {
+      execFileSync(x11Driver, ['chord', 'Control_L', key]);
+    } else {
+      await app.command('key', { keystroke: `ctrl-${key}` });
+    }
+  };
+
+  let probes = 0;
+
+  const page = async (step, source = 'null') => {
+    const label = `clipboard-${++probes}`;
+    const reply = site.probe(label);
+    await app.command('script', {
+      tab,
+      source: `{
+        const field = selector => document.querySelector(selector);
+        const result = (() => { ${step}; return ${source}; })();
+        fetch('/probe/${label}?value=' + encodeURIComponent(JSON.stringify(result)), { cache: 'no-store' });
+      }`,
+    });
+    waitingFor = `clipboard page step ${label}`;
+
+    return JSON.parse(await reply);
+  };
+
+  const clipboard = async text => (await app.command('clipboard', text === undefined ? {} : { text })).text;
+  const sentinel = 'flecha-clipboard-sentinel';
+
+  assert.equal(await clipboard(sentinel), sentinel, `GPUI's ${backend} clipboard did not keep a fixture string`);
+
+  // Each target starts empty, focused and with its caret at the end.
+  const targets = [
+    ['#text', 'value', 'flecha-paste-text'],
+    ['#password', 'value', 'flecha-paste-secret'],
+    ['#area', 'value', 'flecha-paste line one\nline two'],
+    ['#editable', 'textContent', 'flecha-paste-editable'],
+  ];
+
+  for (const [selector, property, text] of targets) {
+    await clipboard(text);
+    await page(`field('${selector}').${property} = ''; field('${selector}').focus()`);
+    await press('v');
+    await poll(`${selector} to receive the pasted text`, async () =>
+      (await page('', `field('${selector}').${property}`)) === text);
+  }
+
+  assert.equal(await page('', 'window.pastes'), 0, 'Chromium pasted on its own');
+  pass(`${backend}: Ctrl+V pasted GPUI's clipboard into a text input, a password input, a textarea and a contenteditable`);
+
+  const copy = async (key, step) => {
+    await clipboard(sentinel);
+    const since = app.events.length;
+    await page(step);
+    await press(key);
+
+    return (await app.wait(`page ${key === 'x' ? 'cut' : 'copy'} report`, event =>
+      event.type === 'page_copy' && event.tab === tab, since)).copied;
+  };
+
+  const select = (selector, value) => `field('${selector}').value = '${value}'; field('${selector}').focus(); field('${selector}').select()`;
+
+  assert.equal(await copy('c', select('#password', 'flecha-copy-secret')), false, 'Ctrl+C read a password field');
+  assert.equal(await clipboard(), sentinel, 'Ctrl+C put a password on the clipboard');
+  assert.equal(await copy('x', select('#password', 'flecha-cut-secret')), false, 'Ctrl+X read a password field');
+  assert.equal(await clipboard(), sentinel, 'Ctrl+X put a password on the clipboard');
+  assert.equal(await page('', `field('#password').value`), 'flecha-cut-secret', 'Ctrl+X deleted a password');
+  // Nothing was copied, so the page got the held keystrokes, as it would without Flecha.
+  await poll('the held Ctrl+C and Ctrl+X to reach the page', async () => (await page('', 'window.editKeys')) === 2);
+  pass(`${backend}: Ctrl+C and Ctrl+X in a password field left GPUI's clipboard and the field unchanged and reached the page as keystrokes`);
+
+  assert.equal(await copy('c', select('#text', 'flecha-copy-text')), true, 'Ctrl+C read nothing');
+  await poll('the copied input text on the clipboard', async () => (await clipboard()) === 'flecha-copy-text');
+  assert.equal(await copy('c', `
+    document.activeElement.blur();
+    getSelection().selectAllChildren(document.querySelector('h1'))`), true, 'Ctrl+C read no page selection');
+  await poll('the copied page text on the clipboard', async () => (await clipboard()) === 'Flecha fixture /clipboard');
+  assert.equal(await copy('x', select('#area', 'flecha-cut-area')), true, 'Ctrl+X read nothing');
+  await poll('the cut text on the clipboard', async () => (await clipboard()) === 'flecha-cut-area');
+  await poll('the cut text to leave the textarea', async () => (await page('', `field('#area').value`)) === '');
+  assert.equal(await page('', 'window.editKeys'), 2, 'a copy or cut with text also reached the page as a keystroke');
+  pass(`${backend}: Ctrl+C copied input and page selections and Ctrl+X cut textarea text to GPUI's clipboard without Chromium's own copy`);
+
+  // The page menu opens on a right-click that CEF receives, with the field's selection intact.
+  const menu = async (selector, label) => {
+    const [x, y] = await page('', `(() => {
+      const box = field('${selector}').getBoundingClientRect();
+      return [box.x + box.width / 2, box.y + box.height / 2];
+    })()`);
+
+    await app.command('click', { tab, x, y, right: true });
+
+    return poll(`the page menu's ${label} row`, async () => {
+      const reply = await app.attempt('menu_row', { label });
+
+      return reply.error === 'no page menu is open' ? undefined : reply;
+    });
+  };
+
+  await clipboard('flecha-menu-paste');
+  await page(`field('#text').value = ''`);
+  assert.equal((await menu('#text', 'Paste')).error, undefined);
+  await poll('the page menu paste', async () => (await page('', `field('#text').value`)) === 'flecha-menu-paste');
+  assert.equal(await page('', 'window.pastes'), 0, 'Chromium pasted on its own');
+
+  await clipboard(sentinel);
+  await page(select('#text', 'flecha-menu-copy'));
+  assert.equal((await menu('#text', 'Copy')).error, undefined);
+  await poll('the page menu copy', async () => (await clipboard()) === 'flecha-menu-copy');
+
+  await clipboard(sentinel);
+  await page(select('#area', 'flecha-menu-cut'));
+  assert.equal((await menu('#area', 'Cut')).error, undefined);
+  await poll('the page menu cut', async () => (await clipboard()) === 'flecha-menu-cut');
+  await poll('the page menu cut to leave the textarea', async () => (await page('', `field('#area').value`)) === '');
+
+  await clipboard(sentinel);
+  await page(select('#password', 'flecha-menu-secret'));
+  assert.equal((await menu('#password', 'Copy')).error, 'the page menu has no enabled Copy row');
+  assert.equal((await app.attempt('menu_row', { label: 'Cut' })).error, 'the page menu has no enabled Cut row');
+  await app.command('key', { keystroke: 'escape' });
+  assert.equal(await clipboard(), sentinel, 'the page menu put a password on the clipboard');
+  pass(`${backend}: the page menu pasted from, copied to and cut to GPUI's clipboard, and refused to copy or cut a password`);
+
+  await app.quit();
+}
+
 try {
   if (mode === 'adblock') {
     await verifyAdblock();
+  } else if (mode === 'clipboard') {
+    await verifyClipboard();
   } else {
     await verifySlice();
   }

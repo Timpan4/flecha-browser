@@ -1,6 +1,7 @@
 mod adblock;
 mod boosts;
 mod callbacks;
+mod clipboard;
 mod compositor;
 mod context_menu;
 mod devtools;
@@ -31,6 +32,7 @@ use gpui::{Bounds, Pixels, Point, point, px};
 
 pub use callbacks::Frames;
 use callbacks::{Queue, Slot, Stage};
+pub use clipboard::{ClipboardEdit, CopiedSelection};
 pub use compositor::Compositing;
 use compositor::Compositor;
 pub use context_menu::{

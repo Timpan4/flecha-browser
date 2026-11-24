@@ -27,6 +27,10 @@ pub struct MenuContext {
     pub src_url: String,
     pub selection_text: String,
     pub is_editable: bool,
+    /// Chromium's verdict on copying the selection. It refuses a password field's.
+    pub can_copy: bool,
+    /// Chromium's verdict on cutting the selection. It refuses a password field's.
+    pub can_cut: bool,
     pub can_go_back: bool,
     pub can_go_forward: bool,
 }
@@ -72,6 +76,8 @@ wrap_context_menu_handler! {
                 self.slot.menu.serial.set(serial);
                 let id = ContextMenuId { key: self.slot.key.borrow().clone(), serial };
                 let position = (params.xcoord(), params.ycoord());
+                let edit = params.edit_state_flags().as_ref().0;
+                let can = |flag: sys::cef_context_menu_edit_state_flags_t| edit & flag.0 != 0;
                 let request = ContextMenuRequest {
                     id: id.clone(),
                     position,
@@ -81,6 +87,8 @@ wrap_context_menu_handler! {
                         src_url: CefString::from(&params.source_url()).to_string(),
                         selection_text: CefString::from(&params.selection_text()).to_string(),
                         is_editable: params.is_editable() != 0,
+                        can_copy: can(sys::cef_context_menu_edit_state_flags_t::CM_EDITFLAG_CAN_COPY),
+                        can_cut: can(sys::cef_context_menu_edit_state_flags_t::CM_EDITFLAG_CAN_CUT),
                         can_go_back: browser.can_go_back() != 0,
                         can_go_forward: browser.can_go_forward() != 0,
                     },
@@ -139,7 +147,23 @@ impl Engine {
         }
     }
 
+    /// Runs Chromium's own edit command in the menu's frame and closes the menu.
     pub fn context_menu_edit(&self, id: &ContextMenuId, action: FrameEdit) {
+        self.in_menu_frame(id, |frame| match action {
+            FrameEdit::Copy => frame.copy(),
+            FrameEdit::Cut => frame.cut(),
+            FrameEdit::Paste => frame.paste(),
+            FrameEdit::SelectAll => frame.select_all(),
+        });
+    }
+
+    /// Deletes the selection in the menu's frame without touching the clipboard, for a cut the
+    /// shell copied itself, and closes the menu.
+    pub fn context_menu_delete(&self, id: &ContextMenuId) {
+        self.in_menu_frame(id, |frame| frame.del());
+    }
+
+    fn in_menu_frame(&self, id: &ContextMenuId, edit: impl FnOnce(&Frame)) {
         let Some(slot) = self.menu_slot(id) else {
             return;
         };
@@ -150,12 +174,7 @@ impl Engine {
             .as_ref()
             .map(|pending| pending.frame.clone());
         if let Some(frame) = frame.filter(|frame| frame.is_valid() != 0) {
-            match action {
-                FrameEdit::Copy => frame.copy(),
-                FrameEdit::Cut => frame.cut(),
-                FrameEdit::Paste => frame.paste(),
-                FrameEdit::SelectAll => frame.select_all(),
-            }
+            edit(&frame);
         }
         self.dismiss_context_menu(id);
     }
