@@ -5,6 +5,7 @@ import { copyFileSync, createWriteStream, existsSync, readdirSync, readFileSync,
 import { join, relative } from 'node:path';
 import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
+import { crc32, deflateSync } from 'node:zlib';
 
 import { blankRestartColor, downloadBody, fixture, openerColors } from './fixture.mjs';
 import { checkProcessEnvironment } from './verify-process-env.mjs';
@@ -19,14 +20,91 @@ const stepTimeoutMs = 10_000;
 const shippingTrace = readFileSync(new URL('./slice-ts-replay.jsonl', import.meta.url), 'utf8')
   .trim().split('\n').map(line => JSON.parse(line));
 
-assert(['slice', 'open', 'focus', 'popups', 'adblock', 'incognito', 'fullscreen', 'break-restore', 'clipboard', 'visual'].includes(mode), 'unknown slice check');
+assert(['slice', 'open', 'focus', 'popups', 'adblock', 'incognito', 'fullscreen', 'break-restore', 'clipboard', 'visual', 'tab-status'].includes(mode), 'unknown slice check');
 
 const easylist = '[Adblock Plus 2.0]\n! Title: EasyList\n/fixture-ad$xmlhttprequest\n';
 const easyprivacy = '[Adblock Plus 2.0]\n! Title: EasyPrivacy\n/fixture-tracker$xmlhttprequest\n';
 let listResponse = 'offline';
 const listRequests = new Set();
 
+// The tab-status check's colours: the icon /icon declares, and `--blue`, which draws the
+// loading spinner (chromium/shell/ui/styles.css:702-709, ui/tokens.css:36).
+const faviconColor = '#D6336C';
+const spinnerColor = '#3AA6D9';
+// Responses to /slow, held open so the page stays loading until the check releases them.
+
+const slowResponses = [];
+
+/** A `size` square PNG in one colour. */
+function solidPng(size, color) {
+  const chunk = (type, data) => {
+    const body = Buffer.concat([Buffer.from(type, 'latin1'), data]);
+    const length = Buffer.alloc(4);
+    const crc = Buffer.alloc(4);
+    length.writeUInt32BE(data.length);
+    crc.writeUInt32BE(crc32(body));
+
+    return Buffer.concat([length, body, crc]);
+  };
+
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(size, 0);
+  header.writeUInt32BE(size, 4);
+  header[8] = 8; // bits per channel
+  header[9] = 2; // RGB
+  const rgb = [1, 3, 5].map(at => parseInt(color.slice(at, at + 2), 16));
+  const row = Buffer.from([0, ...Array.from({ length: size }, () => rgb).flat()]);
+  const pixels = Buffer.concat(Array.from({ length: size }, () => row));
+
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', header), chunk('IDAT', deflateSync(pixels)), chunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+// Each page's head, then its body. Blink reads icon links from the head only.
+const statusPages = {
+  '/icon': ['<link rel="icon" href="/icon.png">', ''],
+  // The click is the user gesture an AudioContext needs to start.
+  '/audio': ['', `<button id="play">Play</button><script>
+    document.querySelector('#play').addEventListener('click', () => {
+      const context = new AudioContext();
+      const tone = context.createOscillator();
+      tone.connect(context.destination);
+      tone.start();
+    });
+  </script>`],
+};
+
 const site = await fixture((path, response) => {
+  if (path === '/icon.png') {
+    response.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-store' }).end(solidPng(32, faviconColor));
+
+    return true;
+  }
+
+  if (path === '/slow') {
+    slowResponses.push(response);
+
+    return true;
+  }
+
+  if (statusPages[path]) {
+    response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }).end(`<!doctype html>
+      <title>Flecha fixture ${path}</title>
+      ${statusPages[path][0]}
+      <style>
+        html { background: #147a70; color: white; font: 24px system-ui; }
+        body { margin: 32px; }
+        #marker { width: 116px; height: 56px; background: #ffcc49; }
+        #play { display: block; width: 320px; height: 64px; margin: 8px 0; font: inherit; }
+      </style>
+      <div id="marker"></div>
+      ${statusPages[path][1]}`);
+
+    return true;
+  }
+
   if (path !== '/easylist.txt' && path !== '/easyprivacy.txt') return false;
 
   listRequests.add(path);
@@ -708,6 +786,99 @@ async function pageFullscreen(app, main, other) {
   await ended('a tab switch', after);
   pass('switching tabs ended the page\'s fullscreen and the sidebar came back');
   await app.quit();
+}
+
+// The tab row's status marks as ui/app.ts:543-590 draws them: the icon the page declares once it
+// downloads, a spinner in its place while the page loads, and on a page that plays sound a
+// speaker that mutes the page when clicked.
+async function tabStatus(app, main, left) {
+  const [windowX, windowY, , windowHeight] = execFileSync(x11Driver, ['geometry', 'Flecha'], { encoding: 'utf8' })
+    .trim().split(' ').map(Number);
+
+  const sidebarWidth = (await app.command('snapshot')).core.sidebarWidth;
+  const region = `${sidebarWidth}x${windowHeight}+${windowX}+${windowY}`;
+
+  const crop = (name, path) => {
+    const cropped = join(out, `${name}-sidebar.png`);
+    execFileSync('magick', [path, '-crop', region, '+repage', cropped]);
+
+    // isolated-run.sh binds FLECHA_VISUAL_OUT here; the scratch directory goes when the run passes.
+    if (existsSync('/mnt/visual')) copyFileSync(cropped, join('/mnt/visual', `${name}.png`));
+
+    return cropped;
+  };
+
+  const histogram = path => execFileSync('magick', [path, '-format', '%c', 'histogram:info:'], { encoding: 'utf8' });
+
+  const sidebar = async (name, mismatch) => {
+    await app.present(main);
+    await captureUntil(name, 'root', path => mismatch(histogram(crop(name, path))));
+  };
+
+  const tab = async id => (await app.command('snapshot')).core.tabs[id];
+  const browser = async id => (await app.command('snapshot')).browsers.find(page => page.tab === id);
+
+  let after = app.events.length;
+  const iconTab = await openTab(app, '/icon');
+  // Blink reports the default /favicon.ico until the parser reaches the page's own icon.
+  await app.wait('the page to declare its icon', event => event.type === 'favicon_urls' && event.tab === iconTab &&
+    event.urls.length === 1 && event.urls[0] === base + '/icon.png', after);
+  await poll('the tab to keep its downloaded icon', async () => (await tab(iconTab)).favicon === base + '/icon.png');
+  await sidebar('tab-favicon', colors => colors.includes(faviconColor) ? undefined : 'the row shows no site icon');
+  pass('the tab kept the icon its page declared, and its row drew the downloaded image');
+
+  await app.command('select', { tab: left });
+  await sidebar('tab-idle', colors => colors.includes(spinnerColor) ? 'blue in the sidebar with no page loading' : undefined);
+  after = app.events.length;
+  const slowTab = active(await app.command('open', { url: base + '/slow' })).activeTabId;
+  await app.wait('the slow page to start loading', event =>
+    event.type === 'loading' && event.tab === slowTab && event.loading, after);
+  // Away from the slow tab, so the address bar's loading line is not on screen.
+  await app.command('select', { tab: left });
+  await sidebar('tab-loading', colors => colors.includes(spinnerColor) ? undefined : 'no spinner in the loading row');
+  after = app.events.length;
+
+  for (const response of slowResponses.splice(0)) {
+    response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }).end('<!doctype html><title>Flecha fixture /slow</title>');
+  }
+
+  await app.loaded(slowTab, '/slow', after);
+  await sidebar('tab-loaded', colors => colors.includes(spinnerColor) ? 'the spinner stayed after the load' : undefined);
+  pass('a loading tab showed a spinner in its row that went away once the page loaded');
+
+  const audioTab = await openTab(app, '/audio');
+  await sidebar('tab-silent', colors => colors.includes(spinnerColor) ? 'the page is still loading' : undefined);
+  const silent = join(out, 'tab-silent-sidebar.png');
+  after = app.events.length;
+  await clickElement(app, audioTab, '#play', ['#147A70', '#FFCC49'], 'audio-play', main);
+  await app.wait('the page to become audible', event =>
+    event.type === 'audible' && event.tab === audioTab && event.audible, after, stepTimeoutMs);
+  assert.equal((await browser(audioTab)).audible, true);
+
+  // The speaker is the right end of what the sidebar gained since the page was silent: the title
+  // shortens to make room for it, so the change starts inside the title. The click goes half the
+  // mark's 14px icon (ui/styles.css:2190) in from that end.
+  let mark;
+  await sidebar('tab-audible', () => {
+    const changed = execFileSync('magick', [
+      silent, join(out, 'tab-audible-sidebar.png'), '-compose', 'difference', '-composite',
+      '-separate', '-evaluate-sequence', 'max', '-threshold', '0', '-format', '%@', 'info:',
+    ], { encoding: 'utf8' }).trim();
+
+    const [, width, height, x, y] = /^(\d+)x(\d+)\+(\d+)\+(\d+)$/.exec(changed)?.map(Number) ?? [];
+
+    if (!width || !height) return 'no audio mark in the sidebar';
+    mark = [windowX + x + width - 14 / 2, windowY + y + height / 2];
+  });
+  pass(`the audible page's row showed an audio mark (${mark.map(Math.round).join(', ')})`);
+
+  execFileSync(x11Driver, ['click', Math.round(mark[0]), Math.round(mark[1])]);
+  await poll('the mark to mute the page', async () =>
+    (await tab(audioTab)).muted === true && (await browser(audioTab)).muted);
+  execFileSync(x11Driver, ['click', Math.round(mark[0]), Math.round(mark[1])]);
+  await poll('the mark to unmute the page', async () =>
+    (await tab(audioTab)).muted === undefined && !(await browser(audioTab)).muted);
+  pass('clicking the audio mark muted the page in CEF and the saved tab, and clicking again unmuted it');
 }
 
 // Incognito windows: one in-memory cookie jar per session, kept apart from the regular one,
@@ -1454,6 +1625,9 @@ async function verifySlice() {
     await incognitoChecks(app, main);
   } else if (mode === 'fullscreen') {
     await pageFullscreen(app, main, left);
+  } else if (mode === 'tab-status') {
+    await tabStatus(app, main, left);
+    await app.quit();
   } else if (mode === 'visual') {
     await visualParity(app, left);
     await app.quit();

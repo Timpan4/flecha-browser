@@ -3,6 +3,7 @@ mod clipboard;
 mod command_bar;
 mod context_menu;
 mod downloads_view;
+mod favicons;
 mod find_bar;
 mod fullscreen;
 mod history_view;
@@ -186,6 +187,8 @@ enum Action {
     Return,
     Close,
     CloseTab(TabId),
+    /// The audio mark on a tab row (ui/app.ts:569-573).
+    ToggleMute(TabId),
     /// The window's close button: the window closes for good, or the app quits with
     /// its last Flecha window (patches 0059 and 0062).
     CloseWindow,
@@ -244,6 +247,7 @@ struct Controller {
     downloads: Downloads,
     permissions: PermissionStore,
     sleep: TabSleep,
+    favicons: favicons::Favicons,
     fullscreen: fullscreen::PageFullscreen,
     agents: mcp::Agents,
     toolbars: BTreeMap<WindowId, Toolbar>,
@@ -345,6 +349,7 @@ impl Controller {
             downloads: Downloads::new(&profile, isolated),
             permissions: PermissionStore::open(&profile),
             sleep: TabSleep::new(Instant::now()),
+            favicons: favicons::Favicons::default(),
             fullscreen: fullscreen::PageFullscreen::default(),
             agents: mcp::Agents::default(),
             toolbars: BTreeMap::new(),
@@ -620,6 +625,13 @@ impl Controller {
                 }
             }
             Action::CloseTab(tab) => self.close_tab(&tab),
+            Action::ToggleMute(tab) => {
+                if let Some((entry, _)) = self.model.tab_mut(&tab) {
+                    let muted = entry.muted != Some(true);
+                    entry.muted = muted.then_some(true);
+                    self.engine.set_muted(&tab, muted);
+                }
+            }
             Action::Switch(space) => {
                 self.model
                     .core
@@ -687,6 +699,7 @@ impl Controller {
             }
         }
         self.update_visibility();
+        self.favicons_stale();
         self.save()
     }
 
@@ -796,9 +809,13 @@ impl Controller {
                             self.history.begin(&message.key, &address);
                         }
                         if tab.url != address {
+                            let moved = view::site(&tab.url) != view::site(&address);
                             tab.url = address;
                             save |= durable;
                             changed = true;
+                            if moved {
+                                self.page_site_changed(id);
+                            }
                         }
                     }
                 }
@@ -837,13 +854,36 @@ impl Controller {
                 Event::Loaded { url, .. } => self.history.loaded(id, &url),
                 Event::LoadFailed { url, .. } => self.history.failed(id, &url),
                 Event::Closed => self.history.forget(id),
-                Event::Created(_) => {}
+                Event::Created(_) => {
+                    // A new browser starts unmuted: restart, restore and CPU-copy reopen.
+                    let muted = self
+                        .model
+                        .tab(id)
+                        .is_some_and(|tab| tab.muted == Some(true));
+                    if muted {
+                        self.engine.set_muted(id, true);
+                    }
+                    self.favicons_stale();
+                }
+                Event::FaviconUrls(urls) => {
+                    let (tab_changed, durable) = self.page_favicons(id, urls);
+                    changed |= tab_changed;
+                    save |= tab_changed && durable;
+                }
+                Event::Loading(_) | Event::Audible(_) => changed = true,
                 Event::Fullscreen(fullscreen) => {
                     self.page_fullscreen(&message.key, fullscreen);
                     changed = true;
                 }
             }
         }
+        let (icons_changed, icons_save) = self.drain_favicons();
+        changed |= icons_changed;
+        save |= icons_save;
+        if save {
+            self.favicons_stale();
+        }
+        self.sweep_favicons();
         changed |= self.engine.take_reopened();
         changed |= self.sweep_fullscreen();
         changed |= self.serve_agents();

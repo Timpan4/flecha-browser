@@ -307,6 +307,12 @@ cited! {
     FAVICON = 16., STYLES: 743 "height: 16px";
     FAVICON_RADIUS = 4., STYLES: 745 "border-radius: 4px";
     FAVICON_LETTER = 9., STYLES: 753 "font: 700 9px / 1 var(--font)";
+    /// One turn of `.favicon.spinner`.
+    SPINNER_MS = 800., APP: 381 "duration: 800, iterations: Infinity";
+    AUDIO_MARK = 20., STYLES: 2174 "width: 20px";
+    AUDIO_MARK_ICON = 14., STYLES: 2190 "width: 14px";
+    /// `.split-badge svg`, `.boost-mark svg`.
+    ROW_BADGE_ICON = 13., STYLES: 671 "width: 13px";
     KBD_MIN_WIDTH = 18., TOKENS: 160 "min-width: 18px";
     KBD_PAD_Y = 1., TOKENS: 161 "padding: 1px 5px";
     KBD_PAD_X = 5., TOKENS: 161 "padding: 1px 5px";
@@ -518,6 +524,7 @@ pub(crate) const EASE: (f32, f32, f32, f32) = (0.2, 0.8, 0.2, 1.);
 
 /// `--medium`, for panels that open.
 pub(crate) const MEDIUM: Duration = Duration::from_millis(MEDIUM_MS as u64);
+pub(crate) const SPINNER_TURN: Duration = Duration::from_millis(SPINNER_MS as u64);
 
 /// `--ease` as a GPUI easing: the progress along the curve at `t` of its duration.
 pub(crate) fn ease(t: f32) -> f32 {

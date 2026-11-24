@@ -1,4 +1,4 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -9,11 +9,11 @@ use flecha_core::{FolderId, TabId, WindowId};
 use flecha_surface::{Frame, input, surface};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    Animation, AnimationExt as _, App, ClickEvent, Context, Div, FocusHandle, FontWeight,
-    InteractiveElement as _, IntoElement, KeyUpEvent, MouseButton, MouseDownEvent, MouseExitEvent,
-    MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Render, RenderImage, ScrollEvent,
-    StatefulInteractiveElement as _, Styled as _, Subscription, Window, canvas, deferred, div, px,
-    relative,
+    Animation, AnimationExt as _, AnyElement, App, ClickEvent, Context, Corners, Div, ElementId,
+    FocusHandle, FontWeight, InteractiveElement as _, IntoElement, KeyUpEvent, MouseButton,
+    MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, ParentElement as _,
+    Pixels, Render, RenderImage, ScrollEvent, StatefulInteractiveElement as _, Styled as _,
+    Subscription, Transformation, Window, canvas, deferred, div, percentage, px, relative, svg,
 };
 
 use crate::icons::icon;
@@ -68,6 +68,9 @@ pub(crate) struct Shell {
     pub(crate) bindings: Bindings,
     pub(crate) consumed_keys: BTreeSet<String>,
     images: BTreeMap<TabId, Vec<Arc<RenderImage>>>,
+    /// Site icons drawn by the current frame, so the next one can free those it no longer
+    /// draws from the window's sprite atlas.
+    favicons_drawn: RefCell<Vec<Arc<RenderImage>>>,
     title: String,
     native_fullscreen: crate::fullscreen::NativeFullscreen,
     _activation: Subscription,
@@ -122,6 +125,7 @@ impl Shell {
             bindings,
             consumed_keys: BTreeSet::new(),
             images: BTreeMap::new(),
+            favicons_drawn: RefCell::default(),
             title: String::new(),
             native_fullscreen: Default::default(),
             _activation: activation,
@@ -512,6 +516,7 @@ impl Render for Shell {
             .child(div().absolute().size_0().track_focus(&self.page_focus))
             .child(div().absolute().size_0().track_focus(&self.focus));
         let mut images = BTreeMap::new();
+        let favicons_before = self.favicons_drawn.take();
         let fullscreen = self.state.borrow().fullscreen_pane(&self.id);
         self.sync_native_fullscreen(fullscreen.is_some(), window);
         let state = self.state.borrow();
@@ -934,6 +939,13 @@ impl Render for Shell {
         if let Overlay::ContextMenu(menu) = &self.overlay {
             main = main.child(self.context_menu_panel(menu, window, cx));
         }
+        let drawn = self.favicons_drawn.borrow();
+        for image in favicons_before {
+            if !drawn.iter().any(|next| next.id == image.id) {
+                let _ = window.drop_image(image);
+            }
+        }
+        drop(drawn);
         for (tab, retired) in std::mem::replace(&mut self.images, images) {
             for image in retired {
                 if !self
@@ -1276,6 +1288,57 @@ pub(crate) fn letter_favicon(url: &str, size: f32, radius: f32, text: f32) -> Di
         .font_weight(FontWeight::BOLD)
         .child(letter)
 }
+
+impl Shell {
+    /// A site's icon, or its letter while the icon loads or when the site has none
+    /// (`favicon` in ui/app.ts:118-124).
+    pub(crate) fn site_icon(
+        &self,
+        image: Option<Arc<RenderImage>>,
+        url: &str,
+        (size, radius, text): (f32, f32, f32),
+    ) -> AnyElement {
+        let Some(image) = image else {
+            return letter_favicon(url, size, radius, text).into_any_element();
+        };
+        self.favicons_drawn.borrow_mut().push(image.clone());
+        // Painted on a canvas: GPUI's `img` element can arm timers for pending images, and
+        // this image is already decoded.
+        let radius = px(radius);
+        canvas(
+            |_, _, _| (),
+            move |bounds, _, window, _| {
+                // `object-fit: contain` (ui/styles.css:746).
+                let fitted = ObjectFit::Contain.get_bounds(bounds, image.size(0));
+                let corners = Corners::all(radius);
+                if let Err(error) = window.paint_image(bounds, fitted, corners, image, 0, false) {
+                    eprintln!("favicon paint: {error:#}");
+                }
+            },
+        )
+        .flex_none()
+        .size(px(size))
+        .into_any_element()
+    }
+}
+
+/// `.favicon.spinner` (ui/styles.css:701-709, ui/app.ts:376-383): a ring in `--blue` at a
+/// quarter strength with its top quarter at full strength, turning once every 800ms in the
+/// favicon's place while the page loads.
+pub(crate) fn spinner(id: impl Into<ElementId>) -> impl IntoElement {
+    svg()
+        .path(SPINNER)
+        .flex_none()
+        .size(px(tokens::FAVICON))
+        .text_color(palette().blue)
+        .with_animation(
+            id,
+            Animation::new(tokens::SPINNER_TURN).repeat(),
+            |spinner, delta| spinner.with_transformation(Transformation::rotate(percentage(delta))),
+        )
+}
+
+const SPINNER: &str = crate::icons::SPINNER;
 
 /// `kbd` (ui/tokens.css:158-168): a key name in a small chip.
 pub(crate) fn kbd(keys: impl Into<gpui::SharedString>) -> Div {

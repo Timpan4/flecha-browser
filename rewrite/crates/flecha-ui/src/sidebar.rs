@@ -3,8 +3,9 @@ use std::time::Duration;
 use flecha_core::{BrowserState, FolderId, PinnedNode, Placement, TabId, WindowId, shortcuts};
 use gpui::{
     Animation, AnimationExt as _, ClickEvent, Context, Div, FontWeight, InteractiveElement as _,
-    ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _, Transformation,
-    Window, div, percentage, prelude::FluentBuilder as _, px, relative,
+    IntoElement as _, ParentElement as _, SharedString, StatefulInteractiveElement as _,
+    Styled as _, Transformation, Window, div, percentage, prelude::FluentBuilder as _, px,
+    relative,
 };
 use uuid::Uuid;
 
@@ -15,8 +16,8 @@ use crate::text_field::TextField;
 use crate::theme::palette;
 use crate::tokens;
 use crate::view::{
-    Overlay, Shell, hairline, icon_button, icon_square, is_dev_url, kbd, letter_favicon, menu_item,
-    overlay_panel, primary_button, site, sized_icon_button, text_button, tinted_icon_button,
+    Overlay, Shell, hairline, icon_button, icon_square, is_dev_url, kbd, menu_item, overlay_panel,
+    primary_button, site, sized_icon_button, spinner, text_button, tinted_icon_button,
 };
 use crate::{Action, Controller, dispatch, now};
 
@@ -182,6 +183,8 @@ impl Shell {
             core,
             active,
             split,
+            state,
+            boosted: state.boosts.enabled().boosted_hosts(),
         };
 
         let mut tabs = div()
@@ -460,11 +463,14 @@ impl Shell {
                             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                                 dispatch(&this.state, &this.id, action.clone(), cx);
                             }))
-                            .child(letter_favicon(
+                            .child(self.site_icon(
+                                rows.state.favicons.for_tab(tab),
                                 &tab.url,
-                                tokens::FAVORITE_ICON,
-                                tokens::FAVORITE_ICON_RADIUS,
-                                tokens::FAVORITE_LETTER,
+                                (
+                                    tokens::FAVORITE_ICON,
+                                    tokens::FAVORITE_ICON_RADIUS,
+                                    tokens::FAVORITE_LETTER,
+                                ),
                             )),
                     )
                     .when(selected, |tile| {
@@ -647,8 +653,9 @@ impl Shell {
             })
     }
 
-    /// `.row` (ui/styles.css:578-650): the site's letter, the title, and the row's actions on
-    /// hover.
+    /// `.row` (ui/styles.css:578-713, ui/app.ts:543-590): the site's icon or a spinner while the
+    /// page loads, the title, the audio mark, and the row's actions on hover in place of its
+    /// Boost and split marks.
     fn tab_row(&self, rows: &Rows<'_>, id: &TabId, cx: &Context<Self>) -> Div {
         let Some(tab) = rows.core.tab(id) else {
             return div();
@@ -657,6 +664,14 @@ impl Shell {
         let in_split = rows.split.len() > 1 && rows.split.contains(id);
         let select = Action::Select(id.clone());
         let group = SharedString::from(format!("row-{}", id.as_str()));
+        let engine = &rows.state.engine;
+        let loading = engine.is_loading(id);
+        let muted = tab.muted == Some(true);
+        let boosted = rows
+            .boosted
+            .iter()
+            .any(|host| *host != "all" && flecha_boosts::boost_matches(&tab.url, host));
+        let palette = palette();
         row(&group, selected, Some(in_split))
             .child(
                 div()
@@ -671,21 +686,51 @@ impl Shell {
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         dispatch(&this.state, &this.id, select.clone(), cx);
                     }))
-                    .child(letter_favicon(
-                        &tab.url,
-                        tokens::FAVICON,
-                        tokens::FAVICON_RADIUS,
-                        tokens::FAVICON_LETTER,
-                    ))
+                    .child(if loading {
+                        spinner(SharedString::from(format!("spinner-{}", id.as_str())))
+                            .into_any_element()
+                    } else {
+                        self.site_icon(
+                            rows.state.favicons.for_tab(tab),
+                            &tab.url,
+                            (
+                                tokens::FAVICON,
+                                tokens::FAVICON_RADIUS,
+                                tokens::FAVICON_LETTER,
+                            ),
+                        )
+                    })
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
                             .truncate()
                             .when(selected, |title| title.font_weight(FontWeight::MEDIUM))
+                            .when(loading, |title| title.text_color(palette.text_2))
                             .child(tab_label(tab)),
                     ),
             )
+            .when(muted || engine.is_audible(id), |row| {
+                let toggle = Action::ToggleMute(id.clone());
+                row.child(
+                    tinted_icon_button(
+                        format!("audio-{}", id.as_str()),
+                        if muted { "muted" } else { "volume" },
+                        if muted { "Unmute" } else { "Mute" },
+                        (tokens::AUDIO_MARK, tokens::AUDIO_MARK_ICON),
+                        if muted {
+                            palette.text_3
+                        } else {
+                            palette.text_2
+                        },
+                    )
+                    .on_click(cx.listener(
+                        move |this, _: &ClickEvent, _, cx| {
+                            dispatch(&this.state, &this.id, toggle.clone(), cx);
+                        },
+                    )),
+                )
+            })
             .when(!selected && rows.active.is_some(), |row| {
                 row.child(
                     row_action(
@@ -701,14 +746,23 @@ impl Shell {
                 )
             })
             .child(row_action(&group, self.tab_menu_button(id, cx)))
-            .child(self.row_action(
-                &group,
-                "close-tab",
-                id.as_str(),
-                ("close", "Close tab"),
-                Action::CloseTab(id.clone()),
-                cx,
-            ))
+            .child(
+                div()
+                    .relative()
+                    .flex()
+                    .flex_none()
+                    .child(self.row_action(
+                        &group,
+                        "close-tab",
+                        id.as_str(),
+                        ("close", "Close tab"),
+                        Action::CloseTab(id.clone()),
+                        cx,
+                    ))
+                    .when(boosted || in_split, |close| {
+                        close.child(row_marks(&group, boosted, in_split))
+                    }),
+            )
     }
 
     /// `#btn-newtab` (ui/index.html:83, ui/styles.css:704-722): a row in `--text-2` with its
@@ -1114,6 +1168,31 @@ struct Rows<'a> {
     core: &'a BrowserState,
     active: Option<&'a TabId>,
     split: &'a [TabId],
+    state: &'a Controller,
+    /// `boostedHosts`: hosts with an enabled Boost.
+    boosted: Vec<&'a str>,
+}
+
+/// `.boost-mark` and `.split-badge` (ui/styles.css:652-682, ui/app.ts:575-581): an amber bolt on
+/// a Boosted site and a split mark on a tab in split view, at the row's end until the pointer
+/// reveals the close button there.
+fn row_marks(group: &SharedString, boosted: bool, in_split: bool) -> Div {
+    let palette = palette();
+    div()
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .right_0()
+        .flex()
+        .items_center()
+        .gap(px(tokens::ROW_GAP))
+        .group_hover(group.clone(), |marks| marks.opacity(0.))
+        .when(boosted, |marks| {
+            marks.child(icon("zap", tokens::ROW_BADGE_ICON, palette.amber))
+        })
+        .when(in_split, |marks| {
+            marks.child(icon("columns", tokens::ROW_BADGE_ICON, palette.text_3))
+        })
 }
 
 /// `.row` (ui/styles.css:578-603): 32 tall, raised while it is the shown tab, tinted while it

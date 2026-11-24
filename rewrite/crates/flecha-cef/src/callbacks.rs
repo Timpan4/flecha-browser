@@ -67,6 +67,8 @@ pub(crate) struct Slot {
     /// Why a shared texture could not be imported. The engine reopens the page with CPU
     /// copies, and the render handler ignores shared textures until then.
     pub import_failure: RefCell<Option<anyhow::Error>>,
+    /// Whether the page became audible since its document loaded ([`crate::Engine::is_audible`]).
+    pub audible: Cell<bool>,
     delivery: Cell<Option<Delivery>>,
 }
 
@@ -93,6 +95,7 @@ impl Slot {
             one_time: RefCell::new(Vec::new()),
             shares_textures: Cell::new(false),
             import_failure: RefCell::new(None),
+            audible: Cell::new(false),
             delivery: Cell::new(None),
         }
     }
@@ -153,6 +156,13 @@ impl Slot {
             key: self.key.borrow().clone(),
             event,
         });
+    }
+
+    /// Records whether the page is audible, and tells the shell when that changes.
+    fn set_audible(&self, audible: bool) {
+        if !self.retired.get() && self.audible.replace(audible) != audible {
+            self.emit(Event::Audible(audible));
+        }
     }
 
     fn paint_changed(&self) {
@@ -359,6 +369,13 @@ wrap_display_handler! {
             }
         }
 
+        fn on_favicon_urlchange(&self, _browser: Option<&mut Browser>, icon_urls: Option<&mut CefStringList>) {
+            if !self.slot.retired.get() {
+                let urls = icon_urls.map(|urls| std::mem::take(urls).into_iter().collect()).unwrap_or_default();
+                self.slot.emit(Event::FaviconUrls(urls));
+            }
+        }
+
         fn on_fullscreen_mode_change(&self, _browser: Option<&mut Browser>, fullscreen: i32) {
             if !self.slot.retired.get() {
                 self.slot.emit(Event::Fullscreen(fullscreen != 0));
@@ -370,10 +387,20 @@ wrap_display_handler! {
 wrap_load_handler! {
     struct Load { slot: Rc<Slot> }
     impl LoadHandler {
+        fn on_loading_state_change(
+            &self, _browser: Option<&mut Browser>, is_loading: i32, _can_go_back: i32, _can_go_forward: i32,
+        ) {
+            if !self.slot.retired.get() {
+                self.slot.emit(Event::Loading(is_loading != 0));
+            }
+        }
+
         fn on_load_start(
             &self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, _transition_type: TransitionType,
         ) {
             let Some(frame) = frame.filter(|frame| frame.is_main() != 0) else { return };
+            // A new document. CEF reports when a page becomes audible, never when it stops.
+            self.slot.set_audible(false);
             context_menu::cancel(&self.slot);
             let services = services::of(&self.slot);
             // The page this tab's permission requests came from is gone.
@@ -409,10 +436,24 @@ wrap_load_handler! {
     }
 }
 
+wrap_audio_handler! {
+    struct Audio { slot: Rc<Slot> }
+    impl AudioHandler {
+        // An Alloy browser asks on the UI thread each time its page becomes audible
+        // (AlloyBrowserHostImpl::OnAudioStateChanged and StartAudioCapturer in CEF 8127).
+        // Declining the capture leaves playback as it was. Nothing reports when sound stops.
+        fn audio_parameters(&self, _browser: Option<&mut Browser>, _params: Option<&mut AudioParameters>) -> i32 {
+            self.slot.set_audible(true);
+            0
+        }
+    }
+}
+
 #[derive(Clone)]
 struct PageHandlers {
     display: DisplayHandler,
     load: LoadHandler,
+    audio: AudioHandler,
     find: FindHandler,
     context_menu: ContextMenuHandler,
 }
@@ -436,6 +477,7 @@ wrap_client! {
         fn permission_handler(&self) -> Option<PermissionHandler> { Some(self.permission.clone()) }
         fn find_handler(&self) -> Option<FindHandler> { Some(self.page.find.clone()) }
         fn context_menu_handler(&self) -> Option<ContextMenuHandler> { Some(self.page.context_menu.clone()) }
+        fn audio_handler(&self) -> Option<AudioHandler> { Some(self.page.audio.clone()) }
     }
 }
 
@@ -454,6 +496,7 @@ pub(crate) fn client(slot: Rc<Slot>) -> Client {
         PageHandlers {
             display: Display::new(slot.clone()),
             load: Load::new(slot.clone()),
+            audio: Audio::new(slot.clone()),
             find: find::handler(slot.clone()),
             context_menu: context_menu::handler(slot),
         },

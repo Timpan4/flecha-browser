@@ -2277,6 +2277,7 @@ dependencies = [
  "flecha-surface",
  "futures",
  "gpui",
+ "image",
  "reqwest",
  "serde",
  "serde_json",

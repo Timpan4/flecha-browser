@@ -6,6 +6,7 @@ mod compositor;
 mod context_menu;
 mod devtools;
 mod downloads;
+mod favicon;
 mod find;
 mod identity;
 mod permissions;
@@ -42,6 +43,7 @@ pub use devtools::{DevToolsEvent, DevToolsMessage};
 pub use downloads::{
     DownloadConfig, DownloadError, DownloadEvent, DownloadHandle, DownloadMessage,
 };
+pub use favicon::{FAVICON_SIZE, Favicon, FaviconBitmap};
 pub use find::{FindEvent, FindResult};
 use identity::Generations;
 pub use identity::{BrowserKey, IncognitoSession, Owner, Partition};
@@ -78,6 +80,13 @@ pub enum Event {
     /// The page entered (`true`) or left HTML fullscreen. With Alloy-style browsers the
     /// client makes the window transition and handles Esc ([`Engine::exit_fullscreen`]).
     Fullscreen(bool),
+    /// The icons the main frame's document declares, in its order. Empty when it has none.
+    FaviconUrls(Vec<String>),
+    /// The browser started (`true`) or finished loading ([`Engine::is_loading`]).
+    Loading(bool),
+    /// The page became audible (`true`), or a new document replaced the audible one
+    /// ([`Engine::is_audible`]).
+    Audible(bool),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -160,17 +169,10 @@ struct Session {
     slot: Rc<Slot>,
     hidden: bool,
     opener: Option<Weak<Slot>>,
-    frozen: Frozen,
-}
-
-/// Whether tab sleep froze this browser, and whether freezing muted it.
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
-enum Frozen {
-    #[default]
-    No,
-    Yes {
-        muted: bool,
-    },
+    /// Whether tab sleep froze this browser. A frozen browser is muted whatever `muted` says.
+    frozen: bool,
+    /// The shell's mute for this tab, applied whenever the browser isn't frozen.
+    muted: bool,
 }
 
 struct PartitionContext {
@@ -374,7 +376,8 @@ impl Engine {
                 partition,
                 hidden: false,
                 opener: None,
-                frozen: Frozen::No,
+                frozen: false,
+                muted: false,
             },
         );
         self.discarded.remove(&tab);
@@ -662,6 +665,33 @@ impl Engine {
             .is_some_and(|browser| browser.is_loading() != 0)
     }
 
+    /// Whether the tab's page has played sound since its document loaded. CEF reports only when
+    /// a page becomes audible, so this stays set until the next document or browser.
+    pub fn is_audible(&self, tab: &TabId) -> bool {
+        self.browsers
+            .get(tab)
+            .is_some_and(|session| session.slot.audible.get())
+    }
+
+    /// Whether CEF has the tab's page muted now, by the shell or by tab sleep.
+    pub fn is_audio_muted(&self, tab: &TabId) -> bool {
+        self.host(tab)
+            .is_some_and(|host| host.is_audio_muted() != 0)
+    }
+
+    /// Mutes or unmutes the tab's page. A frozen page stays muted until it thaws.
+    pub fn set_muted(&mut self, tab: &TabId, muted: bool) {
+        let Some(session) = self.browsers.get_mut(tab) else {
+            return;
+        };
+        session.muted = muted;
+        if !session.frozen
+            && let Some(host) = self.host(tab)
+        {
+            host.set_audio_muted(i32::from(muted));
+        }
+    }
+
     /// Whether the tab's page is in HTML fullscreen, as its renderer has it now.
     pub fn is_fullscreen(&self, tab: &TabId) -> bool {
         self.host(tab).is_some_and(|host| host.is_fullscreen() != 0)
@@ -759,7 +789,8 @@ impl Engine {
                     slot: child,
                     hidden: false,
                     opener: Some(Rc::downgrade(&opener)),
-                    frozen: Frozen::No,
+                    frozen: false,
+                    muted: false,
                 },
             );
         }
@@ -872,6 +903,9 @@ mod tests {
             }),
             Event::ClosedByPage => Event::ClosedByPage,
             Event::Fullscreen(_) => Event::Fullscreen(true),
+            Event::FaviconUrls(_) => Event::FaviconUrls(vec![format!("{url}/icon.png")]),
+            Event::Loading(_) => Event::Loading(true),
+            Event::Audible(_) => Event::Audible(true),
         ] {
             engine.events.borrow_mut().push_back(BrowserEvent {
                 key: retired.clone(),
@@ -939,7 +973,8 @@ mod tests {
                 slot: opener.clone(),
                 hidden: false,
                 opener: None,
-                frozen: Frozen::No,
+                frozen: false,
+                muted: false,
             },
         );
         let child = popup::open(&opener, 7, None);

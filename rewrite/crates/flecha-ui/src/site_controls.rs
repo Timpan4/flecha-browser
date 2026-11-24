@@ -4,7 +4,7 @@ use flecha_cef::Partition;
 use flecha_core::{Settings, TabId, WindowId, blocks_ads_on, is_site_host};
 use flecha_permissions::{Decision, Origin, PermissionKind, SiteSettings};
 use gpui::{
-    ClickEvent, Context, Div, FontWeight, InteractiveElement as _, ParentElement as _,
+    AnyElement, ClickEvent, Context, Div, FontWeight, InteractiveElement as _, ParentElement as _,
     StatefulInteractiveElement as _, Styled as _, Window, div, prelude::FluentBuilder as _, px,
 };
 
@@ -13,8 +13,8 @@ use crate::permissions_view::permission_label;
 use crate::theme::palette;
 use crate::tokens;
 use crate::view::{
-    Overlay, SHELL_SWITCH, Shell, danger_button, icon_button, is_dev_url, letter_favicon,
-    overlay_panel, popover_footer, site, switch,
+    Overlay, SHELL_SWITCH, Shell, danger_button, icon_button, is_dev_url, overlay_panel,
+    popover_footer, site, switch,
 };
 use crate::{Action, Controller, dispatch};
 
@@ -136,14 +136,27 @@ impl Shell {
         let mut panel = overlay_panel().p_0().gap_0();
         let Some(site) = state.site_for_window(&self.id) else {
             return panel.child(
-                site_header(None, None)
+                site_header(None, None, None)
                     .child(close_site_controls(cx))
                     .child("Site Controls are available on web pages."),
             );
         };
         let origin = site.origin.to_string();
+        let site_icon = self.site_icon(
+            state
+                .model
+                .tab(&site.tab)
+                .and_then(|tab| state.favicons.for_tab(tab)),
+            &origin,
+            (
+                tokens::SITE_FAVICON,
+                tokens::SITE_FAVICON_RADIUS,
+                tokens::FAVICON_LETTER,
+            ),
+        );
         panel = panel.child(
-            site_header(Some(&origin), state.status_for(&self.id)).child(close_site_controls(cx)),
+            site_header(Some(&origin), Some(site_icon), state.status_for(&self.id))
+                .child(close_site_controls(cx)),
         );
         let mut body = div()
             .id("site-controls-body")
@@ -349,9 +362,9 @@ impl Shell {
     }
 }
 
-/// `.site-header` (ui/styles.css:1972-2004): the site's letter, its host, and how the page
+/// `.site-header` (ui/styles.css:1972-2004): the site's icon, its host, and how the page
 /// connects, worded as ui/app.ts:850-857 words it.
-fn site_header(origin: Option<&str>, status: Option<&str>) -> Div {
+fn site_header(origin: Option<&str>, icon: Option<AnyElement>, status: Option<&str>) -> Div {
     let palette = palette();
     let inset = px(tokens::SITE_INSET);
     let insecure = origin.is_some_and(|url| url.starts_with("http:") && !is_dev_url(url));
@@ -380,14 +393,7 @@ fn site_header(origin: Option<&str>, status: Option<&str>) -> Div {
         .pt(inset)
         .px(inset)
         .pb(px(tokens::SITE_HEADER_PAD_BOTTOM))
-        .when_some(origin, |header, url| {
-            header.child(letter_favicon(
-                url,
-                tokens::SITE_FAVICON,
-                tokens::SITE_FAVICON_RADIUS,
-                tokens::FAVICON_LETTER,
-            ))
-        })
+        .children(icon)
         .child(
             div()
                 .flex_1()

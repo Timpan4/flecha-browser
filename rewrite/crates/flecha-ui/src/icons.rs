@@ -156,7 +156,16 @@ pub(crate) const ICONS: &[(&str, &str)] = &[
 /// 1.4px strokes (ui/windowControls.css:44-48), served as `icons/window-close.svg`.
 pub(crate) const WINDOW_CLOSE: &str = "M3.75 3.75l4.5 4.5M8.25 3.75l-4.5 4.5";
 
-/// Serves `icons/<name>.svg` for each icon in [`ICONS`], and the window close cross.
+/// The loading spinner's asset path. `.favicon.spinner` (ui/styles.css:701-709) draws it as a
+/// 14px box with a 2px border, 1px in from the favicon's 16px: on the 16px grid, a ring of
+/// radius 6 and width 2 at a quarter strength, and its top border at full strength. A border's
+/// top side meets the others at 45 degrees, so the strong arc runs from 225 to 315 degrees.
+pub(crate) const SPINNER: &str = "icons/spinner.svg";
+
+const SPINNER_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="#000" stroke-width="2"><circle cx="8" cy="8" r="6" stroke-opacity="0.25"/><path d="M3.757 3.757A6 6 0 0 1 12.243 3.757"/></svg>"##;
+
+/// Serves `icons/<name>.svg` for each icon in [`ICONS`], the window close cross and the
+/// loading spinner.
 pub struct Assets;
 
 impl AssetSource for Assets {
@@ -170,6 +179,9 @@ impl AssetSource for Assets {
         if name == "window-close" {
             return Ok(Some(Cow::Owned(window_control(WINDOW_CLOSE).into_bytes())));
         }
+        if name == "spinner" {
+            return Ok(Some(Cow::Borrowed(SPINNER_SVG.as_bytes())));
+        }
         Ok(ICONS
             .iter()
             .find(|(icon, _)| *icon == name)
@@ -181,7 +193,7 @@ impl AssetSource for Assets {
             ICONS
                 .iter()
                 .map(|(name, _)| format!("icons/{name}.svg").into())
-                .chain(["icons/window-close.svg".into()])
+                .chain(["icons/window-close.svg".into(), SPINNER.into()])
                 .collect()
         } else {
             Vec::new()
@@ -256,7 +268,8 @@ mod tests {
             assert!(document.contains(r#"stroke-width="1.5""#));
         }
         assert!(Assets.load("icons/missing.svg").unwrap().is_none());
-        assert_eq!(Assets.list("icons").unwrap().len(), ICONS.len() + 1);
+        assert_eq!(Assets.list("icons").unwrap().len(), ICONS.len() + 2);
+        assert!(Assets.load(SPINNER).unwrap().is_some());
         let close = Assets.load("icons/window-close.svg").unwrap().unwrap();
         assert!(std::str::from_utf8(&close).unwrap().contains(WINDOW_CLOSE));
         let shipping = crate::tokens::tests::source("ui/flechinha.html");

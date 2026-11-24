@@ -24,7 +24,7 @@ use crate::settings_view::{RESTORE_BEFORE_IMPORT, SettingsTab};
 use crate::text_field::TextField;
 use crate::theme::palette;
 use crate::tokens;
-use crate::view::{Overlay, Shell, kbd, letter_favicon, overlay_panel};
+use crate::view::{Overlay, Shell, kbd, overlay_panel};
 use crate::{Action, Controller, now};
 
 mod remote;
@@ -695,6 +695,19 @@ impl Shell {
         self.navigate_from_overlay(action, window, cx);
     }
 
+    /// A tab result's own icon, or for an address the icon of a regular tab on its site.
+    fn target_icon(&self, target: &Target) -> Option<Arc<gpui::RenderImage>> {
+        let state = self.state.borrow();
+        let favicons = &state.favicons;
+        match target {
+            Target::Tab(id, _) => favicons.for_tab(state.model.tab(id)?),
+            Target::Address(url) => {
+                favicons.for_site(state.model.core.open_tabs().into_values(), url)
+            }
+            _ => None,
+        }
+    }
+
     pub(crate) fn command_panel(&self, bar: &CommandBar, cx: &Context<Self>) -> Div {
         // #palette-results .item (ui/styles.css:1315-1397).
         let rows = bar.matches.rows.iter().enumerate().map(|(index, row)| {
@@ -706,13 +719,15 @@ impl Shell {
                 palette().text_2
             };
             let chip = match &row.target {
-                Target::Tab(_, url) | Target::Address(url) => letter_favicon(
+                Target::Tab(_, url) | Target::Address(url) => self.site_icon(
+                    self.target_icon(&row.target),
                     url,
-                    tokens::FAVICON,
-                    tokens::FAVICON_RADIUS,
-                    tokens::FAVICON_LETTER,
-                )
-                .into_any_element(),
+                    (
+                        tokens::FAVICON,
+                        tokens::FAVICON_RADIUS,
+                        tokens::FAVICON_LETTER,
+                    ),
+                ),
                 Target::Search(_) => icon("search", tokens::ICON, icon_color).into_any_element(),
                 Target::Copy(_) => icon("copy", tokens::ICON, icon_color).into_any_element(),
                 Target::RestoreBeforeImport => {
@@ -819,13 +834,15 @@ impl Shell {
             .get(bar.matches.selected)
             .map(|row| &row.target)
         {
-            Some(Target::Tab(_, url) | Target::Address(url)) => letter_favicon(
+            Some(target @ (Target::Tab(_, url) | Target::Address(url))) => self.site_icon(
+                self.target_icon(target),
                 url,
-                tokens::PALETTE_ICON,
-                tokens::FAVICON_RADIUS,
-                tokens::FAVICON_LETTER,
-            )
-            .into_any_element(),
+                (
+                    tokens::PALETTE_ICON,
+                    tokens::FAVICON_RADIUS,
+                    tokens::FAVICON_LETTER,
+                ),
+            ),
             Some(Target::Copy(_)) => {
                 icon("copy", tokens::PALETTE_ICON, palette().text_3).into_any_element()
             }
