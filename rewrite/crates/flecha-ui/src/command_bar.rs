@@ -16,11 +16,12 @@ use flecha_history::{HistoryStore, PAGE};
 use gpui::{
     AppContext as _, ClickEvent, ClipboardItem, Context, Div, InteractiveElement as _,
     ParentElement as _, ScrollHandle, StatefulInteractiveElement as _, Styled as _, Task, Window,
-    div, prelude::FluentBuilder as _, rgb,
+    div, prelude::FluentBuilder as _,
 };
 
 use crate::settings_view::{RESTORE_BEFORE_IMPORT, SettingsTab};
 use crate::text_field::TextField;
+use crate::theme::palette;
 use crate::view::{Overlay, Shell, button, overlay_panel};
 use crate::{Action, Controller, now};
 
@@ -705,8 +706,10 @@ impl Shell {
                 .py_2()
                 .rounded_md()
                 .cursor_pointer()
-                .when(index == bar.matches.selected, |row| row.bg(rgb(0x27547b)))
-                .hover(|style| style.bg(rgb(0x304855)))
+                .when(index == bar.matches.selected, |row| {
+                    row.bg(palette().accent)
+                })
+                .hover(|style| style.bg(palette().row))
                 .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                     this.choose_suggestion(&target, window, cx);
                 }))
@@ -721,7 +724,7 @@ impl Shell {
                                 div()
                                     .truncate()
                                     .text_xs()
-                                    .text_color(rgb(0xa4b5c3))
+                                    .text_color(palette().muted)
                                     .child(row.detail.clone()),
                             )
                         }),
@@ -730,7 +733,7 @@ impl Shell {
                     div()
                         .flex_shrink_0()
                         .text_xs()
-                        .text_color(rgb(0xc0d1dc))
+                        .text_color(palette().text_secondary)
                         .child(row.kind),
                 )
         });

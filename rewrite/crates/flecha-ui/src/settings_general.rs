@@ -8,11 +8,12 @@ use flecha_core::{
 };
 use gpui::{
     ClickEvent, Context, Div, ElementId, ParentElement as _, SharedString, Stateful,
-    StatefulInteractiveElement as _, Styled as _, div, prelude::FluentBuilder as _, rgb,
+    StatefulInteractiveElement as _, Styled as _, div, prelude::FluentBuilder as _,
 };
 use uuid::Uuid;
 
 use super::{Draft, Field, SettingsPanel, muted, row, section};
+use crate::theme::palette;
 use crate::view::{Shell, button};
 
 #[derive(Clone, PartialEq, Eq)]
@@ -383,7 +384,7 @@ impl Shell {
         cx: &Context<Self>,
     ) -> Stateful<Div> {
         button(id, label)
-            .when(selected, |button| button.bg(rgb(0x27547b)))
+            .when(selected, |button| button.bg(palette().accent))
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 let result = this.state.borrow_mut().edit_settings(|settings| {
                     edit(settings);

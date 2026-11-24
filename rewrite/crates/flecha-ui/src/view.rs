@@ -13,9 +13,10 @@ use gpui::{
     IntoElement, KeyUpEvent, MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent,
     MouseUpEvent, ParentElement as _, Pixels, Render, RenderImage, ScrollEvent,
     StatefulInteractiveElement as _, Styled as _, Subscription, Window, canvas, deferred, div, px,
-    relative, rgb,
+    relative,
 };
 
+use crate::theme::{Palette, palette};
 use crate::{Action, Shared, dispatch};
 use crate::{
     command_bar::{CommandBar, SuggestionClient},
@@ -67,6 +68,7 @@ pub(crate) struct Shell {
     /// Native fullscreen the user chose stays.
     page_made_fullscreen: bool,
     _activation: Subscription,
+    _appearance: Subscription,
 }
 
 impl Shell {
@@ -93,6 +95,8 @@ impl Shell {
                 }
                 let _ = this.sync_page_focus(window, cx);
             });
+            // Theme::System follows the desktop's light or dark appearance as it changes.
+            let appearance = cx.observe_window_appearance(window, |_, _, cx| cx.notify());
             Self {
                 state,
                 id,
@@ -109,6 +113,7 @@ impl Shell {
                 title: String::new(),
                 page_made_fullscreen: false,
                 _activation: activation,
+                _appearance: appearance,
             }
         })
     }
@@ -277,7 +282,7 @@ impl Shell {
             .relative()
             .size_full()
             .overflow_hidden()
-            .bg(rgb(0x171e22))
+            .bg(palette().page)
             .child(surface(frames.view, frames.popup))
             .child(
                 canvas(|_, _, _| (), {
@@ -375,6 +380,9 @@ impl Shell {
 
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let incognito = self.state.borrow().model.is_incognito(&self.id);
+        let theme = self.state.borrow().model.core.settings.theme;
+        crate::theme::draw_with(Palette::resolve(theme, window.appearance(), incognito));
         self.bindings
             .refresh(&self.state.borrow().model.core.settings.keybindings);
         self.sync_command_preferences(cx);
@@ -387,18 +395,13 @@ impl Render for Shell {
             window.set_window_title(&title);
             self.title = title;
         }
-        let incognito = self.state.borrow().model.is_incognito(&self.id);
         let mut main = div()
             .relative()
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(if incognito {
-                crate::incognito::BACKGROUND
-            } else {
-                0x161c20
-            }))
-            .text_color(rgb(0xe2edf1))
+            .bg(palette().background)
+            .text_color(palette().text)
             .on_key_down(cx.listener(|this, event, window, cx| this.key(event, window, cx)))
             .on_key_up(cx.listener(|this, event: &KeyUpEvent, window, cx| {
                 if this.consumed_keys.remove(&event.keystroke.key) || this.overlay.is_open() {
@@ -497,7 +500,7 @@ impl Render for Shell {
                         .occlude()
                         .flex()
                         .flex_col()
-                        .bg(rgb(0x26333a))
+                        .bg(palette().surface)
                         .child(
                             div()
                                 .h(px(40.))
@@ -547,7 +550,7 @@ impl Render for Shell {
                     .left_0()
                     .size_full()
                     .occlude()
-                    .bg(gpui::rgba(0x00000088))
+                    .bg(palette().backdrop)
                     .on_any_mouse_down(cx.listener(|this, _: &MouseDownEvent, _, cx| {
                         dispatch(&this.state, &this.id, Action::ClosePeek, cx);
                         cx.stop_propagation();
@@ -583,9 +586,7 @@ impl Render for Shell {
                     .absolute()
                     .inset_0()
                     .occlude()
-                    .when(!site_controls, |backdrop| {
-                        backdrop.bg(gpui::rgba(0x00000088))
-                    })
+                    .when(!site_controls, |backdrop| backdrop.bg(palette().backdrop))
                     .child(div().absolute().inset_0().on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, _: &MouseDownEvent, window, cx| {
@@ -638,8 +639,8 @@ pub(crate) fn overlay_panel() -> Div {
         .text_sm()
         .rounded_xl()
         .border_1()
-        .border_color(rgb(0x405863))
-        .bg(rgb(0x1d2a32))
+        .border_color(palette().border)
+        .bg(palette().panel)
         .shadow_lg()
 }
 
@@ -653,6 +654,6 @@ pub(crate) fn button(
         .py_1()
         .rounded_md()
         .cursor_pointer()
-        .hover(|style| style.bg(rgb(0x37545e)))
+        .hover(|style| style.bg(palette().hover))
         .child(name.into())
 }

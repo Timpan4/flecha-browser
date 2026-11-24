@@ -2,9 +2,11 @@ use std::ops::Range;
 
 use gpui::{
     App, ClipboardItem, Div, Keystroke, ParentElement as _, Styled as _, div,
-    prelude::FluentBuilder as _, px, rgb,
+    prelude::FluentBuilder as _, px,
 };
 use unicode_segmentation::UnicodeSegmentation as _;
+
+use crate::theme::palette;
 
 #[derive(Default)]
 pub(crate) struct TextField {
@@ -185,7 +187,7 @@ impl TextField {
                 .px_3()
                 .py_2()
                 .rounded_md()
-                .bg(rgb(0x243640))
+                .bg(palette().inset)
                 .font_family("monospace")
                 .children(self.text.split('\n').map(|line| {
                     let end = offset + line.len();
@@ -194,7 +196,7 @@ impl TextField {
                     rendered
                 }))
                 .when(self.text.is_empty(), |field| {
-                    field.child(div().text_color(rgb(0xa4b5c3)).child(placeholder))
+                    field.child(div().text_color(palette().muted).child(placeholder))
                 });
         }
         let field = div()
@@ -206,11 +208,11 @@ impl TextField {
             .px_3()
             .py_2()
             .rounded_md()
-            .bg(rgb(0x243640));
+            .bg(palette().inset);
         if self.text.is_empty() {
             return field
                 .child(caret())
-                .child(div().ml_1().text_color(rgb(0xa4b5c3)).child(placeholder));
+                .child(div().ml_1().text_color(palette().muted).child(placeholder));
         }
         field.child(self.render_line(0..self.text.len()))
     }
@@ -222,7 +224,7 @@ impl TextField {
         let has_caret = line.contains(&self.cursor) || self.cursor == line.end;
         let selected = div()
             .flex_shrink_0()
-            .bg(rgb(0x285783))
+            .bg(palette().selection)
             .child(self.text[start..end].to_owned());
         div()
             .flex()
@@ -243,5 +245,9 @@ impl TextField {
 }
 
 fn caret() -> Div {
-    div().w(px(1.)).h(px(16.)).flex_shrink_0().bg(rgb(0x80c8ee))
+    div()
+        .w(px(1.))
+        .h(px(16.))
+        .flex_shrink_0()
+        .bg(palette().accent_strong)
 }

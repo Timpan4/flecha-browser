@@ -13,6 +13,7 @@ mod sidebar;
 mod site_controls;
 mod tab_sleep;
 mod text_field;
+mod theme;
 mod verify;
 mod view;
 
