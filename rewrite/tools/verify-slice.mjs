@@ -14,6 +14,17 @@ const out = join(process.env.HOME, '..');
 const x11Driver = join(out, 'x11-input');
 const mode = process.argv[2] ?? 'slice';
 
+// Points in the main window with the visual mode's 260px sidebar and one favorite, measured from
+// its captures. Xvfb has no compositor, so GPUI keeps the platform's title bar and draws no
+// window controls: the menu button sits right of the sidebar toggle (ui/styles.css:32, 55, 66).
+// The window menu drops 4px below it (settingsUi.ts:202), a 5px-padded list of 25.5px rows with
+// 11px separators (shell.css:78, 88, 132-133); the Space menu opens at the pointer.
+const menuButton = [10 + 30 + 2 + 15, 10 + 14];
+const newWindowRow = [82, 61];
+const zoomRow = [82, 287];
+const spaceHeader = [60, 157];
+const spaceMenuItem = [80, 18];
+
 // The per-step allowance from chromium/tests/native-workflows.mjs.
 const stepTimeoutMs = 10_000;
 
@@ -338,7 +349,7 @@ async function capture(name, colors, window = 'root') {
   });
 }
 
-async function captureUntil(name, window, mismatch) {
+async function captureUntil(name, window, mismatch, signal) {
   waitingFor = `${name} capture`;
   const path = join(out, `${name}.png`);
   let previous;
@@ -346,6 +357,7 @@ async function captureUntil(name, window, mismatch) {
   // X can still expose the previous frame after GPUI acknowledges presentation.
   // The launcher watchdog bounds both the capture attempts and their subprocesses.
   for (;;) {
+    signal?.throwIfAborted();
     execFileSync('magick', ['import', '-window', window, path]);
     const reason = mismatch(path);
 
@@ -360,7 +372,7 @@ async function captureUntil(name, window, mismatch) {
       previous = reason;
     }
 
-    await delay(100); // Matches Spike 1's capture readiness polling.
+    await delay(100, undefined, { signal }); // Matches Spike 1's capture readiness polling.
   }
 }
 
@@ -535,8 +547,8 @@ async function sidebarFocus(app, left) {
   assert.deepEqual(active(split).split, [left, right]);
   await keyDelivery(app, { A: left, B: right }, 'y', 'sidebar split', 'B');
 
-  // Pane A's row title, one 32px row plus its 2px margins further down.
-  execFileSync(x11Driver, ['click', 95, 269]);
+  // The split pair replaces both rows at the first row's position, with pane A on the left.
+  execFileSync(x11Driver, ['click', 50, 235]);
   await waitForSelection(app, left, 'sidebar selected pane A');
   await keyDelivery(app, { A: left, B: right }, 'z', 'sidebar select', 'A');
 
@@ -662,13 +674,20 @@ async function isolateWithTransients(app, space) {
   await app.present();
   await capture('peek-backdrop', ['#147A70', '#FFCC49']);
 
-  // The centre of the Shared cookies button with two Spaces, measured from this step's capture
-  // on Xvfb's 1280×1024 screen. The button sits in the controls at the foot of the sidebar.
-  execFileSync(x11Driver, ['click', 192, 965]);
+  // The footer's New Space button: inside the sidebar's 6px right and 8px bottom padding, half
+  // the 28px icon button from each (ui/styles.css:32, 136), measured from the visual captures.
+  const [x, y, , height] = execFileSync(x11Driver, ['geometry', 'Flecha'], { encoding: 'utf8' })
+    .trim().split(' ').map(Number);
+
+  const newSpace = [x + 260 - 6 - 14, y + height - 8 - 14];
+  const spaces = snapshot => snapshot.core.spaces.length;
+  const spacesBefore = spaces(await app.command('snapshot'));
+  execFileSync(x11Driver, ['click', ...newSpace]);
 
   for (;;) {
     const state = await app.command('snapshot');
-    assert.equal(isIsolated(state), false, 'Peek backdrop passed the click through to Separate cookies');
+    assert.equal(spaces(state), spacesBefore, 'Peek backdrop passed the click through to New Space');
+    assert.equal(isIsolated(state), false);
 
     if (!state.peeks.length) break;
     await delay(100); // Matches the capture poll.
@@ -676,7 +695,14 @@ async function isolateWithTransients(app, space) {
 
   await app.wait('CEF closure after clicking the Peek backdrop', event =>
     event.type === 'closed' && event.tab === clickedPeek);
-  pass('clicking Separate cookies through the Peek backdrop dismissed Peek and left the Space shared');
+  // Without Peek the same click adds a Space, so the backdrop, not a miss, held it back. GPUI
+  // hit-tests the last frame it drew, so that frame must be the one without the backdrop.
+  await app.present();
+  execFileSync(x11Driver, ['click', ...newSpace]);
+  await poll('New Space from the footer button', async () =>
+    spaces(await app.command('snapshot')) === spacesBefore + 1);
+  await app.command('switch', { space });
+  pass('clicking New Space through the Peek backdrop dismissed Peek and left the Spaces alone');
 
   await cookie(app, 'Shared cookie');
   const [{ window: mini, tab: detached }] = (await app.command('detach')).flechinhas;
@@ -737,6 +763,148 @@ async function openTab(app, path) {
   await app.loaded(tab, path.split('?')[0], after);
 
   return tab;
+}
+
+async function tabDrags(app) {
+  const space = win(await app.command('new_space')).activeSpaceId;
+  const pinned = await openTab(app, '/opener');
+  await app.command('pin', { tab: pinned });
+  const favorite = await openTab(app, '/closed');
+  await app.command('favorite', { tab: favorite });
+  await app.command('new_folder', { name: 'Drag fixtures' });
+  const a = await openTab(app, '/open');
+  const b = await openTab(app, '/split');
+  const c = await openTab(app, '/peek');
+  await app.present();
+  execFileSync(x11Driver, ['focus', 'Flecha']);
+
+  const [x, y, width, height] = execFileSync(x11Driver, ['geometry', 'Flecha'], { encoding: 'utf8' })
+    .trim().split(' ').map(Number);
+
+  const pointer = (op, [localX, localY]) => execFileSync(x11Driver, [op, x + localX, y + localY]);
+
+  // Sidebar dimensions from tokens.rs at the default sidebar width. The drag adds the 4px
+  // Pinned end target. Each visible row, including a split pair, takes 32px plus its margins.
+  const pinnedHeader = 10 + 28 + 8 + 36 + 8 + 44 + 8 + 26 + 8;
+  const firstPinned = pinnedHeader + 22 + 1;
+  const rowHeight = 32 + 2;
+
+  const pinTop = index => firstPinned + index * rowHeight;
+
+  const todayTop = (index, pinnedRows, dragging = false) =>
+    pinTop(pinnedRows) + (dragging ? 4 : 0) + 8 + 30 + 34 + index * rowHeight;
+
+  const today = (index, pinnedRows = 2) => [60, todayTop(index, pinnedRows) + 16];
+  const beforeToday = index => [60, todayTop(index, 2, true) + 2];
+  const folder = index => [60, pinTop(index) + 16];
+  const favoriteTile = (index = 0) => [36 + 62 * index, 112];
+  const pane = fraction => [260 + Math.round((width - 260) * fraction), Math.floor(height / 2)];
+  const snapshot = () => app.command('snapshot');
+  const pins = state => state.core.spaces.find(candidate => candidate.id === space).pinnedFlat;
+  const pinOrder = state => pins(state).filter(node => node.depth === 0).map(node => node.tabId ?? node.id);
+  const children = state => pins(state).filter(node => node.depth === 1).map(node => node.tabId);
+
+  const folderId = pins(await snapshot()).find(node => node.name === 'Drag fixtures').id;
+
+  const drag = async (label, from, to, preview) => {
+    waitingFor = label;
+    pointer('press', from);
+
+    try {
+      pointer('move', [from[0] + 8, from[1]]);
+      await app.present();
+      pointer('move', to);
+      await app.present();
+
+      if (preview) await preview();
+    } finally {
+      execFileSync(x11Driver, ['release']);
+    }
+
+    await app.present();
+    waitingFor = label;
+
+    return snapshot();
+  };
+
+  const retain = name => {
+    if (existsSync('/mnt/visual')) copyFileSync(join(out, name + '.png'), join('/mnt/visual', name + '.png'));
+  };
+
+  const cue = (name, rgb, crop) => async () => {
+    await captureUntil(name, 'root', path => {
+      const pixels = execFileSync('magick', [path, '-crop', crop, '+repage', '-depth', '8', 'rgb:-']);
+
+      // Xvfb's composited color differed from the opaque blue token by up to three channel values.
+      for (let index = 0; index < pixels.length; index += 3) {
+        if (rgb.every((channel, offset) => Math.abs(channel - pixels[index + offset]) <= 3)) return;
+      }
+
+      return 'the highlighted border did not appear in ' + crop;
+    }, AbortSignal.timeout(stepTimeoutMs));
+    retain(name);
+  };
+
+  pointer('click', today(1));
+  await app.present();
+  const clicked = active(await snapshot());
+  assert.equal(clicked.activeTabId, b);
+  assert.deepEqual(clicked.today, [c, b, a]);
+  assert.equal(clicked.split, undefined);
+
+  const insertionCrop = '64x6+' + (x + 185) + '+' + (y + todayTop(0, 2, true) - 1);
+  let state = await drag('reorder Today', today(2), beforeToday(0), cue('drag-insertion', [58, 166, 217], insertionCrop));
+  assert.deepEqual(active(state).today, [a, c, b]);
+  assert.equal(active(state).activeTabId, b);
+  pass('a click selected its tab and a drag reordered Today with a visible insertion line');
+
+  const viewportCrop = '64x6+' + (x + 300) + '+' + (y + 8);
+  state = await drag('drop on the left of the viewport', today(0), pane(0.25), cue('drag-split-preview', [31, 111, 181], viewportCrop));
+  assert.deepEqual(active(state).split, [a, b]);
+  assert.equal(active(state).activeTabId, a);
+  await capture('drag-split-pair', ['#147A70', '#703496']);
+  retain('drag-split-pair');
+  state = await drag('drop on the right of the existing split', today(1), pane(0.75));
+  assert.deepEqual(active(state).split, [a, c]);
+  assert.equal(active(state).activeTabId, c);
+  state = await drag('split onto a pinned row', today(1), [125, pinTop(0) + 16]);
+  assert.deepEqual(active(state).split, [pinned, b]);
+  pass('viewport drops showed a highlight, created and replaced a split, and a sidebar row drop split with that tab');
+
+  const beforeCancel = active(state);
+  state = await drag('cancel over Favorites', today(0), favoriteTile(), () => {
+    execFileSync(x11Driver, ['key', 'Escape']);
+  });
+  assert.deepEqual(active(state), beforeCancel);
+  assert.deepEqual(state.core.favorites, [favorite]);
+  state = await drag('drop outside the tab targets', today(0), [60, height - 100]);
+  assert.deepEqual(active(state), beforeCancel);
+  pass('Escape and an outside drop cancelled the drag without changing tabs');
+
+  state = await drag('Today to Pinned', today(0), [60, pinTop(0) + 2]);
+  assert.deepEqual(pinOrder(state), [a, pinned, folderId]);
+  state = await drag('reorder Pinned', folder(1), [60, pinTop(0) + 2]);
+  assert.deepEqual(pinOrder(state), [pinned, a, folderId]);
+  state = await drag('Pinned into a folder', folder(1), folder(2));
+  assert.deepEqual(children(state), [a]);
+  state = await drag('Today into a folder', today(0, 3), folder(1));
+  assert.deepEqual(children(state), [a, c]);
+  state = await drag('reorder folder children', folder(3), [65, pinTop(2) + 2]);
+  assert.deepEqual(children(state), [c, a]);
+  state = await drag('folder to Favorites', folder(2), favoriteTile());
+  assert.deepEqual(state.core.favorites, [c, favorite]);
+  state = await drag('reorder Favorites', favoriteTile(1), favoriteTile());
+  assert.deepEqual(state.core.favorites, [favorite, c]);
+  state = await drag('Favorites to Pinned', favoriteTile(1), [60, pinnedHeader + 11]);
+  assert.deepEqual(pinOrder(state), [pinned, folderId, c]);
+  state = await drag('folder to Today', folder(2), [60, todayTop(0, 4, true) - 17]);
+  assert.deepEqual(active(state).today, [b, a]);
+  state = await drag('Pinned to Today', folder(2), [60, todayTop(0, 3, true) - 17]);
+  assert.deepEqual(active(state).today, [b, a, c]);
+  assert.deepEqual(children(state), []);
+  pass('reordered Pinned, a folder and Favorites, and moved tabs between all sidebar sections');
+
+  return state.core;
 }
 
 // HTML fullscreen: the page alone in its window without the sidebar, which comes back when Esc
@@ -881,13 +1049,14 @@ async function tabStatus(app, main, left) {
   pass('clicking the audio mark muted the page in CEF and the saved tab, and clicking again unmuted it');
 
   // The split mark (ui/app.ts:574-576) sits where the close button shows on hover, and hovering
-  // the row hides it (ui/styles.css:660-683). The audio row is drawn alone and in a split, each
-  // time with the pointer on the page beside the sidebar and then on the row's title. A row is
-  // 32px tall (ui/styles.css:6), and its icon and title end where the 20px audio mark
-  // (ui/styles.css:2174) begins.
+  // the row hides it (ui/styles.css:660-683). A split pair drawn side by side leaves it out
+  // (ui/styles.css:1955-1958), so the audio tab is pinned first and its split partner stays in
+  // Today. The pinned row is drawn alone and in a split, each time with the pointer on the page
+  // beside the sidebar and then on the row's title. A row is 32px tall (ui/styles.css:6), and its
+  // icon and title end where the 20px audio mark (ui/styles.css:2174) begins.
   const rowHeight = 32;
   const titleWidth = Math.round(mark[0] - windowX - 20);
-  const click =([x, y]) => execFileSync(x11Driver, ['click', Math.round(x), Math.round(y)]);
+  const click = ([x, y]) => execFileSync(x11Driver, ['click', Math.round(x), Math.round(y)]);
   const awayPoint = [windowX + sidebarWidth + 40, windowY + windowHeight - 40];
   const titlePoint = centre => [windowX + titleWidth / 2, windowY + centre];
 
@@ -906,12 +1075,91 @@ async function tabStatus(app, main, left) {
     await captureUntil(name, 'root', path => check(crop(name, path)));
   };
 
-  const aloneCentre = Math.round(mark[1] - windowY);
+  const audibleCentre = Math.round(mark[1] - windowY);
+
+  // Where `part` best matches in `path`, and whether it matches there exactly.
+  const search = (path, metric, part) => {
+    const result = spawnSync('magick', ['compare', '-metric', metric, '-subimage-search', path, part, 'null:'],
+      { encoding: 'utf8' }).stderr;
+
+    const [, different, x, y] = /^(\S+) .*@ (\d+),(\d+)/.exec(result) ?? [];
+
+    return x === undefined ? undefined : { at: [Number(x), Number(y)], exact: different === '0' };
+  };
+
+  // A split pair drawn side by side keeps the speaker in the row's narrower half, and it still
+  // mutes the page. The speaker is found by its 14px icon (ui/styles.css:2190).
+  const speaker = join(out, 'split-speaker.png');
+
+  execFileSync('magick', [
+    join(out, 'tab-audible-sidebar.png'), '-crop', `14x14+${Math.round(mark[0] - windowX - 14 / 2)}+${audibleCentre - 14 / 2}`,
+    '+repage', speaker,
+  ]);
+
+  const tabsBefore = Object.keys((await app.command('snapshot')).core.tabs);
+
+  await app.command('split', { url: base + '/split' });
+  const partner = Object.keys((await app.command('snapshot')).core.tabs).find(id => !tabsBefore.includes(id));
+
+  await app.command('select', { tab: audioTab });
+  click(awayPoint);
+
+  // The half's own width moves the icon by a fraction of a pixel, so the match is the closest
+  // one, and the clicks below show whether it was the speaker.
+  const findSpeaker = path => search(path, 'RMSE', speaker)?.at;
+  let resting;
+  let pairSpeaker;
+
+  await shot('split-pair', path => {
+    resting = findSpeaker(path);
+
+    return resting ? undefined : 'no match for the speaker';
+  });
+
+  // Until the pointer is on the row, the pair's actions float invisibly over its end, speaker
+  // included. An X11 click presses before GPUI draws the hover, so the pointer first rests on
+  // the title, and the speaker moves aside to make room for the actions.
+  click([windowX + resting[0] / 2, windowY + resting[1] + 14 / 2]);
+  await shot('split-pair-hover', path => {
+    const moved = findSpeaker(path);
+
+    if (!moved || moved[0] >= resting[0]) return 'the paired row made no room for its actions';
+    pairSpeaker = [windowX + moved[0] + 14 / 2, windowY + moved[1] + 14 / 2];
+  });
+  click(pairSpeaker);
+  await poll('the paired row\'s speaker to mute the page', async () => (await tab(audioTab)).muted === true);
+  click(pairSpeaker);
+  await poll('the paired row\'s speaker to unmute the page', async () => (await tab(audioTab)).muted === undefined);
+  pass('a split pair drawn side by side kept the speaker, and it muted and unmuted the page');
+
+  await app.command('select', { tab: partner });
+  await app.command('close');
+  await app.command('select', { tab: audioTab });
+
+  // Pinning and the split's new tab move the row, so it is found again by its icon and title.
+  const titleOnly = join(out, 'split-title.png');
+
+  execFileSync('magick', [
+    join(out, 'tab-audible-sidebar.png'), '-crop', `${titleWidth}x${rowHeight}+0+${audibleCentre - rowHeight / 2}`,
+    '+repage', titleOnly,
+  ]);
+
+  const findRow = path => {
+    const found = search(path, 'AE', titleOnly);
+
+    return found?.exact ? found.at[1] + rowHeight / 2 : undefined;
+  };
+
+  await app.command('pin', { tab: audioTab });
+  click(awayPoint);
+  let aloneCentre;
   let alone;
   let aloneHovered;
 
-  click(awayPoint);
   await shot('split-alone', path => {
+    aloneCentre = findRow(path);
+
+    if (aloneCentre === undefined) return 'the pinned audio row is not in the sidebar';
     alone = rowBand('split-alone', path, aloneCentre);
   });
   click(titlePoint(aloneCentre));
@@ -930,19 +1178,6 @@ async function tabStatus(app, main, left) {
   const [, actionsWidth, , actionsX] = /^(\d+)x(\d+)\+(\d+)\+(\d+)$/.exec(actions).map(Number);
   // Half the close button's 13px icon (ui/styles.css:648) in from that end.
   const closeX = windowX + actionsX + actionsWidth - 13 / 2;
-
-  const titleOnly = join(out, 'split-title.png');
-  execFileSync('magick', [alone, '-crop', `${titleWidth}x${rowHeight}+0+0`, '+repage', titleOnly]);
-
-  // The split's new tab can move the row, so it is found again by its icon and title.
-  const findRow = path => {
-    const search = spawnSync('magick', ['compare', '-metric', 'AE', '-subimage-search', path, titleOnly, 'null:'],
-      { encoding: 'utf8' }).stderr;
-
-    const [, offset] = /@ \d+,(\d+)/.exec(search) ?? [];
-
-    return offset === undefined ? undefined : Number(offset) + rowHeight / 2;
-  };
 
   await app.command('split', { url: base + '/split' });
   await app.command('select', { tab: audioTab });
@@ -966,9 +1201,10 @@ async function tabStatus(app, main, left) {
     : undefined);
   pass('a tab in a split showed the split mark, and hovering its row swapped the mark for the row actions');
 
+  // Closing a pinned tab closes its page, whatever happens to the pin.
   click([closeX, windowY + splitCentre]);
-  await poll('the close button under the split mark to close the tab', async () => !(await tab(audioTab)));
-  pass('the close button under the split mark closed the tab');
+  await poll('the close button under the split mark to close the page', async () => !(await browser(audioTab)));
+  pass('the close button under the split mark closed the page');
 }
 
 // Incognito windows: one in-memory cookie jar per session, kept apart from the regular one,
@@ -1563,6 +1799,17 @@ async function visualParity(app, left) {
     await shot(`visual-context-menu-${theme}`);
     key('Escape');
 
+    click(x + menuButton[0], y + menuButton[1]);
+    await shot(`visual-app-menu-${theme}`);
+    // The Zoom row opens its submenu beside it.
+    click(x + zoomRow[0], y + zoomRow[1]);
+    await shot(`visual-app-menu-zoom-${theme}`);
+    key('Escape');
+
+    execFileSync(x11Driver, ['right-click', x + spaceHeader[0], y + spaceHeader[1]]);
+    await shot(`visual-space-menu-${theme}`);
+    key('Escape');
+
     // The footer's Downloads button: the sidebar's left and bottom padding, then half the
     // 28px icon button (ui/styles.css:32, 136).
     click(x + 10 + 14, y + height - 8 - 14);
@@ -1589,6 +1836,57 @@ async function visualParity(app, left) {
     const returned = await app.command('return', { window: mini });
     await app.command('select', { tab: active(returned).activeTabId });
   }
+
+  // The window menu's rows act: New window opens a regular window.
+  execFileSync(x11Driver, ['focus', 'Flecha']);
+  const [x, y] = geometry();
+  const windows = async () => (await app.command('snapshot')).core.windows;
+  const before = await windows();
+
+  click(x + menuButton[0], y + menuButton[1]);
+  await app.present();
+  click(x + newWindowRow[0], y + newWindowRow[1]);
+
+  const opened = (await poll('New window from the window menu', async () => {
+    const now = await windows();
+
+    return now.length === before.length + 1 && now;
+  })).find(window => !before.some(old => old.id === window.id));
+
+  await app.command('close_window', { window: opened.id });
+  await poll('GPUI closed the menu\'s window', async () =>
+    !(await app.command('snapshot')).nativeWindows.includes(opened.id));
+  pass('the window menu opened a new window');
+
+  // The Space menu, from a right-click on the Space's name (background.ts spaceMenu), turns
+  // Separate Cookies and Logins on and off. The driver focuses a title only one window has.
+  await poll('one window named Flecha', async () => {
+    try {
+      execFileSync(x11Driver, ['focus', 'Flecha'], { stdio: 'ignore' });
+
+      return true;
+    } catch {
+      return false;
+    }
+  });
+
+  const shown = async () => {
+    const snapshot = await app.command('snapshot');
+
+    return snapshot.core.spaces.find(space => space.id === win(snapshot).activeSpaceId);
+  };
+
+  for (const wanted of [true, false]) {
+    // GPUI hit-tests the last frame drawn, which may still hold the previous menu.
+    await app.present();
+    execFileSync(x11Driver, ['right-click', x + spaceHeader[0], y + spaceHeader[1]]);
+    await app.present();
+    click(x + spaceHeader[0] + spaceMenuItem[0], y + spaceHeader[1] + spaceMenuItem[1]);
+    await poll(`Separate Cookies and Logins ${wanted ? 'on' : 'off'} from the Space menu`, async () =>
+      (await shown()).isolated === wanted);
+  }
+
+  pass('the Space menu turned Separate Cookies and Logins on and off');
 
   const { window: incognito } = await openIncognito(app);
   await app.command('open', { url: base + '/open', window: incognito });
@@ -1861,10 +2159,17 @@ async function verifySlice() {
     await restarted.command('switch', { space: shared });
     await cookie(restarted, 'Shared cookie');
     pass('the isolated cookie persisted after restart and stayed out of the ordinary Space');
+    const dragged = mode === 'slice' ? await tabDrags(restarted) : undefined;
     await restarted.quit();
 
     const popups = launch('popups');
     await popups.wait('CEF context ready for popups', event => event.type === 'ready');
+
+    if (dragged) {
+      assert.deepEqual((await popups.command('snapshot')).core, dragged);
+      pass('tab drag order, placements and split survived an isolated restart');
+    }
+
     await popupChecks(popups);
   } else {
     await app.quit();

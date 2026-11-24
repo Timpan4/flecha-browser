@@ -152,9 +152,15 @@ pub(crate) const ICONS: &[(&str, &str)] = &[
     ),
 ];
 
-/// The close circle's cross (ui/flechinha.html:18 and ui/index.html:21): a 12px grid with
-/// 1.4px strokes (ui/windowControls.css:44-48), served as `icons/window-close.svg`.
-pub(crate) const WINDOW_CLOSE: &str = "M3.75 3.75l4.5 4.5M8.25 3.75l-4.5 4.5";
+/// The window controls' glyphs (ui/index.html:21-23 and ui/flechinha.html:18-20): a 12px grid
+/// with 1.4px strokes (ui/windowControls.css:44-48), served as `icons/<name>.svg`. Maximize
+/// shows its `grow` path, and `shrink` while the window is maximized.
+pub(crate) const WINDOW_GLYPHS: &[(&str, &str)] = &[
+    ("window-close", "M3.75 3.75l4.5 4.5M8.25 3.75l-4.5 4.5"),
+    ("window-minimize", "M3.25 6h5.5"),
+    ("window-maximize", "M3.5 6.5v-3h3M8.5 5.5v3h-3"),
+    ("window-restore", "M6 3v3H3M6 9V6h3"),
+];
 
 /// The loading spinner's asset path. `.favicon.spinner` (ui/styles.css:701-709) draws it as a
 /// 14px box with a 2px border, 1px in from the favicon's 16px: on the 16px grid, a ring of
@@ -164,8 +170,8 @@ pub(crate) const SPINNER: &str = "icons/spinner.svg";
 
 const SPINNER_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="#000" stroke-width="2"><circle cx="8" cy="8" r="6" stroke-opacity="0.25"/><path d="M3.757 3.757A6 6 0 0 1 12.243 3.757"/></svg>"##;
 
-/// Serves `icons/<name>.svg` for each icon in [`ICONS`], the window close cross and the
-/// loading spinner.
+/// Serves `icons/<name>.svg` for each icon in [`ICONS`] and [`WINDOW_GLYPHS`], and the loading
+/// spinner.
 pub struct Assets;
 
 impl AssetSource for Assets {
@@ -176,8 +182,8 @@ impl AssetSource for Assets {
         else {
             return Ok(None);
         };
-        if name == "window-close" {
-            return Ok(Some(Cow::Owned(window_control(WINDOW_CLOSE).into_bytes())));
+        if let Some((_, d)) = WINDOW_GLYPHS.iter().find(|(glyph, _)| *glyph == name) {
+            return Ok(Some(Cow::Owned(window_control(d).into_bytes())));
         }
         if name == "spinner" {
             return Ok(Some(Cow::Borrowed(SPINNER_SVG.as_bytes())));
@@ -193,7 +199,12 @@ impl AssetSource for Assets {
             ICONS
                 .iter()
                 .map(|(name, _)| format!("icons/{name}.svg").into())
-                .chain(["icons/window-close.svg".into(), SPINNER.into()])
+                .chain(
+                    WINDOW_GLYPHS
+                        .iter()
+                        .map(|(name, _)| format!("icons/{name}.svg").into()),
+                )
+                .chain([SPINNER.into()])
                 .collect()
         } else {
             Vec::new()
@@ -208,7 +219,7 @@ fn document(d: &str) -> String {
     )
 }
 
-/// The close cross on the window controls' 12px grid, stroked as ui/windowControls.css:44-50.
+/// A window control's glyph on its 12px grid, stroked as ui/windowControls.css:44-50.
 fn window_control(d: &str) -> String {
     format!(
         r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12" fill="none" stroke="#000" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="{d}"/></svg>"##
@@ -219,7 +230,10 @@ fn window_control(d: &str) -> String {
 /// never one it would inherit, so every icon names its colour.
 pub(crate) fn icon(name: &'static str, size: f32, color: impl Into<Hsla>) -> Svg {
     debug_assert!(
-        name == "window-close" || ICONS.iter().any(|(icon, _)| *icon == name),
+        WINDOW_GLYPHS
+            .iter()
+            .chain(ICONS)
+            .any(|(icon, _)| *icon == name),
         "{name}"
     );
     svg()
@@ -268,12 +282,22 @@ mod tests {
             assert!(document.contains(r#"stroke-width="1.5""#));
         }
         assert!(Assets.load("icons/missing.svg").unwrap().is_none());
-        assert_eq!(Assets.list("icons").unwrap().len(), ICONS.len() + 2);
         assert!(Assets.load(SPINNER).unwrap().is_some());
-        let close = Assets.load("icons/window-close.svg").unwrap().unwrap();
-        assert!(std::str::from_utf8(&close).unwrap().contains(WINDOW_CLOSE));
-        let shipping = crate::tokens::tests::source("ui/flechinha.html");
-        assert!(shipping.contains(&format!(r#"<path d="{WINDOW_CLOSE}" />"#)));
+        assert_eq!(
+            Assets.list("icons").unwrap().len(),
+            ICONS.len() + WINDOW_GLYPHS.len() + 1
+        );
+        for page in ["ui/flechinha.html", "ui/index.html"] {
+            let shipping = crate::tokens::tests::source(page);
+            for (name, d) in WINDOW_GLYPHS {
+                let glyph = Assets.load(&format!("icons/{name}.svg")).unwrap().unwrap();
+                assert!(std::str::from_utf8(&glyph).unwrap().contains(d), "{name}");
+                assert!(
+                    shipping.contains(&format!(r#" d="{d}" />"#)),
+                    "{page}: {name}"
+                );
+            }
+        }
         let rule = crate::tokens::tests::source("ui/windowControls.css");
         assert!(rule.contains("stroke-width: 1.4;"));
     }

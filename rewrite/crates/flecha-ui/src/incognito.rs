@@ -124,6 +124,7 @@ pub(crate) fn refusal(action: &Action) -> Option<&'static str> {
         Action::RestoreArchive(_) | Action::ClearArchive => {
             Some("An incognito window has no archive")
         }
+        Action::OpenFlechinha(_) => Some("Open a Flechinha from a regular window"),
         Action::Sidebar(
             SidebarAction::Pin(..)
             | SidebarAction::Favorite(_)
@@ -131,6 +132,13 @@ pub(crate) fn refusal(action: &Action) -> Option<&'static str> {
             | SidebarAction::ToggleFolder(..)
             | SidebarAction::RemoveFolder(_)
             | SidebarAction::TogglePinned(_),
+        )
+        | Action::DropTab(
+            _,
+            crate::tab_drag::TabDrop::Place(
+                crate::tab_drag::TabZone::Pinned(_) | crate::tab_drag::TabZone::Favorites,
+                _,
+            ),
         ) => Some("An incognito window has no pinned tabs or favorites"),
         Action::Site(_, SiteChange::Shield(_)) => Some("Change it in a regular window"),
         _ => None,

@@ -37,7 +37,7 @@ pub(crate) struct Toolbar {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Shortcut {
+pub(crate) enum Shortcut {
     Command(Command),
     Close,
     Reopen,
@@ -156,6 +156,7 @@ fn shortcut_for_id(id: &str) -> Option<Shortcut> {
     Some(match id {
         "newTab" => Shortcut::Command(Command::NewTab),
         "openLocation" => Shortcut::Command(Command::EditLocation),
+        "newFlechinha" => Shortcut::Command(Command::Flechinha),
         "splitNew" => Shortcut::Command(Command::Split),
         "closeTab" => Shortcut::Close,
         "reopenTab" => Shortcut::Reopen,
@@ -371,6 +372,11 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if event.keystroke.key == "escape" && self.cancel_tab_drag(window, cx) {
+            self.consumed_keys.insert(event.keystroke.key.clone());
+            cx.stop_propagation();
+            return;
+        }
         let focused = self.sync_page_focus(window, cx);
         self.bindings
             .refresh(&self.state.borrow().model.core.settings.keybindings);
@@ -441,7 +447,7 @@ impl Shell {
         }
     }
 
-    fn invoke_shortcut(
+    pub(crate) fn invoke_shortcut(
         &mut self,
         shortcut: Shortcut,
         window: &mut Window,
