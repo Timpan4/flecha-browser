@@ -402,6 +402,46 @@ async function sidebarFocus(app, left) {
   const commandKeys = site.probe('command-keys');
   await app.command('script', { tab: left, source: `fetch('/probe/command-keys?value=' + JSON.stringify(window.commandKeys));` });
   assert.deepEqual(JSON.parse(await commandKeys), [], 'command bar keys reached pane A');
+  await managerFocus(app, left, right);
+}
+
+async function managerFocus(app, left, right) {
+  const ready = site.probe('manager-keys-ready');
+  await app.command('script', { tab: left, source: `
+    window.managerKeys = [];
+    addEventListener('keydown', event => window.managerKeys.push(event.key));
+    fetch('/probe/manager-keys-ready?value=ready');
+  ` });
+  assert.equal(await ready, 'ready');
+  execFileSync(x11Driver, ['chord', 'Control_L', 'comma']);
+  await app.present();
+  const [x, y, width] = execFileSync(x11Driver, ['geometry', 'Flecha'], { encoding: 'utf8' })
+    .trim().split(' ').map(Number);
+  // The fifth tab in the centered GPUI Settings panel on the Xvfb fixture.
+  execFileSync(x11Driver, ['click', Math.round(x + width / 2 + 5), y + 105]);
+  await capture('tabs-spaces-manager', ['#73B4E4']);
+
+  execFileSync(x11Driver, ['key', 'q']);
+  execFileSync(x11Driver, ['chord', 'Control_L', 'a']);
+  for (const key of 'split') execFileSync(x11Driver, ['key', key]);
+  execFileSync(x11Driver, ['key', 'Down']);
+  execFileSync(x11Driver, ['key', 'Delete']);
+
+  for (;;) {
+    const snapshot = await app.command('snapshot');
+    if (!snapshot.core.tabs[right]) {
+      assert(snapshot.core.tabs[left], 'the search excluded the other split tab');
+      assert(snapshot.core.archive.some(tab => tab.url === base + '/split'), 'the matching tab reached the Archive');
+      break;
+    }
+    waitingFor = 'archive the tab matching the manager search';
+    await delay(100);
+  }
+  execFileSync(x11Driver, ['key', 'Escape']);
+  const keys = site.probe('manager-keys');
+  await app.command('script', { tab: left, source: `fetch('/probe/manager-keys?value=' + JSON.stringify(window.managerKeys));` });
+  assert.deepEqual(JSON.parse(await keys), [], 'manager search and list keys reached CEF');
+  await keyDelivery(app, { A: left }, 'g', 'Tabs & Spaces dismissed', 'A');
 }
 
 async function cookie(app, expected, op = 'open') {

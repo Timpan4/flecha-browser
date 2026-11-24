@@ -6,6 +6,8 @@ mod general;
 mod import;
 #[path = "settings_shortcuts.rs"]
 mod shortcuts;
+#[path = "settings_tabs.rs"]
+mod tabs;
 
 use anyhow::Result;
 use flecha_core::Settings;
@@ -25,6 +27,7 @@ pub(crate) enum SettingsTab {
     Shortcuts,
     Boosts,
     Import,
+    TabsSpaces,
 }
 
 impl SettingsTab {
@@ -34,6 +37,7 @@ impl SettingsTab {
             Self::Shortcuts => "Shortcuts",
             Self::Boosts => "Boosts",
             Self::Import => "Import",
+            Self::TabsSpaces => "Tabs & Spaces",
         }
     }
 }
@@ -43,6 +47,7 @@ pub(crate) struct SettingsPanel {
     field: Option<Draft>,
     boosts: boosts::Editor,
     import: import::ImportPanel,
+    manager: tabs::Manager,
     scroll: ScrollHandle,
     message: Option<(String, bool)>,
 }
@@ -85,6 +90,7 @@ impl SettingsPanel {
             field: None,
             boosts: boosts::Editor::default(),
             import: import::ImportPanel::default(),
+            manager: tabs::Manager::default(),
             scroll: ScrollHandle::new(),
             message: None,
         }
@@ -96,6 +102,9 @@ impl SettingsPanel {
             self.field = None;
             self.message = None;
             self.scroll = ScrollHandle::new();
+            if tab == SettingsTab::TabsSpaces {
+                self.manager.focus_search();
+            }
         }
     }
 
@@ -152,6 +161,21 @@ impl Controller {
 }
 
 impl Shell {
+    pub(crate) fn settings_before_shortcuts(
+        &mut self,
+        stroke: &Keystroke,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(panel) = self.settings_mut() else {
+            return false;
+        };
+        if panel.tab == SettingsTab::TabsSpaces && panel.manager.before_shortcuts(stroke) {
+            cx.notify();
+            return true;
+        }
+        false
+    }
+
     pub(crate) fn toggle_settings(
         &mut self,
         tab: SettingsTab,
@@ -187,6 +211,10 @@ impl Shell {
         let Some(panel) = self.settings_mut() else {
             return;
         };
+        if panel.tab == SettingsTab::TabsSpaces {
+            self.tabs_settings_key(stroke, cx);
+            return;
+        }
         let Some(draft) = &mut panel.field else {
             return;
         };
@@ -232,6 +260,7 @@ impl Shell {
             SettingsTab::Shortcuts,
             SettingsTab::Boosts,
             SettingsTab::Import,
+            SettingsTab::TabsSpaces,
         ]
         .into_iter()
         .map(|tab| {
@@ -250,6 +279,7 @@ impl Shell {
             SettingsTab::Shortcuts => self.shortcut_settings(panel, cx),
             SettingsTab::Boosts => self.boosts_settings(panel, cx),
             SettingsTab::Import => self.import_settings(panel, cx),
+            SettingsTab::TabsSpaces => self.tabs_settings(panel, cx),
         };
         overlay_panel()
             .w(px(680.))
