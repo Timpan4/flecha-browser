@@ -2,15 +2,29 @@ use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result, ensure};
-use flecha_cef::{Owner, Partition};
+use flecha_cef::{IncognitoSession, Owner, Partition};
 use flecha_core::{BrowserState, EpochMillis, Placement, SpaceId, Tab, TabId, WindowId};
 use uuid::Uuid;
 
+use crate::incognito::Incognito;
+
 pub struct Model {
+    /// The regular windows, Spaces and tabs: the state storage saves.
     pub core: BrowserState,
+    /// The incognito windows' own state while any is open. Storage never sees it.
+    pub(crate) incognito: Option<Incognito>,
+    incognito_sessions: u64,
     pub peeks: BTreeMap<WindowId, Transient>,
     pub flechinhas: BTreeMap<WindowId, Transient>,
     pub popups: BTreeMap<WindowId, Popup>,
+}
+
+/// What closing an incognito window took down.
+pub(crate) struct ClosedIncognito {
+    /// Pages whose browsers must close.
+    pub(crate) removed: Vec<TabId>,
+    /// The session that ended with its last window.
+    pub(crate) ended: Option<IncognitoSession>,
 }
 
 /// A scripted popup (`window.open` with features) in a window of its own, as Chromium
@@ -39,14 +53,143 @@ impl Model {
     pub fn new(core: Option<BrowserState>) -> Self {
         Self {
             core: core.unwrap_or_else(|| BrowserState::new(space_id(), window_id())),
+            incognito: None,
+            incognito_sessions: 0,
             peeks: BTreeMap::new(),
             flechinhas: BTreeMap::new(),
             popups: BTreeMap::new(),
         }
     }
 
+    /// The state that has this Flecha window: the regular one, or the incognito windows'.
+    pub(crate) fn state(&self, window: &WindowId) -> Option<&BrowserState> {
+        if self.core.window(window).is_some() {
+            return Some(&self.core);
+        }
+        let incognito = &self.incognito.as_ref()?.state;
+        incognito.window(window).map(|_| incognito)
+    }
+
+    pub(crate) fn state_mut(&mut self, window: &WindowId) -> Option<&mut BrowserState> {
+        if self.core.window(window).is_some() {
+            return Some(&mut self.core);
+        }
+        let incognito = &mut self.incognito.as_mut()?.state;
+        incognito.window(window).is_some().then_some(incognito)
+    }
+
+    /// The state that has this tab, and whether storage keeps it.
+    fn tab_state_mut(&mut self, id: &TabId) -> Option<(&mut BrowserState, bool)> {
+        if self.core.tab(id).is_some() {
+            return Some((&mut self.core, true));
+        }
+        let incognito = &mut self.incognito.as_mut()?.state;
+        incognito.tab(id).is_some().then_some((incognito, false))
+    }
+
+    /// A tab of a Flecha window, regular or incognito.
+    pub(crate) fn tab(&self, id: &TabId) -> Option<&Tab> {
+        self.core
+            .tab(id)
+            .or_else(|| self.incognito.as_ref()?.state.tab(id))
+    }
+
+    /// Whether this window, or the page in a Flechinha or popup window, is incognito.
+    pub(crate) fn is_incognito(&self, window: &WindowId) -> bool {
+        if let Some(page) = self.flechinhas.get(window) {
+            return page.partition.is_incognito();
+        }
+        if let Some(popup) = self.popups.get(window) {
+            return popup.page.partition.is_incognito();
+        }
+        self.incognito
+            .as_ref()
+            .is_some_and(|incognito| incognito.state.window(window).is_some())
+    }
+
+    /// The incognito windows, while a session lasts.
+    pub(crate) fn incognito_windows(&self) -> &[flecha_core::Window] {
+        self.incognito
+            .as_ref()
+            .map_or(&[], |incognito| incognito.state.windows())
+    }
+
+    /// Opens an incognito window, starting a session when none is open.
+    pub(crate) fn open_incognito_window(&mut self) -> WindowId {
+        let window = window_id();
+        match &mut self.incognito {
+            Some(incognito) => {
+                incognito.state.open_window(window.clone(), None);
+                incognito.state.focus_window(&window);
+            }
+            None => {
+                self.incognito_sessions += 1;
+                let session = IncognitoSession::new(self.incognito_sessions);
+                self.incognito = Some(Incognito::new(session, window.clone()));
+            }
+        }
+        window
+    }
+
+    /// Closes an incognito window. The last one ends the session, with every page it opened.
+    pub(crate) fn close_incognito_window(&mut self, window: &WindowId) -> ClosedIncognito {
+        let mut removed = Vec::new();
+        removed.extend(self.peeks.remove(window).map(|page| page.id));
+        let Some(incognito) = &mut self.incognito else {
+            return ClosedIncognito {
+                removed,
+                ended: None,
+            };
+        };
+        if incognito.state.windows().len() > 1 {
+            removed.extend(incognito.state.close_window(window, now()).removed);
+            return ClosedIncognito {
+                removed,
+                ended: None,
+            };
+        }
+        let partition = incognito.partition();
+        let session = incognito.session;
+        self.incognito = None;
+        removed.extend(
+            self.peeks
+                .extract_if(.., |_, page| page.partition == partition)
+                .chain(
+                    self.flechinhas
+                        .extract_if(.., |_, page| page.partition == partition),
+                )
+                .map(|(_, page)| page.id)
+                .chain(
+                    self.popups
+                        .extract_if(.., |_, popup| popup.page.partition == partition)
+                        .map(|(_, popup)| popup.page.id),
+                ),
+        );
+        ClosedIncognito {
+            removed,
+            ended: Some(session),
+        }
+    }
+
+    pub(crate) fn focus_window(&mut self, window: &WindowId) {
+        if let Some(state) = self.state_mut(window) {
+            state.focus_window(window);
+        }
+    }
+
+    /// The window a page with this partition joins when it leaves a Flechinha or popup.
+    pub(crate) fn focused_window_for(&self, partition: &Partition) -> Option<&WindowId> {
+        match &self.incognito {
+            Some(incognito) if partition.is_incognito() => {
+                (incognito.partition() == *partition).then(|| &incognito.state.focused_window().id)
+            }
+            _ if partition.is_incognito() => None,
+            _ => Some(&self.core.focused_window().id),
+        }
+    }
+
     pub fn active(&self, window: &WindowId) -> Option<&TabId> {
-        let window = self.core.window(window)?;
+        let window = self.state(window)?.window(window)?;
         window
             .spaces
             .get(&window.active_space_id)?
@@ -61,7 +204,7 @@ impl Model {
         if let Some(page) = self.flechinhas.get(window) {
             return Some((Owner::Flechinha(window.clone()), &page.id));
         }
-        self.core.window(window)?;
+        self.state(window)?;
         if let Some(page) = self.peeks.get(window) {
             return Some((Owner::Peek(window.clone()), &page.id));
         }
@@ -90,21 +233,38 @@ impl Model {
         after: Option<&TabId>,
         activate: bool,
     ) -> Result<()> {
+        let state = self.state_mut(window).context("missing Flecha window")?;
         ensure!(
-            self.core
-                .open_today(id, Tab::new(url, now()), window, after, activate),
+            state.open_today(id, Tab::new(url, now()), window, after, activate),
             "could not open tab"
         );
         Ok(())
     }
 
-    /// A new Flecha window showing one new tab, in the focused window's Space.
-    pub fn open_window_page(&mut self, id: TabId, url: String) -> Result<WindowId> {
-        let window = window_id();
-        ensure!(
-            self.core.open_window(window.clone(), None),
-            "could not open window"
-        );
+    /// A new Flecha window showing one new tab, in the focused window's Space. A page from an
+    /// incognito window opens in a new incognito window.
+    pub fn open_window_page(
+        &mut self,
+        id: TabId,
+        url: String,
+        opener: &Partition,
+    ) -> Result<WindowId> {
+        let window = if opener.is_incognito() {
+            ensure!(
+                self.incognito
+                    .as_ref()
+                    .is_some_and(|incognito| incognito.partition() == *opener),
+                "the incognito session that opened this page has ended"
+            );
+            self.open_incognito_window()
+        } else {
+            let window = window_id();
+            ensure!(
+                self.core.open_window(window.clone(), None),
+                "could not open window"
+            );
+            window
+        };
         self.open_page(id, &window, url, None, true)?;
         Ok(window)
     }
@@ -160,7 +320,7 @@ impl Model {
         let space = self.origin_space(&window, source)?.clone();
         let partition = source
             .and_then(|id| self.partition(id))
-            .unwrap_or_else(|| self.space_partition(&space));
+            .unwrap_or_else(|| self.window_partition(&window, &space));
         let transient = Transient {
             id,
             tab: Tab::new(url, now()),
@@ -177,11 +337,12 @@ impl Model {
     }
 
     pub fn detach(&mut self, window: &WindowId, source: &TabId) -> Result<Detachment> {
-        let mut tab = self.core.tab(source).context("no tab to move")?.clone();
+        let mut tab = self.tab(source).context("no tab to move")?.clone();
         let space = self.origin_space(window, Some(source))?.clone();
         let partition = self.partition(source).context("tab has no Space")?;
         let id = window_id();
-        let change = self.core.close_tab(source, now());
+        let (state, _) = self.tab_state_mut(source).context("no tab to move")?;
+        let change = state.close_tab(source, now());
         tab.agent = false;
         let page = Transient {
             id: tab_id(),
@@ -202,8 +363,18 @@ impl Model {
         })
     }
 
+    /// A Flechinha's page goes back to the focused window of its own kind: an incognito page
+    /// to an incognito window (patch 0032), any other to a regular one.
     pub fn return_page(&mut self, window: &WindowId) -> Result<(WindowId, TabId)> {
-        let destination = self.core.focused_window().id.clone();
+        let partition = &self
+            .flechinhas
+            .get(window)
+            .context("no Flechinha to return")?
+            .partition;
+        let destination = self
+            .focused_window_for(partition)
+            .context("no window to return the page to")?
+            .clone();
         let page = self
             .flechinhas
             .remove(window)
@@ -220,9 +391,9 @@ impl Model {
     ) -> Result<TabId> {
         page.tab.home_url = None;
         page.tab.last_active = Some(now() as f64);
+        let state = self.state_mut(window).context("missing Flecha window")?;
         ensure!(
-            self.core
-                .open_today(page.id.clone(), page.tab, window, after, true),
+            state.open_today(page.id.clone(), page.tab, window, after, true),
             "could not adopt page"
         );
         Ok(page.id)
@@ -231,6 +402,12 @@ impl Model {
     pub fn partition(&self, id: &TabId) -> Option<Partition> {
         if let Some(transient) = self.transient(id) {
             return Some(transient.partition.clone());
+        }
+        // Before Spaces and placement: an incognito tab is never in a persistent context.
+        if let Some(incognito) = &self.incognito
+            && incognito.state.tab(id).is_some()
+        {
+            return Some(incognito.partition());
         }
         Some(match self.core.locate(id)? {
             Placement::Favorite => Partition::Shared,
@@ -241,13 +418,21 @@ impl Model {
     }
 
     fn origin_space(&self, window: &WindowId, source: Option<&TabId>) -> Result<&SpaceId> {
-        match source.and_then(|tab| self.core.locate(tab)) {
+        let state = self.state(window).context("missing Flecha window")?;
+        match source.and_then(|tab| state.locate(tab)) {
             Some(Placement::Pinned { space, .. } | Placement::Today { space, .. }) => Ok(space),
-            Some(Placement::Favorite) | None => self
-                .core
+            Some(Placement::Favorite) | None => state
                 .window(window)
                 .map(|window| &window.active_space_id)
                 .context("missing Flecha window"),
+        }
+    }
+
+    /// The request context a new page in this window's Space browses in.
+    fn window_partition(&self, window: &WindowId, space: &SpaceId) -> Partition {
+        match &self.incognito {
+            Some(incognito) if incognito.state.window(window).is_some() => incognito.partition(),
+            _ => self.space_partition(space),
         }
     }
 
@@ -283,23 +468,36 @@ impl Model {
             .find(|page| &page.id == id)
     }
 
+    /// The tab or page, and whether it is durable: kept in the saved state and recorded in
+    /// history. Transient pages and incognito tabs are not.
     pub fn tab_mut(&mut self, id: &TabId) -> Option<(&mut Tab, bool)> {
+        if self.transient(id).is_none() {
+            let (state, durable) = self.tab_state_mut(id)?;
+            return Some((state.tab_mut(id)?, durable));
+        }
         self.flechinhas
             .values_mut()
             .chain(self.peeks.values_mut())
             .chain(self.popups.values_mut().map(|popup| &mut popup.page))
             .find(|page| &page.id == id)
             .map(|page| (&mut page.tab, false))
-            .or_else(|| self.core.tab_mut(id).map(|tab| (tab, true)))
+    }
+
+    /// Closes a tab of a Flecha window, regular or incognito, and returns the tabs it took
+    /// down.
+    pub(crate) fn close_tab(&mut self, id: &TabId) -> Vec<TabId> {
+        self.tab_state_mut(id)
+            .map(|(state, _)| state.close_tab(id, now()).removed)
+            .unwrap_or_default()
     }
 
     pub fn page(&self, owner: &Owner, id: &TabId) -> Option<&Tab> {
         match owner {
             Owner::Tab(window) => self
-                .core
-                .window(window)
+                .state(window)
+                .and_then(|state| state.window(window))
                 .filter(|window| window.visible_tabs().contains(id) && self.transient(id).is_none())
-                .and_then(|_| self.core.tab(id)),
+                .and_then(|_| self.tab(id)),
             Owner::Peek(window) => self
                 .peeks
                 .get(window)

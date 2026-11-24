@@ -32,6 +32,7 @@ enum Command {
     Close,
     CloseWindow,
     OpenWindow { url: String },
+    NewIncognitoWindow,
     Switch { space: SpaceId },
     NewSpace,
     Isolate,
@@ -66,10 +67,15 @@ impl Command {
             Self::NewSpace => Action::NewSpace,
             Self::Isolate => Action::Isolate,
             Self::Quit => Action::Quit,
+            Self::NewIncognitoWindow => Action::NewIncognitoWindow,
             Self::Snapshot => return snapshot(state),
             // The model call a page's NEW_WINDOW link makes, without a Shift-click.
             Self::OpenWindow { url } => {
-                let window = state.model.open_window_page(crate::model::tab_id(), url)?;
+                let window = state.model.open_window_page(
+                    crate::model::tab_id(),
+                    url,
+                    &Partition::Shared,
+                )?;
                 state.save()?;
                 return Ok(json!({ "window": window }));
             }
@@ -156,11 +162,7 @@ fn snapshot(state: &Controller) -> Result<Value> {
                 Some(Owner::Popup(window)) => json!({ "kind": "popup", "window": window }),
                 None => Value::Null,
             };
-            let partition = match state.engine.partition(id) {
-                Some(Partition::Shared) => json!("shared"),
-                Some(Partition::Isolated(space)) => json!(space),
-                None => Value::Null,
-            };
+            let partition = state.engine.partition(id).map_or(Value::Null, partition);
             json!({
                 "tab": id,
                 "owner": owner,
@@ -176,9 +178,22 @@ fn snapshot(state: &Controller) -> Result<Value> {
         "flechinhas": state.model.flechinhas.iter().map(|(window, page)| json!({ "window": window, "tab": page.id })).collect::<Vec<_>>(),
         "popups": state.model.popups.iter().map(|(window, popup)| json!({ "window": window, "tab": popup.page.id, "opener": popup.opener })).collect::<Vec<_>>(),
         "browsers": browsers,
+        "incognito": state.model.incognito.as_ref().map(|incognito| json!({
+            "session": incognito.session.number(),
+            "state": incognito.state,
+        })),
+        "contexts": state.engine.context_partitions().map(partition).collect::<Vec<_>>(),
         "liveBrowsers": state.engine.live_browsers(),
         "nativeWindows": state.windows.keys().collect::<Vec<_>>(),
     }))
+}
+
+fn partition(partition: &Partition) -> Value {
+    match partition {
+        Partition::Shared => json!("shared"),
+        Partition::Isolated(space) => json!(space),
+        Partition::Incognito(session) => json!(format!("incognito-{}", session.number())),
+    }
 }
 
 pub(super) fn install(controller: &Shared, cx: &mut App) {

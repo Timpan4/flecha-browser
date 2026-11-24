@@ -316,6 +316,11 @@ pub(crate) fn partition(partition: &crate::Partition) -> Partition {
     match partition {
         crate::Partition::Shared => Partition::Shared,
         crate::Partition::Isolated(space) => Partition::Isolated(space.as_str().to_owned()),
+        // Kept in memory and never saved: Chromium's off-the-record profiles keep content
+        // settings for the session only.
+        crate::Partition::Incognito(session) => {
+            Partition::Ephemeral(format!("incognito-{}", session.number()))
+        }
     }
 }
 
@@ -1025,6 +1030,63 @@ pub(crate) mod tests {
             reconcile(&services, &Partition::Shared, &refusing).is_err(),
             "a context Chromium won't clear must not be browsed in"
         );
+    }
+
+    #[test]
+    fn incognito_decisions_reach_chromium_but_are_never_saved() {
+        use PermissionKind::Geolocation;
+        let services = Services::new();
+        let session = crate::IncognitoSession::new(1);
+        let incognito = partition(&crate::Partition::Incognito(session));
+        let chromium = Chromium::default();
+        let contexts = [(incognito.clone(), chromium.clone())];
+        let maps = origin("https://maps.example/");
+        set_site(
+            &services,
+            &contexts,
+            &incognito,
+            &maps,
+            Geolocation.into(),
+            Decision::Allow,
+        )
+        .unwrap();
+        assert_eq!(
+            chromium.holds(),
+            [(
+                "https://maps.example".to_owned(),
+                Geolocation,
+                Verdict::Allow
+            )]
+        );
+        let state = services.permissions.borrow();
+        assert!(
+            !state.manager.is_dirty(),
+            "an incognito decision asked to be saved"
+        );
+        assert_eq!(state.manager.snapshot(), Snapshot::default());
+        assert_eq!(
+            state
+                .manager
+                .site_settings(&incognito, &maps)
+                .decision(Geolocation),
+            Decision::Allow,
+            "the session keeps its decision while it lasts"
+        );
+        drop(state);
+
+        // The session ends with its last window.
+        apply(&services, |manager| {
+            ((), manager.clear_partition(&incognito))
+        });
+        let state = services.permissions.borrow();
+        assert_eq!(
+            state
+                .manager
+                .site_settings(&incognito, &maps)
+                .decision(Geolocation),
+            Decision::Ask
+        );
+        assert!(!state.manager.is_dirty());
     }
 
     #[test]

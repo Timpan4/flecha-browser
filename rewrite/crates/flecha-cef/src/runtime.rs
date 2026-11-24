@@ -108,7 +108,13 @@ impl Runtime {
             external_message_pump: 1,
             command_line_args_disabled: 1,
             root_cache_path: path_string(profile)?,
-            cache_path: path_string(&profile.join(crate::Partition::Shared.directory()))?,
+            cache_path: path_string(
+                &profile.join(
+                    crate::Partition::Shared
+                        .directory()
+                        .expect("the shared partition keeps its data on disk"),
+                ),
+            )?,
             persist_session_cookies: 1,
             log_severity: LogSeverity::DISABLE,
             ..Default::default()

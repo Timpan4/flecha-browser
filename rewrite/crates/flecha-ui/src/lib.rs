@@ -2,6 +2,7 @@ mod boosts;
 mod command_bar;
 mod downloads_view;
 mod history_view;
+mod incognito;
 mod model;
 mod permissions_view;
 mod popup;
@@ -110,6 +111,8 @@ enum Action {
     /// The window's close button: the window closes for good, or the app quits with
     /// its last Flecha window (patches 0059 and 0062).
     CloseWindow,
+    /// "New incognito window" (`ui/app.ts`), Ctrl+Shift+N.
+    NewIncognitoWindow,
     Switch(SpaceId),
     NewSpace,
     Isolate,
@@ -215,6 +218,8 @@ impl Controller {
             .expect("session recovery ran before opening windows")
     }
 
+    /// The one place the browser state reaches storage. It saves the regular state alone:
+    /// incognito windows keep theirs in `Model::incognito`, which never comes here.
     fn save(&mut self) -> Result<()> {
         let write = self
             .snapshots
@@ -227,6 +232,11 @@ impl Controller {
     fn act(&mut self, window: &WindowId, action: Action) -> Result<()> {
         if self.quitting {
             return Ok(());
+        }
+        if self.model.is_incognito(window)
+            && let Some(refusal) = incognito::refusal(&action)
+        {
+            anyhow::bail!(refusal);
         }
         match action {
             Action::Quit => {
@@ -246,13 +256,17 @@ impl Controller {
             Action::RetryPermissionSave => return self.save_permissions(),
             Action::Site(site, change) => return self.change_current_site(window, &site, change),
             Action::Select(id) => {
-                let change = self.model.core.activate(&id, window, Some(now()));
+                let state = self
+                    .model
+                    .state_mut(window)
+                    .context("missing Flecha window")?;
+                let change = state.activate(&id, window, Some(now()));
                 for id in change.removed {
                     self.engine.close(&id);
                 }
                 if let Some(destination) = change.result.filter(|destination| destination != window)
                 {
-                    self.model.core.focus_window(&destination);
+                    self.model.focus_window(&destination);
                     self.front = Some(destination);
                 }
             }
@@ -269,8 +283,10 @@ impl Controller {
                 }
             }
             Action::ExitSplit => {
-                if let Some(flecha_core::EndedSplit::Responsive { mirror }) =
-                    self.model.core.unsplit(window)
+                if let Some(flecha_core::EndedSplit::Responsive { mirror }) = self
+                    .model
+                    .state_mut(window)
+                    .and_then(|state| state.unsplit(window))
                 {
                     self.engine.close(&mirror);
                 }
@@ -283,7 +299,7 @@ impl Controller {
                 return Ok(());
             }
             Action::PeekTab(id) => {
-                let Some(tab) = self.model.core.tab(&id) else {
+                let Some(tab) = self.model.tab(&id) else {
                     return Ok(());
                 };
                 if let Some(old) = self
@@ -337,11 +353,19 @@ impl Controller {
                 self.reconcile_partition(&returned);
                 self.front = Some(destination);
             }
+            Action::NewIncognitoWindow => {
+                self.front = Some(self.model.open_incognito_window());
+                return Ok(());
+            }
             Action::CloseWindow => {
                 if self.model.flechinhas.contains_key(window)
                     || self.model.popups.contains_key(window)
                 {
                     return self.act(window, Action::Close);
+                }
+                if self.model.is_incognito(window) {
+                    self.close_incognito_window(window);
+                    return Ok(());
                 }
                 if self.model.core.windows().len() <= 1 {
                     return self.act(window, Action::Quit);
@@ -378,7 +402,7 @@ impl Controller {
             }
             Action::CloseTab(tab) => {
                 self.engine.close(&tab);
-                for removed in self.model.core.close_tab(&tab, now()).removed {
+                for removed in self.model.close_tab(&tab) {
                     self.engine.close(&removed);
                 }
             }
@@ -421,7 +445,11 @@ impl Controller {
             }
             Action::Sidebar(action) => self.sidebar_action(window, action),
             Action::Reopen => {
-                let change = self.model.core.reopen_last(model::tab_id(), now());
+                let state = self
+                    .model
+                    .state_mut(window)
+                    .context("missing Flecha window")?;
+                let change = state.reopen_last(model::tab_id(), now());
                 for id in change.removed {
                     self.engine.close(&id);
                 }
@@ -461,7 +489,11 @@ impl Controller {
     }
 
     fn split(&mut self, window: &WindowId, left: TabId, right: TabId) -> Result<()> {
-        let split = self.model.core.split_to_right(window, left, right, now());
+        let split = self
+            .model
+            .state_mut(window)
+            .context("missing Flecha window")?
+            .split_to_right(window, left, right, now());
         ensure!(split.result, "could not split these tabs");
         for removed in split.removed {
             self.engine.close(&removed);
@@ -619,9 +651,7 @@ type Shared = Rc<RefCell<Controller>>;
 fn dispatch(controller: &Shared, window: &WindowId, action: Action, cx: &mut App) {
     let mut state = controller.borrow_mut();
     state.status.clear();
-    if state.model.core.window(window).is_some() {
-        state.model.core.focus_window(window);
-    }
+    state.model.focus_window(window);
     if let Err(error) = state.act(window, action) {
         state.status = error.to_string();
         if state.quitting {
@@ -634,6 +664,7 @@ fn dispatch(controller: &Shared, window: &WindowId, action: Action, cx: &mut App
 #[derive(Clone, Copy)]
 enum Kind {
     Main,
+    Incognito,
     Flechinha,
     Popup(Option<(i32, i32)>),
 }
@@ -644,6 +675,9 @@ fn sync_windows(controller: &Shared, cx: &mut App) -> Result<()> {
         let mut wanted = BTreeMap::new();
         for window in state.model.core.windows() {
             wanted.insert(window.id.clone(), Kind::Main);
+        }
+        for window in state.model.incognito_windows() {
+            wanted.insert(window.id.clone(), Kind::Incognito);
         }
         for id in state.model.flechinhas.keys() {
             wanted.insert(id.clone(), Kind::Flechinha);
@@ -671,7 +705,7 @@ fn sync_windows(controller: &Shared, cx: &mut App) -> Result<()> {
         // the size it asked for, below its address bar. The main window and popups
         // without a size use GPUI's default size.
         let content = match kind {
-            Kind::Main | Kind::Popup(None) => None,
+            Kind::Main | Kind::Incognito | Kind::Popup(None) => None,
             Kind::Flechinha => Some(size(px(900.), px(700.))),
             Kind::Popup(Some((width, height))) => Some(size(
                 px(width as f32),
@@ -691,6 +725,7 @@ fn sync_windows(controller: &Shared, cx: &mut App) -> Result<()> {
                 move |window, cx| {
                     window.set_window_title(match kind {
                         Kind::Main => "Flecha",
+                        Kind::Incognito => "Flecha Incognito",
                         Kind::Flechinha => "Flechinha",
                         // The Shell names it after its page.
                         Kind::Popup(_) => "",

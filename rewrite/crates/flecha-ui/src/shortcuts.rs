@@ -41,6 +41,7 @@ enum Shortcut {
     SettingsTab(SettingsTab),
     Sidebar,
     Return,
+    NewIncognitoWindow,
     Quit,
     Escape,
 }
@@ -84,6 +85,8 @@ impl Bindings {
             ("f5", Shortcut::Browser(Navigation::Reload)),
             ("secondary-q", Shortcut::Quit),
             ("escape", Shortcut::Escape),
+            // Chromium's IDC_NEW_INCOGNITO_WINDOW, which the shipping menu shows (`ui/app.ts`).
+            ("secondary-shift-n", Shortcut::NewIncognitoWindow),
         ] {
             bindings.push((
                 Keystroke::parse_with_os(keys, os).expect("valid shell shortcut"),
@@ -193,9 +196,14 @@ impl Controller {
         }
         self.pending_reloads
             .retain(|_, key| self.engine.key(&key.tab).as_ref() == Some(key));
-        self.toolbars
-            .retain(|id, _| self.model.core.window(id).is_some());
-        for window in self.model.core.windows() {
+        self.toolbars.retain(|id, _| self.model.state(id).is_some());
+        for window in self
+            .model
+            .core
+            .windows()
+            .iter()
+            .chain(self.model.incognito_windows())
+        {
             let next =
                 self.model
                     .keyboard_pane(&window.id)
@@ -334,7 +342,7 @@ impl Shell {
                 self.toggle_history(window, cx);
                 return true;
             }
-            Shortcut::Sidebar if self.state.borrow().model.core.window(&self.id).is_some() => {
+            Shortcut::Sidebar if self.state.borrow().model.state(&self.id).is_some() => {
                 Action::Sidebar(SidebarAction::Toggle)
             }
             Shortcut::Escape if self.overlay.is_open() => {
@@ -358,18 +366,15 @@ impl Shell {
                 self.dismiss_overlay(window, cx);
                 Action::Close
             }
-            Shortcut::Reopen if self.state.borrow().model.core.window(&self.id).is_some() => {
+            Shortcut::Reopen if self.state.borrow().model.state(&self.id).is_some() => {
                 Action::Reopen
             }
             Shortcut::Browser(nav) if !self.overlay.is_open() => Action::Browser(nav),
             Shortcut::Select(_) | Shortcut::Cycle(_) if !self.overlay.is_open() => {
                 let state = self.state.borrow();
-                let Some(id) = tab_for_shortcut(
-                    &state.model.core,
-                    &self.id,
-                    state.model.active(&self.id),
-                    shortcut,
-                ) else {
+                let Some(id) = state.model.state(&self.id).and_then(|core| {
+                    tab_for_shortcut(core, &self.id, state.model.active(&self.id), shortcut)
+                }) else {
                     return false;
                 };
                 Action::Select(id)
@@ -380,6 +385,7 @@ impl Shell {
             Shortcut::Return if self.state.borrow().model.peeks.contains_key(&self.id) => {
                 Action::Promote
             }
+            Shortcut::NewIncognitoWindow => Action::NewIncognitoWindow,
             Shortcut::Quit => Action::Quit,
             _ => return false,
         };
@@ -426,6 +432,7 @@ mod tests {
             ("ctrl-tab".into(), Shortcut::Cycle(false)),
             ("ctrl-shift-tab".into(), Shortcut::Cycle(true)),
             (format!("{ctrl}-9"), Shortcut::Select(8)),
+            (format!("{ctrl}-shift-n"), Shortcut::NewIncognitoWindow),
             ("escape".into(), Shortcut::Escape),
         ] {
             assert_eq!(
