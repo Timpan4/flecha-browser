@@ -247,6 +247,7 @@ struct Controller {
     fullscreen: fullscreen::PageFullscreen,
     agents: mcp::Agents,
     toolbars: BTreeMap<WindowId, Toolbar>,
+    copy_link_flashes: BTreeMap<WindowId, Instant>,
     pending_reloads: BTreeMap<i32, flecha_cef::BrowserKey>,
     store: StateStore,
     session_dir: PathBuf,
@@ -348,6 +349,7 @@ impl Controller {
             fullscreen: fullscreen::PageFullscreen::default(),
             agents: mcp::Agents::default(),
             toolbars: BTreeMap::new(),
+            copy_link_flashes: BTreeMap::new(),
             pending_reloads: BTreeMap::new(),
             store,
             snapshots,
@@ -815,7 +817,7 @@ impl Controller {
                         changed = true;
                     }
                 }
-                Event::Paint => {
+                Event::Paint | Event::PointerChanged => {
                     changed = true;
                 }
                 Event::PaintFailed => {
@@ -851,6 +853,12 @@ impl Controller {
         changed |= self.drain_downloads();
         changed |= self.poll_permissions();
         changed |= self.poll_toolbars();
+        if !self.copy_link_flashes.is_empty() {
+            let pending = self.copy_link_flashes.len();
+            let now = Instant::now();
+            self.copy_link_flashes.retain(|_, until| *until > now);
+            changed |= pending != self.copy_link_flashes.len();
+        }
         self.poll_page_overlays(cx);
         self.poll_clipboard(cx);
         if self.ready && !self.quitting {

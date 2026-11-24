@@ -329,7 +329,7 @@ async function document(app, tab, label, prepare = '') {
 async function nativeInput(app, tab) {
   execFileSync('cc', [
     '-std=c17', '-Wall', '-Wextra', '-Werror', 'spikes/gpui-cef-compositor/x11-input.c',
-    '-lX11', '-lXtst', '-o', x11Driver,
+    '-DFLECHA_VERIFY_CURSOR', '-lX11', '-lXtst', '-lXfixes', '-o', x11Driver,
   ]);
   const center = site.probe('input-center');
   const typed = site.probe('native-key');
@@ -385,6 +385,131 @@ async function nativeContextMenu(app) {
   await captureUntil('page-context-menu-dismissed', 'root', path =>
     pixel(path) === 'FFCC49' ? undefined : `the page marker is still covered (${pixel(path)})`);
   pass('right-click opened the GPUI page menu and Escape dismissed it');
+}
+
+async function quickWins(app) {
+  await app.command('new_space');
+
+  const tab = await openTab(app, '/open');
+
+  const [x, y, , height] = execFileSync(x11Driver, ['geometry', 'Flecha'], { encoding: 'utf8' })
+    .trim().split(' ').map(Number);
+
+  // Default sidebar width and page top inset, also used by the visual parity check.
+  const pageX = x + 260;
+  const pageY = y + 8;
+  const input = (operation, px, py) => execFileSync(x11Driver, [operation, Math.round(px), Math.round(py)]);
+  const cursor = () => execFileSync(x11Driver, ['cursor'], { encoding: 'utf8' }).trim().split(' ').map(Number);
+
+  const captureWhile = (name, check) => poll(name, () => {
+    const path = join(out, `${name}.png`);
+
+    execFileSync('magick', ['import', '-window', 'root', path]);
+
+    return check(path) && path;
+  });
+
+  const pixels = (path, crop, format, output = 'info:') => execFileSync('magick', [
+    path, '-crop', crop, '+repage', '-format', format, output,
+  ], { encoding: 'utf8' }).trim().toUpperCase();
+
+  const boxes = site.probe('quick-wins-boxes', stepTimeoutMs);
+  await app.command('script', { tab, source: `
+    const link = document.querySelector('a');
+    const marker = document.querySelector('#marker');
+    link.href = '/split';
+    link.removeAttribute('target');
+    marker.style.cursor = 'none';
+    const center = element => {
+      const { x, y, width, height } = element.getBoundingClientRect();
+      return [x + width / 2, y + height / 2];
+    };
+    const centers = [link, document.querySelector('input'), marker].map(center);
+    fetch('/probe/quick-wins-boxes?value=' + encodeURIComponent(JSON.stringify(centers)));
+  ` });
+  const [link, field, hidden] = JSON.parse(await boxes).map(([left, top]) => [pageX + left, pageY + top]);
+  const blank = [pageX + 400, pageY + 300];
+  input('move', ...blank);
+  await app.present();
+
+  const [arrow] = cursor();
+
+  input('move', ...link);
+
+  const [hand] = await poll('X11 link cursor', () => {
+    const result = cursor();
+
+    return result[1] && result[0] !== arrow && result;
+  });
+
+  const statusPixel = `1x1+${pageX + 4}+${y + height - 8 - 12}`;
+
+  const linkShot = await captureWhile('quick-wins-link-status', path =>
+    ['FFFFFF', '161E2B'].includes(pixels(path, statusPixel, '%[hex:p{0,0}]').slice(0, 6)));
+
+  input('move', ...field);
+  await poll('X11 text cursor', () => {
+    const [serial, visible] = cursor();
+
+    return visible && serial !== arrow && serial !== hand;
+  });
+  await captureWhile('quick-wins-no-link-status', path =>
+    pixels(path, statusPixel, '%[hex:p{0,0}]').startsWith('147A70'));
+  input('move', ...hidden);
+  await poll('X11 CSS cursor none', () => cursor()[1] === 0);
+  input('move', ...link);
+  await poll('X11 cursor returns to link hand', () => cursor()[0] === hand);
+  pass('X11 changed cursor over links and text, hid it over cursor:none, and drew and cleared the link status pill');
+
+  for (const [operation, position, path] of [['click', link, '/split'], ['back', blank, '/open'], ['forward', blank, '/split']]) {
+    const after = app.events.length;
+
+    input(operation, ...position);
+    await app.wait(`${operation} loaded ${path}`, event =>
+      event.type === 'loaded' && event.tab === tab && event.url === base + path, after, stepTimeoutMs);
+  }
+
+  pass('X11 side buttons navigated back and forward in the active tab');
+
+  // The address bar's two 26px actions sit against the 4px inner pad and 6px sidebar pad.
+  const copy = [x + 260 - 6 - 4 - 26 - 13, y + 10 + 28 + 8 + 18];
+  input('move', ...copy);
+  await app.present();
+  const addressCrop = `186x20+${x + 28}+${copy[1] - 10}`;
+  const address = path => pixels(path, addressCrop, '%#');
+  const before = address(await captureWhile('quick-wins-address', () => true));
+  input('click', ...copy);
+  const flashShot = await captureWhile('quick-wins-copy-flash', path => address(path) !== before);
+  assert.equal((await app.command('clipboard')).text, base + '/split');
+  await captureWhile('quick-wins-copy-restored', path => address(path) === before);
+  pass('Copy link wrote the active URL to GPUI clipboard and the confirmation cleared');
+
+  const title = 'MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM';
+  const after = app.events.length;
+  await app.command('script', { tab, source: `document.title = '${title}'` });
+  await app.wait('long sidebar title', event => event.type === 'title' && event.tab === tab && event.title === title, after);
+  const rowY = y + 235; // The first Today row in the one-Space layout used by sidebarFocus.
+  // This strip is the gap between the shortened title and the menu button on hover.
+  const titleCrop = `7x18+${x + 186}+${rowY - 9}`;
+  const hasTitleInk = path => Number(pixels(path, titleCrop, '%k')) > 1;
+  input('move', ...blank);
+  const resting = await captureWhile('quick-wins-row-resting', hasTitleInk);
+  input('move', x + 80, rowY);
+  const hovered = await captureWhile('quick-wins-row-hovered', path => !hasTitleInk(path));
+  pass('the resting tab title occupied the space taken by controls on hover');
+
+  input('click', x + 234, y + 173);
+  await poll('Today Clear to archive the tab', async () => {
+    const snapshot = await app.command('snapshot');
+
+    return !active(snapshot).today.length && snapshot.core.archive.some(entry => entry.url === base + '/split');
+  });
+  await app.wait('CEF closure after clearing Today', event => event.type === 'closed' && event.tab === tab);
+  pass('Today Clear archived the tab and closed its CEF browser');
+
+  if (existsSync('/mnt/visual')) {
+    for (const path of [linkShot, flashShot, resting, hovered]) copyFileSync(path, join('/mnt/visual', relative(out, path)));
+  }
 }
 
 async function keyDelivery(app, tabs, key, step, expected) {
@@ -451,6 +576,8 @@ async function sidebarFocus(app, left) {
   // the 22px menu and close buttons with the row's 10px gaps and 6px right padding
   // (ui/styles.css:582, 586, 631).
   execFileSync(x11Driver, ['click', 340, 110]);
+  execFileSync(x11Driver, ['move', 169, 235]);
+  await app.present();
   execFileSync(x11Driver, ['click', 169, 235]);
   const split = await waitForSelection(app, right, 'sidebar Split selected pane B');
 
@@ -1597,6 +1724,12 @@ async function verifySlice() {
     await restarted.command('switch', { space: shared });
     await cookie(restarted, 'Shared cookie');
     pass('the isolated cookie persisted after restart and stayed out of the ordinary Space');
+
+    if (mode === 'slice') {
+      await quickWins(restarted);
+      await restarted.command('switch', { space: shared });
+    }
+
     await restarted.quit();
 
     const popups = launch('popups');

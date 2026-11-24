@@ -10,13 +10,14 @@ use flecha_surface::{Frame, input, surface};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     Animation, AnimationExt as _, App, ClickEvent, Context, Div, FocusHandle, FontWeight,
-    InteractiveElement as _, IntoElement, KeyUpEvent, MouseButton, MouseDownEvent, MouseExitEvent,
-    MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Render, RenderImage, ScrollEvent,
-    StatefulInteractiveElement as _, Styled as _, Subscription, Window, canvas, deferred, div, px,
-    relative,
+    HoverListenerMode, InteractiveElement as _, IntoElement, KeyUpEvent, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection, ParentElement as _, Pixels,
+    Render, RenderImage, ScrollEvent, SharedString, StatefulInteractiveElement as _, Styled as _,
+    Subscription, Window, canvas, deferred, div, px, relative,
 };
 
 use crate::icons::icon;
+use crate::shortcuts::Navigation;
 use crate::theme::{DEFAULT_TINT, Palette, palette};
 use crate::tokens::{self, ease};
 use crate::{Action, Shared, dispatch};
@@ -67,6 +68,7 @@ pub(crate) struct Shell {
     pub(crate) last_suggestion_sent: Option<Instant>,
     pub(crate) bindings: Bindings,
     pub(crate) consumed_keys: BTreeSet<String>,
+    pub(crate) hovered_tab_row: Option<TabId>,
     images: BTreeMap<TabId, Vec<Arc<RenderImage>>>,
     title: String,
     native_fullscreen: crate::fullscreen::NativeFullscreen,
@@ -121,6 +123,7 @@ impl Shell {
             last_suggestion_sent: None,
             bindings,
             consumed_keys: BTreeSet::new(),
+            hovered_tab_row: None,
             images: BTreeMap::new(),
             title: String::new(),
             native_fullscreen: Default::default(),
@@ -327,12 +330,13 @@ impl Shell {
         images: &mut BTreeMap<TabId, Vec<Arc<RenderImage>>>,
         cx: &Context<Self>,
     ) -> Div {
-        let (frames, prompt, writable) = {
+        let (frames, prompt, writable, (cursor, status)) = {
             let state = self.state.borrow();
             (
                 state.engine.frames(&id).unwrap_or_default(),
                 state.engine.pending_permission_prompt(&id),
                 state.permissions.error().is_none(),
+                state.engine.pointer_state(&id),
             )
         };
         let pane_images = [
@@ -347,11 +351,15 @@ impl Shell {
         images.insert(id.clone(), pane_images);
         let state = self.state.clone();
         let origin = Rc::new(Cell::new(gpui::Point::default()));
+        let group = SharedString::new_static("page-pointer");
         let mut element = div()
+            .id(format!("page-viewport-{}", id.as_str()))
+            .group(group.clone())
             .relative()
             .size_full()
             .overflow_hidden()
             .bg(palette().page)
+            .cursor(cursor)
             .child(surface(frames.view, frames.popup))
             .child(
                 canvas(|_, _, _| (), {
@@ -395,7 +403,23 @@ impl Shell {
         }
         element = element
             .on_mouse_move(pointer!(MouseMoveEvent, mouse_move))
-            .on_mouse_exit(pointer!(MouseExitEvent, mouse_exit))
+            .hover_listener_mode(HoverListenerMode::InputModalityIndependent)
+            .on_hover({
+                let (id, origin) = (id.clone(), origin.clone());
+                cx.listener(move |this, hovered: &bool, window, _| {
+                    if !hovered {
+                        let state = this.state.borrow();
+                        state.engine.clear_pointer_status(&id);
+                        if let Some(host) = state.engine.host(&id) {
+                            input::mouse_leave(
+                                &host,
+                                window.mouse_position() - origin.get(),
+                                window.modifiers(),
+                            );
+                        }
+                    }
+                })
+            })
             .on_scroll(pointer!(ScrollEvent, scroll));
         for button in [MouseButton::Left, MouseButton::Middle, MouseButton::Right] {
             let (down_id, down_origin, down_owner) = (id.clone(), origin.clone(), owner.clone());
@@ -444,6 +468,25 @@ impl Shell {
             && find.browser.tab == id
         {
             element = element.child(self.find_panel(find, cx));
+        }
+        if let Some(status) = status {
+            element = element.child(
+                div()
+                    .absolute()
+                    .bottom_0()
+                    .left_0()
+                    .max_w_full()
+                    .invisible()
+                    .group_hover(group, |style| style.visible())
+                    .rounded_tr(px(tokens::RADIUS_SM))
+                    .px(px(tokens::SPACE_2))
+                    .py(px(tokens::SPACE_1))
+                    .bg(palette().surface)
+                    .text_color(palette().text_2)
+                    .text_size(px(tokens::TEXT_XS))
+                    .truncate()
+                    .child(status),
+            );
         }
         div()
             .flex()
@@ -500,6 +543,15 @@ impl Render for Shell {
             .when_some(ui_font(cx), |main, font| main.font_family(font))
             .text_size(px(tokens::TEXT_MD))
             .line_height(relative(tokens::LINE_HEIGHT))
+            .on_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                let navigation = match event.button {
+                    MouseButton::Navigate(NavigationDirection::Back) => Navigation::Back,
+                    MouseButton::Navigate(NavigationDirection::Forward) => Navigation::Forward,
+                    _ => return,
+                };
+                cx.stop_propagation();
+                dispatch(&this.state, &this.id, Action::Browser(navigation), cx);
+            }))
             .on_key_down(cx.listener(|this, event, window, cx| this.key(event, window, cx)))
             .on_key_up(cx.listener(|this, event: &KeyUpEvent, window, cx| {
                 if this.consumed_keys.remove(&event.keystroke.key) || this.overlay.is_open() {
@@ -525,6 +577,8 @@ impl Render for Shell {
                 )
             {
                 body = body.child(self.sidebar(&state, current, cx));
+            } else {
+                self.hovered_tab_row = None;
             }
             let page = self.pane(owner, tab, &mut images, cx);
             main = main.child(body.child(div().flex_1().min_w_0().min_h_0().child(page)));
@@ -750,6 +804,9 @@ impl Render for Shell {
                 ));
             }
             let docked = core.sidebar_visible(&self.id);
+            if !docked {
+                self.hovered_tab_row = None;
+            }
             let page_area = div()
                 .flex_1()
                 .min_h_0()

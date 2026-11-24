@@ -1,11 +1,50 @@
 use cef::{
-    BrowserHost, ImplBrowserHost as _, KeyEvent, KeyEventType, MouseButtonType, MouseEvent,
-    sys::cef_event_flags_t as Flags,
+    BrowserHost, CursorType, ImplBrowserHost as _, KeyEvent, KeyEventType, MouseButtonType,
+    MouseEvent, sys::cef_event_flags_t as Flags,
 };
 use gpui::{
-    Keystroke, Modifiers, MouseButton, MouseExitEvent, MouseMoveEvent, Pixels, Point, ScrollDelta,
+    CursorStyle, Keystroke, Modifiers, MouseButton, MouseMoveEvent, Pixels, Point, ScrollDelta,
     ScrollEvent,
 };
+
+pub fn cursor_style(kind: CursorType) -> CursorStyle {
+    match kind {
+        CursorType::CROSS | CursorType::CELL => CursorStyle::Crosshair,
+        CursorType::HAND => CursorStyle::PointingHand,
+        CursorType::IBEAM => CursorStyle::IBeam,
+        CursorType::VERTICALTEXT => CursorStyle::IBeamCursorForVerticalLayout,
+        CursorType::WAIT => CursorStyle::Wait,
+        CursorType::PROGRESS => CursorStyle::Progress,
+        CursorType::HELP => CursorStyle::Help,
+        CursorType::EASTRESIZE => CursorStyle::ResizeRight,
+        CursorType::WESTRESIZE => CursorStyle::ResizeLeft,
+        CursorType::NORTHRESIZE => CursorStyle::ResizeUp,
+        CursorType::SOUTHRESIZE => CursorStyle::ResizeDown,
+        CursorType::EASTWESTRESIZE => CursorStyle::ResizeLeftRight,
+        CursorType::NORTHSOUTHRESIZE => CursorStyle::ResizeUpDown,
+        CursorType::NORTHWESTRESIZE
+        | CursorType::SOUTHEASTRESIZE
+        | CursorType::NORTHWESTSOUTHEASTRESIZE => CursorStyle::ResizeUpLeftDownRight,
+        CursorType::NORTHEASTRESIZE
+        | CursorType::SOUTHWESTRESIZE
+        | CursorType::NORTHEASTSOUTHWESTRESIZE => CursorStyle::ResizeUpRightDownLeft,
+        CursorType::COLUMNRESIZE => CursorStyle::ResizeColumn,
+        CursorType::ROWRESIZE => CursorStyle::ResizeRow,
+        CursorType::MOVE | CursorType::DND_MOVE => CursorStyle::Move,
+        CursorType::GRAB => CursorStyle::OpenHand,
+        CursorType::GRABBING => CursorStyle::ClosedHand,
+        CursorType::NOTALLOWED | CursorType::NODROP | CursorType::DND_NONE => {
+            CursorStyle::OperationNotAllowed
+        }
+        CursorType::ALIAS | CursorType::DND_LINK => CursorStyle::DragLink,
+        CursorType::COPY | CursorType::DND_COPY => CursorStyle::DragCopy,
+        CursorType::CONTEXTMENU => CursorStyle::ContextualMenu,
+        CursorType::ZOOMIN => CursorStyle::ZoomIn,
+        CursorType::ZOOMOUT => CursorStyle::ZoomOut,
+        CursorType::NONE => CursorStyle::Hidden,
+        _ => CursorStyle::Arrow,
+    }
+}
 
 fn modifiers(state: Modifiers) -> u32 {
     let mut flags = Flags::EVENTFLAG_NONE;
@@ -67,13 +106,8 @@ pub fn mouse_move(host: &BrowserHost, motion: &MouseMoveEvent, origin: Point<Pix
     host.send_mouse_move_event(Some(&event(motion.position - origin, flags)), 0);
 }
 
-pub fn mouse_exit(host: &BrowserHost, motion: &MouseExitEvent, origin: Point<Pixels>) {
-    let flags = modifiers(motion.modifiers)
-        | motion
-            .pressed_button
-            .and_then(button)
-            .map_or(0, |(_, flag)| flag.0);
-    host.send_mouse_move_event(Some(&event(motion.position - origin, flags)), 1);
+pub fn mouse_leave(host: &BrowserHost, position: Point<Pixels>, state: Modifiers) {
+    host.send_mouse_move_event(Some(&event(position, modifiers(state))), 1);
 }
 
 pub fn scroll(host: &BrowserHost, scroll: &ScrollEvent, origin: Point<Pixels>) {

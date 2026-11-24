@@ -508,7 +508,7 @@ pub(super) fn event(message: &BrowserEvent) {
         Event::Fullscreen(fullscreen) => {
             json!({ "type": "fullscreen", "tab": tab, "fullscreen": fullscreen })
         }
-        Event::PaintFailed => return,
+        Event::PaintFailed | Event::PointerChanged => return,
     };
     value["generation"] = json!(message.key.generation());
     emit(value);

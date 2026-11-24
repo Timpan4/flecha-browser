@@ -1,10 +1,11 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use flecha_core::{BrowserState, FolderId, PinnedNode, Placement, TabId, WindowId, shortcuts};
 use gpui::{
-    Animation, AnimationExt as _, ClickEvent, Context, Div, FontWeight, InteractiveElement as _,
-    ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _, Transformation,
-    Window, div, percentage, prelude::FluentBuilder as _, px, relative,
+    Animation, AnimationExt as _, AnyElement, ClickEvent, ClipboardItem, Context, Div, FontWeight,
+    HoverListenerMode, InteractiveElement as _, IntoElement as _, ParentElement as _, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Transformation, Window, div, percentage,
+    prelude::FluentBuilder as _, px, relative,
 };
 use uuid::Uuid;
 
@@ -30,6 +31,7 @@ pub(crate) enum SidebarAction {
     ToggleFolder(FolderId, bool),
     RemoveFolder(FolderId),
     TogglePinned(bool),
+    ClearToday,
 }
 
 impl Controller {
@@ -64,6 +66,11 @@ impl Controller {
             }
             SidebarAction::TogglePinned(collapsed) => {
                 core.update_space(&space, None, None, None, Some(collapsed));
+            }
+            SidebarAction::ClearToday => {
+                for id in core.clear_today(window, now()) {
+                    self.engine.close(&id);
+                }
             }
             SidebarAction::Pin(..) | SidebarAction::Favorite(_) | SidebarAction::ToToday(_) => {
                 let (id, placement) = match &action {
@@ -186,6 +193,7 @@ impl Shell {
 
         let mut tabs = div()
             .id("sidebar-tabs")
+            .group("sidebar-tabs")
             .flex()
             .flex_col()
             .min_h_0()
@@ -206,7 +214,21 @@ impl Shell {
                     .h(px(tokens::TODAY_HEADER))
                     .border_t(px(tokens::TODAY_RULE))
                     .border_color(palette.line)
-                    .child("Today"),
+                    .child("Today")
+                    .child(
+                        text_button("clear-today", "Clear")
+                            .aria_label("Archive today's tabs")
+                            .invisible()
+                            .group_hover("sidebar-tabs", |clear| clear.visible())
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                dispatch(
+                                    &this.state,
+                                    &this.id,
+                                    Action::Sidebar(SidebarAction::ClearToday),
+                                    cx,
+                                );
+                            })),
+                    ),
             )
             .child(self.new_tab_row(state, cx));
         if let Some(ws) = window_space {
@@ -335,6 +357,7 @@ impl Shell {
             Some(_) => "globe",
         };
         let group = SharedString::new_static("urlbar");
+        let flashing = state.copy_link_flashes.contains_key(&self.id);
         div()
             .id("urlbar-wrap")
             .group(group.clone())
@@ -361,6 +384,7 @@ impl Shell {
                     .pr(px(tokens::URLBAR_PAD_RIGHT))
                     .cursor_pointer()
                     .aria_label("Open location")
+                    .when(flashing, |address| address.opacity(0.))
                     .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                         this.open_command(Command::EditLocation, window, cx);
                     }))
@@ -382,20 +406,51 @@ impl Shell {
                         }
                     })),
             )
-            .when(state.site_for_window(&self.id).is_some(), |wrap| {
+            .when(rows.active.is_some() && !flashing, |wrap| {
                 wrap.child(
                     tinted_icon_button(
-                        "site-controls",
-                        "sliders",
-                        "Site controls",
+                        "copy-link",
+                        "link",
+                        "Copy link",
                         (tokens::URL_ACTION, tokens::URL_ACTION_ICON),
                         palette.text_3,
                     )
-                    .opacity(0.)
-                    .group_hover(group, |action| action.opacity(1.))
-                    .on_click(cx.listener(
-                        |this, _: &ClickEvent, window, cx| this.toggle_site_controls(window, cx),
-                    )),
+                    .invisible()
+                    .group_hover(group.clone(), |action| action.visible())
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.copy_link(cx))),
+                )
+            })
+            .when(
+                !flashing && state.site_for_window(&self.id).is_some(),
+                |wrap| {
+                    wrap.child(
+                        tinted_icon_button(
+                            "site-controls",
+                            "sliders",
+                            "Site controls",
+                            (tokens::URL_ACTION, tokens::URL_ACTION_ICON),
+                            palette.text_3,
+                        )
+                        .opacity(0.)
+                        .group_hover(group, |action| action.opacity(1.))
+                        .on_click(cx.listener(
+                            |this, _: &ClickEvent, window, cx| {
+                                this.toggle_site_controls(window, cx)
+                            },
+                        )),
+                    )
+                },
+            )
+            .when(flashing, |wrap| {
+                wrap.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child("✓  Link copied"),
                 )
             })
             .when_some(rows.active.filter(|_| loading), |wrap, tab| {
@@ -413,6 +468,23 @@ impl Shell {
                         ),
                 )
             })
+    }
+
+    fn copy_link(&self, cx: &mut Context<Self>) {
+        let mut state = self.state.borrow_mut();
+        let url = state
+            .model
+            .active(&self.id)
+            .and_then(|tab| state.model.tab(tab))
+            .map(|tab| tab.url.clone());
+        let Some(url) = url else { return };
+        cx.write_to_clipboard(ClipboardItem::new_string(url));
+        // The shipping address bar shows the confirmation for 1400ms (ui/app.ts:986).
+        state.copy_link_flashes.insert(
+            self.id.clone(),
+            Instant::now() + Duration::from_millis(1400),
+        );
+        cx.notify();
     }
 
     /// `#favorites` (ui/styles.css:414-457): a grid of four site tiles.
@@ -523,7 +595,12 @@ impl Shell {
 
     /// The pinned tabs and folders; an open folder's contents sit indented past a hairline
     /// guide (`.folder-children`, ui/styles.css:776-790).
-    fn pinned_rows(&self, rows: &Rows<'_>, nodes: &[PinnedNode], cx: &Context<Self>) -> Vec<Div> {
+    fn pinned_rows(
+        &self,
+        rows: &Rows<'_>,
+        nodes: &[PinnedNode],
+        cx: &Context<Self>,
+    ) -> Vec<AnyElement> {
         let palette = palette();
         nodes
             .iter()
@@ -556,7 +633,8 @@ impl Shell {
                                 )
                                 .children(self.pinned_rows(rows, children, cx)),
                         )
-                    }),
+                    })
+                    .into_any_element(),
             })
             .collect()
     }
@@ -649,15 +727,29 @@ impl Shell {
 
     /// `.row` (ui/styles.css:578-650): the site's letter, the title, and the row's actions on
     /// hover.
-    fn tab_row(&self, rows: &Rows<'_>, id: &TabId, cx: &Context<Self>) -> Div {
+    fn tab_row(&self, rows: &Rows<'_>, id: &TabId, cx: &Context<Self>) -> AnyElement {
         let Some(tab) = rows.core.tab(id) else {
-            return div();
+            return div().into_any_element();
         };
         let selected = rows.active == Some(id);
         let in_split = rows.split.len() > 1 && rows.split.contains(id);
         let select = Action::Select(id.clone());
         let group = SharedString::from(format!("row-{}", id.as_str()));
         row(&group, selected, Some(in_split))
+            .id(group)
+            .hover_listener_mode(HoverListenerMode::InputModalityIndependent)
+            .on_hover({
+                let id = id.clone();
+                cx.listener(move |this, hovered: &bool, _, cx| {
+                    if *hovered {
+                        this.hovered_tab_row = Some(id.clone());
+                        cx.notify();
+                    } else if this.hovered_tab_row.as_ref() == Some(&id) {
+                        this.hovered_tab_row = None;
+                        cx.notify();
+                    }
+                })
+            })
             .child(
                 div()
                     .id(format!("tab-{}", id.as_str()))
@@ -686,29 +778,35 @@ impl Shell {
                             .child(tab_label(tab)),
                     ),
             )
-            .when(!selected && rows.active.is_some(), |row| {
-                row.child(
-                    row_action(
-                        &group,
-                        text_button(format!("split-{}", id.as_str()), "Split"),
+            .when(self.hovered_tab_row.as_ref() == Some(id), |row| {
+                row.when(!selected && rows.active.is_some(), |row| {
+                    let split = Action::Split(id.clone());
+                    row.child(
+                        text_button(format!("split-{}", id.as_str()), "Split").on_click(
+                            cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                dispatch(&this.state, &this.id, split.clone(), cx);
+                            }),
+                        ),
+                    )
+                })
+                .child(self.tab_menu_button(id, cx))
+                .child(
+                    sized_icon_button(
+                        format!("close-tab-{}", id.as_str()),
+                        "close",
+                        "Close tab",
+                        tokens::ROW_CLOSE,
+                        tokens::ROW_CLOSE_ICON,
                     )
                     .on_click({
-                        let split = Action::Split(id.clone());
+                        let close = Action::CloseTab(id.clone());
                         cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            dispatch(&this.state, &this.id, split.clone(), cx);
+                            dispatch(&this.state, &this.id, close.clone(), cx);
                         })
                     }),
                 )
             })
-            .child(row_action(&group, self.tab_menu_button(id, cx)))
-            .child(self.row_action(
-                &group,
-                "close-tab",
-                id.as_str(),
-                ("close", "Close tab"),
-                Action::CloseTab(id.clone()),
-                cx,
-            ))
+            .into_any_element()
     }
 
     /// `#btn-newtab` (ui/index.html:83, ui/styles.css:704-722): a row in `--text-2` with its
