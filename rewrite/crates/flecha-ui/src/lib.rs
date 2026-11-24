@@ -17,6 +17,7 @@ mod settings_view;
 mod shortcuts;
 mod sidebar;
 mod site_controls;
+mod tab_drag;
 mod tab_sleep;
 mod text_field;
 mod theme;
@@ -180,6 +181,7 @@ enum Action {
     Select(TabId),
     Split(TabId),
     SplitNew(String),
+    DropTab(tab_drag::TabDrag, tab_drag::TabDrop),
     ExitSplit,
     Peek(String),
     PeekTab(TabId),
@@ -532,6 +534,7 @@ impl Controller {
                     self.split(window, left, right)?;
                 }
             }
+            Action::DropTab(drag, target) => self.drop_tab(window, drag, target),
             Action::ExitSplit => {
                 if let Some(flecha_core::EndedSplit::Responsive { mirror }) = self
                     .model
