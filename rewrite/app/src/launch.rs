@@ -1,4 +1,4 @@
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::io::ErrorKind;
 use std::path::{Component, Path, PathBuf};
 
@@ -26,6 +26,7 @@ pub struct Environment {
     data_home: Option<PathBuf>,
     config_home: Option<PathBuf>,
     chrome_config_home: Option<PathBuf>,
+    adblock_fixture_port: Option<OsString>,
 }
 
 impl Environment {
@@ -40,6 +41,7 @@ impl Environment {
             data_home: path("XDG_DATA_HOME"),
             config_home: path("XDG_CONFIG_HOME"),
             chrome_config_home: path("CHROME_CONFIG_HOME"),
+            adblock_fixture_port: std::env::var_os("FLECHA_VERIFY_ADBLOCK_PORT"),
         }
     }
 
@@ -177,9 +179,23 @@ impl Launch {
             }
             None => env.desktop_profile(profile_arg)?,
         };
+        let adblock_fixture_port = env
+            .adblock_fixture_port
+            .as_deref()
+            .filter(|_| verify)
+            .map(|port| {
+                port.to_str()
+                    .and_then(|port| port.parse().ok())
+                    .context("FLECHA_VERIFY_ADBLOCK_PORT must be a nonzero TCP port")
+            })
+            .transpose()?;
         Ok(Self::Browser {
             profile,
-            options: Options { initial, verify },
+            options: Options {
+                initial,
+                verify,
+                adblock_fixture_port,
+            },
         })
     }
 }

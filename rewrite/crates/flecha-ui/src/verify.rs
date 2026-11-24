@@ -1,6 +1,11 @@
-use std::io::BufRead as _;
+use std::io::{self, BufRead as _};
+use std::num::NonZeroU16;
 
 use anyhow::{Context as _, Result, ensure};
+use flecha_adblock::{
+    DOWNLOAD_TIMEOUT, Download, DownloadRequest, LISTS, UpdateReport, UreqDownload, WireResponse,
+    fetch::ListWarning,
+};
 use flecha_cef::{BrowserEvent, Disposition, Event, Owner, Partition};
 use flecha_core::{SpaceId, TabId, WindowId};
 use futures::StreamExt as _;
@@ -284,6 +289,40 @@ pub(super) fn install(controller: &Shared, cx: &mut App) {
 
 fn emit(value: Value) {
     println!("phase1 {value}");
+}
+
+struct FixtureDownload {
+    port: u16,
+    inner: UreqDownload,
+}
+
+impl Download for FixtureDownload {
+    fn get(&self, url: &str, request: &DownloadRequest) -> io::Result<WireResponse> {
+        let list = LISTS
+            .iter()
+            .find(|list| list.url == url)
+            .ok_or_else(|| io::Error::other("unexpected filter list URL"))?;
+        self.inner.get(
+            &format!("http://127.0.0.1:{}/{}.txt", self.port, list.id),
+            request,
+        )
+    }
+}
+
+pub(super) fn adblock_download(port: NonZeroU16) -> Box<dyn Download> {
+    Box::new(FixtureDownload {
+        port: port.get(),
+        inner: UreqDownload::default(),
+    })
+}
+
+pub(super) fn adblock_report(report: &UpdateReport) {
+    emit(json!({
+        "type": "adblock",
+        "failed": !report.failures.is_empty(),
+        "usedCache": report.warnings.iter().any(|warning| matches!(warning, ListWarning::UsedCache { .. })),
+        "downloadTimeoutMs": DOWNLOAD_TIMEOUT.as_millis(),
+    }));
 }
 
 pub(super) fn ready() {
