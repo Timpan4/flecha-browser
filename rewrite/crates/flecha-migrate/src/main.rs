@@ -34,6 +34,13 @@ fn main() -> ExitCode {
             println!("Archive entries: {}", report.archive_entries);
             println!("Ad-block sites: {}", report.ad_block_sites);
             println!("Boosts: {}", report.boosts);
+            let yes_no = |copied| if copied { "yes" } else { "no" };
+            println!("Cookies copied: {}", yes_no(report.cookies_copied));
+            println!("Web storage copied: {}", yes_no(report.web_storage_copied));
+            println!(
+                "OSCrypt settings copied: {}",
+                yes_no(report.os_crypt_copied)
+            );
             ExitCode::SUCCESS
         }
         Err(error) => {

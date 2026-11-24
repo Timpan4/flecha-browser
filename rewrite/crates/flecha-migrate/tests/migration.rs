@@ -187,9 +187,118 @@ fn cli_reports_migrated_counts() -> Result<()> {
     assert!(output.status.success(), "{stderr}");
     assert_eq!(
         String::from_utf8(output.stdout)?,
-        "Spaces: 1\nWindows: 1\nOpen tabs: 1\nArchive entries: 1\nAd-block sites: 1\nBoosts: 2\n"
+        concat!(
+            "Spaces: 1\nWindows: 1\nOpen tabs: 1\nArchive entries: 1\nAd-block sites: 1\nBoosts: 2\n",
+            "Cookies copied: no\nWeb storage copied: no\nOSCrypt settings copied: no\n",
+        )
     );
+    assert!(!fixture.new.join("cef").exists());
     assert_session(&fixture.load()?.unwrap(), "current");
+    Ok(())
+}
+
+#[test]
+fn migrates_chromium_cookies_storage_and_only_os_crypt() -> Result<()> {
+    let fixture = Fixture::write(&[])?;
+    let source = fixture.old.join("Default");
+    let files: &[(&str, &[u8])] = &[
+        ("Cookies", b"fixture database"),
+        ("Cookies-wal", b"fixture WAL"),
+        ("Cookies-shm", b""),
+        ("LocalStorage", b"fixture local storage"),
+        (
+            "Local Storage/leveldb/000001.ldb",
+            b"fixture local storage table",
+        ),
+        ("SessionStorage", b"fixture session storage"),
+        (
+            "Session Storage/CURRENT",
+            b"fixture session storage manifest",
+        ),
+        (
+            "IndexedDB/example.indexeddb.blob/1/00/2",
+            b"fixture IndexedDB blob",
+        ),
+        ("WebStorage/1/IndexedDB/000002.ldb", b"fixture bucket table"),
+    ];
+    for (name, bytes) in files {
+        let path = source.join(name);
+        fs::create_dir_all(path.parent().unwrap())?;
+        fs::write(path, bytes)?;
+    }
+    let os_crypt = json!({"portal": {"metadata": "fixture only"}});
+    fs::write(
+        fixture.old.join("Local State"),
+        serde_json::to_vec(&json!({ "os_crypt": os_crypt, "profile": {"info": false} }))?,
+    )?;
+
+    let report = fixture.migrate()?;
+    assert!(report.cookies_copied && report.web_storage_copied && report.os_crypt_copied);
+    let cef = fixture.new.join("cef");
+    let default = cef.join("Default");
+    assert_eq!(
+        hash_tree(&default)?
+            .values()
+            .filter(|kind| matches!(kind, EntryHash::File(_)))
+            .count(),
+        files.len()
+    );
+    for (name, bytes) in files {
+        assert_eq!(fs::read(default.join(name))?, *bytes);
+    }
+    let local_state: Value = serde_json::from_reader(fs::File::open(cef.join("Local State"))?)?;
+    assert_eq!(local_state, json!({ "os_crypt": os_crypt }));
+    Ok(())
+}
+
+#[test]
+fn migrates_network_cookies_and_omits_absent_sidecars_and_os_crypt() -> Result<()> {
+    let fixture = Fixture::write(&[])?;
+    let network = fixture.old.join("Default/Network");
+    fs::create_dir(&network)?;
+    fs::write(network.join("Cookies"), b"fixture network database")?;
+    fs::write(network.join("Cookies-wal"), b"fixture network WAL")?;
+    fs::write(fixture.old.join("Local State"), br#"{"profile":{}}"#)?;
+
+    let report = fixture.migrate()?;
+    assert!(report.cookies_copied);
+    assert!(!report.web_storage_copied && !report.os_crypt_copied);
+    let cef = fixture.new.join("cef");
+    let default = cef.join("Default");
+    assert_eq!(
+        fs::read(default.join("Cookies"))?,
+        b"fixture network database"
+    );
+    assert_eq!(
+        fs::read(default.join("Cookies-wal"))?,
+        b"fixture network WAL"
+    );
+    assert!(!default.join("Cookies-shm").exists());
+    assert!(!cef.join("Local State").exists());
+    Ok(())
+}
+
+#[test]
+fn rejects_links_in_chromium_browser_data_without_publishing() -> Result<()> {
+    for name in [
+        "Default/Cookies",
+        "Default/Cookies-wal",
+        "Default/Network",
+        "Default/Local Storage",
+        "Default/IndexedDB",
+        "Default/WebStorage/1/CURRENT",
+        "Local State",
+    ] {
+        let fixture = Fixture::write(&[])?;
+        if name.ends_with("-wal") {
+            fs::write(fixture.old.join("Default/Cookies"), b"fixture database")?;
+        }
+        let source = fixture.old.join(name);
+        fs::create_dir_all(source.parent().unwrap())?;
+        symlink(fixture.old.join("outside"), &source)?;
+        assert!(fixture.migrate().is_err(), "accepted symlink at {name}");
+        assert!(!fixture.new.exists());
+    }
     Ok(())
 }
 
