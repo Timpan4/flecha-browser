@@ -616,16 +616,21 @@ impl Shell {
         };
         let Some(item) = row.item() else { return div() };
         div().pl(px(12. * depth as f32)).child(
-            button(id, "")
+            div()
+                .id(id)
                 .w_full()
                 .flex()
                 .items_center()
-                .justify_between()
                 .gap_2()
+                .px_2()
+                .py_1()
+                .rounded_md()
+                .cursor_pointer()
+                .hover(|row| row.bg(rgb(0x37545e)))
                 .when(manager.selected.contains(&item), |row| {
                     row.bg(rgb(0x27547b))
                 })
-                .child(div().min_w_0().truncate().child(title))
+                .child(div().flex_1().min_w_0().truncate().child(title))
                 .child(muted(detail).min_w_0().truncate().text_xs())
                 .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
                     let Overlay::Settings(panel) = &mut this.overlay else {
