@@ -6,7 +6,16 @@
 //! content and the page's clipboard events, so the shell leaves page edits to Chromium. On X11
 //! it has to: once a page script makes Chromium the clipboard owner, a GPUI read waits on
 //! Chromium on the thread they share, and a shell paste would stall.
+//!
+//! A copy or cut reads the page asynchronously, and a busy page answers late. Keys and
+//! clipboard edits that follow it for the same browser wait in a [`Hold`] until the read's
+//! text is on the clipboard, then reach the page in their original order, as they would in
+//! Chromium. Typing after Ctrl+X therefore cannot replace the selection before the cut reads
+//! it, and Ctrl+V after Ctrl+X pastes the cut text.
 
+use std::collections::VecDeque;
+
+use cef::BrowserHost;
 use flecha_cef::{BrowserKey, ClipboardEdit};
 use flecha_surface::input;
 use gpui::{App, ClipboardItem, Keystroke, Window};
@@ -48,6 +57,36 @@ pub(crate) fn text(cx: &App) -> Option<String> {
         .filter(|text| !text.is_empty())
 }
 
+/// Page input that waits behind a pending selection read.
+pub(crate) enum Held {
+    Key {
+        stroke: Keystroke,
+        up: bool,
+        repeat: bool,
+        altgr: bool,
+    },
+    /// A paste from the keyboard, with its key, or from the page menu.
+    Paste(Option<Keystroke>),
+    /// A copy or cut from the keyboard, with its key and repeat flag, or a page menu cut.
+    Read(ClipboardEdit, Option<(Keystroke, bool)>),
+    /// A page menu Copy of the selection the menu opened on.
+    Write(String),
+}
+
+/// A browser's pending selection read and the input that arrived after it. It exists while
+/// either does.
+#[derive(Default)]
+pub(crate) struct Hold {
+    reading: bool,
+    queue: VecDeque<Held>,
+}
+
+/// Gives the page a whole key the shell took. The shell swallows the real release.
+fn forward(host: &BrowserHost, stroke: &Keystroke, repeat: bool) {
+    input::key(host, stroke, false, repeat, false);
+    input::key(host, stroke, true, false, false);
+}
+
 impl Shell {
     /// Whether the shell, not Chromium, handles page clipboard edits in `window`.
     pub(crate) fn shell_clipboard(&self, window: &Window) -> bool {
@@ -66,6 +105,7 @@ impl Shell {
     /// selection is read: with no copyable text, such as nothing selected or a password field,
     /// the page gets the whole keystroke after all, with its repeat flag. Paste without
     /// clipboard text, and a copy or cut the engine could not start, leave the key to the page.
+    /// Behind a pending read, the shortcut waits its turn.
     pub(crate) fn page_clipboard_key(
         &self,
         focused: Option<&BrowserKey>,
@@ -80,31 +120,69 @@ impl Shell {
         if !self.shell_clipboard(window) {
             return false;
         }
-        let edit = match edit {
-            PageClipboard::Paste => {
-                // The platform read can block, so it runs before the controller is borrowed.
-                let Some(text) = text(cx) else {
-                    return false;
-                };
-                return self.state.borrow().engine.paste_text(&key.tab, &text);
-            }
-            PageClipboard::Copy => ClipboardEdit::Copy,
-            PageClipboard::Cut => ClipboardEdit::Cut,
+        let read = match edit {
+            PageClipboard::Paste => None,
+            PageClipboard::Copy => Some(ClipboardEdit::Copy),
+            PageClipboard::Cut => Some(ClipboardEdit::Cut),
         };
-        let stroke = stroke.clone();
-        // The shell swallows the real key release, so the page gets both halves here.
+        let held = match read {
+            None => Held::Paste(Some(stroke.clone())),
+            Some(edit) => Held::Read(edit, Some((stroke.clone(), repeat))),
+        };
+        if self.state.borrow_mut().hold(key, held) {
+            return true;
+        }
+        let Some(edit) = read else {
+            // The platform read can block, so it runs before the controller is borrowed.
+            let Some(text) = text(cx) else {
+                return false;
+            };
+            return self.state.borrow().engine.paste_text(&key.tab, &text);
+        };
         self.state
-            .borrow()
-            .engine
-            .copy_selection(&key.tab, edit, move |host| {
-                input::key(host, &stroke, false, repeat, false);
-                input::key(host, &stroke, true, false, false);
-            })
+            .borrow_mut()
+            .read_selection(key, edit, Some((stroke.clone(), repeat)))
     }
 }
 
 impl Controller {
-    /// Puts each selection a page copied on GPUI's clipboard.
+    /// Queues `input` for `key`'s browser behind its pending read or earlier held input.
+    /// Returns `false`, keeping nothing, when the browser holds nothing.
+    pub(crate) fn hold(&mut self, key: &BrowserKey, input: Held) -> bool {
+        let Some(hold) = self.held.get_mut(key) else {
+            return false;
+        };
+        hold.queue.push_back(input);
+        true
+    }
+
+    /// Whether input for `key`'s browser has to wait.
+    pub(crate) fn holding(&self, key: &BrowserKey) -> bool {
+        self.held.contains_key(key)
+    }
+
+    /// Starts a selection read for `key`'s browser, whose later input then waits for it. A
+    /// keyboard read carries its key, which the page gets when nothing may be copied. Returns
+    /// whether the read was sent.
+    pub(crate) fn read_selection(
+        &mut self,
+        key: &BrowserKey,
+        edit: ClipboardEdit,
+        stroke: Option<(Keystroke, bool)>,
+    ) -> bool {
+        let sent = self.engine.copy_selection(&key.tab, edit, move |host| {
+            if let Some((stroke, repeat)) = &stroke {
+                forward(host, stroke, *repeat);
+            }
+        });
+        if sent {
+            self.held.entry(key.clone()).or_default().reading = true;
+        }
+        sent
+    }
+
+    /// Puts each selection a page copied on GPUI's clipboard, then gives each browser no
+    /// longer reading the input it held.
     pub(crate) fn poll_clipboard(&mut self, cx: &mut App) {
         while let Some(copied) = self.engine.next_copied_selection() {
             if self.verify {
@@ -113,7 +191,78 @@ impl Controller {
             if let Some(text) = copied.text {
                 cx.write_to_clipboard(ClipboardItem::new_string(text));
             }
+            if let Some(key) = self.engine.key(&copied.tab)
+                && let Some(hold) = self.held.get_mut(&key)
+            {
+                hold.reading = false;
+            }
         }
+        self.release_held(cx);
+    }
+
+    fn release_held(&mut self, cx: &mut App) {
+        // A closed or replaced browser answers no read, and its held input has no page to go
+        // to, so it is dropped.
+        let engine = &self.engine;
+        self.held
+            .retain(|key, _| engine.key(&key.tab).as_ref() == Some(key));
+        let released: Vec<_> = self
+            .held
+            .iter()
+            .filter(|(_, hold)| !hold.reading)
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in released {
+            while let Some(input) = self
+                .held
+                .get_mut(&key)
+                .and_then(|hold| hold.queue.pop_front())
+            {
+                if self.deliver(&key, input, cx) {
+                    break;
+                }
+            }
+            if self
+                .held
+                .get(&key)
+                .is_some_and(|hold| !hold.reading && hold.queue.is_empty())
+            {
+                self.held.remove(&key);
+            }
+        }
+    }
+
+    /// Gives held `input` to `key`'s browser. Returns `true` when it started another read, which
+    /// the rest of the input waits for.
+    fn deliver(&mut self, key: &BrowserKey, input: Held, cx: &mut App) -> bool {
+        let Some(host) = self.engine.host(&key.tab) else {
+            return false;
+        };
+        match input {
+            Held::Key {
+                stroke,
+                up,
+                repeat,
+                altgr,
+            } => input::key(&host, &stroke, up, repeat, altgr),
+            Held::Paste(stroke) => match (text(cx), stroke) {
+                (Some(text), _) => {
+                    self.engine.paste_text(&key.tab, &text);
+                }
+                (None, Some(stroke)) => forward(&host, &stroke, false),
+                (None, None) => {}
+            },
+            Held::Read(edit, stroke) => {
+                if self.read_selection(key, edit, stroke.clone()) {
+                    return true;
+                }
+                if let Some((stroke, repeat)) = stroke {
+                    forward(&host, &stroke, repeat);
+                }
+            }
+            Held::Write(text) => cx.write_to_clipboard(ClipboardItem::new_string(text)),
+        }
+        false
     }
 }
 

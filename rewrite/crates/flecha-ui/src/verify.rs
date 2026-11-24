@@ -87,11 +87,11 @@ enum Command {
         text: Option<String>,
     },
     /// Dispatches a keystroke such as `ctrl-v` to the window, for displays without an input
-    /// injection protocol. It runs after the reply.
+    /// injection protocol. It replies once the window has handled the keystroke.
     Key {
         keystroke: String,
     },
-    /// Chooses the open page menu's enabled row labelled `label`. It runs after the reply.
+    /// Chooses the open page menu's enabled row labelled `label`, and replies once it has.
     MenuRow {
         label: String,
     },

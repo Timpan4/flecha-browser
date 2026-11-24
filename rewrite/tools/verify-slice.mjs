@@ -1534,6 +1534,7 @@ async function verifyClipboard() {
   const page = async (step, source = 'null') => {
     const label = `clipboard-${++probes}`;
     const reply = site.probe(label, stepTimeoutMs);
+    reply.catch(() => {}); // A failed command rejects first; the probe's timeout must not go unhandled.
     await app.command('script', {
       tab,
       source: `{
@@ -1559,6 +1560,7 @@ async function verifyClipboard() {
   const frameState = async () => {
     const label = `frame-${++probes}`;
     const reply = site.probe(label, stepTimeoutMs);
+    reply.catch(() => {}); // A failed command rejects first; the probe's timeout must not go unhandled.
     await page(`field('#frame').contentWindow.postMessage(['report', '${label}'], '*')`);
     waitingFor = `the frame's ${label} report`;
 
@@ -1663,14 +1665,25 @@ async function verifyClipboard() {
   await poll('the held Ctrl+C and Ctrl+X keystrokes to reach the page', async () => (await page('', 'window.editKeys')) === 6);
   assert.equal(await copy('c', select('#email', 'flecha@copy.test')), true, 'Ctrl+C read no email field');
   assert.equal(await clipboard(), 'flecha@copy.test', 'Ctrl+C did not copy the email field');
-  pass(`${backend}: Ctrl+C and Ctrl+X refused hidden or blurred password selections, and Ctrl+C copied an email field`);
+  assert.equal(await copy('x', `${select('#text', 'flecha-read-only')}; field('#text').readOnly = true`), false,
+    'Ctrl+X cut from a read-only field');
+  assert.equal(await clipboard(), sentinel, 'Ctrl+X in a read-only field wrote the clipboard');
+  assert.equal(await page('field("#text").readOnly = false', `field('#text').value`), 'flecha-read-only', 'Ctrl+X changed a read-only field');
+  await poll('the held Ctrl+X to reach the page', async () => (await page('', 'window.editKeys')) === 7);
+  pass(`${backend}: Ctrl+C and Ctrl+X refused hidden or blurred password selections, Ctrl+X refused a read-only field, and Ctrl+C copied an email field`);
 
   // The page menu opens on a right-click that CEF receives, with the field's selection intact.
-  // A row label no menu has tells an open menu from none.
+  // A row label no menu has tells an open menu from none. Any other answer is a failure.
   const openMenu = async (x, y) => {
     await app.command('click', { tab, x, y, right: true });
-    await poll('the page menu to open', async () =>
-      (await app.attempt('menu_row', { label: '' })).error !== 'no page menu is open');
+    await poll('the page menu to open', async () => {
+      const { error } = await app.attempt('menu_row', { label: 'Menu probe' });
+
+      if (error === 'no page menu is open') return undefined;
+      assert.equal(error, 'the page menu has no enabled Menu probe row');
+
+      return true;
+    });
   };
 
   const menu = async (selector, label) => {
@@ -1896,6 +1909,42 @@ async function verifyClipboard() {
     assert.equal(area, 'flecha-later-paste', 'the page menu pasted into the frame that took focus');
     assert.equal(await page('', `field('#area').value`), '', 'the page menu pasted after its frame lost focus');
   });
+
+  // Keys and pastes after Ctrl+X while the page runs a long task. They must act after the cut,
+  // as in Chromium. The verifier lost the cut text in 10 of 10 trials at every busy length from
+  // 30 to 300 ms on 5203212.
+  const busyCut = (name, after, expected) => check(`${name} on a busy page acts after the cut`, async () => {
+    const original = 'flecha-race-cut flecha-race-keep';
+
+    for (const busy of [30, 100, 300]) {
+      for (let trial = 0; trial < 2; trial++) {
+        await clipboard('flecha-old-clip');
+        await page(`
+          field('#text').value = '${original}';
+          field('#text').focus();
+          field('#text').setSelectionRange(0, 15);
+          setTimeout(() => { const start = performance.now(); while (performance.now() - start < ${busy}); }, 20)`);
+        await delay(40); // Inside the long task, which starts 20 ms after the step.
+        const since = app.events.length;
+
+        await keys(['Control_L', 'x'], ...after);
+        await copyReport(since);
+        let value;
+
+        try {
+          await poll(`the field after ${name}`, async () => (value = await page('', `field('#text').value`)) === expected);
+        } catch {
+          assert.fail(`busy ${busy} ms, trial ${trial}: the field reads ${JSON.stringify(value)}, not ${JSON.stringify(expected)}`);
+        }
+
+        assert.equal(await clipboard(), 'flecha-race-cut', `busy ${busy} ms, trial ${trial}: the cut text is not on the clipboard`);
+      }
+    }
+  });
+
+  await busyCut('typing after Ctrl+X', [['a'], ['b']], 'ab flecha-race-keep');
+  await busyCut('Ctrl+V after Ctrl+X', [['Control_L', 'v']], 'flecha-race-cut flecha-race-keep');
+  await busyCut('End and Ctrl+V after Ctrl+X', [['End'], ['Control_L', 'v']], ' flecha-race-keepflecha-race-cut');
 
   assert.deepEqual(failed, [], 'clipboard race checks failed');
   await app.quit();

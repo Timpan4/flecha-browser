@@ -165,16 +165,6 @@ impl Engine {
             .is_some_and(|frame| frame.is_focused() != 0)
     }
 
-    /// Cuts the selection to the shell's clipboard, reading and deleting it in one step as the
-    /// answer to [`Engine::copy_selection`], and closes the menu. It does nothing when the menu's
-    /// frame has lost focus or the read finds no text it may copy.
-    pub fn context_menu_cut(&self, id: &ContextMenuId) {
-        if self.context_menu_frame_focused(id) {
-            self.copy_selection(&id.key.tab, crate::ClipboardEdit::Cut, |_| {});
-        }
-        self.dismiss_context_menu(id);
-    }
-
     fn menu_frame(&self, id: &ContextMenuId) -> Option<Frame> {
         let slot = self.menu_slot(id)?;
         let frame = slot.menu.pending.borrow().as_ref()?.frame.clone();

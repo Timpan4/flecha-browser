@@ -151,6 +151,7 @@ export async function fixture(handle = () => false) {
           area: document.querySelector('#area'),
         };
         addEventListener('message', event => {
+          if (event.source !== parent || !Array.isArray(event.data)) return;
           const [command, label] = event.data;
           if (command === 'focus') fields.text.focus();
           if (command === 'clear-area') {

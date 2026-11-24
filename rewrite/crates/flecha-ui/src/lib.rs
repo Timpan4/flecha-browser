@@ -259,6 +259,8 @@ struct Controller {
     /// Set by the verify harness: the shell handles page clipboard edits on every display, so a
     /// display without a Wayland input serial can still check them.
     shell_clipboard: bool,
+    /// Page input waiting behind a selection read, per browser.
+    held: BTreeMap<flecha_cef::BrowserKey, clipboard::Hold>,
     failure: Rc<RefCell<Option<anyhow::Error>>>,
     status: Status,
 }
@@ -353,6 +355,7 @@ impl Controller {
             quitting: false,
             verify,
             shell_clipboard: false,
+            held: BTreeMap::new(),
             failure,
             status: Status::default(),
         };

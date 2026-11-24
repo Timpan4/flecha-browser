@@ -1,6 +1,7 @@
 use anyhow::{Context as _, Result};
 use flecha_cef::{
-    BrowserKey, ContextMenuEvent, ContextMenuRequest, Disposition, FrameEdit, MenuContext, Owner,
+    BrowserKey, ClipboardEdit, ContextMenuEvent, ContextMenuRequest, Disposition, FrameEdit,
+    MenuContext, Owner,
 };
 use flecha_core::{TabId, WindowId, suggestions::pinnable_address};
 use gpui::{
@@ -9,6 +10,7 @@ use gpui::{
     div, px,
 };
 
+use crate::clipboard::Held;
 use crate::model::tab_id;
 use crate::popup::{Place, place};
 use crate::shortcuts::Navigation;
@@ -268,6 +270,27 @@ impl Shell {
                 cx.write_to_clipboard(ClipboardItem::new_string(url.clone()));
                 None
             }
+            Item::Edit(action @ (FrameEdit::Paste | FrameEdit::Copy | FrameEdit::Cut))
+                if shell_clipboard && self.state.borrow().holding(&id.key) =>
+            {
+                // A copy or cut in this page is still reading, so the edit waits its turn.
+                let context = &request.context;
+                let mut state = self.state.borrow_mut();
+                let focused = state.engine.context_menu_frame_focused(&id);
+                let held = match action {
+                    FrameEdit::Paste => focused.then_some(Held::Paste(None)),
+                    FrameEdit::Cut => {
+                        (focused && context.can_cut).then_some(Held::Read(ClipboardEdit::Cut, None))
+                    }
+                    _ => (context.can_copy && !context.selection_text.is_empty())
+                        .then(|| Held::Write(context.selection_text.clone())),
+                };
+                if let Some(held) = held {
+                    state.hold(&id.key, held);
+                }
+                state.engine.dismiss_context_menu(&id);
+                None
+            }
             Item::Edit(FrameEdit::Paste)
                 if shell_clipboard && let Some(text) = crate::clipboard::text(cx) =>
             {
@@ -281,7 +304,7 @@ impl Shell {
             }
             Item::Edit(action) => {
                 let context = &request.context;
-                let engine = &self.state.borrow().engine;
+                let mut state = self.state.borrow_mut();
                 // Chromium's Copy and Cut would take the clipboard from the shell. See
                 // `Engine::copy_selection`.
                 match action {
@@ -293,14 +316,17 @@ impl Shell {
                         cx.write_to_clipboard(ClipboardItem::new_string(
                             context.selection_text.clone(),
                         ));
-                        engine.dismiss_context_menu(&id);
+                        state.engine.dismiss_context_menu(&id);
                     }
                     // The selection may have changed since the menu opened, so the cut reads
-                    // it again and deletes what it read.
+                    // it again and deletes what it read. The read goes to the focused frame.
                     FrameEdit::Cut if shell_clipboard && context.can_cut => {
-                        engine.context_menu_cut(&id);
+                        if state.engine.context_menu_frame_focused(&id) {
+                            state.read_selection(&id.key, ClipboardEdit::Cut, None);
+                        }
+                        state.engine.dismiss_context_menu(&id);
                     }
-                    _ => engine.context_menu_edit(&id, action),
+                    _ => state.engine.context_menu_edit(&id, action),
                 }
                 None
             }
