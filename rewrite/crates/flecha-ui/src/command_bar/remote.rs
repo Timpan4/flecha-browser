@@ -10,10 +10,19 @@ pub(super) struct SuggestionRequest {
     url: String,
 }
 
+/// Whether the window may ask a search provider at all. An incognito window never does, whatever
+/// the setting: Chromium's omnibox sends no suggestion requests in incognito (`flechaApi.ts`
+/// `searchSuggestions`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RemoteSuggestions {
+    Allowed,
+    Refused,
+}
+
 impl SuggestionRequest {
-    pub(super) fn new(settings: &Settings, text: &str) -> Option<Self> {
+    pub(super) fn new(settings: &Settings, remote: RemoteSuggestions, text: &str) -> Option<Self> {
         let engine = settings.search_engine;
-        if !settings.search_suggestions_enabled() {
+        if remote == RemoteSuggestions::Refused || !settings.search_suggestions_enabled() {
             return None;
         }
         let query = trim_input(text);

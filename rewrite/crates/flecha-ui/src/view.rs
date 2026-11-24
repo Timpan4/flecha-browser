@@ -84,7 +84,7 @@ impl Shell {
                     .sleep
                     .window_activation(&this.id, active);
                 if active {
-                    this.state.borrow_mut().model.core.focus_window(&this.id);
+                    this.state.borrow_mut().model.focus_window(&this.id);
                 } else {
                     this.consumed_keys.clear();
                 }
@@ -370,12 +370,17 @@ impl Render for Shell {
             window.set_window_title(&title);
             self.title = title;
         }
+        let incognito = self.state.borrow().model.is_incognito(&self.id);
         let mut main = div()
             .relative()
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(0x161c20))
+            .bg(rgb(if incognito {
+                crate::incognito::BACKGROUND
+            } else {
+                0x161c20
+            }))
             .text_color(rgb(0xe2edf1))
             .on_key_down(cx.listener(|this, event, window, cx| this.key(event, window, cx)))
             .on_key_up(cx.listener(|this, event: &KeyUpEvent, window, cx| {
@@ -424,8 +429,9 @@ impl Render for Shell {
                     &mut images,
                     cx,
                 )));
-        } else if let Some(current) = state.model.core.window(&self.id) {
-            let core = &state.model.core;
+        } else if let Some(core) = state.model.state(&self.id)
+            && let Some(current) = core.window(&self.id)
+        {
             let active_space = &current.active_space_id;
             let view = current.visible_tabs();
             let mut pages = div().flex().size_full().overflow_hidden();
@@ -498,8 +504,8 @@ impl Render for Shell {
             }
             main = main.child(body);
         }
-        if !state.status.is_empty() {
-            main = main.child(div().p_2().child(state.status.clone()));
+        if let Some(status) = state.status_for(&self.id) {
+            main = main.child(div().p_2().child(status.to_owned()));
         }
         if state.model.peeks.contains_key(&self.id) {
             main = main.child(

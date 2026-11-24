@@ -31,6 +31,7 @@ use url::Url;
 
 use crate::callbacks::Slot;
 use crate::services::{self, Services};
+use crate::{IncognitoSession, Partition};
 
 /// A download in this engine session. The engine allocates it: CEF's download ids are unique
 /// only within one request context, so a shared and an isolated tab can both start download 1.
@@ -78,10 +79,36 @@ pub enum DownloadEvent {
     },
 }
 
+impl DownloadEvent {
+    pub fn handle(&self) -> DownloadHandle {
+        match self {
+            Self::AskPath { handle, .. }
+            | Self::Held { handle, .. }
+            | Self::Started { handle, .. }
+            | Self::Updated { handle, .. }
+            | Self::Blocked { handle, .. }
+            | Self::Cancelled { handle, .. } => *handle,
+        }
+    }
+
+    fn id(&self) -> Option<DownloadId> {
+        match self {
+            Self::Held { id, .. } | Self::Started { id, .. } | Self::Updated { id, .. } => {
+                Some(*id)
+            }
+            Self::Cancelled { id, .. } => *id,
+            Self::AskPath { .. } | Self::Blocked { .. } => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DownloadMessage {
     /// The tab that started it, while the engine still owns that tab's browser.
     pub tab: Option<TabId>,
+    /// The incognito session it downloads in. Only that session's windows list it, as each
+    /// Chromium profile keeps its own downloads.
+    pub incognito: Option<IncognitoSession>,
     pub event: DownloadEvent,
 }
 
@@ -271,6 +298,11 @@ pub(crate) struct Downloads {
     /// The handle of each download CEF is running. The list knows a download by its handle.
     handles: BTreeMap<CefDownload, DownloadHandle>,
     last_handle: u32,
+    /// The rows incognito sessions recorded, until their session ends and the row can go.
+    incognito: BTreeMap<DownloadId, IncognitoSession>,
+    /// Where each incognito session last answered a save dialog. It lives as long as the session
+    /// and never becomes the regular folder.
+    prompt_folders: BTreeMap<IncognitoSession, PathBuf>,
 }
 
 fn same(browser: &Weak<Slot>, slot: &Slot) -> bool {
@@ -322,6 +354,40 @@ impl Downloads {
         };
         self.handles.insert(download, handle);
         handle
+    }
+
+    /// The incognito session whose request context runs the download.
+    fn handle_session(&self, handle: DownloadHandle) -> Option<IncognitoSession> {
+        self.handles
+            .iter()
+            .find(|(_, live)| **live == handle)
+            .and_then(|((partition, _), _)| partition.as_ref()?.incognito_session())
+    }
+
+    /// Where a save dialog for `session` starts. An incognito session starts from the regular
+    /// answer until it gives its own.
+    fn prompt_folder(&self, session: Option<IncognitoSession>) -> Option<&Path> {
+        session
+            .and_then(|session| self.prompt_folders.get(&session))
+            .map(PathBuf::as_path)
+            .or_else(|| self.list.last_prompt_folder())
+    }
+
+    fn session(&self, event: &DownloadEvent) -> Option<IncognitoSession> {
+        event
+            .id()
+            .and_then(|id| self.incognito.get(&id).copied())
+            .or_else(|| self.handle_session(event.handle()))
+    }
+
+    /// Drops the rows of an ended incognito session; the files stay on disk. A row still
+    /// running stays until closing its browser has cancelled it.
+    fn end_session(&mut self, session: IncognitoSession) {
+        self.prompt_folders.remove(&session);
+        let list = &mut self.list;
+        self.incognito.retain(|id, owner| {
+            *owner != session || matches!(list.remove(*id), Err(ListError::NotAllowed { .. }))
+        });
     }
 
     /// The download ended, so its CEF id may name another download from now on.
@@ -392,6 +458,7 @@ impl Downloads {
                     suggested_name: offer.suggested_name,
                 },
                 settings: &config.settings,
+                last_prompt_folder: self.prompt_folder(self.handle_session(handle)),
                 save_as: false,
                 max_name_length,
                 started: offer.started,
@@ -483,6 +550,9 @@ impl Downloads {
                 Act::Emit(browser, DownloadEvent::Blocked { handle, url }),
             ];
         };
+        if let Some(session) = self.handle_session(handle) {
+            self.incognito.insert(id, session);
+        }
         match warning {
             Some(warning) => {
                 waiting.stage = Stage::Held { id, path };
@@ -552,8 +622,13 @@ impl Downloads {
                     return Err(DownloadError::PathInUse(target));
                 }
                 if let Some(folder) = target.parent() {
-                    // The next save dialog starts where this one was answered.
-                    self.list.downloads_folder_changed(folder);
+                    // The next save dialog of the same profile starts where this one was answered.
+                    match self.handle_session(handle) {
+                        Some(session) => {
+                            self.prompt_folders.insert(session, folder.to_owned());
+                        }
+                        None => self.list.downloads_folder_changed(folder),
+                    }
                 }
                 let https_first = self
                     .config
@@ -830,10 +905,37 @@ impl crate::Engine {
             .find(|handle| downloads.list.id_for_cef(handle.0) == Some(id))
     }
 
+    /// The incognito session that recorded the row, or `None` for a regular one.
+    pub fn download_session(&self, id: DownloadId) -> Option<IncognitoSession> {
+        self.services()
+            .downloads
+            .borrow()
+            .incognito
+            .get(&id)
+            .copied()
+    }
+
     pub fn next_download_event(&mut self) -> Option<DownloadMessage> {
         self.adopt_popups();
         let (tab, event) = self.services().download_events.pop()?;
-        Some(DownloadMessage { tab, event })
+        let mut downloads = self.services().downloads.borrow_mut();
+        let incognito = downloads.session(&event);
+        if let Some(session) = incognito
+            && !self.contexts.contains_key(&Partition::Incognito(session))
+        {
+            downloads.end_session(session);
+        }
+        drop(downloads);
+        Some(DownloadMessage {
+            tab,
+            incognito,
+            event,
+        })
+    }
+
+    /// Drops the download rows of an incognito session whose last window closed.
+    pub(crate) fn end_download_session(&self, session: IncognitoSession) {
+        self.services().downloads.borrow_mut().end_session(session);
     }
 
     /// Saves an asked download at `path` (`None` takes the suggestion), or keeps a held one
@@ -1654,6 +1756,143 @@ mod tests {
             (State::Complete, picked.as_path())
         );
         assert!(services.downloads.borrow().is_idle());
+    }
+
+    #[test]
+    fn an_incognito_session_lists_its_own_downloads_until_it_ends() {
+        let [regular, private] = <[_; 2]>::try_from(crate::tests::slots(&["regular", "private"]))
+            .unwrap_or_else(|_| unreachable!());
+        let session = IncognitoSession::new(1);
+        regular.partition.replace(Some(Partition::Shared));
+        private
+            .partition
+            .replace(Some(Partition::Incognito(session)));
+        let services = crate::services::of(&regular);
+        services.downloads.borrow_mut().config = downloads(false).config;
+        let log = Log::default();
+        let finished = "https://files.example/finished.txt";
+        let running = "https://files.example/running.txt";
+        for (slot, id, url) in [
+            (&regular, 1, finished),
+            (&private, 1, finished),
+            (&private, 2, running),
+        ] {
+            offered(
+                slot,
+                id,
+                offer(0, url, url),
+                Reentrant::boxed(&services, &log),
+                |_| false,
+            );
+        }
+        let started = drain(&services);
+        let sessions: Vec<_> = started
+            .iter()
+            .map(|event| services.downloads.borrow().session(event))
+            .collect();
+        assert_eq!(sessions, [None, Some(session), Some(session)]);
+        let [regular_id, private_id, running_id] = <[_; 3]>::try_from(
+            started
+                .iter()
+                .map(|event| event.id().unwrap())
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        let path = |id| {
+            let downloads = services.downloads.borrow();
+            downloads.list.get(id).unwrap().path().to_owned()
+        };
+        let item = || Rc::new(ReentrantItem(services.clone()));
+        for (slot, cef_id, id, state) in [
+            (&regular, 1, regular_id, SnapshotState::Complete),
+            (&private, 1, private_id, SnapshotState::Complete),
+            (&private, 2, running_id, SnapshotState::InProgress),
+        ] {
+            reported(slot, cef_id, report(state, 10, 10, &path(id)), item());
+        }
+
+        // The session ends while one download still runs. The finished row goes at once; the
+        // running one stays until closing its browser has cancelled it.
+        services.downloads.borrow_mut().end_session(session);
+        let rows = |services: &Services| -> Vec<DownloadId> {
+            services
+                .downloads
+                .borrow()
+                .list
+                .iter()
+                .map(flecha_downloads::Download::id)
+                .collect()
+        };
+        assert_eq!(rows(&services), [regular_id, running_id]);
+        reported(
+            &private,
+            2,
+            report(SnapshotState::Cancelled, 10, 10, &path(running_id)),
+            item(),
+        );
+        let cancelled = drain(&services)
+            .into_iter()
+            .rfind(|event| event.id() == Some(running_id))
+            .unwrap();
+        assert_eq!(
+            services.downloads.borrow().session(&cancelled),
+            Some(session),
+            "a cancelled row still names its session"
+        );
+        services.downloads.borrow_mut().end_session(session);
+        assert_eq!(rows(&services), [regular_id]);
+        assert!(services.downloads.borrow().incognito.is_empty());
+    }
+
+    #[test]
+    fn an_incognito_save_dialog_answer_never_becomes_the_regular_folder() {
+        let [regular, private] = <[_; 2]>::try_from(crate::tests::slots(&["regular", "private"]))
+            .unwrap_or_else(|_| unreachable!());
+        let session = IncognitoSession::new(1);
+        regular.partition.replace(Some(Partition::Shared));
+        private
+            .partition
+            .replace(Some(Partition::Incognito(session)));
+        let services = crate::services::of(&regular);
+        services.downloads.borrow_mut().config = downloads(true).config;
+        let log = Log::default();
+        let url = "https://files.example/a.txt";
+        let suggested = |slot: &Rc<Slot>, id| {
+            offered(
+                slot,
+                id,
+                offer(0, url, url),
+                Reentrant::boxed(&services, &log),
+                |_| false,
+            );
+            match drain(&services).pop() {
+                Some(DownloadEvent::AskPath {
+                    handle, suggested, ..
+                }) => (handle, suggested),
+                other => panic!("expected AskPath, got {other:?}"),
+            }
+        };
+
+        let (handle, _) = suggested(&private, 1);
+        let chosen = folder().join("private-choice");
+        command(&services, |downloads| {
+            downloads.accept(handle, Some(chosen.join("a.txt")))
+        })
+        .unwrap();
+        assert_eq!(
+            suggested(&private, 2).1.parent(),
+            Some(chosen.as_path()),
+            "the session starts its next dialog where it answered the last one"
+        );
+        assert_eq!(
+            suggested(&regular, 1).1.parent(),
+            Some(folder().as_path()),
+            "a regular dialog still starts in the regular default folder"
+        );
+        assert_eq!(services.downloads.borrow().list.last_prompt_folder(), None);
+
+        services.downloads.borrow_mut().end_session(session);
+        assert!(services.downloads.borrow().prompt_folders.is_empty());
     }
 
     #[cfg(unix)]

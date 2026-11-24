@@ -26,7 +26,9 @@ pub(crate) enum SidebarAction {
 
 impl Controller {
     pub(crate) fn sidebar_action(&mut self, window: &WindowId, action: SidebarAction) {
-        let core = &mut self.model.core;
+        let Some(core) = self.model.state_mut(window) else {
+            return;
+        };
         let Some(current) = core.window(window) else {
             return;
         };
@@ -90,11 +92,13 @@ impl Controller {
                 Placement::Favorite => true,
                 Placement::Pinned { space, .. } | Placement::Today { space, .. } => self
                     .model
-                    .core
-                    .window(window)
+                    .state(window)
+                    .and_then(|state| state.window(window))
                     .is_some_and(|current| &current.active_space_id == space),
             };
-        let core = &mut self.model.core;
+        let Some(core) = self.model.state_mut(window) else {
+            return false;
+        };
         let change = core.place_tab(id, placement, None);
         if change.result {
             for id in change.removed {
@@ -112,7 +116,7 @@ impl Controller {
 
     pub(crate) fn close_tab(&mut self, tab: &TabId) {
         self.engine.close(tab);
-        for removed in self.model.core.close_tab(tab, now()).removed {
+        for removed in self.model.close_tab(tab) {
             self.engine.close(&removed);
         }
     }
@@ -133,7 +137,10 @@ impl Shell {
         current: &flecha_core::Window,
         cx: &Context<Self>,
     ) -> Div {
-        let core = &state.model.core;
+        let Some(core) = state.model.state(&self.id) else {
+            return div();
+        };
+        let incognito = state.model.is_incognito(&self.id);
         let toggle = Action::Sidebar(SidebarAction::Toggle);
         if !core.sidebar_visible(&self.id) {
             return div()
@@ -209,40 +216,41 @@ impl Shell {
             )
             .when(!core.favorites().is_empty(), |row| row.child(favorites));
 
-        let mut tabs = div()
-            .id("sidebar-tabs")
-            .min_h_0()
-            .flex_1()
-            .overflow_y_scroll()
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap_1()
-                    .child(self.section_button(
-                        "pinned-toggle",
-                        if space.pinned_collapsed {
-                            "▸ Pinned"
-                        } else {
-                            "▾ Pinned"
-                        },
-                        SidebarAction::TogglePinned(!space.pinned_collapsed),
-                        cx,
-                    ))
-                    .child(
-                        button("new-folder", "+ Folder")
-                            .text_xs()
-                            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                                this.show_overlay(
-                                    Overlay::Folder(None, TextField::default()),
-                                    window,
-                                    cx,
-                                );
-                            })),
-                    ),
-            );
-        if !space.pinned_collapsed {
+        let mut tabs =
+            div()
+                .id("sidebar-tabs")
+                .min_h_0()
+                .flex_1()
+                .overflow_y_scroll()
+                .when(!incognito, |tabs| {
+                    tabs.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .gap_1()
+                            .child(self.section_button(
+                                "pinned-toggle",
+                                if space.pinned_collapsed {
+                                    "▸ Pinned"
+                                } else {
+                                    "▾ Pinned"
+                                },
+                                SidebarAction::TogglePinned(!space.pinned_collapsed),
+                                cx,
+                            ))
+                            .child(button("new-folder", "+ Folder").text_xs().on_click(
+                                cx.listener(|this, _: &ClickEvent, window, cx| {
+                                    this.show_overlay(
+                                        Overlay::Folder(None, TextField::default()),
+                                        window,
+                                        cx,
+                                    );
+                                }),
+                            )),
+                    )
+                });
+        if !space.pinned_collapsed && !incognito {
             tabs = tabs.children(self.pinned_rows(core, &space.pinned, active, cx));
         }
         tabs = tabs.child(section("Today"));
@@ -288,17 +296,39 @@ impl Shell {
             );
         }
         let toolbar = state.toolbars.get(&self.id).copied().unwrap_or_default();
-        let downloads = state.downloads.count();
+        let downloads = state
+            .downloads
+            .count(state.model.incognito_session(&self.id));
         div()
             .flex()
             .flex_col()
-            .w(px(core.settings.sidebar_width.pixels() as f32))
+            .w(px(state.model.core.settings.sidebar_width.pixels() as f32))
             .flex_shrink_0()
             .min_h_0()
             .p_2()
             .gap_2()
-            .bg(rgb(0x202a30))
+            .bg(rgb(if incognito {
+                crate::incognito::SIDEBAR
+            } else {
+                0x202a30
+            }))
             .text_sm()
+            .when(incognito, |sidebar| {
+                sidebar.child(
+                    div()
+                        .id("incognito-label")
+                        .flex()
+                        .gap_1()
+                        .items_center()
+                        .px_2()
+                        .text_color(rgb(crate::incognito::LABEL))
+                        .child(format!(
+                            "{} {}",
+                            space.emoji.as_deref().unwrap_or_default(),
+                            space.name
+                        )),
+                )
+            })
             .child(
                 div()
                     .flex()
@@ -356,16 +386,18 @@ impl Shell {
                         })),
                 )
             })
-            .child(favorites)
+            .when(!incognito, |sidebar| sidebar.child(favorites))
             .child(tabs)
-            .child(
-                div()
-                    .flex()
-                    .min_w_0()
-                    .gap_1()
-                    .child(div().flex_1().min_w_0().child(spaces))
-                    .child(self.action_button("new-space", "+ Space", Action::NewSpace, cx)),
-            )
+            .when(!incognito, |sidebar| {
+                sidebar.child(
+                    div()
+                        .flex()
+                        .min_w_0()
+                        .gap_1()
+                        .child(div().flex_1().min_w_0().child(spaces))
+                        .child(self.action_button("new-space", "+ Space", Action::NewSpace, cx)),
+                )
+            })
             .child(
                 div()
                     .flex()
@@ -375,9 +407,11 @@ impl Shell {
                     .border_t_1()
                     .border_color(rgb(0x30404a))
                     .pt_1()
-                    .child(button("show-history", "History").on_click(cx.listener(
-                        |this, _: &ClickEvent, window, cx| this.toggle_history(window, cx),
-                    )))
+                    .when(!incognito, |row| {
+                        row.child(button("show-history", "History").on_click(cx.listener(
+                            |this, _: &ClickEvent, window, cx| this.toggle_history(window, cx),
+                        )))
+                    })
                     .child(
                         button("show-downloads", "Downloads")
                             .when(downloads > 0, |button| {
@@ -394,9 +428,11 @@ impl Shell {
                                 this.toggle_downloads(window, cx)
                             })),
                     )
-                    .child(button("show-archive", "Archive").on_click(cx.listener(
-                        |this, _: &ClickEvent, window, cx| this.toggle_archive(window, cx),
-                    )))
+                    .when(!incognito, |row| {
+                        row.child(button("show-archive", "Archive").on_click(cx.listener(
+                            |this, _: &ClickEvent, window, cx| this.toggle_archive(window, cx),
+                        )))
+                    })
                     .child(self.command_button(
                         "open-settings",
                         "Settings",
@@ -404,16 +440,18 @@ impl Shell {
                         cx,
                     ))
                     .child(self.command_button("new-tab", "+ Tab", Command::NewTab, cx))
-                    .child(self.action_button(
-                        "isolation",
-                        if space.isolated {
-                            "Isolated cookies"
-                        } else {
-                            "Shared cookies"
-                        },
-                        Action::Isolate,
-                        cx,
-                    ))
+                    .when(!incognito, |row| {
+                        row.child(self.action_button(
+                            "isolation",
+                            if space.isolated {
+                                "Isolated cookies"
+                            } else {
+                                "Shared cookies"
+                            },
+                            Action::Isolate,
+                            cx,
+                        ))
+                    })
                     .when(current.visible_tabs().len() > 1, |row| {
                         row.child(self.action_button(
                             "unsplit",
@@ -421,7 +459,14 @@ impl Shell {
                             Action::ExitSplit,
                             cx,
                         ))
-                    }),
+                    })
+                    // Last, so the regular controls keep the places the harness measured.
+                    .child(self.action_button(
+                        "new-incognito-window",
+                        "+ Incognito",
+                        Action::NewIncognitoWindow,
+                        cx,
+                    )),
             )
     }
 
@@ -653,7 +698,9 @@ impl Shell {
 
     pub(crate) fn tab_actions_panel(&self, tab_id: &TabId, cx: &Context<Self>) -> Div {
         let state = self.state.borrow();
-        let core = &state.model.core;
+        let Some(core) = state.model.state(&self.id) else {
+            return overlay_panel();
+        };
         let Some(tab) = core.tab(tab_id) else {
             return overlay_panel();
         };
@@ -684,6 +731,9 @@ impl Shell {
             ("Move to Flechinha", Action::DetachTab(id.clone())),
             ("Close tab", Action::CloseTab(id)),
         ]);
+        if state.model.is_incognito(&self.id) {
+            actions.retain(|(_, action)| crate::incognito::refusal(action).is_none());
+        }
         overlay_panel()
             .child(div().truncate().child(tab_label(tab)))
             .children(actions.into_iter().map(|(label, action)| {

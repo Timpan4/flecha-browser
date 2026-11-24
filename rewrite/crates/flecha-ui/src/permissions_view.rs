@@ -104,7 +104,7 @@ impl Controller {
         if self.permissions.save_error().is_none()
             && let Err(error) = self.save_permissions()
         {
-            self.status = error.to_string();
+            self.status.set(None, error.to_string());
             changed = true;
         }
         changed

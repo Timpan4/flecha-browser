@@ -75,13 +75,19 @@ for mutation in "${slice_mutations[@]}"; do
     popups-allowed) expected='a popup without a user gesture opened' ;;
     popup-keyboard) expected='PASS a scripted popup opened in its own window' ;;
   esac
+  # Reverting a mutation must advance source mtimes for Cargo's fingerprint. Bash ignores
+  # `set -e` in a subshell tested by `||`, so each step is chained: a mutation that no longer
+  # applies must stop the suite, not test the unchanged binary.
   (
-    cd "$shadow"
-    # Reverting a mutation must advance source mtimes for Cargo's fingerprint.
-    cp -R "$rewrite/crates/." crates/
-    node "$rewrite/tools/mutate-slice.mjs" "$mutation"
-    "${launcher[@]}" build --locked -p flecha -j 14 >"$logs/$mutation-build.log" 2>&1
-  ) || { cat "$logs/$mutation-build.log" >&2; exit 1; }
+    cd "$shadow" &&
+      cp -R "$rewrite/crates/." crates/ &&
+      node "$rewrite/tools/mutate-slice.mjs" "$mutation" &&
+      "${launcher[@]}" build --locked -p flecha -j 14 >"$logs/$mutation-build.log" 2>&1
+  ) || {
+    cat "$logs/$mutation-build.log" >&2 2>/dev/null || true
+    printf 'FAIL %s could not be applied or built\n' "$mutation" >&2
+    exit 1
+  }
   expect_failure "$mutation" "$expected" tools/verify-slice.sh slice "$binary"
 done
 

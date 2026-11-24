@@ -12,6 +12,7 @@ Usage: flecha [--profile DIR] [--open URL | URL]
 
 Desktop profile: --profile, FLECHA_PROFILE, or $XDG_DATA_HOME/flecha-rewrite
 (defaults to $HOME/.local/share/flecha-rewrite when XDG_DATA_HOME is unset).
+A launch on a profile Flecha already runs hands its URL, or a new window, to it.
 Use rewrite/tools/isolated-run.sh for --verify.
 ";
 

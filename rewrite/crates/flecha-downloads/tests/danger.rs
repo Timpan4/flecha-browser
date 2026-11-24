@@ -310,6 +310,7 @@ fn decided(
                 suggested_name: None,
             },
             settings: &settings,
+            last_prompt_folder: None,
             save_as: false,
             max_name_length: Some(255),
             started: started(),
