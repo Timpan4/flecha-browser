@@ -529,8 +529,9 @@ async function isolateWithTransients(app, space) {
   await app.present();
   await capture('peek-backdrop', ['#147A70', '#FFCC49']);
 
-  // The verifier measured this point inside the Separate cookies row with two Spaces.
-  execFileSync(x11Driver, ['click', 95, 189]);
+  // The centre of the Shared cookies button with two Spaces, measured from this step's capture
+  // on Xvfb's 1280×1024 screen. The button sits in the controls at the foot of the sidebar.
+  execFileSync(x11Driver, ['click', 192, 965]);
 
   for (;;) {
     const state = await app.command('snapshot');
