@@ -221,7 +221,7 @@ impl Engine {
             self.resize(&tab, viewport);
             return Ok(());
         }
-        self.close(&tab);
+        self.close_browser(&tab);
         let Some(mut context) = self.context(&partition)? else {
             return Ok(());
         };
@@ -470,8 +470,14 @@ impl Engine {
         Some(CefString::from(&frame.url()).to_string())
     }
 
+    /// Closes the tab's browser and forgets the tab, discarded page included.
     pub fn close(&mut self, tab: &TabId) {
         self.discarded.remove(tab);
+        self.close_browser(tab);
+    }
+
+    /// Closes the tab's browser. A discarded page's record stays for [`Self::restore_tab`].
+    fn close_browser(&mut self, tab: &TabId) {
         let Some(session) = self.browsers.remove(tab) else {
             return;
         };
@@ -676,13 +682,22 @@ mod tests {
 
     /// A slot no CEF browser backs, in an engine of its own.
     pub(crate) fn slot(tab: &str) -> Rc<Slot> {
+        slots(&[tab]).remove(0)
+    }
+
+    /// Browsers of one engine, so they share its services.
+    pub(crate) fn slots(tabs: &[&str]) -> Vec<Rc<Slot>> {
         let mut engine = Engine::new(PathBuf::new(), || TabId::new("popup"));
-        Rc::new(Slot::new(
-            engine.generations.create(TabId::new(tab)),
-            VIEWPORT,
-            engine.events.clone(),
-            engine.popups.clone(),
-        ))
+        tabs.iter()
+            .map(|tab| {
+                Rc::new(Slot::new(
+                    engine.generations.create(TabId::new(*tab)),
+                    VIEWPORT,
+                    engine.events.clone(),
+                    engine.popups.clone(),
+                ))
+            })
+            .collect()
     }
 
     /// A live opener with a popup CEF has started creating, and the popup's slot.

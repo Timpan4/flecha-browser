@@ -9,6 +9,11 @@
 //!
 //! Requests are queued per CEF browser rather than per tab id, so a prompt follows its browser
 //! when the shell moves it to another tab.
+//!
+//! Chromium saves every answer CEF gives it as a content setting of the request context, and
+//! after that stops asking. A saved flecha decision may stay there. An answer no saved decision
+//! backs, such as Allow once, is reset to Chromium's default when the document that got it goes
+//! away, so the next document asks again.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Weak;
@@ -43,9 +48,11 @@ pub struct PermissionEvent {
     pub prompt: Option<PermissionPrompt>,
 }
 
-/// How a held request is answered. CEF's callbacks in the app, recorders in tests.
+/// How a request is answered. CEF's callbacks in the app, recorders in tests.
 pub(crate) trait Answer {
-    fn answer(self: Box<Self>, verdict: Verdict);
+    /// `one_time` holds the kinds no saved decision backs: Chromium may keep them only for the
+    /// current document.
+    fn answer(self: Box<Self>, verdict: Verdict, one_time: PermissionSet);
 }
 
 struct Held {
@@ -53,6 +60,27 @@ struct Held {
     queue: QueueId,
     /// CEF's prompt id, for `OnDismissPermissionPrompt`. Media requests have none.
     prompt: Option<u64>,
+    partition: Partition,
+    origin: Origin,
+    kinds: PermissionSet,
+}
+
+/// The kinds of a `verdict` for `origin` that no saved decision backs.
+fn one_time(
+    manager: &PermissionManager,
+    partition: &Partition,
+    origin: &Origin,
+    kinds: PermissionSet,
+    verdict: Verdict,
+) -> PermissionSet {
+    let saved = manager.site_settings(partition, origin);
+    let mut one_time = PermissionSet::EMPTY;
+    for kind in kinds.iter() {
+        if saved.decision(kind) != verdict.into() {
+            one_time.insert(kind);
+        }
+    }
+    one_time
 }
 
 #[derive(Default)]
@@ -66,7 +94,7 @@ pub(crate) struct Permissions {
     shown: BTreeMap<QueueId, RequestId>,
 }
 
-type Ready = Vec<(Box<dyn Answer>, Verdict)>;
+type Ready = Vec<(Box<dyn Answer>, Verdict, PermissionSet)>;
 
 impl Permissions {
     fn complete(&mut self, completions: Vec<Completion>, touched: &mut BTreeSet<QueueId>) -> Ready {
@@ -78,7 +106,14 @@ impl Permissions {
                     self.prompts.remove(&prompt);
                 }
                 touched.insert(held.queue);
-                Some((held.answer, verdict))
+                let one_time = one_time(
+                    &self.manager,
+                    &held.partition,
+                    &held.origin,
+                    held.kinds,
+                    verdict,
+                );
+                Some((held.answer, verdict, one_time))
             })
             .collect()
     }
@@ -289,7 +324,8 @@ pub(crate) struct Ask {
 pub(crate) fn request(services: &Services, ask: Ask, answer: Box<dyn Answer>) {
     let (Some(partition), Some(origin), Some(kinds)) = (ask.partition, ask.origin, ask.kinds)
     else {
-        answer.answer(Verdict::Block);
+        // Ineligible requests are always denied, so Chromium keeping the denial changes nothing.
+        answer.answer(Verdict::Block, PermissionSet::EMPTY);
         return;
     };
     let now = {
@@ -298,7 +334,10 @@ pub(crate) fn request(services: &Services, ask: Ask, answer: Box<dyn Answer>) {
             .manager
             .evaluate(&partition, &ask.queue, &origin, kinds)
         {
-            Evaluation::Resolved(verdict) => Some((answer, verdict)),
+            Evaluation::Resolved(verdict) => {
+                let one_time = one_time(&state.manager, &partition, &origin, kinds, verdict);
+                Some((answer, verdict, one_time))
+            }
             Evaluation::Prompt(request) => {
                 state.held.insert(
                     request,
@@ -306,6 +345,9 @@ pub(crate) fn request(services: &Services, ask: Ask, answer: Box<dyn Answer>) {
                         answer,
                         queue: ask.queue.clone(),
                         prompt: ask.prompt,
+                        partition,
+                        origin,
+                        kinds,
                     },
                 );
                 if let Some(prompt) = ask.prompt {
@@ -317,8 +359,8 @@ pub(crate) fn request(services: &Services, ask: Ask, answer: Box<dyn Answer>) {
             }
         }
     };
-    if let Some((answer, verdict)) = now {
-        answer.answer(verdict);
+    if let Some((answer, verdict, one_time)) = now {
+        answer.answer(verdict, one_time);
     }
 }
 
@@ -335,8 +377,8 @@ pub(crate) fn apply<R>(
         state.refresh(touched, &services.permission_events);
         (result, ready)
     };
-    for (answer, verdict) in ready {
-        answer.answer(verdict);
+    for (answer, verdict, one_time) in ready {
+        answer.answer(verdict, one_time);
     }
     result
 }
@@ -381,31 +423,114 @@ pub(crate) fn dismissed(services: &Services, prompt: u64) {
     drop(dropped);
 }
 
+/// The document a request came from, where Chromium keeps the answer as a content setting.
+pub(crate) struct Document {
+    slot: Weak<Slot>,
+    context: RequestContext,
+    requesting: String,
+    top: String,
+}
+
+/// Puts back to Chromium's default the content settings one document's answers left.
+pub(crate) struct OneTime(Box<dyn FnOnce()>);
+
+impl Document {
+    fn of(
+        slot: &std::rc::Rc<Slot>,
+        browser: &Browser,
+        requesting: Option<&CefString>,
+    ) -> Option<Self> {
+        Some(Self {
+            slot: std::rc::Rc::downgrade(slot),
+            context: browser.host()?.request_context()?,
+            requesting: requesting?.to_string(),
+            top: top_url(browser)?,
+        })
+    }
+
+    /// Remembers that Chromium now holds `kinds` for this document only.
+    fn answered(self, kinds: PermissionSet) {
+        let Some(slot) = self.slot.upgrade().filter(|_| !kinds.is_empty()) else {
+            return;
+        };
+        let Self {
+            context,
+            requesting,
+            top,
+            ..
+        } = self;
+        let reset = move || {
+            let (requesting, top) = (
+                CefString::from(requesting.as_str()),
+                CefString::from(top.as_str()),
+            );
+            for kind in kinds.iter() {
+                for &setting in content_settings(kind) {
+                    context.set_content_setting(
+                        Some(&requesting),
+                        Some(&top),
+                        setting,
+                        ContentSettingValues::DEFAULT,
+                    );
+                }
+            }
+        };
+        slot.one_time.borrow_mut().push(OneTime(Box::new(reset)));
+    }
+}
+
+/// The Chromium content settings that hold `kind`.
+fn content_settings(kind: PermissionKind) -> &'static [ContentSettingTypes] {
+    match kind {
+        PermissionKind::Geolocation => &[ContentSettingTypes::GEOLOCATION],
+        PermissionKind::Camera => &[ContentSettingTypes::MEDIASTREAM_CAMERA],
+        PermissionKind::Microphone => &[ContentSettingTypes::MEDIASTREAM_MIC],
+        PermissionKind::Notifications => &[ContentSettingTypes::NOTIFICATIONS],
+        PermissionKind::ClipboardRead => &[ContentSettingTypes::CLIPBOARD_READ_WRITE],
+    }
+}
+
+/// `slot`'s document went away (navigation or close): Chromium forgets the answers it gave that
+/// no saved decision backs, so the next document's requests reach the engine again.
+pub(crate) fn forget_one_time(slot: &Slot) {
+    for OneTime(reset) in slot.one_time.take() {
+        reset();
+    }
+}
+
 struct MediaAnswer {
     callback: MediaAccessCallback,
     requested: u32,
+    document: Option<Document>,
 }
 
 impl Answer for MediaAnswer {
-    fn answer(self: Box<Self>, verdict: Verdict) {
+    fn answer(self: Box<Self>, verdict: Verdict, one_time: PermissionSet) {
         // A getUserMedia grant must match what was requested, so it is all or nothing.
         match verdict {
             Verdict::Allow => self.callback.cont(self.requested),
             Verdict::Block => self.callback.cancel(),
+        }
+        if let Some(document) = self.document {
+            document.answered(one_time);
         }
     }
 }
 
 struct PromptAnswer {
     callback: PermissionPromptCallback,
+    document: Option<Document>,
 }
 
 impl Answer for PromptAnswer {
-    fn answer(self: Box<Self>, verdict: Verdict) {
+    fn answer(self: Box<Self>, verdict: Verdict, one_time: PermissionSet) {
         self.callback.cont(match verdict {
             Verdict::Allow => PermissionRequestResult::ACCEPT,
             Verdict::Block => PermissionRequestResult::DENY,
         });
+        if let Some(document) = self.document {
+            document.answered(one_time);
+        }
     }
 }
 
@@ -446,7 +571,8 @@ wrap_permission_handler! {
             let frame_url = frame.map(|frame| CefString::from(&frame.url()).to_string());
             let mut ask = ask(&self.slot, browser, requesting_origin, frame_url);
             ask.kinds = media_kinds(requested_permissions);
-            let answer = Box::new(MediaAnswer { callback: callback.clone(), requested: requested_permissions });
+            let document = Document::of(&self.slot, browser, requesting_origin);
+            let answer = Box::new(MediaAnswer { callback: callback.clone(), requested: requested_permissions, document });
             request(&services::of(&self.slot), ask, answer);
             1
         }
@@ -460,7 +586,8 @@ wrap_permission_handler! {
             let mut ask = ask(&self.slot, browser, requesting_origin, None);
             ask.kinds = prompt_kinds(requested_permissions);
             ask.prompt = Some(prompt_id);
-            request(&services::of(&self.slot), ask, Box::new(PromptAnswer { callback: callback.clone() }));
+            let document = Document::of(&self.slot, browser, requesting_origin);
+            request(&services::of(&self.slot), ask, Box::new(PromptAnswer { callback: callback.clone(), document }));
             1
         }
 
@@ -487,16 +614,21 @@ pub(crate) mod tests {
 
     pub(crate) type Log = Rc<RefCell<Vec<(&'static str, Option<Verdict>)>>>;
 
+    /// The one-time kinds each answer carried.
+    type OneTimeLog = Rc<RefCell<Vec<(&'static str, PermissionSet)>>>;
+
     pub(crate) struct Recorder {
         name: &'static str,
         log: Log,
+        one_time: OneTimeLog,
         answered: bool,
     }
 
     impl Answer for Recorder {
-        fn answer(mut self: Box<Self>, verdict: Verdict) {
+        fn answer(mut self: Box<Self>, verdict: Verdict, one_time: PermissionSet) {
             self.answered = true;
             self.log.borrow_mut().push((self.name, Some(verdict)));
+            self.one_time.borrow_mut().push((self.name, one_time));
         }
     }
 
@@ -509,9 +641,14 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn recorder(name: &'static str, log: &Log) -> Box<Recorder> {
+        tracked(name, log, &OneTimeLog::default())
+    }
+
+    fn tracked(name: &'static str, log: &Log, one_time: &OneTimeLog) -> Box<Recorder> {
         Box::new(Recorder {
             name,
             log: log.clone(),
+            one_time: one_time.clone(),
             answered: false,
         })
     }
@@ -736,5 +873,72 @@ pub(crate) mod tests {
             ((), completions)
         });
         assert_eq!(*log.borrow(), [("held", Some(Verdict::Block))]);
+    }
+
+    #[test]
+    fn chromium_keeps_only_answers_a_saved_decision_backs() {
+        let services = Services::new();
+        let log = Log::default();
+        let one_time = OneTimeLog::default();
+        let camera = PermissionSet::from(PermissionKind::Camera);
+
+        // Allow once: Chromium must forget it with the document.
+        request(
+            &services,
+            camera_ask("browser-1", "https://meet.example/"),
+            tracked("once", &log, &one_time),
+        );
+        let front = services
+            .permissions
+            .borrow()
+            .pending(&QueueId::new("browser-1"))
+            .unwrap();
+        resolve(&services, front.request, PromptOutcome::AllowOnce).unwrap();
+        // The page asks again: the one-time answer still isn't saved.
+        request(
+            &services,
+            camera_ask("browser-1", "https://meet.example/"),
+            tracked("again", &log, &one_time),
+        );
+
+        // Allow always: Chromium may keep it.
+        request(
+            &services,
+            camera_ask("browser-2", "https://call.example/"),
+            tracked("always", &log, &one_time),
+        );
+        let front = services
+            .permissions
+            .borrow()
+            .pending(&QueueId::new("browser-2"))
+            .unwrap();
+        resolve(&services, front.request, PromptOutcome::AllowAlways).unwrap();
+
+        // Leaving with a prompt open denies it once.
+        request(
+            &services,
+            camera_ask("browser-3", "https://left.example/"),
+            tracked("left", &log, &one_time),
+        );
+        leave(&services, &QueueId::new("browser-3"));
+
+        assert_eq!(
+            *one_time.borrow(),
+            [
+                ("once", camera),
+                ("again", camera),
+                ("always", PermissionSet::EMPTY),
+                ("left", camera)
+            ]
+        );
+        assert_eq!(
+            *log.borrow(),
+            [
+                ("once", Some(Verdict::Allow)),
+                ("again", Some(Verdict::Allow)),
+                ("always", Some(Verdict::Allow)),
+                ("left", Some(Verdict::Block)),
+            ]
+        );
     }
 }

@@ -10,6 +10,10 @@
 //! The path handed to CEF is the list's record of the download, so an intermediate name CEF
 //! reports never replaces it (issue #114). When the person picks the path, the insecure-delivery
 //! check runs again on the chosen file name.
+//!
+//! Answering or dropping a CEF callback can call straight back into this handler, so
+//! [`Downloads`] never touches one: it returns [`Act`]s, which [`run`] carries out once the
+//! `RefCell` borrow has ended. That covers releasing a callback too.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -28,9 +32,13 @@ use url::Url;
 use crate::callbacks::Slot;
 use crate::services::{self, Services};
 
-/// A download for this CEF session: CEF's download id.
+/// A download in this engine session. The engine allocates it: CEF's download ids are unique
+/// only within one request context, so a shared and an isolated tab can both start download 1.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DownloadHandle(pub u32);
+
+/// CEF's name for a download: its request context's partition and its id there.
+pub(crate) type CefDownload = (Option<crate::Partition>, u32);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DownloadEvent {
@@ -91,10 +99,13 @@ pub enum DownloadError {
     NotWaiting(DownloadHandle),
     /// CEF hasn't reported this download, or it already ended.
     Unknown(DownloadHandle),
-    /// A chosen path must be absolute and name a file.
+    /// A chosen path must be absolute, name a file and be UTF-8, which CEF requires. The prompt
+    /// stays open.
     InvalidPath(PathBuf),
     /// A held download is kept at its decided path. Choosing another path is asked first.
     KeepsDecidedPath(DownloadHandle),
+    /// Another download in progress is saving to this path. The prompt stays open.
+    PathInUse(PathBuf),
     List(ListError),
 }
 
@@ -105,7 +116,12 @@ impl std::fmt::Display for DownloadError {
                 write!(f, "download {} isn't waiting for an answer", handle.0)
             }
             Self::Unknown(handle) => write!(f, "no live download {}", handle.0),
-            Self::InvalidPath(path) => write!(f, "{} is not an absolute file path", path.display()),
+            Self::InvalidPath(path) => {
+                write!(f, "{} is not an absolute UTF-8 file path", path.display())
+            }
+            Self::PathInUse(path) => {
+                write!(f, "another download is saving to {}", path.display())
+            }
             Self::KeepsDecidedPath(handle) => {
                 write!(f, "held download {} keeps its decided path", handle.0)
             }
@@ -215,8 +231,10 @@ struct Waiting {
     started_at: EpochMillis,
 }
 
+/// A download CEF is saving. Its owner is known from the moment it is continued, before CEF's
+/// first update brings the item's controls.
 struct Item {
-    control: Rc<dyn Control>,
+    control: Option<Rc<dyn Control>>,
     browser: Weak<Slot>,
 }
 
@@ -227,6 +245,8 @@ pub(crate) enum Act {
     CancelItem(Rc<dyn Control>),
     Pause(Rc<dyn Control>),
     Resume(Rc<dyn Control>),
+    /// Lets go of an item's controls.
+    Release(Rc<dyn Control>),
     Emit(Weak<Slot>, DownloadEvent),
 }
 
@@ -236,6 +256,9 @@ pub(crate) struct Downloads {
     pub list: DownloadList,
     waiting: BTreeMap<DownloadHandle, Waiting>,
     items: BTreeMap<DownloadHandle, Item>,
+    /// The handle of each download CEF is running. The list knows a download by its handle.
+    handles: BTreeMap<CefDownload, DownloadHandle>,
+    last_handle: u32,
 }
 
 fn same(browser: &Weak<Slot>, slot: &Slot) -> bool {
@@ -243,6 +266,48 @@ fn same(browser: &Weak<Slot>, slot: &Slot) -> bool {
 }
 
 impl Downloads {
+    /// The handle of CEF's download, allocated the first time CEF names it.
+    pub fn handle_for(&mut self, download: CefDownload) -> DownloadHandle {
+        if let Some(handle) = self.handles.get(&download) {
+            return *handle;
+        }
+        let handle = loop {
+            self.last_handle = self.last_handle.wrapping_add(1);
+            let handle = DownloadHandle(self.last_handle);
+            let taken = handle.0 == 0
+                || self.handles.values().any(|live| *live == handle)
+                || self.waiting.contains_key(&handle)
+                || self.items.contains_key(&handle)
+                || self.list.id_for_cef(handle.0).is_some();
+            if !taken {
+                break handle;
+            }
+        };
+        self.handles.insert(download, handle);
+        handle
+    }
+
+    /// The download ended, so its CEF id may name another download from now on.
+    fn forget(&mut self, handle: DownloadHandle) {
+        self.handles.retain(|_, live| *live != handle);
+    }
+
+    /// Parks a download until the shell answers. Handles are unique, so nothing is displaced;
+    /// if something were, its callback would be released after the borrow, not inside it.
+    fn wait(&mut self, handle: DownloadHandle, waiting: Waiting, acts: &mut Vec<Act>) {
+        if let Some(displaced) = self.waiting.insert(handle, waiting) {
+            acts.push(Act::Cancel(displaced.proceed));
+        }
+    }
+
+    /// CEF is about to save it: from here on, closing its browser cancels it.
+    fn saving(&mut self, handle: DownloadHandle, browser: Weak<Slot>) {
+        self.items.entry(handle).or_insert(Item {
+            control: None,
+            browser,
+        });
+    }
+
     pub fn before(
         &mut self,
         browser: Weak<Slot>,
@@ -251,7 +316,8 @@ impl Downloads {
         exists: impl Fn(&Path) -> bool,
     ) -> Vec<Act> {
         let handle = offer.handle;
-        let blocked = |browser: Weak<Slot>, proceed| {
+        let blocked = |downloads: &mut Self, browser: Weak<Slot>, proceed| {
+            downloads.forget(handle);
             vec![
                 Act::Cancel(proceed),
                 Act::Emit(
@@ -264,7 +330,7 @@ impl Downloads {
             ]
         };
         let (Some(config), Ok(download_url)) = (self.config.clone(), Url::parse(offer.url)) else {
-            return blocked(browser, proceed);
+            return blocked(self, browser, proceed);
         };
         let delivery = Delivery {
             url: offer.url.into(),
@@ -309,7 +375,7 @@ impl Downloads {
             exists,
         );
         if decision.verdict == Verdict::Block {
-            return blocked(browser, proceed);
+            return blocked(self, browser, proceed);
         }
         let mut waiting = Waiting {
             proceed,
@@ -325,8 +391,9 @@ impl Downloads {
                 waiting.stage = Stage::Ask {
                     suggested: suggested.clone(),
                 };
-                self.waiting.insert(handle, waiting);
-                vec![Act::Emit(
+                let mut acts = Vec::new();
+                self.wait(handle, waiting, &mut acts);
+                acts.push(Act::Emit(
                     browser,
                     DownloadEvent::AskPath {
                         handle,
@@ -334,7 +401,8 @@ impl Downloads {
                         suggested,
                         reason,
                     },
-                )]
+                ));
+                acts
             }
             TargetDecision::Save(path) => {
                 let warning = match decision.verdict {
@@ -355,6 +423,15 @@ impl Downloads {
         warning: Option<Warning>,
     ) -> Vec<Act> {
         let browser = waiting.browser.clone();
+        // CEF takes the path as a string; a path that isn't UTF-8 never reaches it.
+        if path.to_str().is_none() {
+            self.forget(handle);
+            let url = waiting.delivery.url.clone();
+            return vec![
+                Act::Cancel(waiting.proceed),
+                Act::Emit(browser, DownloadEvent::Blocked { handle, url }),
+            ];
+        }
         let begun = self.list.begin(NewDownload {
             cef_id: handle.0,
             url: waiting.delivery.url.clone(),
@@ -365,6 +442,7 @@ impl Downloads {
             prompted: false,
         });
         let Ok(id) = begun else {
+            self.forget(handle);
             let url = waiting.delivery.url.clone();
             return vec![
                 Act::Cancel(waiting.proceed),
@@ -374,20 +452,25 @@ impl Downloads {
         match warning {
             Some(warning) => {
                 waiting.stage = Stage::Held { id, path };
-                self.waiting.insert(handle, waiting);
-                vec![Act::Emit(
+                let mut acts = Vec::new();
+                self.wait(handle, waiting, &mut acts);
+                acts.push(Act::Emit(
                     browser,
                     DownloadEvent::Held {
                         handle,
                         id,
                         warning,
                     },
-                )]
+                ));
+                acts
             }
-            None => vec![
-                Act::Proceed(waiting.proceed, path.clone()),
-                Act::Emit(browser, DownloadEvent::Started { handle, id, path }),
-            ],
+            None => {
+                self.saving(handle, browser.clone());
+                vec![
+                    Act::Proceed(waiting.proceed, path.clone()),
+                    Act::Emit(browser, DownloadEvent::Started { handle, id, path }),
+                ]
+            }
         }
     }
 
@@ -407,10 +490,16 @@ impl Downloads {
                 let name = target
                     .file_name()
                     .map(|name| name.to_string_lossy().into_owned());
-                let Some(name) = name.filter(|_| target.is_absolute()) else {
+                let Some(name) = name.filter(|_| target.is_absolute() && target.to_str().is_some())
+                else {
                     self.waiting.insert(handle, waiting);
                     return Err(DownloadError::InvalidPath(target));
                 };
+                // Another prompt may have been answered with this path since this one was asked.
+                if self.list.reserves(&target, Platform::current()) {
+                    self.waiting.insert(handle, waiting);
+                    return Err(DownloadError::PathInUse(target));
+                }
                 if let Some(folder) = target.parent() {
                     // The next save dialog starts where this one was answered.
                     self.list.downloads_folder_changed(folder);
@@ -423,6 +512,7 @@ impl Downloads {
                 // still make an insecure delivery one Chromium holds or blocks.
                 match waiting.delivery.verdict(&name, https_first) {
                     InsecureVerdict::SilentBlock => {
+                        self.forget(handle);
                         let url = waiting.delivery.url.clone();
                         let browser = waiting.browser.clone();
                         Ok(vec![
@@ -446,6 +536,7 @@ impl Downloads {
                     self.waiting.insert(handle, waiting);
                     return Err(error.into());
                 }
+                self.saving(handle, waiting.browser.clone());
                 Ok(vec![
                     Act::Proceed(waiting.proceed, decided.clone()),
                     Act::Emit(
@@ -464,14 +555,24 @@ impl Downloads {
     /// Discards a waiting download, or cancels one in progress.
     pub fn cancel(&mut self, handle: DownloadHandle) -> Result<Vec<Act>, DownloadError> {
         if let Some(waiting) = self.waiting.remove(&handle) {
+            self.forget(handle);
             let id = match waiting.stage {
                 Stage::Held { id, .. } => self.list.discard(id).ok().map(|_| id),
                 Stage::Ask { .. } => None,
             };
-            return Ok(vec![
+            let mut acts = vec![
                 Act::Cancel(waiting.proceed),
                 Act::Emit(waiting.browser, DownloadEvent::Cancelled { handle, id }),
-            ]);
+            ];
+            // CEF may already have reported it; its later updates no longer find it.
+            if let Some(Item {
+                control: Some(control),
+                ..
+            }) = self.items.remove(&handle)
+            {
+                acts.push(Act::Release(control));
+            }
+            return Ok(acts);
         }
         let (id, control) = self.live(handle)?;
         self.list.cancel(id)?;
@@ -495,38 +596,56 @@ impl Downloads {
             .list
             .id_for_cef(handle.0)
             .ok_or(DownloadError::Unknown(handle))?;
-        let item = self
+        // CEF brings an item's controls with its first update.
+        let control = self
             .items
             .get(&handle)
+            .and_then(|item| item.control.clone())
             .ok_or(DownloadError::Unknown(handle))?;
-        Ok((id, item.control.clone()))
+        Ok((id, control))
     }
 
     /// `OnDownloadUpdated`.
     pub fn updated(
         &mut self,
         browser: Weak<Slot>,
-        handle: DownloadHandle,
+        download: CefDownload,
         report: Option<Snapshot<'_>>,
         control: Rc<dyn Control>,
     ) -> Vec<Act> {
+        let mut acts = vec![Act::Release(control.clone())];
         let Some(snapshot) = report else {
-            return Vec::new();
+            return acts;
         };
         let state = snapshot.state;
         let ended = matches!(state, SnapshotState::Complete | SnapshotState::Cancelled);
-        if ended {
-            self.items.remove(&handle);
+        // An ended download CEF never named before, or one the engine already let go, is done.
+        let handle = if ended {
+            self.handles.get(&download).copied()
         } else {
-            self.items.insert(
-                handle,
-                Item {
-                    control,
-                    browser: browser.clone(),
-                },
-            );
+            Some(self.handle_for(download))
+        };
+        let Some(handle) = handle else {
+            return acts;
+        };
+        if ended {
+            self.forget(handle);
+            if let Some(Item {
+                control: Some(held),
+                ..
+            }) = self.items.remove(&handle)
+            {
+                acts.push(Act::Release(held));
+            }
+        } else {
+            let item = self.items.entry(handle).or_insert(Item {
+                control: None,
+                browser: browser.clone(),
+            });
+            if let Some(previous) = item.control.replace(control) {
+                acts.push(Act::Release(previous));
+            }
         }
-        let mut acts = Vec::new();
         if state == SnapshotState::Cancelled
             && let Some(waiting) = self.waiting.remove(&handle)
         {
@@ -572,6 +691,7 @@ impl Downloads {
             let Some(item) = self.items.remove(&handle) else {
                 continue;
             };
+            self.forget(handle);
             let id = self.list.id_for_cef(handle.0);
             if let Some(entry) = id.and_then(|id| self.list.get(id))
                 && matches!(
@@ -588,7 +708,8 @@ impl Downloads {
                 };
                 let _ = self.list.update(handle.0, snapshot);
             }
-            acts.push(Act::CancelItem(item.control));
+            // Without controls yet, CEF cancels the destroyed browser's download itself.
+            acts.extend(item.control.map(Act::CancelItem));
             acts.push(Act::Emit(
                 item.browser,
                 DownloadEvent::Cancelled { handle, id },
@@ -597,9 +718,16 @@ impl Downloads {
         acts
     }
 
+    /// Gives a shared-context CEF id the handle a test expects.
+    #[cfg(test)]
+    fn name(&mut self, id: u32, handle: DownloadHandle) {
+        self.handles.insert((None, id), handle);
+        self.last_handle = self.last_handle.max(handle.0);
+    }
+
     #[cfg(test)]
     pub fn is_idle(&self) -> bool {
-        self.waiting.is_empty() && self.items.is_empty()
+        self.waiting.is_empty() && self.items.is_empty() && self.handles.is_empty()
     }
 }
 
@@ -609,11 +737,10 @@ impl crate::Engine {
         self.services().downloads.borrow_mut().config = config;
     }
 
-    /// The sidebar's list. Change it through the engine so CEF and the list agree.
-    pub fn downloads(&self) -> std::cell::Ref<'_, DownloadList> {
-        std::cell::Ref::map(self.services().downloads.borrow(), |downloads| {
-            &downloads.list
-        })
+    /// A copy of the sidebar's list. Change it through the engine so CEF and the list agree. A
+    /// copy, so holding it never blocks a CEF callback or another engine call.
+    pub fn downloads(&self) -> DownloadList {
+        self.services().downloads.borrow().list.clone()
     }
 
     /// Installs the list loaded at startup (`flecha_downloads::persist::load`). Call it before
@@ -692,6 +819,7 @@ pub(crate) fn run(services: &Services, acts: Vec<Act>) {
             Act::CancelItem(control) => control.cancel(),
             Act::Pause(control) => control.pause(),
             Act::Resume(control) => control.resume(),
+            Act::Release(control) => drop(control),
             Act::Emit(browser, event) => services.download_events.push(browser, event),
         }
     }
@@ -759,7 +887,8 @@ wrap_download_handler! {
                 .and_then(|browser| browser.main_frame())
                 .map(|frame| text(&frame.url()));
             let offer = Offer {
-                handle: DownloadHandle(item.id()),
+                // `offered` names it.
+                handle: DownloadHandle(0),
                 url: &url,
                 original_url: &original_url,
                 content_disposition: disposition.as_deref(),
@@ -768,14 +897,7 @@ wrap_download_handler! {
                 started: chrono::Local::now().naive_local(),
                 started_at: epoch_millis(),
             };
-            let services = services::of(&self.slot);
-            let acts = services.downloads.borrow_mut().before(
-                Rc::downgrade(&self.slot),
-                offer,
-                Box::new(Before(callback.clone())),
-                Path::exists,
-            );
-            run(&services, acts);
+            offered(&self.slot, item.id(), offer, Box::new(Before(callback.clone())), Path::exists);
             1
         }
 
@@ -793,22 +915,49 @@ wrap_download_handler! {
                 item.interrupt_reason().get_raw() as i32,
             );
             let full_path = PathBuf::from(text(&item.full_path()));
-            let services = services::of(&self.slot);
             let report = state.map(|state| Snapshot {
                 state,
                 received: item.received_bytes(),
                 total: item.total_bytes(),
                 full_path: &full_path,
             });
-            let acts = services.downloads.borrow_mut().updated(
-                Rc::downgrade(&self.slot),
-                DownloadHandle(item.id()),
-                report,
-                Rc::new(callback.clone()),
-            );
-            run(&services, acts);
+            reported(&self.slot, item.id(), report, Rc::new(callback.clone()));
         }
     }
+}
+
+/// `OnBeforeDownload` for CEF's download `id` in `slot`'s browser.
+fn offered(
+    slot: &Rc<Slot>,
+    id: u32,
+    mut offer: Offer<'_>,
+    proceed: Box<dyn Proceed>,
+    exists: impl Fn(&Path) -> bool,
+) {
+    let services = services::of(slot);
+    let acts = {
+        let mut downloads = services.downloads.borrow_mut();
+        offer.handle = downloads.handle_for(cef_download(slot, id));
+        downloads.before(Rc::downgrade(slot), offer, proceed, exists)
+    };
+    run(&services, acts);
+}
+
+/// `OnDownloadUpdated` for CEF's download `id` in `slot`'s browser.
+fn reported(slot: &Rc<Slot>, id: u32, report: Option<Snapshot<'_>>, control: Rc<dyn Control>) {
+    let services = services::of(slot);
+    let acts = services.downloads.borrow_mut().updated(
+        Rc::downgrade(slot),
+        cef_download(slot, id),
+        report,
+        control,
+    );
+    run(&services, acts);
+}
+
+/// CEF numbers downloads per request context, which is the browser's partition.
+fn cef_download(slot: &Slot, id: u32) -> CefDownload {
+    (slot.partition.borrow().clone(), id)
 }
 
 pub(crate) fn handler(slot: Rc<Slot>) -> DownloadHandler {
@@ -919,6 +1068,7 @@ mod tests {
                 Act::CancelItem(control) => control.cancel(),
                 Act::Pause(control) => control.pause(),
                 Act::Resume(control) => control.resume(),
+                Act::Release(control) => drop(control),
                 Act::Emit(_, event) => events.push(event),
             }
         }
@@ -935,6 +1085,7 @@ mod tests {
             log: log.clone(),
             done: false,
         });
+        downloads.name(offer.handle.0, offer.handle);
         settle(downloads.before(browser, offer, proceed, |_| false))
     }
 
@@ -968,7 +1119,7 @@ mod tests {
         let intermediate = folder().join("Unconfirmed 123.crdownload");
         settle(downloads.updated(
             Weak::new(),
-            DownloadHandle(1),
+            (None, 1),
             report(SnapshotState::InProgress, 10, 100, &intermediate),
             item.clone(),
         ));
@@ -976,7 +1127,7 @@ mod tests {
         assert!(downloads.list.reserves(&path, Platform::current()));
         settle(downloads.updated(
             Weak::new(),
-            DownloadHandle(1),
+            (None, 1),
             report(SnapshotState::Complete, 100, 100, &path),
             item,
         ));
@@ -1175,7 +1326,7 @@ mod tests {
             let item = Rc::new(FakeItem(log.clone()));
             settle(downloads.updated(
                 owner,
-                DownloadHandle(handle),
+                (None, handle),
                 report(SnapshotState::InProgress, 1, 10, Path::new("")),
                 item,
             ));
@@ -1214,7 +1365,7 @@ mod tests {
         settle(downloads.pause(DownloadHandle(9)).unwrap());
         settle(downloads.updated(
             Rc::downgrade(&other),
-            DownloadHandle(9),
+            (None, 9),
             report(SnapshotState::Paused, 1, 10, Path::new("")),
             Rc::new(FakeItem(log.clone())),
         ));
@@ -1272,5 +1423,232 @@ mod tests {
             "the held download is discarded"
         );
         assert!(services.downloads.borrow().waiting.is_empty());
+    }
+
+    /// A CEF callback that calls straight back into the download handler when it is answered or
+    /// dropped, as CEF does: it panics if the engine still holds the downloads borrow.
+    struct Reentrant {
+        services: Rc<Services>,
+        log: Log,
+        done: bool,
+    }
+
+    impl Reentrant {
+        fn boxed(services: &Rc<Services>, log: &Log) -> Box<Self> {
+            Box::new(Self {
+                services: services.clone(),
+                log: log.clone(),
+                done: false,
+            })
+        }
+
+        fn reenter(&self) {
+            drop(self.services.downloads.borrow_mut());
+        }
+    }
+
+    impl Proceed for Reentrant {
+        fn proceed(mut self: Box<Self>, path: &Path) {
+            self.reenter();
+            self.done = true;
+            self.log
+                .borrow_mut()
+                .push(format!("continue {}", path.display()));
+        }
+    }
+
+    impl Drop for Reentrant {
+        fn drop(&mut self) {
+            if !self.done {
+                self.reenter();
+                self.log.borrow_mut().push("cancelled".into());
+            }
+        }
+    }
+
+    struct ReentrantItem(Rc<Services>);
+
+    impl Control for ReentrantItem {
+        fn cancel(&self) {
+            drop(self.0.downloads.borrow_mut());
+        }
+        fn pause(&self) {}
+        fn resume(&self) {}
+    }
+
+    impl Drop for ReentrantItem {
+        fn drop(&mut self) {
+            drop(self.0.downloads.borrow_mut());
+        }
+    }
+
+    fn drain(services: &Services) -> Vec<DownloadEvent> {
+        std::iter::from_fn(|| services.download_events.pop())
+            .map(|(_, event)| event)
+            .collect()
+    }
+
+    fn ask_handle(event: &DownloadEvent) -> DownloadHandle {
+        match event {
+            DownloadEvent::AskPath { handle, .. } => *handle,
+            other => panic!("expected AskPath, got {other:?}"),
+        }
+    }
+
+    /// Runs a shell command the way [`crate::Engine`] does.
+    fn command(
+        services: &Services,
+        command: impl FnOnce(&mut Downloads) -> Result<Vec<Act>, DownloadError>,
+    ) -> Result<(), DownloadError> {
+        let acts = command(&mut services.downloads.borrow_mut())?;
+        run(services, acts);
+        Ok(())
+    }
+
+    #[test]
+    fn shared_and_isolated_downloads_with_one_cef_id_stay_apart() {
+        let [shared, isolated] = <[_; 2]>::try_from(crate::tests::slots(&["shared", "isolated"]))
+            .unwrap_or_else(|_| unreachable!());
+        shared.partition.replace(Some(crate::Partition::Shared));
+        let space = flecha_core::SpaceId::new("work");
+        isolated
+            .partition
+            .replace(Some(crate::Partition::Isolated(space)));
+        let services = crate::services::of(&shared);
+        services.downloads.borrow_mut().config = downloads(true).config;
+        let log = Log::default();
+
+        // CEF numbers downloads per request context: both of these are its download 1.
+        let url = "https://files.example/a.txt";
+        offered(
+            &shared,
+            1,
+            offer(0, url, url),
+            Reentrant::boxed(&services, &log),
+            |_| false,
+        );
+        offered(
+            &isolated,
+            1,
+            offer(0, url, url),
+            Reentrant::boxed(&services, &log),
+            |_| false,
+        );
+        let events = drain(&services);
+        let (first, second) = (ask_handle(&events[0]), ask_handle(&events[1]));
+        assert_ne!(first, second);
+        assert!(
+            log.borrow().is_empty(),
+            "the second prompt never cancels the first"
+        );
+
+        // Both suggested the same name; the first answer reserves it.
+        let picked = folder().join("picked.txt");
+        command(&services, |downloads| {
+            downloads.accept(first, Some(picked.clone()))
+        })
+        .unwrap();
+        assert_eq!(*log.borrow(), [format!("continue {}", picked.display())]);
+        assert_eq!(
+            command(&services, |downloads| downloads
+                .accept(second, Some(picked.clone()))),
+            Err(DownloadError::PathInUse(picked.clone()))
+        );
+
+        // Updates find their own download by context, and run outside the borrow.
+        let item = || Rc::new(ReentrantItem(services.clone()));
+        reported(
+            &shared,
+            1,
+            report(SnapshotState::InProgress, 1, 10, &picked),
+            item(),
+        );
+        reported(
+            &isolated,
+            1,
+            report(SnapshotState::InProgress, 1, 10, Path::new("")),
+            item(),
+        );
+        let started: Vec<_> = drain(&services);
+        assert!(
+            matches!(started[..], [DownloadEvent::Started { handle, .. }, DownloadEvent::Updated { handle: updated, .. }] if handle == first && updated == first),
+            "{started:?}"
+        );
+        command(&services, |downloads| downloads.cancel(second)).unwrap();
+        assert_eq!(log.borrow().last().map(String::as_str), Some("cancelled"));
+        reported(
+            &isolated,
+            1,
+            report(SnapshotState::Cancelled, 1, 10, Path::new("")),
+            item(),
+        );
+        reported(
+            &shared,
+            1,
+            report(SnapshotState::Complete, 10, 10, &picked),
+            item(),
+        );
+        let list = services.downloads.borrow().list.clone();
+        let row = list.iter().next().unwrap();
+        assert_eq!(
+            (row.state(), row.path()),
+            (State::Complete, picked.as_path())
+        );
+        assert!(services.downloads.borrow().is_idle());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_chosen_path_cef_cannot_take_keeps_the_prompt_open() {
+        use std::os::unix::ffi::OsStrExt as _;
+
+        let mut downloads = downloads(true);
+        let log = Log::default();
+        let url = "https://files.example/a.txt";
+        before(&mut downloads, &log, offer(1, url, url), Weak::new());
+        let invalid = folder().join(std::ffi::OsStr::from_bytes(b"\xff.txt"));
+        assert_eq!(
+            downloads
+                .accept(DownloadHandle(1), Some(invalid.clone()))
+                .err(),
+            Some(DownloadError::InvalidPath(invalid))
+        );
+        assert!(log.borrow().is_empty());
+        let events = settle(downloads.accept(DownloadHandle(1), None).unwrap());
+        assert!(
+            matches!(events[..], [DownloadEvent::Started { .. }]),
+            "{events:?}"
+        );
+    }
+
+    #[test]
+    fn closing_the_browser_before_cefs_first_update_cancels_the_download() {
+        let slot = crate::tests::slot("closing");
+        let services = crate::services::of(&slot);
+        services.downloads.borrow_mut().config = downloads(false).config;
+        let log = Log::default();
+        let url = "https://files.example/a.pdf";
+        offered(
+            &slot,
+            3,
+            offer(0, url, url),
+            Reentrant::boxed(&services, &log),
+            |_| false,
+        );
+        let Some(DownloadEvent::Started { handle, id, .. }) = drain(&services).pop() else {
+            panic!("a safe download starts at once");
+        };
+
+        slot.destroyed();
+        assert_eq!(
+            drain(&services),
+            [DownloadEvent::Cancelled {
+                handle,
+                id: Some(id)
+            }]
+        );
+        let list = services.downloads.borrow().list.clone();
+        assert_eq!(list.get(id).unwrap().state(), State::Cancelled);
+        assert!(services.downloads.borrow().is_idle());
     }
 }

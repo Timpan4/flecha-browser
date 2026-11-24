@@ -120,11 +120,7 @@ wrap_dev_tools_message_observer! {
         ) {
             let Some(slot) = self.slot.upgrade() else { return };
             let services = services::of(&slot);
-            let internal = services
-                .devtools_internal
-                .borrow_mut()
-                .remove(&message_id)
-                .map(|(_, internal)| internal);
+            let internal = take_internal(&services, message_id, &slot);
             match internal {
                 None => services.devtools_events.push(self.slot.clone(), DevToolsEvent::Result {
                     id: message_id,
@@ -186,6 +182,17 @@ pub(crate) fn send(
     Ok(id)
 }
 
+/// The engine's own call `id`, when `slot`'s browser made it. A reply to any other browser's
+/// call is left for that browser.
+fn take_internal(services: &services::Services, id: i32, slot: &Slot) -> Option<Internal> {
+    let mut internal = services.devtools_internal.borrow_mut();
+    let (owner, _) = internal.get(&id)?;
+    if !std::ptr::eq(owner.as_ptr(), slot) {
+        return None;
+    }
+    internal.remove(&id).map(|(_, call)| call)
+}
+
 /// Drops the internal calls `slot`'s browser was still waiting on: their replies never come.
 pub(crate) fn forget(services: &services::Services, slot: &Slot) {
     services
@@ -243,5 +250,22 @@ mod tests {
         services.devtools_next.set(i32::MAX);
         assert_eq!(services.next_devtools_id(), i32::MAX);
         assert_eq!(services.next_devtools_id(), 1);
+    }
+
+    #[test]
+    fn only_the_browser_that_made_an_internal_call_takes_its_reply() {
+        let slots = crate::tests::slots(&["caller", "other"]);
+        let services = services::of(&slots[0]);
+        let call = (std::rc::Rc::downgrade(&slots[0]), Internal::Ignore);
+        services.devtools_internal.borrow_mut().insert(5, call);
+
+        assert!(take_internal(&services, 5, &slots[1]).is_none());
+        assert!(services.devtools_internal.borrow().contains_key(&5));
+        assert!(matches!(
+            take_internal(&services, 5, &slots[0]),
+            Some(Internal::Ignore)
+        ));
+        assert!(services.devtools_internal.borrow().is_empty());
+        assert!(take_internal(&services, 5, &slots[0]).is_none());
     }
 }

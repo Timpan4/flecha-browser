@@ -57,6 +57,8 @@ pub(crate) struct Slot {
     pub blocked: Arc<AtomicU64>,
     /// The DevTools observer, registered by the first CDP call.
     pub devtools: RefCell<Option<Registration>>,
+    /// Permission answers Chromium holds for the current document only.
+    pub one_time: RefCell<Vec<permissions::OneTime>>,
 }
 
 impl Slot {
@@ -77,6 +79,7 @@ impl Slot {
             partition: RefCell::new(None),
             blocked: Arc::new(AtomicU64::new(0)),
             devtools: RefCell::new(None),
+            one_time: RefCell::new(Vec::new()),
         }
     }
 
@@ -109,6 +112,7 @@ impl Slot {
         if let Some(identifier) = self.identifier.get() {
             permissions::leave(&services, &permissions::queue_id(identifier));
         }
+        permissions::forget_one_time(self);
         self.closed();
         popup::opener_closed(self);
     }
@@ -293,6 +297,7 @@ wrap_load_handler! {
             if let Some(identifier) = self.slot.identifier.get() {
                 permissions::leave(&services, &permissions::queue_id(identifier));
             }
+            permissions::forget_one_time(&self.slot);
             if !self.slot.retired.get() {
                 boosts::page_committed(&services, frame, &CefString::from(&frame.url()).to_string());
             }

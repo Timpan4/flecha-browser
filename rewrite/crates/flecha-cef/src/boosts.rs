@@ -81,13 +81,17 @@ impl crate::Engine {
         self.services().boosts.replace(boosts);
     }
 
-    pub fn boosts(&self) -> std::cell::Ref<'_, Boosts> {
-        self.services().boosts.borrow()
+    /// A copy of the Boosts, so holding it never blocks a page load or another engine call.
+    pub fn boosts(&self) -> Boosts {
+        self.services().boosts.borrow().clone()
     }
 
     /// Edits the Boosts and applies the edit's [`Effect`] to open pages.
     pub fn edit_boosts<R>(&self, edit: impl FnOnce(&mut Boosts) -> (R, Effect)) -> R {
-        let (result, effect) = edit(&mut self.services().boosts.borrow_mut());
+        // The edit runs on a copy, so it may call back into the engine.
+        let mut boosts = self.boosts();
+        let (result, effect) = edit(&mut boosts);
+        self.services().boosts.replace(boosts);
         self.apply_boost_effect(&effect);
         result
     }
