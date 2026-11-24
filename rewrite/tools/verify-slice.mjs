@@ -761,8 +761,10 @@ async function incognitoChecks(app, main) {
 
   // Restoring Spaces from before an import replaces the regular profile's pages only.
   const privatePage = incognitoTab(await app.command('snapshot'), second.window);
+
   const privateDocument = await document(app, privatePage, 'private-draft',
     "document.querySelector('input').value = 'private draft';");
+
   const privateBrowser = (await app.command('snapshot')).browsers.find(page => page.tab === privatePage)?.browser;
   assert(privateBrowser > 0, 'the incognito page has no browser');
 
