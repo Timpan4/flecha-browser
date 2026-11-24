@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use chrono::Timelike as _;
 use flecha_core::{Space, WindowId, shortcuts};
 use flecha_history::HistoryEntry;
-use flecha_services::local_servers::LocalServer;
+use flecha_services::local_servers::{LocalServer, LocalServerWatch};
 use gpui::{
     AnyElement, ClickEvent, Context, Div, FontWeight, InteractiveElement as _, IntoElement as _,
     ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _, div,
@@ -26,6 +26,25 @@ use crate::{Action, Controller, dispatch};
 /// `Date.now() - … > 60_000` in ui/app.ts:263: while a page stays empty, its tiles are fetched
 /// again after this long.
 const REFETCH: Duration = Duration::from_millis(60_000);
+
+/// The dev server scan. It starts on the first UI tick, so a controller that never runs the
+/// UI, such as a unit test's, never reads the host's sockets or asks its servers for pages.
+#[derive(Default)]
+pub(crate) enum LocalWatch {
+    #[default]
+    Unstarted,
+    Running(LocalServerWatch),
+    Unavailable,
+}
+
+impl LocalWatch {
+    pub(crate) fn get(&self) -> Option<&LocalServerWatch> {
+        match self {
+            Self::Running(watch) => Some(watch),
+            Self::Unstarted | Self::Unavailable => None,
+        }
+    }
+}
 
 /// The sites "Jump back in" shows, and which windows showed the empty page at the last tick.
 #[derive(Default)]
@@ -75,7 +94,19 @@ impl Controller {
 
     /// Takes the dev servers the scan found since the last tick. Returns whether they changed.
     pub(crate) fn poll_local_servers(&mut self) -> bool {
-        let Some(servers) = self.local_watch.as_ref().and_then(|watch| watch.take()) else {
+        if matches!(self.local_watch, LocalWatch::Unstarted) {
+            self.local_watch = match LocalServerWatch::spawn() {
+                Ok(watch) => {
+                    watch.exclude(self.agents.port());
+                    LocalWatch::Running(watch)
+                }
+                Err(error) => {
+                    eprintln!("local servers: could not start the scan: {error}");
+                    LocalWatch::Unavailable
+                }
+            };
+        }
+        let Some(servers) = self.local_watch.get().and_then(LocalServerWatch::take) else {
             return false;
         };
         self.local_servers = servers;
@@ -179,6 +210,14 @@ pub(crate) fn greeting(hour: u32) -> &'static str {
 }
 
 /// `.live-dot` (ui/styles.css:897-906): a green dot in a faint ring.
+/// The keys of the first Space's fixed binding (`fixed_shortcuts`).
+fn space_keys() -> Option<String> {
+    shortcuts::fixed_shortcuts(platform())
+        .into_iter()
+        .find(|(_, id)| id == "selectSpace:1")
+        .map(|(keys, _)| shortcuts::display_keys(Some(&keys), platform()))
+}
+
 pub(crate) fn live_dot() -> Div {
     let green = palette().green;
     div()
@@ -389,8 +428,8 @@ impl Shell {
                     .into_any_element()
             })
         };
-        let space_keys = keys("selectSpace:1");
-        let switch_space = (!space_keys.is_empty()).then(|| {
+        // Space selection is a fixed binding, so like the shell's hint it always shows.
+        let switch_space = space_keys().map(|space_keys| {
             div()
                 .flex()
                 .items_center()
@@ -482,6 +521,12 @@ pub(crate) fn port_label(port: u16) -> Div {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_switch_space_hint_shows_the_fixed_space_keys() {
+        let keys = space_keys().expect("Space selection has a fixed binding");
+        assert!(keys.ends_with('1'), "{keys}");
+    }
 
     #[test]
     fn tiles_are_named_as_the_shell_names_them() {

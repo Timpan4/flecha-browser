@@ -846,7 +846,7 @@ impl Controller {
                 eprintln!("agent bridge: stopped");
             }
         }
-        if let Some(watch) = &self.local_watch {
+        if let Some(watch) = self.local_watch.get() {
             watch.exclude(self.agents.port());
         }
     }

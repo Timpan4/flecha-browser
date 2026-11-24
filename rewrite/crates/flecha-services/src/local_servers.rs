@@ -229,7 +229,16 @@ pub struct LocalServerWatch {
 const NONE: u32 = u32::MAX;
 
 impl LocalServerWatch {
+    /// Scans this machine's sockets and asks each new dev server for its page title.
     pub fn spawn() -> io::Result<Self> {
+        let mut scanner = Scanner::default();
+        Self::spawn_scan(move |skip| scanner.scan(&listening_dev_ports(), skip, ask))
+    }
+
+    /// Runs `scan` with the excluded port every [`POLL`].
+    fn spawn_scan(
+        mut scan: impl FnMut(Option<u16>) -> Vec<LocalServer> + Send + 'static,
+    ) -> io::Result<Self> {
         let latest = Arc::new(Mutex::new(None));
         let excluded = Arc::new(AtomicU32::new(NONE));
         let (stop, stopped) = mpsc::channel::<()>();
@@ -238,11 +247,10 @@ impl LocalServerWatch {
             .spawn({
                 let (latest, excluded) = (latest.clone(), excluded.clone());
                 move || {
-                    let mut scanner = Scanner::default();
                     let mut shown = Vec::new();
                     loop {
                         let skip = u16::try_from(excluded.load(Ordering::Relaxed)).ok();
-                        let found = scanner.scan(&listening_dev_ports(), skip, ask);
+                        let found = scan(skip);
                         if found != shown {
                             shown.clone_from(&found);
                             *latest.lock().unwrap_or_else(|err| err.into_inner()) = Some(found);
@@ -415,8 +423,24 @@ mod tests {
     }
 
     #[test]
-    fn the_watch_stops_without_waiting_out_its_poll() {
-        let watch = LocalServerWatch::spawn().unwrap();
+    fn the_watch_reports_changes_and_stops_without_waiting_out_its_poll() {
+        let (scanned, scans) = mpsc::channel();
+        let watch = LocalServerWatch::spawn_scan(move |skip| {
+            let _ = scanned.send(skip);
+            vec![LocalServer {
+                port: 5173,
+                url: "http://localhost:5173/".into(),
+                name: "Vite App".into(),
+            }]
+        })
+        .unwrap();
+        assert_eq!(scans.recv().unwrap(), None);
+        // The first scan's list is taken once; an unchanged list isn't offered again.
+        while watch.take().is_none() {
+            std::thread::yield_now();
+        }
+        assert_eq!(watch.take(), None);
+
         watch.exclude(Some(3000));
         let latest = Arc::downgrade(&watch.latest);
         let started = Instant::now();

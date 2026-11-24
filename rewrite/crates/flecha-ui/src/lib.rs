@@ -54,7 +54,7 @@ use flecha_core::{
     suggestions::pinnable_address,
 };
 use flecha_services::StateStore;
-use flecha_services::local_servers::{LocalServer, LocalServerWatch};
+use flecha_services::local_servers::LocalServer;
 use gpui::{App, AppContext as _, Bounds, WindowBounds, WindowHandle, WindowOptions, px, size};
 
 use boosts::ProfileBoosts;
@@ -305,7 +305,7 @@ struct Controller {
     isolated: bool,
     /// The dev servers on this machine, and the scan that finds them.
     local_servers: Vec<LocalServer>,
-    local_watch: Option<LocalServerWatch>,
+    local_watch: empty_page::LocalWatch,
     /// "Jump back in" on the empty page.
     top_sites: empty_page::TopSites,
 }
@@ -409,9 +409,7 @@ impl Controller {
             profile: profile.clone(),
             isolated,
             local_servers: Vec::new(),
-            local_watch: LocalServerWatch::spawn()
-                .inspect_err(|error| eprintln!("local servers: could not start the scan: {error}"))
-                .ok(),
+            local_watch: empty_page::LocalWatch::default(),
             top_sites: empty_page::TopSites::default(),
         };
         state.permissions.restore(&mut state.engine);
