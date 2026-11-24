@@ -803,6 +803,7 @@ fn repair_settings(raw: &mut Map<String, Value>, repairs: &mut SnapshotRepairs) 
             .unwrap_or_default(),
         theme: take(raw, "theme").unwrap_or_default(),
         search_engine: take(raw, "searchEngine").unwrap_or_default(),
+        search_suggest_enabled: take(raw, "searchSuggestEnabled"),
         archive_policy: take(raw, "archiveAfterHours")
             .and_then(ArchivePolicy::from_hours)
             .unwrap_or_default(),

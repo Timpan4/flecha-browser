@@ -128,6 +128,8 @@ pub enum PermissionDecision {
 pub struct Settings {
     pub theme: Theme,
     pub search_engine: SearchEngine,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub search_suggest_enabled: Option<bool>,
     pub sidebar_width: SidebarWidth,
     #[serde(rename = "archiveAfterHours")]
     pub archive_policy: ArchivePolicy,
@@ -180,6 +182,10 @@ pub fn blocks_ads_on(allowed: Option<&[String]>, host: &str) -> bool {
 }
 
 impl Settings {
+    pub fn search_suggestions_enabled(&self) -> bool {
+        self.search_suggest_enabled.unwrap_or(true)
+    }
+
     /// The per-site rule. The global ad-block switch is stored separately.
     pub fn blocks_ads_on(&self, host: &str) -> bool {
         blocks_ads_on(self.ad_block_allowed.as_deref(), host)
