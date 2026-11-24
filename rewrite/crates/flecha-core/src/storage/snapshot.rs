@@ -97,6 +97,8 @@ const SNAPSHOT_FIELDS: &[(&str, Shape)] = &[
     ("askWhereToSave", Scalar),
     ("adBlock", Scalar),
     ("adBlockAllowed", Array(&Scalar)),
+    // The shell's `agent` also held its bearer token; only the switch is read.
+    ("agent", Record(&[("enabled", Scalar)])),
     ("onboarded", Scalar),
     ("sitePermissions", Dictionary(&Dictionary(&Scalar))),
 ];

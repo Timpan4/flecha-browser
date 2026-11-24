@@ -15,9 +15,9 @@ use crate::input_text::trim_input;
 use crate::shortcuts::repair_saved_bindings;
 use crate::state::{DEFAULT_SPACE_COLOR, PinnedTree, compare_recency};
 use crate::{
-    ArchivePolicy, ArchivedTab, BrowserState, ClosedWindow, Device, Environment, EnvironmentTarget,
-    EpochMillis, FolderId, PinnedNode, Settings, SidebarWidth, Space, SpaceId, Tab, TabId, Window,
-    WindowId, WindowSpace, is_site_host,
+    AgentPreference, ArchivePolicy, ArchivedTab, BrowserState, ClosedWindow, Device, Environment,
+    EnvironmentTarget, EpochMillis, FolderId, PinnedNode, Settings, SidebarWidth, Space, SpaceId,
+    Tab, TabId, Window, WindowId, WindowSpace, is_site_host,
 };
 
 /// The first Rust snapshot format. Versions 1 and 2 refer to the Chromium shell.
@@ -823,6 +823,11 @@ fn repair_settings(raw: &mut Map<String, Value>, repairs: &mut SnapshotRepairs) 
         ask_where_to_save: take(raw, "askWhereToSave"),
         ad_block: take(raw, "adBlock"),
         ad_block_allowed: repair_ad_block_sites(raw.remove("adBlockAllowed"), repairs),
+        // Only the switch: a shell profile's `agent.token` never comes into the rewrite's state.
+        agent: raw
+            .remove("agent")
+            .and_then(|agent| agent.get("enabled")?.as_bool())
+            .map(|enabled| AgentPreference { enabled }),
         onboarded: take(raw, "onboarded"),
         site_permissions: take(raw, "sitePermissions"),
     }
