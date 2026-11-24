@@ -105,6 +105,9 @@ pub(crate) struct Compositor {
     /// Whether browsers created now share textures. One failed import clears it, and
     /// browsers that still import keep sharing.
     for_new_browsers: Cell<bool>,
+    /// Set by the display harness to make the next import fail.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    reject_next: Cell<bool>,
 }
 
 impl Compositor {
@@ -134,14 +137,15 @@ impl Compositor {
         }
     }
 
-    /// Follows GPUI's device for `target`'s window.
+    /// Follows GPUI's device for `target`'s window. A window without a device, as during
+    /// GPUI's device recovery, changes nothing.
     #[cfg(target_os = "linux")]
     pub fn follow(&self, target: SurfaceTarget) -> DeviceChange {
         let mut shared = self.shared.borrow_mut();
         let Some(current) = shared.as_mut() else {
             return DeviceChange::None;
         };
-        if current.target.is_same_device(&target) {
+        if target.adapter().is_none() || current.target.is_same_device(&target) {
             return DeviceChange::None;
         }
         match target.render_node(current.ozone) {
@@ -160,6 +164,27 @@ impl Compositor {
                 DeviceChange::Lost
             }
         }
+    }
+
+    /// Makes the next shared-texture import fail, for the display harness.
+    pub fn reject_next_import(&self) {
+        self.reject_next.set(true);
+    }
+
+    /// Imports `info`, unless the harness asked for the next import to fail. Then the
+    /// importer gets the texture with no planes and rejects it.
+    #[cfg(target_os = "linux")]
+    pub fn import<T>(
+        &self,
+        info: &cef::AcceleratedPaintInfo,
+        import: impl FnOnce(&cef::AcceleratedPaintInfo) -> T,
+    ) -> T {
+        if self.reject_next.take() {
+            let mut invalid = info.clone();
+            invalid.plane_count = 0;
+            return import(&invalid);
+        }
+        import(info)
     }
 }
 
@@ -183,29 +208,6 @@ pub(crate) fn delivered(last: &Cell<Option<Delivery>>, delivery: Delivery, brows
             None => log!("page frames: a new browser receives {what}"),
         }
     }
-}
-
-/// Imports `info`. Debug builds started with `FLECHA_TEST_REJECT_SHARED_TEXTURE` pass the
-/// process's first shared texture with no planes, so the importer rejects it and the
-/// display harness can check the fallback.
-#[cfg(target_os = "linux")]
-pub(crate) fn reject_for_test<T>(
-    info: &cef::AcceleratedPaintInfo,
-    import: impl FnOnce(&cef::AcceleratedPaintInfo) -> T,
-) -> T {
-    #[cfg(debug_assertions)]
-    {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        static REJECTED: AtomicBool = AtomicBool::new(false);
-        if std::env::var_os("FLECHA_TEST_REJECT_SHARED_TEXTURE").is_some()
-            && !REJECTED.swap(true, Ordering::Relaxed)
-        {
-            let mut invalid = info.clone();
-            invalid.plane_count = 0;
-            return import(&invalid);
-        }
-    }
-    import(info)
 }
 
 #[cfg(test)]

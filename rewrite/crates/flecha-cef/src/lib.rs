@@ -230,6 +230,13 @@ impl Engine {
         }
     }
 
+    /// Makes the next shared-texture import fail, so the display harness can check the
+    /// switch to CPU copies.
+    #[doc(hidden)]
+    pub fn reject_next_shared_texture(&self) {
+        self.popups.compositor.reject_next_import();
+    }
+
     /// Reopens with CPU copies each page whose shared texture could not be imported.
     fn reopen_failed_imports(&mut self) {
         let failed: Vec<_> = self
@@ -882,6 +889,44 @@ mod tests {
         child.destroyed();
         assert!(drain(&mut engine).is_empty());
         assert!(engine.is_drained());
+    }
+
+    #[test]
+    fn a_failed_import_closes_the_browser_and_keeps_its_last_frame() {
+        let mut engine = Engine::new(PathBuf::new(), || TabId::new("popup"));
+        let (opener, _child) = opener_with_pending_popup(&mut engine);
+        let tab = TabId::new("opener");
+        let pixel = [0x10_u8, 0x20, 0x30, 0xff];
+        // SAFETY: `pixel` holds width * height * 4 bytes.
+        let frame = unsafe {
+            flecha_surface::Frame::copy_bgra(
+                pixel.as_ptr(),
+                1,
+                1,
+                &flecha_surface::SurfaceTarget::default(),
+                None,
+                &[],
+            )
+        }
+        .unwrap();
+        opener.surface.borrow_mut().view = Some(frame);
+        opener.shares_textures.set(true);
+        opener
+            .import_failure
+            .replace(Some(anyhow::anyhow!("import failed")));
+
+        drain(&mut engine);
+
+        assert!(
+            !engine.browsers.contains_key(&tab),
+            "the browser stays open"
+        );
+        assert!(
+            engine
+                .frames(&tab)
+                .is_some_and(|frames| frames.view.is_some()),
+            "the page goes blank until its new browser paints"
+        );
     }
 
     #[test]

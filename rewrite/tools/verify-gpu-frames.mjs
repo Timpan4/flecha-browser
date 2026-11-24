@@ -1,6 +1,7 @@
 // Checks page frames on a GPU under headless weston: shared textures for a page, a
-// <select> popup, split view, Peek and a window resize, or, in `fallback` mode, the
-// switch to CPU copies after an import failure. Run it through verify-gpu-frames.sh.
+// <select> popup, split view, Peek, a window resize and a scripted popup window, or, in
+// `fallback` mode, the switch to CPU copies after an import fails. Run it through
+// verify-gpu-frames.sh.
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { EventEmitter, once } from 'node:events';
@@ -9,7 +10,7 @@ import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
 
-import { fixture, selectColors, selectOptionColor } from './fixture.mjs';
+import { fixture, popupColors, selectColors, selectOptionColor } from './fixture.mjs';
 
 const out = join(process.env.HOME, '..');
 const mode = process.argv[2] ?? 'frames';
@@ -19,7 +20,7 @@ assert(['frames', 'fallback'].includes(mode), 'unknown GPU frame check');
 // The fixture's #marker is 116 x 56 CSS pixels, and weston's output scale is 1. A
 // frame drawn at another size than the pane, or stretched, changes this count.
 const markerPixels = 116 * 56;
-const markers = { open: '#FFCC49', split: '#F386B9', peek: '#83DDFF', select: selectColors[1] };
+const markers = { open: '#FFCC49', split: '#F386B9', peek: '#83DDFF', select: selectColors[1], popup: popupColors[1] };
 const backgrounds = ['#147A70', '#703496'];
 
 const site = await fixture();
@@ -28,10 +29,7 @@ const pass = message => console.log(`PASS ${message}`);
 const logPath = join(out, 'gpu-frames.log');
 
 function launch() {
-  const env = { ...process.env };
-
-  if (mode === 'fallback') env.FLECHA_TEST_REJECT_SHARED_TEXTURE = '1';
-  const child = spawn('./target/debug/flecha', ['--verify'], { env });
+  const child = spawn('./target/debug/flecha', ['--verify']);
   const log = createWriteStream(logPath);
   const emitter = new EventEmitter();
   const events = [];
@@ -134,6 +132,18 @@ async function capture(app, name, mismatch) {
   }
 }
 
+const frameLines = () => readFileSync(logPath, 'utf8').split('\n').filter(line => line.startsWith('page frames: '));
+
+// Polls the log until a line matches. The launcher watchdog bounds the wait.
+async function logged(pattern) {
+  for (;;) {
+    const line = frameLines().find(line => pattern.test(line));
+
+    if (line) return line;
+    await delay(100); // Matches verify-slice.mjs capture readiness polling.
+  }
+}
+
 const exactly = (...colors) => counts => {
   const wrong = colors.filter(color => counts.get(color) !== markerPixels);
 
@@ -149,6 +159,8 @@ const active = snapshot => {
 };
 
 const app = launch();
+const browserOf = (tab, since = 0) => app.wait(`the browser for ${tab}`,
+  event => event.type === 'created' && event.tab === tab, since);
 
 await app.wait('CEF context ready', event => event.type === 'ready');
 
@@ -165,24 +177,52 @@ await capture(app, 'select-page', exactly(markers.select));
 pass('the /select page rendered at its own size');
 
 if (mode === 'fallback') {
-  // The launcher watchdog bounds this wait.
-  while (!/page frames: browser \d+ receives CPU copies/.test(readFileSync(logPath, 'utf8'))) {
-    await delay(100);
-  }
+  const { browser } = await browserOf(selectTab);
 
-  const log = readFileSync(logPath, 'utf8');
-  assert.match(log, /page frames: reopening a page with CPU copies: /);
-  assert.match(log, /page frames: CPU copies for new browsers from now on: /);
+  await logged(new RegExp(`^page frames: browser ${browser} receives shared textures$`));
+
+  // Fails the import of the next frame, which the heading change paints.
+  await app.command('reject_next_shared_texture');
+
+  const since = app.events.length;
+
+  await app.command('script', { tab: selectTab, source: 'document.querySelector("h1").textContent = "Repainted"' });
+
+  await logged(/^page frames: reopening a page with CPU copies: /);
+
+  await logged(/^page frames: CPU copies for new browsers from now on: /);
+
+  const reopened = await browserOf(selectTab, since);
+
+  assert.notEqual(reopened.browser, browser, 'the page was not reopened');
+
+  await app.loaded(selectTab, '/select', since);
+
+  await logged(new RegExp(`^page frames: browser ${reopened.browser} receives CPU copies$`));
+
+  await capture(app, 'fallback-select', exactly(markers.select));
+
+  pass('after a failed import the page reopened with CPU copies at its own size');
+
   const split = await app.command('split', { url: base + '/split' });
   const [, right] = active(split).split;
+
   await app.loaded(right, '/split');
+
   await capture(app, 'fallback-split', exactly(markers.select, markers.split));
-  const lines = readFileSync(logPath, 'utf8').split('\n').filter(line => line.startsWith('page frames: '));
-  assert(!lines.some(line => /receives shared textures/.test(line)),
+
+  const lines = frameLines();
+  const afterFailure = lines.slice(lines.findIndex(line => line.startsWith('page frames: reopening')));
+
+  assert(!afterFailure.some(line => /receives shared textures/.test(line)),
     `a browser received shared textures after the failure:\n${lines.join('\n')}`);
-  pass(`an import failure reopened the page with CPU copies, and the next browser used them too:\n  ${lines.join('\n  ')}`);
+
+  pass(`the next browser used CPU copies too:\n  ${lines.join('\n  ')}`);
+
   await app.quit();
+
   pass('Flecha quit cleanly after the fallback');
+
   process.exit(0);
 }
 
@@ -239,7 +279,32 @@ const after = await capture(app, 'resized', counts => exactly(markers.open, mark
 
 pass(`after a resize both pages rendered at their new pane sizes (page area ${area(before)} -> ${area(after)} pixels)`);
 
-const lines = readFileSync(logPath, 'utf8').split('\n').filter(line => line.startsWith('page frames: '));
+// A scripted window.open creates its browser through OnBeforePopup, in a second GPUI window.
+const openerPage = await app.command('open', { url: base + '/opener' });
+const opener = active(openerPage).activeTabId;
+
+await app.loaded(opener, '/opener');
+
+await app.command('script', {
+  tab: opener,
+  source: 'document.querySelector("#scripted").style.cssText = "position: absolute; left: 400px; top: 32px; width: 240px; height: 48px"',
+});
+
+const clicked = app.events.length;
+
+await app.command('click', { tab: opener, x: 520, y: 56 });
+
+const popupLoad = await app.wait('the popup load', event => event.type === 'loaded' && event.url === base + '/popup', clicked);
+
+await capture(app, 'popup-window', exactly(markers.popup));
+
+const popup = await browserOf(popupLoad.tab);
+
+await logged(new RegExp(`^page frames: browser ${popup.browser} receives shared textures$`));
+
+pass('a scripted popup window rendered its page from shared textures');
+
+const lines = frameLines();
 
 assert.match(lines[0] ?? '', /^page frames: shared textures on \/dev\/dri\/renderD\d+$/, lines.join('\n'));
 

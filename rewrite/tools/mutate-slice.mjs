@@ -18,14 +18,14 @@ const mutations = {
   'pane-offset': [`${ui}/view.rs`, 'pages = pages.child(div().h_full().w(relative(width)).child(pane));', 'pages = pages.child(div().h_full().w(relative(width)).when(index == 0, |d| d.ml(px(3.))).child(pane));'],
   'ratio-002': [`${ui}/view.rs`, '.unwrap_or(0.5) as f32;', '.unwrap_or(0.5) as f32 + 0.002;'],
   'ratio-001': [`${ui}/view.rs`, '.unwrap_or(0.5) as f32;', '.unwrap_or(0.5) as f32 + 0.001;'],
-  'right-both': [`${ui}/view.rs`, 'let frames = self.state.borrow().engine.frames(&id).unwrap_or_default();',
-    'let frames = { let st = self.state.borrow(); let pick = st.model.core.window(&self.id).and_then(|w| w.spaces.get(&w.active_space_id)).and_then(|s| s.split.clone()).filter(|s| s[0] == id).map(|s| s[1].clone()).unwrap_or_else(|| id.clone()); st.engine.frames(&pick).unwrap_or_default() };'],
+  'right-both': [`${ui}/view.rs`, 'state.engine.frames(&id).unwrap_or_default(),',
+    '{ let pick = state.model.core.window(&self.id).and_then(|w| w.spaces.get(&w.active_space_id)).and_then(|s| s.split.clone()).filter(|s| s[0] == id).map(|s| s[1].clone()).unwrap_or_else(|| id.clone()); state.engine.frames(&pick).unwrap_or_default() },'],
   'pane-size-restart': [`${ui}/view.rs`, '} else if index == 0 {\n                    ratio\n',
     '} else if index == 0 {\n                    if std::path::Path::new("/mnt/scratch/restart.log").exists() { ratio * 0.5 } else { ratio }\n'],
   'blank-restart': [`${ui}/view.rs`, '.child(surface(frames.view, frames.popup))', `
             .when(std::path::Path::new("/mnt/scratch/restart.log").exists(), |pane| pane.bg(rgb(0x${blankRestartColor.slice(1)})))
             .child(surface(if std::path::Path::new("/mnt/scratch/restart.log").exists() { None } else { frames.view }, frames.popup))`],
-  'close-archive': [`${ui}/lib.rs`, 'self.engine.close(&tab);\n                    for removed in self.model.core.close_tab', 'self.engine.close(&tab);\n                    self.model.core.tab_mut(&tab).unwrap().url = "about:blank".into();\n                    for removed in self.model.core.close_tab'],
+  'close-archive': [`${ui}/lib.rs`, 'self.engine.close(&tab);\n                for removed in self.model.core.close_tab', 'self.engine.close(&tab);\n                self.model.core.tab_mut(&tab).unwrap().url = "about:blank".into();\n                for removed in self.model.core.close_tab'],
   'stale-closedat-ui': [`${ui}/lib.rs`, 'for removed in self.model.core.close_tab(&tab, now()).removed {', 'let stale = self.model.core.tab(&tab).and_then(|t| t.last_active).map_or(now(), |at| at as flecha_core::EpochMillis);\n                    for removed in self.model.core.close_tab(&tab, stale).removed {'],
   'stale-closedat': ['crates/flecha-core/src/state.rs', '        let result = self.close_tab_recording(id, now, |id| removed.push(id));\n',
     '        let stale = self.tabs.get(id).and_then(|tab| tab.last_active).map_or(now, |at| at as EpochMillis);\n        let result = self.close_tab_recording(id, stale, |id| removed.push(id));\n'],

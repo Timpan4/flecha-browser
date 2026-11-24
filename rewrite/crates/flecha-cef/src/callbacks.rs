@@ -277,7 +277,7 @@ wrap_render_handler! {
                 (_, None) => Err(anyhow::anyhow!("shared textures are off")),
                 // The importer copies the dma-buf into GPUI's device before returning, and
                 // CEF's render node matches that device.
-                (Some(info), Some(target)) => compositor::reject_for_test(info, |info| unsafe {
+                (Some(info), Some(target)) => self.slot.popups.compositor.import(info, |info| unsafe {
                     SurfaceFrame::copy_accelerated(info, &target)
                 }),
             };

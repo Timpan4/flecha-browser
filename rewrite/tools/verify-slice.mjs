@@ -749,7 +749,8 @@ try {
   pass(`checked /proc environ for the app and its CEF descendants (${checked} processes, including a renderer or zygote child)`);
   await capture('open', ['#147A70', '#FFCC49']);
   pass('opened a durable tab, received CEF load and paint, and captured the GPUI fixture frame');
-  // Xvfb has no DRI3 device, so these checks cover the CPU copy path, not shared textures.
+  // Under Xvfb GPUI's adapter cannot import Vulkan dma-bufs, so these checks cover the CPU
+  // copy path, not shared textures.
   const frames = /^page frames: .*$/m.exec(readFileSync(join(out, 'first.log'), 'utf8'))?.[0] ?? '';
   assert.match(frames, /^page frames: CPU copies, shared textures are unavailable: /, 'Xvfb run did not use CPU copies');
   pass(`Xvfb pages use CPU copies (${frames})`);

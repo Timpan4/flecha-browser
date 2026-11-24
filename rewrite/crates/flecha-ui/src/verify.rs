@@ -72,6 +72,8 @@ enum Command {
         x: f32,
         y: f32,
     },
+    /// Makes the next shared-texture import fail, to check the switch to CPU copies.
+    RejectNextSharedTexture,
 }
 
 impl Command {
@@ -177,6 +179,10 @@ impl Command {
                 handle.update(cx, |_, window, _| {
                     window.resize(gpui::size(gpui::px(width), gpui::px(height)));
                 })?;
+                return Ok(Value::Null);
+            }
+            Self::RejectNextSharedTexture => {
+                state.engine.reject_next_shared_texture();
                 return Ok(Value::Null);
             }
             Self::Click { tab, x, y } => {
