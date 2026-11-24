@@ -7,13 +7,16 @@ use flecha_cef::{BrowserKey, Partition};
 use flecha_core::{EpochMillis, TabId, suggestions::display_url};
 use flecha_history::{HistoryEntry, HistoryError, HistoryStore, PAGE, RecordedVisit};
 use gpui::{
-    ClickEvent, Context, Div, InteractiveElement as _, ParentElement as _, ScrollHandle,
-    StatefulInteractiveElement as _, Styled as _, Window, div, prelude::FluentBuilder as _,
+    ClickEvent, Context, Div, FontWeight, InteractiveElement as _, ParentElement as _,
+    ScrollHandle, StatefulInteractiveElement as _, Styled as _, Window, div,
+    prelude::FluentBuilder as _, px,
 };
 
+use crate::sidebar::group_header;
 use crate::text_field::TextField;
 use crate::theme::palette;
-use crate::view::{Overlay, Shell, button, overlay_panel};
+use crate::tokens;
+use crate::view::{Overlay, Shell, icon_button, overlay_panel, popover_header, text_button};
 use crate::{Action, Controller, dispatch, now};
 
 pub(crate) struct History {
@@ -318,13 +321,12 @@ impl Shell {
         cx.notify();
     }
 
+    /// The shipping shell opens history as Chromium's own page and archived tabs through the
+    /// command bar, so these drawers borrow `.popover-header` (ui/styles.css:1035-1053).
     fn drawer_heading(&self, title: &'static str, cx: &Context<Self>) -> Div {
-        div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .child(title)
-            .child(button("close-overlay", "Esc").on_click(cx.listener(
+        popover_header(title)
+            .p_0()
+            .child(icon_button("close-overlay", "close", "Close").on_click(cx.listener(
                 |this, _: &ClickEvent, window, cx| {
                     this.dismiss_overlay(window, cx);
                 },
@@ -337,7 +339,7 @@ impl Shell {
                 .child(self.drawer_heading("History", cx))
                 .child(
                     div()
-                        .text_sm()
+                        .text_color(palette().text_3)
                         .child(format!("History is unavailable. {error}")),
                 );
         }
@@ -351,14 +353,7 @@ impl Shell {
         for entry in &panel.entries {
             let day = local_date(entry.last_visit_ms);
             if previous != Some(day) {
-                list = list.child(
-                    div()
-                        .mt_2()
-                        .px_2()
-                        .text_xs()
-                        .text_color(palette().text_2)
-                        .child(day_label(day, today)),
-                );
+                list = list.child(group_header().child(day_label(day, today)));
                 previous = Some(day);
             }
             let url = entry.url.clone();
@@ -366,7 +361,7 @@ impl Shell {
                 div()
                     .flex()
                     .items_center()
-                    .gap_1()
+                    .gap(px(tokens::DOWNLOAD_ACTIONS_GAP))
                     .child(
                         entry_link(format!("history-{url}"), &entry.title, &url).on_click(
                             cx.listener({
@@ -382,8 +377,7 @@ impl Shell {
                         ),
                     )
                     .child(
-                        button(format!("delete-{url}"), "Delete")
-                            .text_xs()
+                        text_button(format!("delete-{url}"), "Delete")
                             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                                 dispatch(
                                     &this.state,
@@ -396,7 +390,7 @@ impl Shell {
             );
         }
         if !panel.exhausted {
-            list = list.child(button("load-history", "Load more").on_click(cx.listener(
+            list = list.child(text_button("load-history", "Load more").on_click(cx.listener(
                 |this, _: &ClickEvent, _, cx| {
                     if let Overlay::History(panel) = &mut this.overlay {
                         let state = this.state.borrow();
@@ -410,10 +404,13 @@ impl Shell {
                 },
             )));
         } else if panel.entries.is_empty() && panel.error.is_none() {
-            list = list.child(div().p_2().text_sm().child("No matching history"));
+            list = list.child(empty_note("No matching history"));
         }
 
-        let mut clear = div().flex().flex_wrap().gap_1().text_xs();
+        let mut clear = div()
+            .flex()
+            .flex_wrap()
+            .gap(px(tokens::DOWNLOAD_ACTIONS_GAP));
         for (label, range) in [
             ("Last hour", ClearRange::Hour),
             ("24 hours", ClearRange::Day),
@@ -426,14 +423,25 @@ impl Shell {
         overlay_panel()
             .child(self.drawer_heading("History", cx))
             .child(panel.input.render("Search history"))
-            .when_some(panel.error.clone(), |panel, error| panel.child(error))
+            .when_some(panel.error.clone(), |panel, error| {
+                panel.child(div().text_color(palette().text_3).child(error))
+            })
             .child(list)
             .child(
                 div()
-                    .border_t_1()
-                    .border_color(palette().surface_2)
-                    .pt_2()
-                    .child(div().text_sm().child("Clear browsing data"))
+                    .flex()
+                    .flex_col()
+                    .gap(px(tokens::SPACE_2))
+                    .pt(px(tokens::SPACE_2))
+                    .border_t(px(tokens::POPOVER_RULE))
+                    .border_color(palette().surface_line)
+                    .child(
+                        div()
+                            .text_size(px(tokens::TEXT_XS))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(palette().text_3)
+                            .child("Clear browsing data"),
+                    )
                     .child(clear),
             )
     }
@@ -443,13 +451,20 @@ impl Shell {
         let entries = state.model.core.search_archive(input.text());
         let mut list = div().id("archive-list").min_h_0().overflow_y_scroll();
         if entries.is_empty() {
-            list = list.child(div().p_2().text_sm().child("No matching archived tabs"));
+            list = list.child(empty_note("No matching archived tabs"));
         }
         for (index, entry) in entries.into_iter().enumerate() {
             let archived = entry.clone();
             list = list.child(
                 entry_link(("archive", index), &entry.title, &entry.url)
-                    .child(div().text_xs().child("Restore"))
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_size(px(tokens::TEXT_XS))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(palette().text_3)
+                            .child("Restore"),
+                    )
                     .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                         this.navigate_from_overlay(
                             Action::RestoreArchive(archived.clone()),
@@ -481,31 +496,48 @@ fn entry_link(id: impl Into<gpui::ElementId>, title: &str, url: &str) -> gpui::S
     } else {
         title
     };
+    // Laid out as a `.download` row (ui/styles.css:1062-1088): a medium name over its address.
     div()
         .id(id)
         .flex()
         .items_center()
-        .gap_2()
+        .gap(px(tokens::SPACE_2))
         .flex_1()
         .min_w_0()
-        .px_2()
-        .py_1()
+        .py(px(tokens::DOWNLOAD_PAD_Y))
+        .pr(px(tokens::DOWNLOAD_PAD_RIGHT))
+        .pl(px(tokens::DOWNLOAD_PAD_LEFT))
         .cursor_pointer()
-        .rounded_md()
+        .rounded(px(tokens::RADIUS_MD))
         .hover(|row| row.bg(palette().surface_2))
         .child(
             div()
                 .flex_1()
                 .min_w_0()
-                .child(div().truncate().child(title.to_owned()))
                 .child(
                     div()
                         .truncate()
-                        .text_xs()
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(title.to_owned()),
+                )
+                .child(
+                    div()
+                        .truncate()
+                        .text_size(px(tokens::TEXT_XS))
                         .text_color(palette().text_2)
                         .child(address),
                 ),
         )
+}
+
+/// `#downloads-list .empty` (ui/styles.css:1144-1147).
+fn empty_note(text: &'static str) -> Div {
+    div()
+        .pt(px(tokens::DOWNLOADS_EMPTY_PAD_TOP))
+        .px(px(tokens::DOWNLOADS_EMPTY_PAD_X))
+        .pb(px(tokens::DOWNLOADS_EMPTY_PAD_BOTTOM))
+        .text_color(palette().text_3)
+        .child(text)
 }
 
 #[cfg(test)]

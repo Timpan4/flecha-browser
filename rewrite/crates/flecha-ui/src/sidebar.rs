@@ -1169,7 +1169,7 @@ fn row_action(group: &SharedString, button: gpui::Stateful<Div>) -> gpui::Statef
 }
 
 /// `.group-header` (ui/styles.css:466-474).
-fn group_header() -> Div {
+pub(crate) fn group_header() -> Div {
     div()
         .flex()
         .flex_none()

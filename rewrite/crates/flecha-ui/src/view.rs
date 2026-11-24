@@ -129,6 +129,7 @@ impl Shell {
         }
     }
 
+    /// A `.text-button` that dispatches `action`.
     pub(crate) fn action_button(
         &self,
         id: &'static str,
@@ -136,7 +137,7 @@ impl Shell {
         action: Action,
         cx: &Context<Self>,
     ) -> impl IntoElement {
-        button(id, label).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+        text_button(id, label).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
             dispatch(&this.state, &this.id, action.clone(), cx);
         }))
     }
