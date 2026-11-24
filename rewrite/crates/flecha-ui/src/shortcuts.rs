@@ -183,14 +183,16 @@ impl Controller {
     pub(crate) fn poll_toolbars(&mut self) -> bool {
         let mut changed = false;
         while let Some(message) = self.engine.next_devtools_event() {
-            if matches!(
-                message.event,
-                flecha_cef::DevToolsEvent::Result { success: false, .. }
-            ) {
+            if let flecha_cef::DevToolsEvent::Result { id, success, .. } = message.event
+                && self.pending_reloads.remove(&id).is_some()
+                && !success
+            {
                 self.status = "Could not reload the page without its cache.".into();
                 changed = true;
             }
         }
+        self.pending_reloads
+            .retain(|_, key| self.engine.key(&key.tab).as_ref() == Some(key));
         self.toolbars
             .retain(|id, _| self.model.core.window(id).is_some());
         for window in self.model.core.windows() {
@@ -201,7 +203,7 @@ impl Controller {
                         back: self.engine.can_go_back(tab),
                         forward: self.engine.can_go_forward(tab),
                         loading: self.engine.is_loading(tab),
-                        available: self.engine.key(tab).is_some(),
+                        available: self.engine.host(tab).is_some(),
                         blocked: self.engine.blocked_count(tab),
                     });
             if let Some(current) = self.toolbars.get_mut(&window.id) {
@@ -215,7 +217,11 @@ impl Controller {
         changed
     }
 
-    pub(crate) fn browser_navigation(&self, window: &WindowId, action: Navigation) -> Result<()> {
+    pub(crate) fn browser_navigation(
+        &mut self,
+        window: &WindowId,
+        action: Navigation,
+    ) -> Result<()> {
         let Some((_, id)) = self.model.keyboard_pane(window) else {
             return Ok(());
         };
@@ -224,10 +230,16 @@ impl Controller {
             Navigation::Forward if self.engine.can_go_forward(id) => self.engine.go_forward(id),
             Navigation::Reload => self.engine.reload(id),
             Navigation::Stop if self.engine.is_loading(id) => self.engine.stop_load(id),
-            Navigation::HardReload if self.engine.key(id).is_some() => {
-                self.engine
+            Navigation::HardReload if self.engine.host(id).is_some() => {
+                let key = self
+                    .engine
+                    .key(id)
+                    .context("No current browser for this tab")?;
+                let request = self
+                    .engine
                     .send_devtools_message(id, "Page.reload", Some(r#"{"ignoreCache":true}"#))
                     .context("Reload without cache")?;
+                self.pending_reloads.insert(request, key);
             }
             _ => {}
         }

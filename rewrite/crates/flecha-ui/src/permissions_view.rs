@@ -17,6 +17,7 @@ pub(crate) struct PermissionStore {
     path: PathBuf,
     observed: Option<Vec<u8>>,
     error: Option<anyhow::Error>,
+    save_error: Option<anyhow::Error>,
 }
 
 impl PermissionStore {
@@ -25,6 +26,7 @@ impl PermissionStore {
             path: profile.join("permissions.json"),
             observed: None,
             error: None,
+            save_error: None,
         }
     }
 
@@ -34,6 +36,10 @@ impl PermissionStore {
 
     pub(crate) fn error(&self) -> Option<&anyhow::Error> {
         self.error.as_ref()
+    }
+
+    pub(crate) fn save_error(&self) -> Option<&anyhow::Error> {
+        self.save_error.as_ref()
     }
 
     fn load(&mut self, engine: &mut Engine) -> Result<()> {
@@ -95,7 +101,7 @@ impl Controller {
         while self.engine.next_permission_event().is_some() {
             changed = true;
         }
-        if self.permissions.error().is_none()
+        if self.permissions.save_error().is_none()
             && let Err(error) = self.save_permissions()
         {
             self.status = error.to_string();
@@ -109,12 +115,13 @@ impl Controller {
             return Ok(());
         }
         if let Err(error) = self.permissions.save(&self.engine.permission_snapshot()) {
-            let error = error.context("Could not save permissions. Restart Flecha to retry");
-            let message = format!("{error:#}");
-            self.permissions.error = Some(error);
-            anyhow::bail!(message);
+            self.permissions.save_error = Some(error);
+            anyhow::bail!(
+                "Permission changes apply to this session only until saved. Retry in Site Controls."
+            );
         }
         self.engine.mark_permissions_saved();
+        self.permissions.save_error = None;
         Ok(())
     }
 

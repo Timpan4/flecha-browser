@@ -92,6 +92,7 @@ enum Action {
         flecha_permissions::RequestId,
         flecha_permissions::PromptOutcome,
     ),
+    RetryPermissionSave,
     Site(Site, SiteChange),
     Select(TabId),
     Split(TabId),
@@ -130,6 +131,7 @@ struct Controller {
     permissions: PermissionStore,
     sleep: TabSleep,
     toolbars: BTreeMap<WindowId, Toolbar>,
+    pending_reloads: BTreeMap<i32, flecha_cef::BrowserKey>,
     store: StateStore,
     session_dir: PathBuf,
     snapshots: LoadedState,
@@ -178,6 +180,7 @@ impl Controller {
             permissions: PermissionStore::open(&profile),
             sleep: TabSleep::new(Instant::now()),
             toolbars: BTreeMap::new(),
+            pending_reloads: BTreeMap::new(),
             store,
             snapshots,
             windows: BTreeMap::new(),
@@ -240,6 +243,7 @@ impl Controller {
             Action::ResolvePermission(request, outcome) => {
                 return self.resolve_permission(request, outcome);
             }
+            Action::RetryPermissionSave => return self.save_permissions(),
             Action::Site(site, change) => return self.change_current_site(window, &site, change),
             Action::Select(id) => {
                 let change = self.model.core.activate(&id, window, Some(now()));
@@ -651,7 +655,11 @@ fn sync_windows(controller: &Shared, cx: &mut App) -> Result<()> {
     };
     for (id, handle) in &opened {
         if !wanted.contains_key(id) {
-            controller.borrow_mut().windows.remove(id);
+            {
+                let mut state = controller.borrow_mut();
+                state.windows.remove(id);
+                state.sleep.window_activation(id, false);
+            }
             let _ = handle.update(cx, |_, window, _| window.remove_window());
         }
     }

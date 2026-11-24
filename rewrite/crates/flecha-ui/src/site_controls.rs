@@ -1,7 +1,7 @@
 use anyhow::{Context as _, Result, ensure};
 use flecha_adblock::site_host;
 use flecha_cef::Partition;
-use flecha_core::{TabId, WindowId, is_site_host};
+use flecha_core::{Settings, TabId, WindowId, blocks_ads_on, is_site_host};
 use flecha_permissions::{Decision, Origin, PermissionKind, SiteSettings};
 use gpui::{
     ClickEvent, Context, Div, ParentElement as _, StatefulInteractiveElement as _, Styled as _,
@@ -36,6 +36,17 @@ pub(crate) enum SiteChange {
     Shield(bool),
     Permission(PermissionKind, Decision),
     ClearPermissions,
+}
+
+fn inherited_exception<'a>(settings: &'a Settings, host: &str) -> Option<&'a str> {
+    settings
+        .ad_block_allowed
+        .as_ref()?
+        .iter()
+        .find(|site| {
+            site.as_str() != host && !blocks_ads_on(Some(std::slice::from_ref(site)), host)
+        })
+        .map(String::as_str)
 }
 
 impl Controller {
@@ -74,6 +85,9 @@ impl Controller {
                     .as_deref()
                     .context("No shield setting for this site")?;
                 self.edit_settings(|settings| {
+                    if block && let Some(parent) = inherited_exception(settings, host) {
+                        anyhow::bail!("Change the exception for {parent} in Settings");
+                    }
                     settings.set_ad_blocking_on(host, block);
                     Ok(())
                 })
@@ -132,6 +146,7 @@ impl Shell {
             let shield_on = settings.blocks_ads_on(host);
             let global_on = settings.ad_block.unwrap_or(true);
             let blocked = state.engine.blocked_count(&site.tab);
+            let inherited = inherited_exception(settings, host);
             let toggle = button(
                 "site-shield",
                 if shield_on { "Turn off" } else { "Turn on" },
@@ -154,11 +169,16 @@ impl Shell {
                                     .text_xs()
                                     .child(format!("{blocked} blocked on this page")),
                             )
+                            .when_some(inherited, |label, parent| {
+                                label.child(format!(
+                                    "Settings has an exception for {parent} and its subdomains."
+                                ))
+                            })
                             .when(!global_on, |label| {
                                 label.child("Ad blocking is off in Settings.")
                             }),
                     )
-                    .child(toggle),
+                    .when(inherited.is_none(), |row| row.child(toggle)),
             );
         }
         if let Some(error) = state.permissions.error() {
@@ -166,6 +186,13 @@ impl Shell {
         }
         if !site.origin.is_potentially_trustworthy() {
             return panel.child("This origin cannot request site permissions.");
+        }
+        if let Some(error) = state.permissions.save_error() {
+            panel = panel.child(
+                div().flex().flex_col()
+                    .child(format!("Permission changes are active in this session. Could not save them. {error:#}"))
+                    .child(self.action_button("retry-permission-save", "Retry save", Action::RetryPermissionSave, cx)),
+            );
         }
         let permissions = state.site_permissions(&site);
         for kind in PermissionKind::ALL {
@@ -314,6 +341,61 @@ mod tests {
                 .is_err()
         );
         assert!(path.is_dir());
+        Ok(())
+    }
+
+    #[test]
+    fn a_failed_permission_revocation_can_be_retried() -> Result<()> {
+        let profile = tempfile::tempdir()?;
+        let site = site();
+        let permission = PermissionKind::Camera;
+        let mut controller = Controller::open_test_profile(profile.path())?;
+        controller.change_site(&site, SiteChange::Permission(permission, Decision::Allow))?;
+
+        let lock = profile.path().join("permissions.json.lock");
+        fs::remove_file(&lock)?;
+        fs::create_dir(&lock)?;
+        assert!(
+            controller
+                .change_site(&site, SiteChange::ClearPermissions)
+                .is_err()
+        );
+        assert!(controller.permissions.save_error().is_some());
+        assert!(controller.engine.permissions_dirty());
+        assert_eq!(
+            controller.site_permissions(&site).decision(permission),
+            Decision::Ask
+        );
+        let saved = fs::read_to_string(profile.path().join("permissions.json"))?;
+        assert!(saved.contains(r#""camera": "allow""#));
+
+        fs::remove_dir(&lock)?;
+        let window = controller.model.core.focused_window().id.clone();
+        controller.act(&window, Action::RetryPermissionSave)?;
+        assert!(controller.permissions.save_error().is_none());
+        assert!(!controller.engine.permissions_dirty());
+        let reloaded = Controller::open_test_profile(profile.path())?;
+        assert_eq!(
+            reloaded.site_permissions(&site).decision(permission),
+            Decision::Ask
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_subdomain_shield_cannot_remove_a_parent_exception() -> Result<()> {
+        let profile = tempfile::tempdir()?;
+        let mut controller = Controller::open_test_profile(profile.path())?;
+        controller.edit_settings(|settings| {
+            settings.set_ad_blocking_on("example.test", false);
+            Ok(())
+        })?;
+        assert!(
+            controller
+                .change_site(&site(), SiteChange::Shield(true))
+                .is_err()
+        );
+        assert_eq!(controller.engine.adblock_allowed_sites(), ["example.test"]);
         Ok(())
     }
 
