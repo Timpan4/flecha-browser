@@ -65,7 +65,7 @@ fn has_credentials(input: &str) -> bool {
                 .chars()
                 .any(|ch| ch != '\u{FEFF}' && is_js_whitespace(ch));
             if padded {
-                !userinfo.contains(is_js_whitespace)
+                (has_tail || !userinfo.contains(is_js_whitespace))
                     && (starts_with_host(destination) || has_single_label_host_tail(destination))
             } else {
                 has_tail || !userinfo.contains(is_js_whitespace)
@@ -86,7 +86,8 @@ fn has_single_label_host_tail(destination: &str) -> bool {
     .captures(destination) else {
         return false;
     };
-    re!(r"(?i-u:^[a-z](?:[a-z0-9-]*[a-z0-9])?$)").is_match(&captures[1])
+    let host = captures[1].trim_end_matches('.');
+    re!(r"(?i-u:^[a-z](?:[a-z0-9-]*[a-z0-9])?$)").is_match(host)
 }
 
 fn starts_with_host(destination: &str) -> bool {
