@@ -1555,6 +1555,7 @@ mod tests {
                 gpui::size(gpui::px(1920.), gpui::px(1080.)),
             ),
             1.0,
+            None,
         )
     }
 

@@ -484,6 +484,70 @@ async function nativeInput(app, tab) {
   pass('an X11 click and key passed through GPUI into the CEF input field');
 }
 
+// One X11 wheel notch reaches GPUI as 3 lines and must scroll the page by native Chromium's 120
+// pixels, animated rather than in one jump.
+async function nativeWheel(app, tab) {
+  const page = (await app.command('snapshot')).browsers.find(page => page.tab === tab);
+  // GPUI reports no refresh rate for Xvfb's display, so pages paint at the 60 fps fallback
+  // instead of CEF's 30 fps default.
+  assert.equal(page?.frameRate, 60, 'CEF windowless frame rate');
+
+  const [x, y] = execFileSync('magick', [
+    join(out, 'open.png'), '-transparent', '#FFCC49', '-alpha', 'extract', '-negate',
+    '-trim', '-format', '%X %Y', 'info:',
+  ], { encoding: 'utf8' }).trim().split(' ').map(Number);
+
+  assert(Number.isFinite(x) && Number.isFinite(y), 'missing page marker');
+
+  const ready = site.probe('wheel-ready', stepTimeoutMs);
+  const scrolled = site.probe('wheel-scroll', stepTimeoutMs);
+  await app.command('script', {
+    tab,
+    source: `
+      const spacer = document.createElement('div');
+      spacer.id = 'wheel-spacer';
+      spacer.style.height = '5000px';
+      document.body.append(spacer);
+      scrollTo(0, 0);
+      const positions = window.wheelPositions = [];
+      // Chromium's wheel animation eases out to its target, so the first position at or past
+      // 120px ends the notch.
+      const record = () => {
+        positions.push(scrollY);
+        if (scrollY >= 120) {
+          removeEventListener('scroll', record);
+          fetch('/probe/wheel-scroll?value=' + encodeURIComponent(JSON.stringify(positions)));
+        }
+      };
+      addEventListener('scroll', record);
+      // A wheel event only scrolls once the compositor has the taller page, a frame after layout.
+      requestAnimationFrame(() => requestAnimationFrame(() => fetch('/probe/wheel-ready?value=1')));
+    `,
+  });
+  waitingFor = 'fixture wheel listeners';
+  await ready;
+  execFileSync(x11Driver, ['wheel-down', x + 10, y + 10]);
+  waitingFor = 'X11 wheel scroll in the CEF page';
+
+  const positions = JSON.parse(await scrolled.catch(async error => {
+    const recorded = site.probe('wheel-recorded', stepTimeoutMs);
+    await app.command('script', {
+      tab,
+      source: "fetch('/probe/wheel-recorded?value=' + encodeURIComponent(JSON.stringify({ positions: window.wheelPositions, scrollY })))",
+    });
+    throw new Error(`${error.message}; the page recorded ${await recorded}`);
+  }));
+
+  assert.equal(positions.at(-1), 120, `one wheel notch scrolled ${JSON.stringify(positions)}`);
+  assert(positions.some(position => position > 0 && position < 120),
+    `one wheel notch jumped without animating: ${JSON.stringify(positions)}`);
+  await app.command('script', {
+    tab,
+    source: "document.getElementById('wheel-spacer').remove(); scrollTo(0, 0);",
+  });
+  pass(`an X11 wheel notch animated the CEF page to 120px through ${positions.length} scroll positions at ${page.frameRate} fps`);
+}
+
 async function nativeContextMenu(app) {
   const [x, y] = execFileSync('magick', [
     join(out, 'open.png'), '-transparent', '#FFCC49', '-alpha', 'extract', '-negate',
@@ -2888,6 +2952,7 @@ async function verifySlice() {
   await nativeInput(app, left);
 
   if (mode === 'slice') {
+    await nativeWheel(app, left);
     await nativeContextMenu(app);
     await tabRowInput(app, left);
   }

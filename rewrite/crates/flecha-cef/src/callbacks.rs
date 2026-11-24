@@ -351,6 +351,9 @@ wrap_life_span_handler! {
             let closed = self.slot.created(browser.identifier());
             if !closed {
                 dialogs::register(&self.slot, browser.identifier());
+                if let Some(host) = browser.host() {
+                    host.set_windowless_frame_rate(self.slot.viewport.get().frame_rate());
+                }
             }
             self.slot.browser.replace(Some(browser.clone()));
             // The engine closed this popup, or its opener left, while CEF was creating it.
@@ -367,10 +370,13 @@ wrap_life_span_handler! {
             &self, _browser: Option<&mut Browser>, _frame: Option<&mut Frame>, popup_id: i32,
             url: Option<&CefString>, _frame_name: Option<&CefString>, disposition: WindowOpenDisposition,
             _gesture: i32, features: Option<&PopupFeatures>, window: Option<&mut WindowInfo>,
-            client: Option<&mut Option<Client>>, _settings: Option<&mut BrowserSettings>,
+            client: Option<&mut Option<Client>>, settings: Option<&mut BrowserSettings>,
             _extra: Option<&mut Option<DictionaryValue>>, _no_javascript: Option<&mut i32>,
         ) -> i32 {
             let allowed = popup::before_popup(&self.slot, popup_id, url, disposition, features, window, client);
+            if allowed && let Some(settings) = settings {
+                settings.windowless_frame_rate = self.slot.viewport.get().frame_rate();
+            }
             i32::from(!allowed)
         }
 
