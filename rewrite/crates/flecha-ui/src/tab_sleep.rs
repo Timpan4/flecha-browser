@@ -80,7 +80,7 @@ impl TabSleep {
 
 impl Controller {
     pub(crate) fn note_shown_tabs(&mut self, instant: Instant) -> EpochMillis {
-        if self.verify {
+        if !AUTOMATIC_SLEEP || self.verify {
             return 0;
         }
         let active_use = self.sleep.sample(instant);
