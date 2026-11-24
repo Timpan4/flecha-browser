@@ -353,8 +353,14 @@ cited! {
     DOWNLOAD_PAD_Y = 7., STYLES: 1068 "padding: 7px 4px 7px 8px";
     DOWNLOAD_PAD_RIGHT = 4., STYLES: 1068 "padding: 7px 4px 7px 8px";
     DOWNLOAD_PAD_LEFT = 8., STYLES: 1068 "padding: 7px 4px 7px 8px";
+    DOWNLOADS_LIST_PAD = 6., STYLES: 1058 "padding: 0 6px 6px";
+    DOWNLOAD_ACTIONS_GAP = 2., STYLES: 1106 "gap: 2px";
     DOWNLOAD_BAR = 3., STYLES: 1130 "height: 3px";
     DOWNLOAD_BAR_GAP = 6., STYLES: 1131 "margin-top: 6px";
+    DOWNLOAD_BAR_RADIUS = 2., STYLES: 1132 "border-radius: 2px";
+    DOWNLOADS_EMPTY_PAD_TOP = 10., STYLES: 1145 "padding: 10px 8px 12px";
+    DOWNLOADS_EMPTY_PAD_X = 8., STYLES: 1145 "padding: 10px 8px 12px";
+    DOWNLOADS_EMPTY_PAD_BOTTOM = 12., STYLES: 1145 "padding: 10px 8px 12px";
     TEXT_FIELD = 32., STYLES: 1435 "height: 32px";
     TEXT_FIELD_PAD = 10., STYLES: 1436 "padding: 0 10px";
     /// The focused text field's `--focus` ring.

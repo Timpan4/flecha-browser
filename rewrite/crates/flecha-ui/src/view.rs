@@ -1325,6 +1325,22 @@ pub(crate) fn switch(
 }
 
 /// `.popover-footer` (ui/styles.css:1586-1592): a hairline above the popover's last actions.
+/// `.popover-header` (ui/styles.css:1035-1053): a semibold title that truncates before the
+/// trailing button does.
+pub(crate) fn popover_header(title: impl Into<gpui::SharedString>) -> Div {
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_between()
+        .pt(px(tokens::POPOVER_PAD_TOP))
+        .pr(px(tokens::POPOVER_PAD_RIGHT))
+        .pb(px(tokens::POPOVER_PAD_BOTTOM))
+        .pl(px(tokens::POPOVER_PAD_LEFT))
+        .font_weight(FontWeight::SEMIBOLD)
+        .child(div().min_w_0().truncate().child(title.into()))
+}
+
 pub(crate) fn popover_footer() -> Div {
     div()
         .flex()
