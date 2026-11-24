@@ -1,21 +1,18 @@
 //! The sidebar's menus: a tab's (`tabMenu`, chromium/shell/background.ts:1111-1162) and a Space's
-//! (`spaceMenu`, background.ts:1164-1179), drawn as the shipping shell's `.shell-menu`
-//! (chromium/shell/shell.css:72-135), and the field that renames a tab.
+//! (`spaceMenu`, background.ts:1164-1179), which `shell_menu` draws, what they do to a tab, and
+//! the field that renames a tab.
 
 use anyhow::{Context as _, Result, ensure};
 use flecha_core::{CloseToday, Placement, SpaceId, TabId, WindowId, suggestions::pinnable_address};
 use gpui::{
-    ClickEvent, ClipboardItem, Context, Div, FontWeight, InteractiveElement as _, IntoElement,
-    MouseDownEvent, ParentElement as _, Pixels, Point, ScrollHandle,
-    StatefulInteractiveElement as _, Styled as _, TextRun, Window, deferred, div,
-    prelude::FluentBuilder as _, px,
+    ClickEvent, ClipboardItem, Context, Div, FontWeight, ParentElement as _, Pixels, Point,
+    SharedString, StatefulInteractiveElement as _, Styled as _, Window, div,
 };
 
+use crate::shell_menu::{Entry, MenuAnchor, Run};
 use crate::sidebar::{SidebarAction, tab_label};
 use crate::space_editor::SpaceAction;
 use crate::text_field::TextField;
-use crate::theme::palette;
-use crate::tokens;
 use crate::view::{Overlay, Shell, overlay_panel, primary_button};
 use crate::{Action, Controller, dispatch, now};
 
@@ -149,76 +146,12 @@ impl Controller {
     }
 }
 
-/// One line of a menu.
-#[derive(Clone)]
-pub(crate) enum Row {
-    Item {
-        label: String,
-        enabled: bool,
-        /// Whether a checkable item is on; `None` for the rest.
-        checked: Option<bool>,
-        run: Run,
-    },
-    Separator,
+fn action(label: impl Into<SharedString>, action: Action) -> Entry {
+    Entry::item(label, Run::Action(action), String::new())
 }
 
-/// What choosing a row does.
-#[derive(Clone)]
-pub(crate) enum Run {
-    Action(Action),
-    Copy(String),
-    Rename(TabId),
-    EditSpace(SpaceId),
-    NewFolder(SpaceId),
-    DeleteSpace(SpaceId),
-    Submenu(Vec<Row>),
-}
-
-fn item(label: impl Into<String>, run: Run) -> Row {
-    Row::Item {
-        label: label.into(),
-        enabled: true,
-        checked: None,
-        run,
-    }
-}
-
-fn action(label: impl Into<String>, action: Action) -> Row {
-    item(label, Run::Action(action))
-}
-
-/// A menu open at the pointer, with the submenu of its row `submenu` beside it.
-pub(crate) struct ShellMenu {
-    pub(crate) anchor: Point<Pixels>,
-    pub(crate) rows: Vec<Row>,
-    pub(crate) submenu: Option<usize>,
-    /// A menu taller than the window scrolls, and its submenu opens beside the scrolled row.
-    scroll: ScrollHandle,
-}
-
-impl ShellMenu {
-    /// What the enabled row labelled `label` runs, in the menu or its open submenu.
-    fn find(&self, label: &str) -> Option<Run> {
-        let submenu = self.submenu.and_then(|index| match self.rows.get(index)? {
-            Row::Item {
-                run: Run::Submenu(rows),
-                ..
-            } => Some(rows.as_slice()),
-            _ => None,
-        });
-        self.rows
-            .iter()
-            .chain(submenu.into_iter().flatten())
-            .find_map(|row| match row {
-                Row::Item {
-                    label: name,
-                    enabled: true,
-                    run,
-                    ..
-                } if name == label => Some(run.clone()),
-                _ => None,
-            })
-    }
+fn item(label: impl Into<SharedString>, run: Run) -> Entry {
+    Entry::item(label, run, String::new())
 }
 
 /// `spaceLabel`: a Space's emoji, two spaces, and its name.
@@ -229,8 +162,8 @@ pub(crate) fn space_label(space: &flecha_core::Space) -> String {
     }
 }
 
-/// `tabMenu` (chromium/shell/background.ts:1111-1162): the rows for `id` as `window` shows it.
-pub(crate) fn tab_menu(state: &Controller, window: &WindowId, id: &TabId) -> Option<Vec<Row>> {
+/// `tabMenu` (chromium/shell/background.ts:1111-1162): the entries for `id` as `window` shows it.
+pub(crate) fn tab_menu(state: &Controller, window: &WindowId, id: &TabId) -> Option<Vec<Entry>> {
     let core = state.model.state(window)?;
     let tab = core.tab(id)?;
     let zone = core.locate(id)?;
@@ -238,31 +171,31 @@ pub(crate) fn tab_menu(state: &Controller, window: &WindowId, id: &TabId) -> Opt
     let incognito = state.model.is_incognito(window);
     let current = core.window(window)?;
     let shown = current.spaces.get(&current.active_space_id);
-    let mut rows = Vec::new();
+    let mut entries = Vec::new();
     if current.visible_tabs().len() > 1 && current.visible_tabs().contains(id) {
-        rows.push(action("Exit Split View", Action::ExitSplit));
+        entries.push(action("Exit Split View", Action::ExitSplit));
     } else if shown
         .and_then(|space| space.active_tab_id.as_ref())
         .is_some_and(|active| active != id)
     {
-        rows.push(action("Open in Split View", Action::Split(id.clone())));
+        entries.push(action("Open in Split View", Action::Split(id.clone())));
     }
-    if !rows.is_empty() {
-        rows.push(Row::Separator);
+    if !entries.is_empty() {
+        entries.push(Entry::Separator);
     }
     let name = tab.custom_title.as_ref().unwrap_or(&tab.title);
     let home = tab.home_url.as_deref().filter(|_| !today);
-    rows.extend([
-        item("Copy Link", Run::Copy(tab.url.clone())),
+    entries.extend([
+        item("Copy Link", Run::Copy(tab.url.clone(), "Link copied")),
         item(
             "Copy as Markdown Link",
-            Run::Copy(format!("[{name}]({})", tab.url)),
+            Run::Copy(format!("[{name}]({})", tab.url), "Markdown link copied"),
         ),
         item("Rename…", Run::Rename(id.clone())),
         action("Duplicate", Action::Tab(id.clone(), TabAction::Duplicate)),
         action("Open in Peek", Action::PeekTab(id.clone())),
         action("Move to Flechinha", Action::DetachTab(id.clone())),
-        Row::Separator,
+        Entry::Separator,
     ]);
     let mobile = tab.device.is_some();
     if !incognito && !mobile {
@@ -281,7 +214,7 @@ pub(crate) fn tab_menu(state: &Controller, window: &WindowId, id: &TabId) -> Opt
                     )
                 })
                 .collect();
-        rows.extend([
+        entries.extend([
             if today {
                 action(
                     "Pin Tab",
@@ -304,22 +237,18 @@ pub(crate) fn tab_menu(state: &Controller, window: &WindowId, id: &TabId) -> Opt
                     Action::Sidebar(SidebarAction::Favorite(id.clone())),
                 )
             },
-            Row::Item {
+            Entry::Submenu {
                 label: "Move to Space".into(),
-                enabled: !others.is_empty(),
-                checked: None,
-                run: Run::Submenu(others),
+                entries: others,
             },
-            Row::Separator,
+            Entry::Separator,
         ]);
     }
-    rows.push(Row::Item {
-        label: "Reload".into(),
-        enabled: state.engine.key(id).is_some(),
-        checked: None,
-        run: Run::Action(Action::Tab(id.clone(), TabAction::Reload)),
-    });
-    rows.push(action(
+    entries.push(
+        action("Reload", Action::Tab(id.clone(), TabAction::Reload))
+            .enabled(state.engine.key(id).is_some()),
+    );
+    entries.push(action(
         if tab.muted == Some(true) {
             "Unmute Tab"
         } else {
@@ -328,24 +257,24 @@ pub(crate) fn tab_menu(state: &Controller, window: &WindowId, id: &TabId) -> Opt
         Action::Tab(id.clone(), TabAction::ToggleMute),
     ));
     if home.is_some_and(|home| !same_address(home, &tab.url)) {
-        rows.push(action(
+        entries.push(action(
             "Go Back to Pinned URL",
             Action::Tab(id.clone(), TabAction::GoHome),
         ));
         if pinnable_address(&tab.url).is_some() {
-            rows.push(action(
+            entries.push(action(
                 "Set Pinned URL to Current Page",
                 Action::Tab(id.clone(), TabAction::SetHome),
             ));
         }
     }
-    rows.push(Row::Separator);
-    rows.push(action(
+    entries.push(Entry::Separator);
+    entries.push(action(
         if today { "Close Tab" } else { "Unload Tab" },
         Action::CloseTab(id.clone()),
     ));
     if today {
-        rows.extend([
+        entries.extend([
             action(
                 "Close Tabs Below",
                 Action::Tab(id.clone(), TabAction::CloseTabs(CloseToday::Below)),
@@ -356,12 +285,16 @@ pub(crate) fn tab_menu(state: &Controller, window: &WindowId, id: &TabId) -> Opt
             ),
         ]);
     }
-    Some(rows)
+    Some(entries)
 }
 
 /// `spaceMenu` (chromium/shell/background.ts:1164-1179). An incognito window has no Spaces to
 /// manage, so it has none.
-pub(crate) fn space_menu(state: &Controller, window: &WindowId, id: &SpaceId) -> Option<Vec<Row>> {
+pub(crate) fn space_menu(
+    state: &Controller,
+    window: &WindowId,
+    id: &SpaceId,
+) -> Option<Vec<Entry>> {
     if state.model.is_incognito(window) {
         return None;
     }
@@ -373,29 +306,17 @@ pub(crate) fn space_menu(state: &Controller, window: &WindowId, id: &SpaceId) ->
             "Open in New Window",
             Action::Space(id.clone(), SpaceAction::OpenInNewWindow),
         ),
-        Row::Separator,
-        Row::Item {
-            label: "Separate Cookies and Logins".into(),
-            enabled: true,
-            checked: Some(space.isolated),
-            run: Run::Action(Action::Space(
-                id.clone(),
-                SpaceAction::Isolate(!space.isolated),
-            )),
-        },
-        Row::Separator,
-        Row::Item {
-            label: "Delete Space…".into(),
-            enabled: state.model.core.spaces().len() > 1,
-            checked: None,
-            run: Run::DeleteSpace(id.clone()),
-        },
+        Entry::Separator,
+        action(
+            "Separate Cookies and Logins",
+            Action::Space(id.clone(), SpaceAction::Isolate(!space.isolated)),
+        )
+        .checked(space.isolated),
+        Entry::Separator,
+        item("Delete Space…", Run::DeleteSpace(id.clone()))
+            .enabled(state.model.core.spaces().len() > 1),
     ])
 }
-
-/// `.shell-menu-item` is one line of body text with 4px above and below.
-const ROW: f32 = tokens::MENU_ITEM_PAD_Y * 2. + tokens::TEXT_MD * tokens::LINE_HEIGHT;
-const SEPARATOR: f32 = tokens::MENU_SEPARATOR + tokens::MENU_SEPARATOR_MARGIN_Y * 2.;
 
 impl Shell {
     pub(crate) fn open_tab_menu(
@@ -405,9 +326,9 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let rows = tab_menu(&self.state.borrow(), &self.id, id);
-        if let Some(rows) = rows {
-            self.open_menu(rows, anchor, window, cx);
+        let entries = tab_menu(&self.state.borrow(), &self.id, id);
+        if let Some(entries) = entries {
+            self.open_menu(entries, MenuAnchor::At(anchor), window, cx);
         }
     }
 
@@ -418,26 +339,10 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let rows = space_menu(&self.state.borrow(), &self.id, id);
-        if let Some(rows) = rows {
-            self.open_menu(rows, anchor, window, cx);
+        let entries = space_menu(&self.state.borrow(), &self.id, id);
+        if let Some(entries) = entries {
+            self.open_menu(entries, MenuAnchor::At(anchor), window, cx);
         }
-    }
-
-    fn open_menu(
-        &mut self,
-        rows: Vec<Row>,
-        anchor: Point<Pixels>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let menu = ShellMenu {
-            anchor,
-            rows,
-            submenu: None,
-            scroll: ScrollHandle::new(),
-        };
-        self.show_overlay(Overlay::Menu(menu), window, cx);
     }
 
     /// Copies `text` and confirms it on the status line, as the shipping shell's flash does.
@@ -449,317 +354,25 @@ impl Shell {
         cx.notify();
     }
 
-    /// Chooses the open tab or Space menu's enabled row labelled `label`, as clicking it does.
-    pub(crate) fn use_shell_menu_row(
+    /// The Space menu's New Folder: the folder editor, in that Space. It saves into the shown
+    /// Space, so it opens only once the chosen one is shown.
+    pub(crate) fn new_folder_in(
         &mut self,
-        label: &str,
+        id: &SpaceId,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> anyhow::Result<()> {
-        let Overlay::Menu(menu) = &self.overlay else {
-            anyhow::bail!("no tab or Space menu is open");
-        };
-        let run = menu
-            .find(label)
-            .ok_or_else(|| anyhow::anyhow!("the menu has no enabled {label} row"))?;
-        anyhow::ensure!(
-            !matches!(run, Run::Submenu(_)),
-            "the {label} row opens a submenu"
-        );
-        self.run_menu(run, window, cx);
-        Ok(())
-    }
-
-    pub(crate) fn run_menu(&mut self, run: Run, window: &mut Window, cx: &mut Context<Self>) {
-        if let Run::Submenu(_) = run {
-            return;
+    ) {
+        dispatch(&self.state, &self.id, Action::Switch(id.clone()), cx);
+        let shown = self
+            .state
+            .borrow()
+            .model
+            .state(&self.id)
+            .and_then(|core| core.window(&self.id))
+            .is_some_and(|current| &current.active_space_id == id);
+        if shown {
+            self.show_overlay(Overlay::Folder(None, TextField::default()), window, cx);
         }
-        self.dismiss_overlay(window, cx);
-        match run {
-            Run::Action(action) => dispatch(&self.state, &self.id, action, cx),
-            Run::Copy(text) => {
-                let message = if text.starts_with('[') {
-                    "Markdown link copied"
-                } else {
-                    "Link copied"
-                };
-                self.copy_text(text, message, cx);
-            }
-            Run::Rename(id) => self.open_rename(&id, window, cx),
-            Run::EditSpace(id) => self.open_space_editor(&id, window, cx),
-            Run::NewFolder(id) => {
-                dispatch(&self.state, &self.id, Action::Switch(id.clone()), cx);
-                // The folder editor saves into the shown Space, which must be the one chosen.
-                let shown = self
-                    .state
-                    .borrow()
-                    .model
-                    .state(&self.id)
-                    .and_then(|core| core.window(&self.id))
-                    .is_some_and(|current| current.active_space_id == id);
-                if shown {
-                    self.show_overlay(Overlay::Folder(None, TextField::default()), window, cx);
-                }
-            }
-            Run::DeleteSpace(id) => self.confirm_delete_space(&id, window, cx),
-            Run::Submenu(_) => unreachable!("a submenu row opens its submenu"),
-        }
-    }
-
-    /// The width a menu's rows need: its longest label in the body text, its padding and
-    /// `.shell-menu`'s 180px at least.
-    fn menu_width(rows: &[Row], window: &Window, cx: &Context<Self>) -> Pixels {
-        let style = window.text_style();
-        let font = crate::view::ui_font(cx).map_or(style.font(), gpui::font);
-        let checkable = rows.iter().any(|row| {
-            matches!(
-                row,
-                Row::Item {
-                    checked: Some(_),
-                    ..
-                }
-            )
-        });
-        let widest = rows
-            .iter()
-            .filter_map(|row| match row {
-                Row::Item { label, run, .. } => {
-                    let run_style = TextRun {
-                        len: label.len(),
-                        font: font.clone(),
-                        color: style.color,
-                        background_color: None,
-                        underline: None,
-                        strikethrough: None,
-                    };
-                    let width = window
-                        .text_system()
-                        .shape_line(
-                            label.clone().into(),
-                            px(tokens::TEXT_MD),
-                            &[run_style],
-                            None,
-                        )
-                        .width;
-                    // `.has-submenu::after`: a `›` 16px past the label.
-                    let arrow = if matches!(run, Run::Submenu(_)) {
-                        px(tokens::MENU_SUBMENU_ARROW_GAP + tokens::TEXT_MD)
-                    } else {
-                        px(0.)
-                    };
-                    Some(width + arrow)
-                }
-                Row::Separator => None,
-            })
-            .fold(px(0.), Pixels::max);
-        let left = if checkable {
-            tokens::MENU_CHECKABLE_PAD
-        } else {
-            tokens::MENU_ITEM_PAD_X
-        };
-        (widest + px(left + tokens::MENU_ITEM_PAD_X + tokens::MENU_PAD * 2.))
-            .max(px(tokens::MENU_MIN_WIDTH))
-            .ceil()
-    }
-
-    fn menu_height(rows: &[Row]) -> Pixels {
-        let height: f32 = rows
-            .iter()
-            .map(|row| match row {
-                Row::Item { .. } => ROW,
-                Row::Separator => SEPARATOR,
-            })
-            .sum();
-        px(height + tokens::MENU_PAD * 2.)
-    }
-
-    /// `.shell-menu-item`s: the pointer's row, and the row whose submenu is open, take the
-    /// selection colour. `submenu` is `Some` for the main menu, with its open row.
-    fn menu_rows(&self, rows: &[Row], submenu: Option<Option<usize>>, cx: &Context<Self>) -> Div {
-        let checkable = rows.iter().any(|row| {
-            matches!(
-                row,
-                Row::Item {
-                    checked: Some(_),
-                    ..
-                }
-            )
-        });
-        let palette = palette();
-        div()
-            .flex()
-            .flex_col()
-            .children(rows.iter().enumerate().map(|(index, row)| {
-                let Row::Item {
-                    label,
-                    enabled,
-                    checked,
-                    run,
-                } = row
-                else {
-                    return div()
-                        .flex_none()
-                        .h(px(tokens::MENU_SEPARATOR))
-                        .mx(px(tokens::MENU_SEPARATOR_MARGIN_X))
-                        .my(px(tokens::MENU_SEPARATOR_MARGIN_Y))
-                        .bg(palette.surface_line)
-                        .into_any_element();
-                };
-                let open = submenu.is_some_and(|open| open == Some(index));
-                let has_submenu = matches!(run, Run::Submenu(_));
-                let id = (
-                    if submenu.is_some() {
-                        "menu-row"
-                    } else {
-                        "submenu-row"
-                    },
-                    index,
-                );
-                let row = div()
-                    .id(id)
-                    .relative()
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .h(px(ROW))
-                    .pl(px(if checkable {
-                        tokens::MENU_CHECKABLE_PAD
-                    } else {
-                        tokens::MENU_ITEM_PAD_X
-                    }))
-                    .pr(px(tokens::MENU_ITEM_PAD_X))
-                    .rounded(px(tokens::MENU_ITEM_RADIUS))
-                    .cursor_default()
-                    .when(*checked == Some(true), |row| {
-                        row.child(
-                            div()
-                                .absolute()
-                                .left(px(tokens::MENU_CHECKABLE_PAD - tokens::MENU_CHECK_OFFSET))
-                                .child("✓"),
-                        )
-                    })
-                    .child(div().flex_1().child(label.clone()))
-                    .when(has_submenu, |row| {
-                        row.child(
-                            div()
-                                .ml(px(tokens::MENU_SUBMENU_ARROW_GAP))
-                                .opacity(tokens::MENU_ACCENT_OPACITY)
-                                .child("›"),
-                        )
-                    })
-                    .when(open, |row| {
-                        row.bg(palette.selection).text_color(palette.selection_text)
-                    });
-                if !*enabled {
-                    return row
-                        .opacity(tokens::MENU_DISABLED_OPACITY)
-                        .into_any_element();
-                }
-                let run = run.clone();
-                row.hover(|row| row.bg(palette.selection).text_color(palette.selection_text))
-                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                        if has_submenu {
-                            this.open_submenu(Some(index), cx);
-                        } else {
-                            this.run_menu(run.clone(), window, cx);
-                        }
-                    }))
-                    .when(submenu.is_some(), |row| {
-                        row.on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                            if *hovered {
-                                this.open_submenu(has_submenu.then_some(index), cx);
-                            }
-                        }))
-                    })
-                    .into_any_element()
-            }))
-    }
-
-    fn open_submenu(&mut self, index: Option<usize>, cx: &mut Context<Self>) {
-        if let Overlay::Menu(menu) = &mut self.overlay
-            && menu.submenu != index
-        {
-            menu.submenu = index;
-            cx.notify();
-        }
-    }
-
-    /// `.shell-menu` at the pointer, kept inside the window, and its open submenu beside it.
-    pub(crate) fn shell_menu_panel(
-        &self,
-        menu: &ShellMenu,
-        window: &Window,
-        cx: &Context<Self>,
-    ) -> impl IntoElement {
-        let viewport = window.viewport_size();
-        let limit = viewport.height - px(tokens::MENU_VIEWPORT_INSET);
-        let frame = |left: Pixels, top: Pixels, width: Pixels, height: Pixels| {
-            let palette = palette();
-            div()
-                .absolute()
-                .left(left)
-                .top(top)
-                .w(width)
-                .h(height)
-                .occlude()
-                .p(px(tokens::MENU_PAD))
-                .rounded(px(tokens::RADIUS_MD))
-                .bg(palette.surface)
-                .text_color(palette.text)
-                .shadow(palette.shadow_pop())
-                .whitespace_nowrap()
-                .font_weight(FontWeight::NORMAL)
-        };
-        let width = Self::menu_width(&menu.rows, window, cx).min(viewport.width);
-        let height = Self::menu_height(&menu.rows).min(limit);
-        let left = menu.anchor.x.clamp(px(0.), viewport.width - width);
-        let top = menu.anchor.y.clamp(px(0.), viewport.height - height);
-        let main = frame(left, top, width, height)
-            .id("tab-space-menu")
-            .overflow_y_scroll()
-            .track_scroll(&menu.scroll)
-            .child(self.menu_rows(&menu.rows, Some(menu.submenu), cx));
-        let submenu = menu.submenu.and_then(|index| {
-            let Row::Item {
-                run: Run::Submenu(rows),
-                ..
-            } = menu.rows.get(index)?
-            else {
-                return None;
-            };
-            let sub_width = Self::menu_width(rows, window, cx).min(viewport.width);
-            let sub_height = Self::menu_height(rows).min(limit);
-            // The scroll offset is zero or negative, so a scrolled menu lifts the row.
-            let row_top = top + Self::menu_height(&menu.rows[..index]) - px(tokens::MENU_PAD)
-                + menu.scroll.offset().y;
-            let right = left + width;
-            let sub_left = if right + sub_width <= viewport.width {
-                right
-            } else {
-                (left - sub_width).max(px(0.))
-            };
-            let sub_top = row_top.clamp(px(0.), viewport.height - sub_height);
-            Some(
-                frame(sub_left, sub_top, sub_width, sub_height)
-                    .id("tab-space-submenu")
-                    .overflow_y_scroll()
-                    .child(self.menu_rows(rows, None, cx)),
-            )
-        });
-        deferred(
-            div()
-                .absolute()
-                .inset_0()
-                .occlude()
-                .child(div().absolute().inset_0().on_any_mouse_down(cx.listener(
-                    |this, _: &MouseDownEvent, window, cx| {
-                        this.dismiss_overlay(window, cx);
-                        cx.stop_propagation();
-                    },
-                )))
-                .child(main)
-                .children(submenu),
-        )
     }
 
     pub(crate) fn open_rename(&mut self, id: &TabId, window: &mut Window, cx: &mut Context<Self>) {
@@ -820,27 +433,41 @@ mod tests {
         controller.model.open(window, url.into(), true).unwrap()
     }
 
-    fn labels(rows: &[Row]) -> Vec<&str> {
-        rows.iter()
-            .map(|row| match row {
-                Row::Item { label, .. } => label.as_str(),
-                Row::Separator => "-",
+    fn labels(entries: &[Entry]) -> Vec<&str> {
+        entries
+            .iter()
+            .map(|entry| match entry {
+                Entry::Item { label, .. } | Entry::Submenu { label, .. } => label.as_ref(),
+                Entry::Separator => "-",
             })
             .collect()
     }
 
-    fn run<'a>(rows: &'a [Row], label: &str) -> &'a Run {
-        rows.iter()
-            .find_map(|row| match row {
-                Row::Item {
-                    label: name, run, ..
-                } if name == label => Some(run),
-                _ => None,
+    fn entry<'a>(entries: &'a [Entry], label: &str) -> &'a Entry {
+        entries
+            .iter()
+            .find(|entry| {
+                matches!(entry, Entry::Item { label: name, .. } | Entry::Submenu { label: name, .. }
+                    if name.as_ref() == label)
             })
             .unwrap_or_else(|| panic!("no {label} row"))
     }
 
-    fn act(controller: &mut Controller, window: &WindowId, rows: &[Row], label: &str) {
+    fn run<'a>(entries: &'a [Entry], label: &str) -> &'a Run {
+        match entry(entries, label) {
+            Entry::Item { run, .. } => run,
+            _ => panic!("{label} is not an item"),
+        }
+    }
+
+    fn submenu<'a>(entries: &'a [Entry], label: &str) -> &'a [Entry] {
+        match entry(entries, label) {
+            Entry::Submenu { entries, .. } => entries,
+            _ => panic!("{label} is not a submenu"),
+        }
+    }
+
+    fn act(controller: &mut Controller, window: &WindowId, rows: &[Entry], label: &str) {
         let Run::Action(action) = run(rows, label).clone() else {
             panic!("{label} is not an action");
         };
@@ -886,11 +513,10 @@ mod tests {
             ]
         );
         assert!(
-            matches!(run(&rows, "Copy as Markdown Link"), Run::Copy(text) if text == "[https://two.example/](https://two.example/)")
+            matches!(run(&rows, "Copy as Markdown Link"), Run::Copy(text, _) if text == "[https://two.example/](https://two.example/)")
         );
-        // One Space: nowhere to move to.
-        assert!(rows.iter().any(|row| matches!(row,
-            Row::Item { label, enabled: false, .. } if label == "Move to Space")));
+        // One Space: nowhere to move to, which shows the submenu disabled.
+        assert!(submenu(&rows, "Move to Space").is_empty());
 
         act(&mut controller, &window, &rows, "Mute Tab");
         assert_eq!(
@@ -1020,18 +646,16 @@ mod tests {
             .unwrap();
         let tab = open_today(&mut controller, &window, "https://move.example/");
         let rows = tab_menu(&controller, &window, &tab).unwrap();
-        let Run::Submenu(spaces) = run(&rows, "Move to Space") else {
-            panic!("Move to Space has no submenu");
-        };
+        let spaces = submenu(&rows, "Move to Space");
         assert_eq!(spaces.len(), 1);
-        let Row::Item {
+        let Entry::Item {
             run: Run::Action(action),
             ..
-        } = spaces[0].clone()
+        } = &spaces[0]
         else {
             panic!("the Space row is not an action");
         };
-        controller.act(&window, action).unwrap();
+        controller.act(&window, action.clone()).unwrap();
         assert!(matches!(
             controller.model.core.locate(&tab),
             Some(Placement::Today { space, .. }) if space == &second
@@ -1048,5 +672,60 @@ mod tests {
             assert!(!labels(&rows).contains(&absent), "{absent}");
         }
         assert!(space_menu(&controller, &private, &first).is_none());
+    }
+
+    #[test]
+    fn the_space_menu_follows_shipping_and_checks_separate_cookies() {
+        let profile = tempfile::tempdir().unwrap();
+        let mut controller = Controller::open_test_profile(profile.path()).unwrap();
+        let window = controller.model.core.focused_window().id.clone();
+        let space = controller
+            .model
+            .core
+            .focused_window()
+            .active_space_id
+            .clone();
+        let entries = space_menu(&controller, &window, &space).unwrap();
+        assert_eq!(
+            labels(&entries),
+            [
+                "Edit Space…",
+                "New Folder",
+                "Open in New Window",
+                "-",
+                "Separate Cookies and Logins",
+                "-",
+                "Delete Space…",
+            ]
+        );
+        // The last Space can't go.
+        assert!(matches!(
+            entry(&entries, "Delete Space…"),
+            Entry::Item { enabled: false, .. }
+        ));
+        for isolated in [true, false] {
+            let entries = entries_for(&controller, &window, &space);
+            act(
+                &mut controller,
+                &window,
+                &entries,
+                "Separate Cookies and Logins",
+            );
+            assert_eq!(
+                controller.model.core.space(&space).unwrap().isolated,
+                isolated
+            );
+            assert!(matches!(
+                entry(
+                    &entries_for(&controller, &window, &space),
+                    "Separate Cookies and Logins"
+                ),
+                Entry::Item { checked: Some(checked), .. } if *checked == isolated
+            ));
+        }
+    }
+
+    fn entries_for(controller: &Controller, window: &WindowId, space: &SpaceId) -> Vec<Entry> {
+        space_menu(controller, window, space).unwrap()
     }
 }

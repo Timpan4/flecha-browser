@@ -125,11 +125,10 @@ pub(crate) fn refusal(action: &Action) -> Option<&'static str> {
         | Action::Tab(_, crate::tab_menu::TabAction::MoveToSpace(_)) => {
             Some("An incognito window has one Space")
         }
-        // A Flechinha takes the regular Space's cookies.
-        Action::OpenFlechinha(_) => Some("Open Flechinha from a regular window"),
         Action::RestoreArchive(_) | Action::ClearArchive => {
             Some("An incognito window has no archive")
         }
+        Action::OpenFlechinha(_) => Some("Open a Flechinha from a regular window"),
         Action::Sidebar(
             SidebarAction::Pin(..)
             | SidebarAction::Favorite(_)

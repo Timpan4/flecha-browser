@@ -56,7 +56,6 @@ pub(crate) enum Shortcut {
     NewIncognitoWindow,
     Quit,
     Escape,
-    NewFlechinha,
     /// Pins a Today tab, or unpins a pinned tab or favorite.
     Pin,
     Duplicate,
@@ -176,6 +175,7 @@ pub(crate) fn shortcut_for_id(id: &str) -> Option<Shortcut> {
     Some(match id {
         "newTab" => Shortcut::Command(Command::NewTab),
         "openLocation" => Shortcut::Command(Command::EditLocation),
+        "newFlechinha" => Shortcut::Command(Command::Flechinha),
         "splitNew" => Shortcut::Command(Command::Split),
         "closeTab" => Shortcut::Close,
         "reopenTab" => Shortcut::Reopen,
@@ -197,7 +197,6 @@ pub(crate) fn shortcut_for_id(id: &str) -> Option<Shortcut> {
         "toggleSidebar" => Shortcut::Sidebar,
         "openInFlecha" => Shortcut::Return,
         "quit" => Shortcut::Quit,
-        "newFlechinha" => Shortcut::NewFlechinha,
         "pinTab" => Shortcut::Pin,
         "duplicateTab" => Shortcut::Duplicate,
         "muteTab" => Shortcut::Mute,
@@ -579,13 +578,19 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        // An open bar, editor or panel keeps its keys, as Find, Zoom and navigation do; the
+        // command bar and the menus close themselves before they run a command.
+        if self.overlay.is_open()
+            && !matches!(self.overlay, Overlay::ContextMenu(_) | Overlay::Menu(_))
+        {
+            return false;
+        }
         let Some(shown) = ShownWindow::read(&self.state.borrow(), &self.id)
             .filter(|shown| shown.can_run(shortcut))
         else {
             return false;
         };
         let action = match shortcut {
-            Shortcut::NewFlechinha => return self.open_command(Command::Flechinha, window, cx),
             Shortcut::NewSpace => return self.new_space(window, cx),
             Shortcut::EditSpace => {
                 self.open_space_editor(&shown.space, window, cx);
@@ -710,7 +715,10 @@ impl ShownWindow {
     /// Whether this window can run `shortcut` now, which the command bar offers only then.
     pub(crate) fn can_run(&self, shortcut: Shortcut) -> bool {
         match shortcut {
-            Shortcut::NewFlechinha
+            // An incognito window has one Space, no archive and no Flechinha, and no history
+            // it shows (`incognito::refusal`).
+            Shortcut::Command(Command::Flechinha)
+            | Shortcut::History
             | Shortcut::NewSpace
             | Shortcut::EditSpace
             | Shortcut::Archive
@@ -749,7 +757,7 @@ fn runs_once(shortcut: Shortcut) -> bool {
             | Shortcut::SettingsTab(_)
             | Shortcut::Find
             | Shortcut::DevTools
-            | Shortcut::NewFlechinha
+            | Shortcut::Command(Command::Flechinha)
             | Shortcut::Pin
             | Shortcut::Duplicate
             | Shortcut::Mute

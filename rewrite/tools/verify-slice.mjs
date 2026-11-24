@@ -13,6 +13,18 @@ const out = join(process.env.HOME, '..');
 const x11Driver = join(out, 'x11-input');
 const mode = process.argv[2] ?? 'slice';
 
+// Points in the main window with the visual mode's 260px sidebar and one favorite, measured from
+// its captures. Xvfb has no compositor, so GPUI keeps the platform's title bar and draws no
+// window controls: the menu button sits right of the sidebar toggle (ui/styles.css:32, 55, 66).
+// The window menu drops 4px below it (settingsUi.ts:202), a 5px-padded list of 25.5px rows with
+// 11px separators (shell.css:78, 88, 132-133); the Space menu opens at the pointer, and its
+// Separate Cookies and Logins row follows Edit Space, New Folder, Open in New Window and a separator.
+const menuButton = [10 + 30 + 2 + 15, 10 + 14];
+const newWindowRow = [82, 61];
+const zoomRow = [82, 287];
+const spaceHeader = [60, 157];
+const spaceMenuItem = [80, Math.round(5 + 3 * 25.5 + 11 + 25.5 / 2)];
+
 // The per-step allowance from chromium/tests/native-workflows.mjs.
 const stepTimeoutMs = 10_000;
 
@@ -452,6 +464,8 @@ async function tabRowInput(app, left) {
 /** Ctrl+Alt+1–9 (Ctrl+1–9 on macOS, `fixed_shortcuts`) switch straight to the numbered Space. */
 async function spaceNumberKeys(app, [first, second]) {
   execFileSync(x11Driver, ['focus', 'Flecha']);
+  // The footer's New Space left its editor open, and an open editor keeps its keys.
+  execFileSync(x11Driver, ['key', 'Escape']);
 
   for (const [key, space] of [['2', second], ['1', first]]) {
     execFileSync(x11Driver, ['chord', 'Control_L', 'Alt_L', key]);
@@ -659,13 +673,20 @@ async function isolateWithTransients(app, space) {
   await app.present();
   await capture('peek-backdrop', ['#147A70', '#FFCC49']);
 
-  // The centre of the Shared cookies button with two Spaces, measured from this step's capture
-  // on Xvfb's 1280×1024 screen. The button sits in the controls at the foot of the sidebar.
-  execFileSync(x11Driver, ['click', 192, 965]);
+  // The footer's New Space button: inside the sidebar's 6px right and 8px bottom padding, half
+  // the 28px icon button from each (ui/styles.css:32, 136), measured from the visual captures.
+  const [x, y, , height] = execFileSync(x11Driver, ['geometry', 'Flecha'], { encoding: 'utf8' })
+    .trim().split(' ').map(Number);
+
+  const newSpace = [x + 260 - 6 - 14, y + height - 8 - 14];
+  const spaces = snapshot => snapshot.core.spaces.length;
+  const spacesBefore = spaces(await app.command('snapshot'));
+  execFileSync(x11Driver, ['click', ...newSpace]);
 
   for (;;) {
     const state = await app.command('snapshot');
-    assert.equal(isIsolated(state), false, 'Peek backdrop passed the click through to Separate cookies');
+    assert.equal(spaces(state), spacesBefore, 'Peek backdrop passed the click through to New Space');
+    assert.equal(isIsolated(state), false);
 
     if (!state.peeks.length) break;
     await delay(100); // Matches the capture poll.
@@ -673,7 +694,14 @@ async function isolateWithTransients(app, space) {
 
   await app.wait('CEF closure after clicking the Peek backdrop', event =>
     event.type === 'closed' && event.tab === clickedPeek);
-  pass('clicking Separate cookies through the Peek backdrop dismissed Peek and left the Space shared');
+  // Without Peek the same click adds a Space, so the backdrop, not a miss, held it back. GPUI
+  // hit-tests the last frame it drew, so that frame must be the one without the backdrop.
+  await app.present();
+  execFileSync(x11Driver, ['click', ...newSpace]);
+  await poll('New Space from the footer button', async () =>
+    spaces(await app.command('snapshot')) === spacesBefore + 1);
+  await app.command('switch', { space });
+  pass('clicking New Space through the Peek backdrop dismissed Peek and left the Spaces alone');
 
   await cookie(app, 'Shared cookie');
   const [{ window: mini, tab: detached }] = (await app.command('detach')).flechinhas;
@@ -1519,6 +1547,17 @@ async function visualParity(app, left) {
     await shot(`visual-context-menu-${theme}`);
     key('Escape');
 
+    click(x + menuButton[0], y + menuButton[1]);
+    await shot(`visual-app-menu-${theme}`);
+    // The Zoom row opens its submenu beside it.
+    click(x + zoomRow[0], y + zoomRow[1]);
+    await shot(`visual-app-menu-zoom-${theme}`);
+    key('Escape');
+
+    execFileSync(x11Driver, ['right-click', x + spaceHeader[0], y + spaceHeader[1]]);
+    await shot(`visual-space-menu-${theme}`);
+    key('Escape');
+
     // The footer's Downloads button: the sidebar's left and bottom padding, then half the
     // 28px icon button (ui/styles.css:32, 136).
     click(x + 10 + 14, y + height - 8 - 14);
@@ -1545,6 +1584,57 @@ async function visualParity(app, left) {
     const returned = await app.command('return', { window: mini });
     await app.command('select', { tab: active(returned).activeTabId });
   }
+
+  // The window menu's rows act: New window opens a regular window.
+  execFileSync(x11Driver, ['focus', 'Flecha']);
+  const [x, y] = geometry();
+  const windows = async () => (await app.command('snapshot')).core.windows;
+  const before = await windows();
+
+  click(x + menuButton[0], y + menuButton[1]);
+  await app.present();
+  click(x + newWindowRow[0], y + newWindowRow[1]);
+
+  const opened = (await poll('New window from the window menu', async () => {
+    const now = await windows();
+
+    return now.length === before.length + 1 && now;
+  })).find(window => !before.some(old => old.id === window.id));
+
+  await app.command('close_window', { window: opened.id });
+  await poll('GPUI closed the menu\'s window', async () =>
+    !(await app.command('snapshot')).nativeWindows.includes(opened.id));
+  pass('the window menu opened a new window');
+
+  // The Space menu, from a right-click on the Space's name (background.ts spaceMenu), turns
+  // Separate Cookies and Logins on and off. The driver focuses a title only one window has.
+  await poll('one window named Flecha', async () => {
+    try {
+      execFileSync(x11Driver, ['focus', 'Flecha'], { stdio: 'ignore' });
+
+      return true;
+    } catch {
+      return false;
+    }
+  });
+
+  const shown = async () => {
+    const snapshot = await app.command('snapshot');
+
+    return snapshot.core.spaces.find(space => space.id === win(snapshot).activeSpaceId);
+  };
+
+  for (const wanted of [true, false]) {
+    // GPUI hit-tests the last frame drawn, which may still hold the previous menu.
+    await app.present();
+    execFileSync(x11Driver, ['right-click', x + spaceHeader[0], y + spaceHeader[1]]);
+    await app.present();
+    click(x + spaceHeader[0] + spaceMenuItem[0], y + spaceHeader[1] + spaceMenuItem[1]);
+    await poll(`Separate Cookies and Logins ${wanted ? 'on' : 'off'} from the Space menu`, async () =>
+      (await shown()).isolated === wanted);
+  }
+
+  pass('the Space menu turned Separate Cookies and Logins on and off');
 
   const { window: incognito } = await openIncognito(app);
   await app.command('open', { url: base + '/open', window: incognito });

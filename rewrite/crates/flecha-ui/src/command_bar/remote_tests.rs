@@ -249,3 +249,63 @@ fn an_incognito_window_asks_no_search_provider() {
     assert!(tabs(&private, "regular").is_empty());
     assert_eq!(tabs(&private, "private").len(), 1);
 }
+
+#[test]
+fn typing_keeps_the_shown_suggestions_until_the_newer_answer_replaces_them() {
+    let profile = tempfile::tempdir().unwrap();
+    let controller = Controller::open_test_profile(profile.path()).unwrap();
+    let window = controller.model.core.focused_window().id.clone();
+    let mut bar = CommandBar {
+        mode: Command::NewTab,
+        actions: false,
+        input: TextField::new(String::new(), false),
+        typed: String::new(),
+        matches: CommandMatches::default(),
+        request_task: None,
+        scroll: ScrollHandle::new(),
+    };
+    let type_text = |bar: &mut CommandBar, text: &str| {
+        bar.typed = text.into();
+        bar.refresh_matches(&controller, &window, false);
+        bar.matches.request.clone()
+    };
+    let labels = |bar: &CommandBar| {
+        bar.matches
+            .rows
+            .iter()
+            .map(|row| row.label.clone())
+            .collect::<Vec<_>>()
+    };
+
+    let wea = type_text(&mut bar, "wea").unwrap();
+    assert!(
+        bar.matches
+            .complete(&wea, vec!["weather".into(), "wealth".into()])
+    );
+    assert_eq!(labels(&bar), ["wea", "weather", "wealth"]);
+
+    // The next keystroke's request is in flight: the answer for "wea" stays in place.
+    let weat = type_text(&mut bar, "weat").unwrap();
+    assert_eq!(labels(&bar), ["weat", "weather", "wealth"]);
+    // A late answer for the superseded query changes nothing.
+    assert!(!bar.matches.complete(&wea, vec!["wealthy".into()]));
+    assert_eq!(labels(&bar), ["weat", "weather", "wealth"]);
+    // The newer answer replaces the kept rows rather than adding to them.
+    assert!(bar.matches.complete(&weat, vec!["weather today".into()]));
+    assert_eq!(labels(&bar), ["weat", "weather today"]);
+
+    // A kept suggestion the typed search now matches is not shown twice.
+    let weather_today = type_text(&mut bar, "weather today").unwrap();
+    assert_eq!(labels(&bar), ["weather today"]);
+    // An empty or failed answer leaves the local rows alone.
+    assert!(bar.matches.complete(&weather_today, Vec::new()));
+    assert_eq!(labels(&bar), ["weather today"]);
+
+    let weather = type_text(&mut bar, "weather").unwrap();
+    assert!(bar.matches.complete(&weather, vec!["weather radar".into()]));
+    // A query that asks the engine nothing drops what an earlier one was told.
+    assert!(type_text(&mut bar, "weather.example").is_none());
+    assert!(bar.matches.remote().next().is_none());
+    assert!(type_text(&mut bar, "").is_none());
+    assert!(bar.matches.remote().next().is_none());
+}
