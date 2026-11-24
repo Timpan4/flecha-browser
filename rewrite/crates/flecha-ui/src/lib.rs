@@ -21,6 +21,9 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use anyhow::{Context as _, Result, ensure};
+use flecha_adblock::{
+    DOWNLOAD_TIMEOUT, Download, EngineOutcome, Updater, UpdaterConfig, UreqDownload,
+};
 use flecha_boosts::Boosts;
 use flecha_cef::{Engine, Event, Owner, Runtime, Viewport};
 use flecha_core::{
@@ -127,6 +130,7 @@ struct Controller {
     history: History,
     boosts: ProfileBoosts,
     engine: Engine,
+    _adblock_updater: Option<Updater>,
     downloads: Downloads,
     permissions: PermissionStore,
     sleep: TabSleep,
@@ -154,7 +158,20 @@ impl Controller {
     ) -> Result<Self> {
         let isolated =
             verify || std::env::var_os("FLECHA_LAUNCHER").as_deref() == Some("isolated".as_ref());
-        Self::with_profile(cef_profile, store, snapshots, verify, isolated, failure)
+        let download = if isolated {
+            verify.then(verify::adblock_download).flatten()
+        } else {
+            Some(Box::new(UreqDownload::default()) as Box<dyn Download>)
+        };
+        Self::with_profile(
+            cef_profile,
+            store,
+            snapshots,
+            verify,
+            isolated,
+            download,
+            failure,
+        )
     }
 
     fn with_profile(
@@ -163,6 +180,7 @@ impl Controller {
         mut snapshots: LoadedState,
         verify: bool,
         isolated: bool,
+        download: Option<Box<dyn Download>>,
         failure: Rc<RefCell<Option<anyhow::Error>>>,
     ) -> Result<Self> {
         let profile = cef_profile
@@ -176,6 +194,7 @@ impl Controller {
             boosts: ProfileBoosts::open(profile.join("boosts")),
             session_dir: profile.join("session"),
             engine: Engine::new(cef_profile, model::tab_id),
+            _adblock_updater: None,
             downloads: Downloads::new(&profile, isolated),
             permissions: PermissionStore::open(&profile),
             sleep: TabSleep::new(Instant::now()),
@@ -192,10 +211,40 @@ impl Controller {
             status: String::new(),
         };
         state.permissions.restore(&mut state.engine);
-        if profile.join("adblock").is_dir() {
-            state.engine.load_adblock_rules(&profile.join("adblock"));
-        }
         state.sync_adblock();
+        if let Some(download) = download {
+            let config = UpdaterConfig {
+                cache_dir: profile.join("adblock"),
+                // After a failure, wait one download window before trying again.
+                retry_after_failure: DOWNLOAD_TIMEOUT,
+            };
+            match Updater::spawn(
+                state.engine.adblocker().clone(),
+                config,
+                download,
+                move |report| {
+                    for issue in &report.warnings {
+                        eprintln!("{issue}");
+                    }
+                    for issue in &report.failures {
+                        eprintln!("{issue}");
+                    }
+                    if let EngineOutcome::Parsed {
+                        save_error: Some(error),
+                        ..
+                    } = &report.engine
+                    {
+                        eprintln!("adblock: could not save the engine: {error}");
+                    }
+                    if verify {
+                        verify::adblock_report(&report);
+                    }
+                },
+            ) {
+                Ok(updater) => state._adblock_updater = Some(updater),
+                Err(error) => eprintln!("adblock: could not start the updater: {error}"),
+            }
+        }
         state.engine.set_boosts(state.boosts().clone());
         state.sync_download_config();
         Ok(state)
@@ -609,6 +658,7 @@ impl Controller {
             loaded,
             false,
             true,
+            None,
             Rc::new(RefCell::new(None)),
         )
     }
