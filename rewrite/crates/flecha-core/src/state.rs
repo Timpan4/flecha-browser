@@ -1307,6 +1307,16 @@ impl BrowserState {
         end_split(ws, &mut self.tabs)
     }
 
+    /// Separates a pair of ordinary tabs in the active Space, keeping both tabs open.
+    pub fn unsplit_standard_pair_containing(&mut self, window: &WindowId, tab: &TabId) {
+        if let Some(ws) = self.active_window_space_mut(window)
+            && ws.split_mode.is_none()
+            && ws.split.as_ref().is_some_and(|pair| pair.contains(tab))
+        {
+            ws.split = None;
+        }
+    }
+
     fn active_window_space_mut(&mut self, window: &WindowId) -> Option<&mut WindowSpace> {
         let win = self.windows.iter_mut().find(|win| win.id == *window)?;
         win.spaces.get_mut(&win.active_space_id)

@@ -966,15 +966,12 @@ async function sidebarFocus(app, left) {
   await app.present();
   await capture('focus-left', ['#147A70', '#FFCC49']);
 
-  // Xvfb fixture geometry with one Space, measured from the focus-left capture: the page, then
-  // pane B's row (centred at y 235, ending at x 256) and its Split button, which sits left of
-  // the 22px menu and close buttons with the row's 10px gaps and 6px right padding
-  // (ui/styles.css:582, 586, 631).
+  // The new tab is the first Today row in the one-Space fixture.
   execFileSync(x11Driver, ['click', 340, 110]);
-  execFileSync(x11Driver, ['move', 169, 235]);
+  execFileSync(x11Driver, ['right-click', 95, 235]);
   await app.present();
-  execFileSync(x11Driver, ['click', 169, 235]);
-  const split = await waitForSelection(app, right, 'sidebar Split selected pane B');
+  await app.command('menu_row', { label: 'Open in Split View' });
+  const split = await waitForSelection(app, right, 'Open in Split View selected pane B');
 
   assert.deepEqual(active(split).split, [left, right]);
   await keyDelivery(app, { A: left, B: right }, 'y', 'sidebar split', 'B');
@@ -1336,6 +1333,28 @@ async function tabDrags(app) {
   assert.deepEqual(active(state).today, [b, a, c]);
   assert.deepEqual(children(state), []);
   pass('reordered Pinned, a folder and Favorites, and moved tabs between all sidebar sections');
+
+  state = await drag('split two Today rows', today(1), [125, todayTop(0, 2, true) + 16]);
+  assert.deepEqual(active(state).split, [b, a]);
+
+  if (existsSync('/mnt/visual')) {
+    await capture('drag-unsplit-before', ['#147A70', '#703496']);
+    retain('drag-unsplit-before');
+  }
+
+  state = await drag('drop the right split tile before the pair', [190, today(0)[1]], beforeToday(0));
+  assert.equal(active(state).split, undefined);
+  assert.deepEqual(active(state).today, [a, b, c]);
+  assert.equal(active(state).activeTabId, a);
+
+  if (existsSync('/mnt/visual')) {
+    pointer('move', today(1));
+    await app.present();
+    await capture('drag-unsplit-after', ['#147A70', '#FFCC49']);
+    retain('drag-unsplit-after');
+  }
+
+  pass('dragging a split tile onto a Today insertion line separated the tabs and reordered Today');
 
   return state.core;
 }

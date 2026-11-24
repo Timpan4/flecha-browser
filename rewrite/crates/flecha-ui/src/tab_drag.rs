@@ -64,7 +64,11 @@ impl Controller {
                     },
                     TabZone::Favorites => Placement::Favorite,
                 };
-                self.place_tab(window, &drag.tab, placement, before.as_ref());
+                if self.place_tab(window, &drag.tab, placement, before.as_ref())
+                    && let Some(core) = self.model.state_mut(window)
+                {
+                    core.unsplit_standard_pair_containing(window, &drag.tab);
+                }
             }
             TabDrop::Split(side, target) => {
                 let change = core.drop_to_split(window, drag.tab, side, target, now());
@@ -295,6 +299,56 @@ mod tests {
 
     use super::*;
     use crate::sidebar::SidebarAction;
+
+    #[test]
+    fn dropping_split_member_at_today_insertion_line_ends_split() {
+        let profile = tempfile::tempdir().unwrap();
+        let mut controller = Controller::open_test_profile(profile.path()).unwrap();
+        let current = controller.model.core.focused_window();
+        let window = current.id.clone();
+        let space = current.active_space_id.clone();
+        let [anchor, left, right] = ["anchor", "left", "right"].map(|name| {
+            controller
+                .act(
+                    &window,
+                    Action::Open(format!("https://example.test/{name}")),
+                )
+                .unwrap();
+            controller.model.active(&window).unwrap().clone()
+        });
+        assert!(
+            controller
+                .model
+                .core
+                .set_split(&window, [left.clone(), right.clone()])
+                .result
+        );
+
+        controller
+            .act(
+                &window,
+                Action::DropTab(
+                    TabDrag {
+                        window: window.clone(),
+                        space: space.clone(),
+                        tab: right.clone(),
+                    },
+                    TabDrop::Place(TabZone::Today, Some(anchor.clone())),
+                ),
+            )
+            .unwrap();
+
+        let core = &controller.model.core;
+        let current = core.focused_window();
+        assert_eq!(current.spaces[&space].split, None);
+        assert_eq!(
+            current.spaces[&space].today,
+            [left.clone(), right.clone(), anchor]
+        );
+        assert_eq!(current.visible_tabs(), std::slice::from_ref(&left));
+        assert!(core.tab(&left).is_some());
+        assert!(core.tab(&right).is_some());
+    }
 
     #[test]
     fn sidebar_drop_actions_reorder_and_persist_placement() {
