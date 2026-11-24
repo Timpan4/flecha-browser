@@ -6,6 +6,9 @@ export const blankRestartColor = '#E64DA3';
 // Popup fixture colours, unique on screen so a capture can find each page's marker.
 export const openerColors = ['#2B2D6E', '#F2E94E'];
 export const popupColors = ['#5A1F1F', '#9AF2C4'];
+// The /select page's colours, and the colour of its <select> popup's options.
+export const selectColors = ['#1F4D2E', '#C7F25A'];
+export const selectOptionColor = '#3B1FD1';
 
 // The opener page's controls. Each sets a fresh title once window.open returns, so the
 // title change reaches the shell after any popup event the call queued.
@@ -65,6 +68,7 @@ export async function fixture() {
     '/peek': ['#235089', '#83ddff'],
     '/opener': openerColors,
     '/popup': popupColors,
+    '/select': selectColors,
   }[path] ?? ['#147a70', '#ffcc49'];
 
   // Asks before leaving. Chromium shows the prompt only after a user gesture.
@@ -85,6 +89,12 @@ export async function fixture() {
         window.opener?.postMessage('hello-from-popup', '*');${beforeUnload}
       </script>`,
     '/unload': `<script>${beforeUnload}</script>`,
+    '/select': `
+      <style>
+        #choice { position: absolute; left: 400px; top: 32px; width: 240px; height: 48px; font: 24px system-ui; }
+        option { background: ${selectOptionColor}; color: white; }
+      </style>
+      <select id="choice"><option>One</option><option>Two</option><option>Three</option></select>`,
   }[path] ?? '';
 
   response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });

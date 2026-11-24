@@ -90,20 +90,25 @@ pub(crate) enum DeviceChange {
 /// The engine's current mode, shared with every browser's render handler.
 #[derive(Default)]
 pub(crate) struct Compositor {
+    /// GPUI's renderer and CEF's render node, while browsers on that GPU may share.
     shared: RefCell<Option<Shared>>,
+    /// Whether browsers created now share textures. One failed import clears it, and
+    /// browsers that still import keep sharing.
+    for_new_browsers: Cell<bool>,
 }
 
 impl Compositor {
     pub fn start(&self, compositing: &Compositing) {
         self.shared.replace(compositing.shared.clone());
+        self.for_new_browsers.set(compositing.shared.is_some());
     }
 
     /// Whether browsers created now should share textures.
     pub fn shares_textures(&self) -> bool {
-        self.shared.borrow().is_some()
+        self.for_new_browsers.get()
     }
 
-    /// GPUI's renderer pair for imports, while shared textures are on.
+    /// GPUI's renderer pair for imports, while it is on CEF's GPU.
     pub fn target(&self) -> Option<SurfaceTarget> {
         self.shared
             .borrow()
@@ -111,9 +116,9 @@ impl Compositor {
             .map(|shared| shared.target.clone())
     }
 
-    /// Turns shared textures off for browsers created from now on. Logs only the change.
+    /// Gives browsers created from now on CPU copies. Logs only the change.
     pub fn turn_off(&self, reason: &str) {
-        if self.shared.take().is_some() {
+        if self.for_new_browsers.replace(false) {
             eprintln!("page frames: CPU copies for new browsers from now on: {reason}");
         }
     }
@@ -138,6 +143,7 @@ impl Compositor {
                     Ok(node) => format!("GPUI moved to {}", node.display()),
                     Err(error) => format!("GPUI's new device cannot import: {error:#}"),
                 };
+                shared.take();
                 drop(shared);
                 self.turn_off(&reason);
                 DeviceChange::Lost
@@ -195,7 +201,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn turning_off_drops_the_target_and_new_browsers_use_cpu_copies() {
+    fn one_failed_import_gives_new_browsers_cpu_copies_and_keeps_the_target() {
         let compositor = Compositor::default();
         compositor.start(&Compositing {
             shared: Some(Shared {
@@ -205,13 +211,10 @@ mod tests {
             }),
         });
         assert!(compositor.shares_textures());
-        assert!(compositor.target().is_some());
         compositor.turn_off("import failed");
         assert!(!compositor.shares_textures());
-        assert!(compositor.target().is_none());
-        // A second failure is not a state change.
-        compositor.turn_off("import failed again");
-        assert!(!compositor.shares_textures());
+        // Browsers that already share keep importing on the same GPU.
+        assert!(compositor.target().is_some());
     }
 
     #[test]

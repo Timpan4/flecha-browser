@@ -113,7 +113,15 @@ The verifier compares live tab ordering, selection and split sides with the ship
 
 Regenerate the shipping trace from the repository root with `node rewrite/tools/slice-ts-replay.mjs > rewrite/tools/slice-ts-replay.jsonl`.
 
-The software OSR path is exercised on Xvfb. Real Wayland sessions, real GPU composition, native macOS and Windows windows, and Google sign-in remain manual checks. They require the relevant hardware, desktop session or test account.
+The software OSR path is exercised on Xvfb. Real Wayland sessions, native macOS and Windows windows, and Google sign-in remain manual checks. They require the relevant hardware, desktop session or test account.
+
+### Page frames on the GPU
+
+On Linux, CEF hands page frames to GPUI as shared GPU textures (`OnAcceleratedPaint`, a dma-buf) when it can. CEF starts after the first window opens. Flecha reads the DRM render node of GPUI's Vulkan adapter and passes it to Chromium as `--render-node-override`, so on a host with several GPUs CEF allocates on the GPU that GPUI draws with. On X11, Chromium's DRI3 device must be that GPU too. If the adapter lacks dma-buf import or `VK_EXT_physical_device_drm`, or the X server has no matching DRI3 device, every browser gets CPU copies through `OnPaint`. Xvfb has no DRI3, so the Xvfb harnesses always use CPU copies.
+
+CEF fixes a browser's mode when it creates it. If a shared texture cannot be imported, the engine discards that browser and reopens its page with CPU copies. The last frame stays on screen until the new browser paints. Browsers created after that also get CPU copies. If GPUI recreates its device on the same GPU, browsers repaint for it. If GPUI moves to another GPU, browsers that share textures reopen with CPU copies. Each change logs one `page frames:` line on stderr.
+
+`tools/verify-gpu-frames.sh` checks the shared-texture path under the isolated launcher's headless weston. It needs a GPU and runs on the workstation, not CI. It checks a page, a `<select>` popup, split view, Peek and a window resize by counting the fixture marker's pixels. `tools/verify-gpu-frames.sh fallback` needs a debug build. It rejects the first shared texture and checks that the page reopens with CPU copies.
 
 ### CEF pump and GPUI timer guard
 

@@ -21,26 +21,57 @@ struct Request {
 #[derive(Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 enum Command {
-    Open { url: String },
-    Select { tab: TabId },
-    Split { url: String },
-    Peek { url: String },
+    Open {
+        url: String,
+    },
+    Select {
+        tab: TabId,
+    },
+    Split {
+        url: String,
+    },
+    Peek {
+        url: String,
+    },
     ClosePeek,
     Promote,
     Detach,
     Return,
     Close,
     CloseWindow,
-    OpenWindow { url: String },
-    Switch { space: SpaceId },
+    OpenWindow {
+        url: String,
+    },
+    Switch {
+        space: SpaceId,
+    },
     NewSpace,
     Isolate,
     Quit,
     Snapshot,
     Capture,
-    Discard { tab: TabId },
-    Recreate { tab: TabId },
-    Script { tab: TabId, source: String },
+    Discard {
+        tab: TabId,
+    },
+    Recreate {
+        tab: TabId,
+    },
+    Script {
+        tab: TabId,
+        source: String,
+    },
+    /// Resizes the window's content area, in logical pixels.
+    Resize {
+        width: f32,
+        height: f32,
+    },
+    /// A left click at page coordinates, sent through CEF for displays without an
+    /// input injection protocol.
+    Click {
+        tab: TabId,
+        x: f32,
+        y: f32,
+    },
 }
 
 impl Command {
@@ -136,6 +167,31 @@ impl Command {
                     state.engine.execute_script(&tab, &source),
                     "missing CEF main frame"
                 );
+                return Ok(Value::Null);
+            }
+            Self::Resize { width, height } => {
+                let handle = *state
+                    .windows
+                    .get(window)
+                    .context("no GPUI window to resize")?;
+                handle.update(cx, |_, window, _| {
+                    window.resize(gpui::size(gpui::px(width), gpui::px(height)));
+                })?;
+                return Ok(Value::Null);
+            }
+            Self::Click { tab, x, y } => {
+                let host = state.engine.host(&tab).context("missing CEF host")?;
+                state.engine.focused(&tab, true);
+                for up in [false, true] {
+                    flecha_surface::input::click(
+                        &host,
+                        gpui::point(gpui::px(x), gpui::px(y)),
+                        gpui::Modifiers::default(),
+                        gpui::MouseButton::Left,
+                        1,
+                        up,
+                    );
+                }
                 return Ok(Value::Null);
             }
         };
