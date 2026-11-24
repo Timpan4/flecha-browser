@@ -8,7 +8,7 @@ use gpui::{
     prelude::FluentBuilder as _, px,
 };
 
-use super::{Draft, Field, SettingsPanel, muted, row, section, settings_button};
+use super::{Draft, Field, SettingsPanel, muted, row, section, settings_button, settings_choice};
 use crate::Controller;
 use crate::boosts::compile_script;
 use crate::text_field::TextField;
@@ -181,16 +181,12 @@ impl Shell {
                         && flecha_boosts::user_script_matches(url, name.host()))
             });
             let selected = editor.selected.as_ref() == Some(name);
-            let select = settings_button(format!("select-boost-{name}"), name.to_string())
-                .when(selected, |button| {
-                    button
-                        .bg(palette().selection)
-                        .text_color(palette().selection_text)
-                })
-                .on_click(cx.listener({
-                    let name = name.clone();
-                    move |this, _: &ClickEvent, _, cx| this.select_boost(name.clone(), cx)
-                }));
+            let select =
+                settings_choice(format!("select-boost-{name}"), name.to_string(), selected)
+                    .on_click(cx.listener({
+                        let name = name.clone();
+                        move |this, _: &ClickEvent, _, cx| this.select_boost(name.clone(), cx)
+                    }));
             let toggle = settings_button(
                 format!("toggle-boost-{name}"),
                 if enabled { "Disable" } else { "Enable" },

@@ -287,6 +287,8 @@ impl Shell {
             .flex()
             .flex_col()
             .flex_none()
+            .min_h_0()
+            .overflow_y_scroll()
             .w(px(tokens::SETTINGS_NAV))
             .h_full()
             .gap(px(tokens::SETTINGS_NAV_GAP))
@@ -487,6 +489,15 @@ pub(crate) fn settings_button(
     id: impl Into<gpui::ElementId>,
     name: impl Into<gpui::SharedString>,
 ) -> gpui::Stateful<Div> {
+    settings_choice(id, name, false)
+}
+
+/// A raised button that can be selected without losing contrast on hover.
+pub(crate) fn settings_choice(
+    id: impl Into<gpui::ElementId>,
+    name: impl Into<gpui::SharedString>,
+    selected: bool,
+) -> gpui::Stateful<Div> {
     let palette = palette();
     div()
         .id(id)
@@ -496,11 +507,20 @@ pub(crate) fn settings_button(
         .h(px(tokens::SETTINGS_BUTTON))
         .px(px(tokens::SETTINGS_BUTTON_PAD))
         .rounded(px(tokens::RADIUS_SM))
-        .bg(palette.card)
         .shadow(tokens::shadow_button(palette.dark))
         .font_weight(FontWeight::MEDIUM)
         .whitespace_nowrap()
         .cursor_pointer()
-        .hover(|button| button.bg(palette.surface_2))
+        .map(|button| {
+            if selected {
+                button
+                    .bg(palette.selection)
+                    .text_color(palette.selection_text)
+            } else {
+                button
+                    .bg(palette.card)
+                    .hover(|button| button.bg(palette.surface_2))
+            }
+        })
         .child(name.into())
 }

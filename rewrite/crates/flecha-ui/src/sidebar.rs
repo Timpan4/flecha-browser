@@ -331,7 +331,6 @@ impl Shell {
         let kind = match url {
             None => "search",
             Some(url) if is_dev_url(url) => "code",
-            Some(url) if url.starts_with("https:") => "lock",
             Some(url) if url.starts_with("http:") => "unlocked",
             Some(_) => "globe",
         };

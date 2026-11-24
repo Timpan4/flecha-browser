@@ -900,6 +900,7 @@ impl Render for Shell {
                         .child(
                             div()
                                 .max_h(relative(tokens::POPOVER_MAX_HEIGHT / 100.))
+                                .min_h_0()
                                 .flex()
                                 .flex_col()
                                 .child(panel.w_full())

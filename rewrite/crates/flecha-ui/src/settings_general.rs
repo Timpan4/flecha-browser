@@ -12,8 +12,7 @@ use gpui::{
 };
 use uuid::Uuid;
 
-use super::{Draft, Field, SettingsPanel, muted, row, section, settings_button};
-use crate::theme::palette;
+use super::{Draft, Field, SettingsPanel, muted, row, section, settings_button, settings_choice};
 use crate::view::{SETTINGS_SWITCH, Shell, switch};
 
 #[derive(Clone, PartialEq, Eq)]
@@ -383,13 +382,8 @@ impl Shell {
         edit: impl Fn(&mut Settings) + 'static,
         cx: &Context<Self>,
     ) -> Stateful<Div> {
-        settings_button(id, label)
-            .when(selected, |button| {
-                button
-                    .bg(palette().selection)
-                    .text_color(palette().selection_text)
-            })
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+        settings_choice(id, label, selected).on_click(cx.listener(
+            move |this, _: &ClickEvent, _, cx| {
                 let result = this.state.borrow_mut().edit_settings(|settings| {
                     edit(settings);
                     Ok(String::new())
@@ -398,7 +392,8 @@ impl Shell {
                     panel.result(result);
                 }
                 cx.refresh_windows();
-            }))
+            },
+        ))
     }
 
     fn toggle(

@@ -145,6 +145,13 @@ impl Shell {
         panel = panel.child(
             site_header(Some(&origin), state.status_for(&self.id)).child(close_site_controls(cx)),
         );
+        let mut body = div()
+            .id("site-controls-body")
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll();
         let rule = |section: Div| {
             section
                 .border_b(px(tokens::POPOVER_RULE))
@@ -163,9 +170,10 @@ impl Shell {
                     .child(text)
             };
             // `.site-shield` (ui/styles.css:2052-2092).
-            panel = panel.child(rule(
+            body = body.child(rule(
                 div()
                     .flex()
+                    .flex_none()
                     .items_center()
                     .gap(px(tokens::SITE_SHIELD_GAP))
                     .py(px(tokens::SITE_SHIELD_PAD_Y))
@@ -217,17 +225,18 @@ impl Shell {
         }
         let message = |text: String| {
             div()
+                .flex_none()
                 .px(inset)
                 .py(px(tokens::SITE_SHIELD_PAD_Y))
                 .child(text)
         };
         if let Some(error) = state.permissions.error() {
-            return panel.child(message(format!(
+            return panel.child(body.child(message(format!(
                 "Saved permissions are read-only. {error:#}"
-            )));
+            ))));
         }
         if let Some(error) = state.permissions.save_error() {
-            panel = panel.child(
+            body = body.child(
                 message(format!(
                     "Permission changes are active in this session. Could not save them. {error:#}"
                 ))
@@ -240,13 +249,14 @@ impl Shell {
             );
         }
         if !site.origin.is_potentially_trustworthy() {
-            return panel.child(message(
+            return panel.child(body.child(message(
                 "This origin cannot request site permissions.".into(),
-            ));
+            )));
         }
         // `.site-label` and `.field-label` (ui/styles.css:1450-1455, 2094-2097).
-        panel = panel.child(
+        body = body.child(
             div()
+                .flex_none()
                 .pt(px(tokens::SITE_LABEL_PAD_TOP))
                 .px(inset)
                 .pb(px(tokens::SITE_LABEL_PAD_BOTTOM))
@@ -260,7 +270,7 @@ impl Shell {
             let decision = permissions.decision(kind);
             // `.site-row` (ui/styles.css:2099-2110), its choice in `.mini-select`'s chip
             // (ui/styles.css:2112-2121).
-            panel = panel.child(
+            body = body.child(
                 div()
                     .flex()
                     .flex_none()
@@ -316,13 +326,14 @@ impl Shell {
                     ),
             );
         }
-        panel.child(popover_footer().mt(px(tokens::SITE_LABEL_PAD_TOP)).child(
-            danger_button("clear-site-permissions", "Clear permissions").on_click(self.site_click(
-                &site,
-                SiteChange::ClearPermissions,
-                cx,
-            )),
-        ))
+        panel.child(
+            body.child(
+                popover_footer().mt(px(tokens::SITE_LABEL_PAD_TOP)).child(
+                    danger_button("clear-site-permissions", "Clear permissions")
+                        .on_click(self.site_click(&site, SiteChange::ClearPermissions, cx)),
+                ),
+            ),
+        )
     }
 
     fn site_click(
@@ -348,7 +359,7 @@ fn site_header(origin: Option<&str>, status: Option<&str>) -> Div {
         if is_dev_url(url) {
             "Local development server"
         } else if url.starts_with("https:") {
-            "Connection is secure"
+            "HTTPS"
         } else if url.starts_with("http:") {
             "Connection is not secure"
         } else {

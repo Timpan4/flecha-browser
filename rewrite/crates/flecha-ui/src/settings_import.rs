@@ -14,8 +14,9 @@ use gpui::{
 };
 use uuid::Uuid;
 
-use super::{Draft, Field, SettingsPanel, SettingsTab, muted, row, section, settings_button};
-use crate::theme::palette;
+use super::{
+    Draft, Field, SettingsPanel, SettingsTab, muted, row, section, settings_button, settings_choice,
+};
 use crate::view::{Overlay, Shell};
 use crate::{Controller, now};
 
@@ -434,20 +435,16 @@ impl Shell {
         let formats = [Format::Bookmarks, Format::Arc, Format::Flecha]
             .into_iter()
             .map(|format| {
-                settings_button(format.label(), format.label())
-                    .when(import.format == format, |button| {
-                        button
-                            .bg(palette().selection)
-                            .text_color(palette().selection_text)
-                    })
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                settings_choice(format.label(), format.label(), import.format == format).on_click(
+                    cx.listener(move |this, _: &ClickEvent, _, cx| {
                         if let Some(panel) = this.settings_mut() {
                             panel.import.format = format;
                             panel.import.clear_preview();
                             panel.message = None;
                             cx.notify();
                         }
-                    }))
+                    }),
+                )
             });
         let mut source = section("Import from file").child(row().children(formats));
         if import.format == Format::Arc {

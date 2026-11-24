@@ -623,6 +623,7 @@ impl Shell {
             ),
         };
         let Some(item) = row.item() else { return div() };
+        let selected = manager.selected.contains(&item);
         div().pl(px(12. * depth as f32)).child(
             div()
                 .id(id)
@@ -634,13 +635,23 @@ impl Shell {
                 .py_1()
                 .rounded_md()
                 .cursor_pointer()
-                .hover(|row| row.bg(palette().surface_2))
-                .when(manager.selected.contains(&item), |row| {
-                    row.bg(palette().selection)
-                        .text_color(palette().selection_text)
+                .map(|row| {
+                    if selected {
+                        row.bg(palette().selection)
+                            .text_color(palette().selection_text)
+                    } else {
+                        row.hover(|row| row.bg(palette().surface_2))
+                    }
                 })
                 .child(div().flex_1().min_w_0().truncate().child(title))
-                .child(muted(detail).min_w_0().truncate().text_xs())
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_xs()
+                        .when(!selected, |detail| detail.text_color(palette().text_2))
+                        .child(detail),
+                )
                 .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
                     let Overlay::Settings(panel) = &mut this.overlay else {
                         return;
