@@ -33,10 +33,20 @@ pub fn pinnable_address(raw: &str) -> Option<String> {
 
 fn has_credentials(input: &str) -> bool {
     let input = trim_input(input);
-    let Some((userinfo, destination)) = input.split_once('@') else {
+    if !input.contains('@') {
+        return false;
+    }
+    // Ignore padding around the separator for privacy classification only.
+    let Some(separator) = re!(
+        r"[\p{White_Space}\p{Cf}\p{Default_Ignorable_Code_Point}]*",
+        r"@[\p{White_Space}\p{Cf}\p{Default_Ignorable_Code_Point}]*"
+    )
+    .find(input) else {
         return false;
     };
-    if userinfo.is_empty() || destination.starts_with(is_js_whitespace) {
+    let userinfo = &input[..separator.start()];
+    let destination = &input[separator.end()..];
+    if userinfo.is_empty() {
         return false;
     }
     let has_tail = re!(r"^[^", js_space_chars!(), r"/?#\\]+[/?#\\]").is_match(destination);

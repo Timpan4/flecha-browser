@@ -108,23 +108,18 @@ fn location<'a>(
 
 fn suggestions_for(
     core: &BrowserState,
-    history: &HistoryStore,
+    history: Option<&HistoryStore>,
     current_url: Option<&str>,
     text: &str,
 ) -> Vec<Suggestion> {
     let mut rows = Vec::new();
     let private = suggestions::contains_private_jwt(text);
-    // FEFF can make the address parser treat a credential-bearing authority
-    // as a search term. Strip it only for the privacy check.
-    let hidden_address = text.contains('\u{feff}')
-        && suggestions::web_address(text).is_none()
-        && suggestions::rejected_address(&text.replace('\u{feff}', ""));
     for row in
         suggestions::developer_suggestions(text, current_url, &core.settings.environments, now())
     {
         let target = match row.action {
             SuggestionAction::Copy(text) => Target::Copy(text),
-            SuggestionAction::Open(url) if !private && !hidden_address => Target::Address(url),
+            SuggestionAction::Open(url) if !private => Target::Address(url),
             SuggestionAction::Open(_) => continue,
         };
         rows.push(Suggestion {
@@ -134,7 +129,7 @@ fn suggestions_for(
             kind: "Local",
         });
     }
-    if private || hidden_address {
+    if private {
         return rows;
     }
     let resolved = suggestions::resolve_input(text, core.settings.search_engine);
@@ -195,7 +190,10 @@ fn suggestions_for(
             },
         ));
     }
-    if !empty && let Ok(entries) = history.suggest(text.trim(), PAGE) {
+    if !empty
+        && let Some(history) = history
+        && let Ok(entries) = history.suggest(text.trim(), PAGE)
+    {
         for entry in entries {
             if open_urls.contains(&entry.url) {
                 continue;
@@ -249,7 +247,7 @@ impl Shell {
                 .and_then(|id| state.model.core.tab(id));
             let rows = suggestions_for(
                 &state.model.core,
-                &state.history.store,
+                state.history.store(),
                 current.map(|tab| tab.url.as_str()),
                 input.text(),
             );
@@ -301,7 +299,7 @@ impl Shell {
                         .and_then(|id| state.model.core.tab(id));
                     bar.rows = suggestions_for(
                         &state.model.core,
-                        &state.history.store,
+                        state.history.store(),
                         current.map(|tab| tab.url.as_str()),
                         bar.input.text(),
                     );
@@ -463,7 +461,7 @@ mod tests {
         ] {
             history.record_visit(url, title, at).unwrap();
         }
-        let rows = suggestions_for(&core, &history, None, "project");
+        let rows = suggestions_for(&core, Some(&history), None, "project");
         assert_eq!(
             rows.iter().map(|row| row.kind).collect::<Vec<_>>(),
             [
@@ -472,17 +470,48 @@ mod tests {
         );
         assert_eq!(rows[3].label, "Project history");
         assert_eq!(
-            suggestions_for(&core, &history, None, "example.com")[0].target,
+            suggestions_for(&core, Some(&history), None, "example.com")[0].target,
             Target::Address("https://example.com".into())
         );
     }
 
     #[test]
-    fn bom_before_credential_hostname_never_reaches_search() {
+    fn padded_credential_addresses_never_offer_a_search() {
         let core = BrowserState::new(SpaceId::new("space"), WindowId::new("main"));
         let history = HistoryStore::in_memory().unwrap();
-        let rows = suggestions_for(&core, &history, None, "user:pass@\u{FEFF}host.example");
-        assert!(rows.iter().all(|row| matches!(row.target, Target::Copy(_))));
+        for userinfo in ["user", "user:pass"] {
+            for separator in [
+                "@\u{FEFF}",
+                "@\u{FEFF}\t",
+                "@\t\u{FEFF}",
+                "@\u{FEFF}\u{200A}",
+                "@\u{FEFF}\u{00A0}",
+                "@\u{FEFF}\u{3000}",
+                "@\u{200A}",
+                "@\u{2009}",
+                "@\u{00A0}",
+                "@\u{3000}",
+                "@\u{202F}",
+                "@\u{2028}",
+                "@\t",
+                "@ ",
+                "@\u{85}\u{200B}",
+                "\u{FEFF}\u{2009}@\u{2060}\u{202F}",
+            ] {
+                for suffix in ["", ":8080", "/path", ":8080/path"] {
+                    let input = format!("{userinfo}{separator}host.example{suffix}");
+                    let rows = suggestions_for(&core, Some(&history), None, &input);
+                    assert!(
+                        rows.iter().all(|row| matches!(row.target, Target::Copy(_))),
+                        "{input:?}"
+                    );
+                }
+            }
+        }
+        assert!(matches!(
+            suggestions_for(&core, None, None, "weather tomorrow")[0].target,
+            Target::Search(_)
+        ));
     }
 
     #[test]

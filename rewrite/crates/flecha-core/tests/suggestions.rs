@@ -8,6 +8,41 @@ use flecha_core::{Environment, SearchEngine};
 use serde_json::{Value, json};
 
 #[test]
+fn whitespace_and_format_characters_around_credential_separator_stay_local() {
+    let engine = SearchEngine::Google;
+    for userinfo in ["user", "user:pass"] {
+        for separator in [
+            "@\u{FEFF}",
+            "@\u{FEFF}\t",
+            "@\t\u{FEFF}",
+            "@\u{FEFF}\u{200A}",
+            "@\u{FEFF}\u{00A0}",
+            "@\u{FEFF}\u{3000}",
+            "@\u{200A}",
+            "@\u{2009}",
+            "@\u{00A0}",
+            "@\u{3000}",
+            "@\u{202F}",
+            "@\u{2028}",
+            "@\t",
+            "@ ",
+            "@\u{85}\u{200B}",
+            "\u{FEFF}\u{2009}@\u{2060}\u{202F}",
+        ] {
+            for suffix in ["", ":8080", "/path", ":8080/path"] {
+                let input = format!("{userinfo}{separator}host.example{suffix}");
+                assert_eq!(
+                    resolve_input(&input, engine),
+                    InputResolution::Invalid,
+                    "{input:?}"
+                );
+                assert!(engine.suggestion_url(&input).is_none(), "{input:?}");
+            }
+        }
+    }
+}
+
+#[test]
 fn obscured_explicit_addresses_and_nel_in_hosts_stay_local() {
     let engine = SearchEngine::Google;
     for input in [

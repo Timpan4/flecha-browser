@@ -680,7 +680,7 @@ mod tests {
         let first = model.core.focused_window().active_space_id.clone();
         let mut controller = Controller {
             model,
-            history: crate::History::open(profile.path()).unwrap(),
+            history: crate::History::open(profile.path()),
             engine: Engine::new(profile.path().join("cef"), crate::model::tab_id),
             store,
             snapshots,

@@ -51,7 +51,7 @@ pub fn start(
         .context("CEF data has no profile directory")?;
     let controller = Rc::new(RefCell::new(Controller {
         model,
-        history: History::open(profile)?,
+        history: History::open(profile),
         engine: Engine::new(cef_profile, model::tab_id),
         store,
         snapshots: loaded,

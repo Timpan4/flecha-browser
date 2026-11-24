@@ -1,5 +1,6 @@
 use std::{collections::BTreeMap, path::Path};
 
+use anyhow::Context as _;
 use cef::{ImplBrowser as _, ImplBrowserHost as _, ImplNavigationEntry as _};
 use chrono::{DateTime, Local, NaiveDate};
 use flecha_cef::{BrowserKey, Partition};
@@ -15,7 +16,8 @@ use crate::view::{Overlay, Shell, button, overlay_panel};
 use crate::{Action, Controller, dispatch, now};
 
 pub(crate) struct History {
-    pub(crate) store: HistoryStore,
+    store: Option<HistoryStore>,
+    open_error: Option<HistoryError>,
     revision: u64,
     pending: BTreeMap<TabId, PendingVisit>,
     recorded: BTreeMap<TabId, (BrowserKey, RecordedVisit)>,
@@ -29,19 +31,32 @@ struct PendingVisit {
 }
 
 impl History {
-    pub(crate) fn open(profile: &Path) -> Result<Self, HistoryError> {
-        let store = HistoryStore::open(profile.join("history.sqlite"))
-            .or_else(|_| HistoryStore::in_memory())?;
-        Ok(Self::from_store(store))
+    pub(crate) fn open(profile: &Path) -> Self {
+        Self::from_open(HistoryStore::open(profile.join("history.sqlite")))
     }
 
-    fn from_store(store: HistoryStore) -> Self {
+    fn from_open(result: Result<HistoryStore, HistoryError>) -> Self {
+        let (store, open_error) = match result {
+            Ok(store) => (Some(store), None),
+            Err(error) => (None, Some(error)),
+        };
         Self {
             store,
+            open_error,
             revision: 0,
             pending: BTreeMap::new(),
             recorded: BTreeMap::new(),
         }
+    }
+
+    pub(crate) fn store(&self) -> Option<&HistoryStore> {
+        self.store.as_ref()
+    }
+
+    fn writable_store(&mut self) -> anyhow::Result<&mut HistoryStore> {
+        self.store
+            .as_mut()
+            .context("History storage is unavailable")
     }
 
     pub(crate) fn record(
@@ -56,7 +71,8 @@ impl History {
         // browser or a future non-persistent partition must never write history.
         if durable
             && matches!(partition, Some(Partition::Shared | Partition::Isolated(_)))
-            && let Some(visit) = self.store.record_navigation(url, title, visited_at)?
+            && let Some(store) = self.store.as_mut()
+            && let Some(visit) = store.record_navigation(url, title, visited_at)?
         {
             self.revision += 1;
             return Ok(Some(visit));
@@ -65,6 +81,9 @@ impl History {
     }
 
     pub(crate) fn begin(&mut self, key: &BrowserKey, address: &str) {
+        if self.store.is_none() {
+            return;
+        }
         self.recorded.remove(&key.tab);
         self.pending.insert(
             key.tab.clone(),
@@ -99,27 +118,27 @@ impl History {
     pub(crate) fn title(&mut self, key: &BrowserKey, title: &str) -> Result<(), HistoryError> {
         if let Some((browser, visit)) = self.recorded.get(&key.tab)
             && browser == key
-            && self.store.update_visit_title(visit, title)?
+            && let Some(store) = self.store.as_mut()
+            && store.update_visit_title(visit, title)?
         {
             self.revision += 1;
         }
         Ok(())
     }
 
-    pub(crate) fn remove(&mut self, url: &str) -> Result<(), HistoryError> {
-        if self.store.remove_url(url)? {
+    pub(crate) fn remove(&mut self, url: &str) -> anyhow::Result<()> {
+        if self.writable_store()?.remove_url(url)? {
             self.recorded.clear();
             self.revision += 1;
         }
         Ok(())
     }
 
-    pub(crate) fn clear(&mut self, range: ClearRange, at: EpochMillis) -> Result<(), HistoryError> {
+    pub(crate) fn clear(&mut self, range: ClearRange, at: EpochMillis) -> anyhow::Result<()> {
+        let store = self.writable_store()?;
         match range.hours() {
-            Some(hours) => self
-                .store
-                .clear_since(at.saturating_sub(hours * 3_600_000))?,
-            None => self.store.clear_all()?,
+            Some(hours) => store.clear_since(at.saturating_sub(hours * 3_600_000))?,
+            None => store.clear_all()?,
         }
         self.pending.clear();
         self.recorded.clear();
@@ -230,10 +249,11 @@ impl HistoryPanel {
     }
 
     fn load(&mut self, history: &History) {
-        match history
-            .store
-            .query(self.input.text().trim(), self.entries.len())
-        {
+        let Some(store) = history.store() else {
+            self.exhausted = true;
+            return;
+        };
+        match store.query(self.input.text().trim(), self.entries.len()) {
             Ok(page) => {
                 self.entries.extend(page.entries);
                 self.exhausted = page.exhausted;
@@ -283,7 +303,7 @@ impl Shell {
 
     pub(crate) fn drawer_key(&mut self, stroke: &gpui::Keystroke, cx: &mut Context<Self>) {
         match &mut self.overlay {
-            Overlay::History(panel) => {
+            Overlay::History(panel) if self.state.borrow().history.store().is_some() => {
                 let previous = panel.input.text().to_owned();
                 panel.input.key(stroke, cx);
                 if panel.input.text() != previous {
@@ -311,6 +331,15 @@ impl Shell {
     }
 
     pub(crate) fn history_panel(&self, panel: &HistoryPanel, cx: &Context<Self>) -> Div {
+        if let Some(error) = &self.state.borrow().history.open_error {
+            return overlay_panel()
+                .child(self.drawer_heading("History", cx))
+                .child(
+                    div()
+                        .text_sm()
+                        .child(format!("History is unavailable. {error}")),
+                );
+        }
         let today = Local::now().date_naive();
         let mut previous = None;
         let mut list = div()
@@ -484,7 +513,7 @@ mod tests {
 
     #[test]
     fn history_records_persistent_http_visits_and_supports_search_and_deletion() {
-        let mut history = History::from_store(HistoryStore::in_memory().unwrap());
+        let mut history = History::from_open(HistoryStore::in_memory());
         let shared = Some(&Partition::Shared);
         let current = 4 * 7 * 24 * 3_600_000;
         let recent = "https://recent.example/";
@@ -516,20 +545,65 @@ mod tests {
         history
             .record(true, shared, "about:blank", "project", current)
             .unwrap();
-        let hits = history.store.query("PROJECT", 0).unwrap().entries;
+        let hits = history
+            .store()
+            .unwrap()
+            .query("PROJECT", 0)
+            .unwrap()
+            .entries;
         assert_eq!(
             hits.iter().map(|hit| hit.url.as_str()).collect::<Vec<_>>(),
             [recent, old]
         );
         assert_eq!(hits[0].visit_count, 1);
         history.clear(ClearRange::Hour, current).unwrap();
-        assert_eq!(history.store.query("", 0).unwrap().entries[0].url, old);
+        assert_eq!(
+            history.store().unwrap().query("", 0).unwrap().entries[0].url,
+            old
+        );
         history.remove(old).unwrap();
-        assert!(history.store.query("", 0).unwrap().entries.is_empty());
+        assert!(
+            history
+                .store()
+                .unwrap()
+                .query("", 0)
+                .unwrap()
+                .entries
+                .is_empty()
+        );
         history
             .record(true, shared, recent, "Shared project", current)
             .unwrap();
         history.clear(ClearRange::All, current).unwrap();
-        assert!(history.store.query("", 0).unwrap().entries.is_empty());
+        assert!(
+            history
+                .store()
+                .unwrap()
+                .query("", 0)
+                .unwrap()
+                .entries
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn unreadable_disk_history_exposes_its_error_and_rejects_mutations() {
+        let profile = tempfile::tempdir().unwrap();
+        let path = profile.path().join("history.sqlite");
+        let original = b"Not a SQLite database";
+        std::fs::write(&path, original).unwrap();
+        let mut history = History::open(profile.path());
+        assert!(history.store().is_none());
+        assert!(history.open_error.is_some());
+        let url = "https://example.test/";
+        assert!(
+            history
+                .record(true, Some(&Partition::Shared), url, "Project", 0)
+                .unwrap()
+                .is_none()
+        );
+        assert!(history.remove(url).is_err());
+        assert!(history.clear(ClearRange::All, 0).is_err());
+        assert_eq!(std::fs::read(path).unwrap(), original);
     }
 }
