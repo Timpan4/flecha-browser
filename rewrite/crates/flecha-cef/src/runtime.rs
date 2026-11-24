@@ -1,5 +1,6 @@
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::ptr;
 use std::rc::Rc;
@@ -68,10 +69,12 @@ wrap_app! {
                     command_line
                         .append_switch_with_value(Some(&OPEN_SWITCH.into()), Some(&open.into()));
                 }
-                command_line.append_switch_with_value(
-                    Some(&"password-store".into()),
-                    Some(&"basic".into()),
-                );
+                if let Some(store) = password_store(std::env::var_os("FLECHA_LAUNCHER").as_deref()) {
+                    command_line.append_switch_with_value(
+                        Some(&"password-store".into()),
+                        Some(&store.into()),
+                    );
+                }
                 // Child processes inherit the browser process's platform.
                 #[cfg(target_os = "linux")]
                 if command_line.has_switch(Some(&"ozone-platform".into())) == 0 {
@@ -215,13 +218,7 @@ impl Runtime {
             external_message_pump: 1,
             command_line_args_disabled: 1,
             root_cache_path: path_string(profile)?,
-            cache_path: path_string(
-                &profile.join(
-                    crate::Partition::Shared
-                        .directory()
-                        .expect("the shared partition keeps its data on disk"),
-                ),
-            )?,
+            cache_path: path_string(&shared_cache_path(profile)?)?,
             persist_session_cookies: 1,
             log_severity: LogSeverity::DISABLE,
             ..Default::default()
@@ -277,6 +274,26 @@ impl Drop for Runtime {
     }
 }
 
+fn password_store(launcher: Option<&OsStr>) -> Option<&'static str> {
+    (launcher == Some(OsStr::new("isolated"))).then_some("basic")
+}
+
+fn shared_cache_path(profile: &Path) -> Result<PathBuf> {
+    // Existing rewrite installs already have their shared context under this name.
+    let legacy = profile.join("shared");
+    if legacy
+        .try_exists()
+        .context("check existing shared CEF profile")?
+    {
+        return Ok(legacy);
+    }
+    Ok(profile.join(
+        crate::Partition::Shared
+            .directory()
+            .expect("the shared partition keeps its data on disk"),
+    ))
+}
+
 /// Whether a process on this host holds `profile`, so CEF would forward a launch on it.
 /// Chromium's process singleton links `SingletonLock` in the profile to `<hostname>-<pid>`
 /// while it runs. A stale link to a live, unrelated process reads as held; that launch then
@@ -308,4 +325,28 @@ pub(crate) fn path_string(path: &Path) -> Result<CefString> {
         .to_str()
         .context("CEF profile or resource path must be UTF-8")?
         .into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn basic_password_store_is_only_for_the_isolated_launcher() {
+        assert_eq!(password_store(Some(OsStr::new("isolated"))), Some("basic"));
+        assert_eq!(password_store(Some(OsStr::new("desktop"))), None);
+        assert_eq!(password_store(None), None);
+    }
+
+    #[test]
+    fn uses_default_for_new_profiles_and_preserves_existing_shared_profiles() -> Result<()> {
+        let profile = tempfile::tempdir()?;
+        let default = profile.path().join("Default");
+        assert_eq!(shared_cache_path(profile.path())?, default);
+        std::fs::create_dir(default)?;
+        let legacy = profile.path().join("shared");
+        std::fs::create_dir(&legacy)?;
+        assert_eq!(shared_cache_path(profile.path())?, legacy);
+        Ok(())
+    }
 }

@@ -56,7 +56,7 @@ impl Partition {
     /// session has none: its request context keeps everything in memory.
     pub(crate) fn directory(&self) -> Option<String> {
         match self {
-            Self::Shared => Some("shared".into()),
+            Self::Shared => Some("Default".into()),
             // Saved IDs can contain path separators, reserved names and mixed case.
             Self::Isolated(space) => {
                 use sha2::{Digest as _, Sha256};

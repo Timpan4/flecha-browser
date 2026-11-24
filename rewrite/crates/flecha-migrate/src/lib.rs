@@ -1,4 +1,4 @@
-//! Copy the Chromium Flecha shell's saved state into a new rewrite profile.
+//! Copy the Chromium Flecha shell state and browser storage into a new rewrite profile.
 
 #![cfg(any(target_os = "linux", target_os = "macos"))]
 
@@ -55,6 +55,9 @@ pub struct MigrationReport {
     pub ad_block_sites: usize,
     pub boosts: usize,
     pub compiled_boosts: usize,
+    pub cookies_copied: bool,
+    pub web_storage_copied: bool,
+    pub os_crypt_copied: bool,
     /// One count per input key consumed, including valid backups and Boosts files.
     pub migrated_keys: usize,
     pub invalid_keys: usize,
@@ -82,7 +85,9 @@ pub fn migrate_profile(
 
     let stage = output.scratch().join("profile");
     fs::DirBuilder::new().mode(0o700).create(&stage)?;
-    let report = migrate_database(&db_path, &stage)?;
+    let mut report = migrate_database(&db_path, &stage)?;
+    source.copy_browser_data(&stage.join("cef"), &mut report)?;
+    source.verify_unchanged()?;
     output.publish()?;
     Ok(report)
 }
