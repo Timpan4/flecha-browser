@@ -69,9 +69,11 @@ export async function fixture(handle = () => false) {
   }
 
   const cookieResult = { isolated: 'Cookie present', shared: 'Shared cookie' };
+
   const jarTitle = path === '/jar/list'
     ? `jars:${(request.headers.cookie ?? '').split('; ').map(entry => entry.split('=')[0]).filter(name => name.startsWith('flecha_')).sort().join(',')}`
     : jar && { '/jar/set': `${jar}:set`, '/jar/check': `${jar}:${inJar ? 'present' : 'absent'}` }[path];
+
   const name = jarTitle || (path === '/cookie/check' ? (cookieResult[cookie] ?? 'Cookie absent') : `Flecha fixture ${path}`);
 
   const [background, marker] = {

@@ -547,9 +547,12 @@ async function jarPage(app, window, path, jar, incognito) {
   const url = `${base}${path}?jar=${jar}`;
   const snapshot = await app.command('open', { url, window });
   const tab = incognito ? incognitoTab(snapshot, window) : active(snapshot).activeTabId;
+
   const load = await app.wait(`HTTP load of ${path} for ${jar}`, event =>
     event.type === 'loaded' && event.tab === tab && event.url === url, after);
+
   assert.equal(load.status, 200, url);
+
   const titled = await app.wait(`${path} title for ${jar}`, event =>
     event.type === 'title' && event.tab === tab && event.title.startsWith(`${jar}:`), after);
 
@@ -599,8 +602,10 @@ async function incognitoChecks(app, main) {
   const after = app.events.length;
   const listTab = active(await app.command('open', { url: base + '/jar/list', window: main })).activeTabId;
   await app.loaded(listTab, '/jar/list', after);
+
   const { title: listed } = await app.wait('regular cookie list', event =>
     event.type === 'title' && event.tab === listTab && event.title.startsWith('jars:'), after);
+
   assert(listed.includes(regularJar), `the regular window lost its cookie: ${listed}`);
   assert(!listed.includes(privateJar), 'an incognito cookie reached the regular window');
   pass('regular and incognito cookies stayed in their own jars, and the incognito one lasted for its session');
