@@ -260,6 +260,10 @@ impl Shell {
                     let id = id.clone();
                     move |pane, (), window, cx| {
                         origin.set(pane.origin);
+                        #[cfg(target_os = "linux")]
+                        state.borrow().engine.follow_window_device(
+                            flecha_surface::SurfaceTarget::for_window(window),
+                        );
                         let screen = window
                             .display(cx)
                             .map_or(window.bounds(), |display| display.bounds());

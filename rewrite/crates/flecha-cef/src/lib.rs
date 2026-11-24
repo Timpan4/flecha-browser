@@ -1,6 +1,7 @@
 mod adblock;
 mod boosts;
 mod callbacks;
+mod compositor;
 mod devtools;
 mod downloads;
 mod identity;
@@ -27,6 +28,8 @@ use gpui::{Bounds, Pixels};
 
 pub use callbacks::Frames;
 use callbacks::{Queue, Slot, Stage};
+pub use compositor::Compositing;
+use compositor::Compositor;
 pub use devtools::{DevToolsEvent, DevToolsMessage};
 pub use downloads::{
     DownloadConfig, DownloadError, DownloadEvent, DownloadHandle, DownloadMessage,
@@ -166,6 +169,9 @@ pub struct Engine {
     discarded: BTreeMap<TabId, Discarded>,
     /// Sites where ad blocking is off (`Settings::ad_block_allowed`).
     adblock_allowed: Vec<String>,
+    /// The last page frame of tabs whose browser is reopening with CPU copies, shown
+    /// until the new browser paints.
+    retained: BTreeMap<TabId, flecha_surface::Frame>,
 }
 
 impl Engine {
@@ -178,6 +184,7 @@ impl Engine {
             pending: RefCell::new(Vec::new()),
             live: Cell::new(0),
             services: Rc::new(Services::new()),
+            compositor: Compositor::default(),
         });
         Self {
             profile,
@@ -190,6 +197,60 @@ impl Engine {
             popups,
             discarded: BTreeMap::new(),
             adblock_allowed: Vec::new(),
+            retained: BTreeMap::new(),
+        }
+    }
+
+    /// Starts giving new browsers frames as `compositing` says. Call once CEF runs with
+    /// the same `compositing`.
+    pub fn start_compositing(&self, compositing: &Compositing) {
+        self.popups.compositor.start(compositing);
+    }
+
+    /// Follows the GPUI device of a window that shows pages. When GPUI recreates its
+    /// device on the same GPU, browsers repaint for the new one. When it moves to another
+    /// GPU, browsers that share textures reopen with CPU copies.
+    #[cfg(target_os = "linux")]
+    pub fn follow_window_device(&self, target: flecha_surface::SurfaceTarget) {
+        let change = self.popups.compositor.follow(target);
+        if change == compositor::DeviceChange::None {
+            return;
+        }
+        for session in self.browsers.values() {
+            let slot = &session.slot;
+            if !slot.shares_textures.get() {
+                continue;
+            }
+            if change == compositor::DeviceChange::Lost {
+                slot.import_failure
+                    .replace(Some(anyhow::anyhow!("GPUI changed GPU")));
+            } else if let Some(host) = slot.browser.borrow().as_ref().and_then(|b| b.host()) {
+                host.invalidate(cef::PaintElementType::VIEW);
+            }
+        }
+    }
+
+    /// Reopens with CPU copies each page whose shared texture could not be imported.
+    fn reopen_failed_imports(&mut self) {
+        let failed: Vec<_> = self
+            .browsers
+            .iter()
+            .filter_map(|(tab, session)| {
+                let error = session.slot.import_failure.borrow_mut().take()?;
+                Some((tab.clone(), error))
+            })
+            .collect();
+        for (tab, error) in failed {
+            self.popups.compositor.turn_off(&format!("{error:#}"));
+            let frame = self.browsers[&tab].slot.surface.borrow().view.clone();
+            eprintln!("page frames: reopening a page with CPU copies: {error:#}");
+            // A page with no address yet opens again at the tab's address.
+            if self.discard_tab(&tab).is_none() {
+                self.close(&tab);
+            }
+            if let Some(frame) = frame {
+                self.retained.insert(tab, frame);
+            }
         }
     }
 
@@ -236,10 +297,14 @@ impl Engine {
             self.popups.clone(),
         ));
         slot.partition.replace(Some(partition.clone()));
+        let shared = self.popups.compositor.shares_textures();
+        slot.shares_textures.set(shared);
+        slot.surface.borrow_mut().view = self.retained.remove(&tab);
         let mut client = callbacks::client(slot.clone());
         let info = WindowInfo {
             runtime_style: RuntimeStyle::ALLOY,
             windowless_rendering_enabled: 1,
+            shared_texture_enabled: i32::from(shared),
             ..Default::default()
         };
         let browser = browser_host_create_browser_sync(
@@ -354,7 +419,10 @@ impl Engine {
     }
 
     pub fn frames(&self, tab: &TabId) -> Option<Frames> {
-        Some(self.browsers.get(tab)?.slot.surface.borrow().clone())
+        match self.browsers.get(tab) {
+            Some(session) => Some(session.slot.surface.borrow().clone()),
+            None => self.retained.get(tab).cloned().map(Frames::page),
+        }
     }
 
     pub fn host(&self, tab: &TabId) -> Option<BrowserHost> {
@@ -511,6 +579,7 @@ impl Engine {
     /// Closes the tab's browser and forgets the tab, discarded page included.
     pub fn close(&mut self, tab: &TabId) {
         self.discarded.remove(tab);
+        self.retained.remove(tab);
         self.close_browser(tab);
     }
 
@@ -613,6 +682,7 @@ impl Engine {
         while let Some(tab) = self.browsers.first_key_value().map(|(tab, _)| tab.clone()) {
             self.close(&tab);
         }
+        self.retained.clear();
     }
 
     /// CEF must call `on_before_close` for every browser before the app exits.
@@ -625,6 +695,7 @@ impl Engine {
 
     pub fn next_event(&mut self) -> Option<BrowserEvent> {
         self.adopt_popups();
+        self.reopen_failed_imports();
         loop {
             let message = self.events.borrow_mut().pop_front()?;
             if message.event == Event::Closed && self.closing.remove(&message.key) {

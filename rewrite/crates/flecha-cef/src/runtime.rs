@@ -1,4 +1,4 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::ptr;
 use std::rc::Rc;
@@ -6,12 +6,15 @@ use std::rc::Rc;
 use anyhow::{Context as _, Result, ensure};
 use cef::{rc::Rc as _, *};
 
+use crate::compositor::Compositing;
 use crate::pump::{Pump, Schedule};
 
 wrap_app! {
     struct FlechaApp {
         schedule: Schedule,
         ready: Rc<Cell<bool>>,
+        // GPUI's GPU, where Chromium must allocate the textures it shares.
+        render_node: Rc<RefCell<Option<String>>>,
     }
     impl App {
         fn browser_process_handler(&self) -> Option<BrowserProcessHandler> {
@@ -34,6 +37,12 @@ wrap_app! {
                     Some(&"ozone-platform".into()),
                     Some(&if std::env::var_os("WAYLAND_DISPLAY").is_some() { "wayland" } else { "x11" }.into()),
                 );
+                if let Some(node) = self.render_node.borrow().as_deref() {
+                    command_line.append_switch_with_value(
+                        Some(&"render-node-override".into()),
+                        Some(&node.into()),
+                    );
+                }
             }
         }
     }
@@ -58,6 +67,7 @@ wrap_browser_process_handler! {
 pub struct Runtime {
     app: cef::App,
     ready: Rc<Cell<bool>>,
+    render_node: Rc<RefCell<Option<String>>>,
     pump: Option<Pump>,
     initialized: bool,
     #[cfg(target_os = "macos")]
@@ -86,7 +96,8 @@ impl Runtime {
         );
         let (schedule, pump) = Schedule::new();
         let ready = Rc::new(Cell::new(false));
-        let mut app = FlechaApp::new(schedule, ready.clone());
+        let render_node = Rc::new(RefCell::new(None));
+        let mut app = FlechaApp::new(schedule, ready.clone(), render_node.clone());
         let args = args::Args::new();
         let code = execute_process(Some(args.as_main_args()), Some(&mut app), ptr::null_mut());
         if code >= 0 {
@@ -95,6 +106,7 @@ impl Runtime {
         Ok(Self {
             app,
             ready,
+            render_node,
             pump: Some(pump),
             initialized: false,
             #[cfg(target_os = "macos")]
@@ -102,7 +114,16 @@ impl Runtime {
         })
     }
 
-    pub fn initialize(&mut self, profile: &Path) -> Result<()> {
+    /// Starts CEF. Chromium reads `compositing`'s render node from its command line, so
+    /// the GPU it shares textures on is fixed for the process.
+    pub fn initialize(&mut self, profile: &Path, compositing: &Compositing) -> Result<()> {
+        self.render_node.replace(
+            compositing
+                .render_node()
+                .map(|node| node.to_str().context("render node path must be UTF-8"))
+                .transpose()?
+                .map(str::to_owned),
+        );
         let mut settings = Settings {
             windowless_rendering_enabled: 1,
             external_message_pump: 1,

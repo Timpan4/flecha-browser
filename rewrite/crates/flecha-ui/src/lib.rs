@@ -57,13 +57,27 @@ pub fn start(
     failure: Rc<RefCell<Option<anyhow::Error>>>,
 ) -> Result<()> {
     let controller = Rc::new(RefCell::new(Controller::new(
-        cef_profile,
+        cef_profile.clone(),
         store,
         loaded,
         options.verify,
         failure,
     )?));
     sync_windows(&controller, cx)?;
+    // Chromium fixes the GPU it shares textures on at startup, so CEF starts after GPUI
+    // has picked the GPU for the first window. GPUI's windows share one device.
+    let first = controller.borrow().windows.values().next().copied();
+    let compositing = first
+        .and_then(|window| {
+            window
+                .update(cx, |_, window, _| {
+                    flecha_cef::Compositing::for_window(window)
+                })
+                .ok()
+        })
+        .unwrap_or_default();
+    runtime.initialize(&cef_profile, &compositing)?;
+    controller.borrow().engine.start_compositing(&compositing);
     if options.verify {
         verify::install(&controller, cx);
     }

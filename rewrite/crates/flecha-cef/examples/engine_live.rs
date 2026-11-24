@@ -125,7 +125,7 @@ struct Live<'a> {
 fn run(runtime: &mut Runtime, profile: &Path, steps: &Steps) -> Result<()> {
     let cef_profile = profile.join("cef");
     std::fs::create_dir_all(&cef_profile)?;
-    runtime.initialize(&cef_profile)?;
+    runtime.initialize(&cef_profile, &flecha_cef::Compositing::software())?;
     steps.wait("CEF to initialize", || Ok(runtime.is_ready().then_some(())))?;
 
     let probe_hits = Arc::new(AtomicUsize::new(0));

@@ -33,17 +33,15 @@ fn main() -> Result<()> {
         .with_quit_mode(gpui::QuitMode::Explicit)
         .run(move |cx| {
             let mut runtime = app_runtime.borrow_mut();
-            if let Err(error) = runtime.initialize(&cef_profile).and_then(|()| {
-                flecha_ui::start(
-                    cx,
-                    &mut runtime,
-                    cef_profile,
-                    store,
-                    loaded,
-                    options,
-                    app_failure.clone(),
-                )
-            }) {
+            if let Err(error) = flecha_ui::start(
+                cx,
+                &mut runtime,
+                cef_profile,
+                store,
+                loaded,
+                options,
+                app_failure.clone(),
+            ) {
                 *app_failure.borrow_mut() = Some(error);
                 cx.quit();
             }

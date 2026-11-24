@@ -8,6 +8,7 @@ use cef::{rc::Rc as _, *};
 use flecha_surface::{Frame as SurfaceFrame, SurfaceTarget};
 use gpui::{Bounds, Pixels, point, px, size};
 
+use crate::compositor::{self, Delivery};
 use crate::popup::{self, Popups};
 use crate::{BrowserEvent, BrowserKey, Event, Partition, Viewport};
 use crate::{adblock, boosts, downloads, permissions, services};
@@ -59,6 +60,12 @@ pub(crate) struct Slot {
     pub devtools: RefCell<Option<Registration>>,
     /// Permission answers Chromium holds for the current document only.
     pub one_time: RefCell<Vec<permissions::OneTime>>,
+    /// Whether CEF created this browser in shared-texture mode.
+    pub shares_textures: Cell<bool>,
+    /// Why a shared texture could not be imported. The engine reopens the page with CPU
+    /// copies, and the render handler ignores shared textures until then.
+    pub import_failure: RefCell<Option<anyhow::Error>>,
+    delivery: Cell<Option<Delivery>>,
 }
 
 impl Slot {
@@ -80,6 +87,9 @@ impl Slot {
             blocked: Arc::new(AtomicU64::new(0)),
             devtools: RefCell::new(None),
             one_time: RefCell::new(Vec::new()),
+            shares_textures: Cell::new(false),
+            import_failure: RefCell::new(None),
+            delivery: Cell::new(None),
         }
     }
 
@@ -105,6 +115,8 @@ impl Slot {
     pub fn destroyed(&self) {
         self.browser.take();
         self.devtools.take();
+        // Frames can hold textures on GPUI's device, which must not outlive the windows.
+        self.surface.take();
         let services = services::of(self);
         crate::devtools::forget(&services, self);
         let acts = services.downloads.borrow_mut().browser_closed(self);
@@ -142,6 +154,19 @@ impl Slot {
             self.emit(Event::Paint);
         }
     }
+
+    /// Stores a page or `<select>` popup frame from either paint callback.
+    fn store(&self, kind: PaintElementType, frame: SurfaceFrame, delivery: Delivery) {
+        compositor::delivered(&self.delivery, delivery, self.identifier.get());
+        let mut frames = self.surface.borrow_mut();
+        if kind == PaintElementType::VIEW {
+            frames.view = Some(frame);
+        } else {
+            frames.popup = frames.popup_bounds.map(|bounds| (bounds, frame));
+        }
+        drop(frames);
+        self.paint_changed();
+    }
 }
 
 #[derive(Clone, Default)]
@@ -149,6 +174,16 @@ pub struct Frames {
     pub view: Option<SurfaceFrame>,
     pub popup: Option<(Bounds<Pixels>, SurfaceFrame)>,
     popup_bounds: Option<Bounds<Pixels>>,
+}
+
+impl Frames {
+    /// A page frame with no `<select>` popup.
+    pub(crate) fn page(view: SurfaceFrame) -> Self {
+        Self {
+            view: Some(view),
+            ..Self::default()
+        }
+    }
 }
 
 fn bounds(rect: &Rect) -> Bounds<Pixels> {
@@ -209,7 +244,7 @@ wrap_render_handler! {
             buffer: *const u8, width: i32, height: i32,
         ) {
             if self.slot.retired.get() { return; }
-            let mut frames = self.slot.surface.borrow_mut();
+            let frames = self.slot.surface.borrow();
             let previous = match kind {
                 PaintElementType::VIEW => frames.view.as_ref(),
                 PaintElementType::POPUP => frames.popup.as_ref().map(|(_, frame)| frame),
@@ -219,16 +254,37 @@ wrap_render_handler! {
             let frame = unsafe { SurfaceFrame::copy_bgra(
                 buffer, width, height, &SurfaceTarget::default(), previous, dirty.unwrap_or_default(),
             ) };
+            drop(frames);
             match frame {
-                Ok(frame) => {
-                    if kind == PaintElementType::VIEW {
-                        frames.view = Some(frame);
-                    } else {
-                        frames.popup = frames.popup_bounds.map(|bounds| (bounds, frame));
-                    }
+                Ok(frame) => self.slot.store(kind, frame, Delivery::CpuCopy),
+                Err(_) => self.slot.emit(Event::PaintFailed),
+            }
+        }
+
+        #[cfg(target_os = "linux")]
+        fn on_accelerated_paint(
+            &self, _browser: Option<&mut Browser>, kind: PaintElementType, _dirty: Option<&[Rect]>,
+            info: Option<&AcceleratedPaintInfo>,
+        ) {
+            if self.slot.retired.get() || self.slot.import_failure.borrow().is_some() { return; }
+            if kind != PaintElementType::VIEW && kind != PaintElementType::POPUP { return; }
+            let target = self.slot.popups.compositor.target();
+            let frame = match (info, target) {
+                (None, _) => Err(anyhow::anyhow!("CEF sent no shared texture")),
+                (_, None) => Err(anyhow::anyhow!("shared textures are off")),
+                // The importer copies the dma-buf into GPUI's device before returning, and
+                // CEF's render node matches that device.
+                (Some(info), Some(target)) => compositor::reject_for_test(info, |info| unsafe {
+                    SurfaceFrame::copy_accelerated(info, &target)
+                }),
+            };
+            match frame {
+                Ok(frame) => self.slot.store(kind, frame, Delivery::SharedTexture),
+                Err(error) => {
+                    self.slot.import_failure.replace(Some(error));
+                    // Wake the engine, which reopens the page with CPU copies.
                     self.slot.paint_changed();
                 }
-                Err(_) => self.slot.emit(Event::PaintFailed),
             }
         }
     }

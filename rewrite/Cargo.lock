@@ -2209,11 +2209,15 @@ name = "flecha-surface"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ash",
  "cef",
  "gpui",
  "image",
+ "libc",
+ "raw-window-handle",
  "smallvec",
  "wgpu",
+ "x11rb",
 ]
 
 [[package]]
