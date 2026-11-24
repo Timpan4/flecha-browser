@@ -3,6 +3,7 @@
 //! go back to most, your dev servers, and a few shortcuts.
 
 use std::collections::BTreeSet;
+use std::time::{Duration, Instant};
 
 use chrono::Timelike as _;
 use flecha_core::{Space, WindowId, shortcuts};
@@ -41,6 +42,9 @@ impl LocalWatch {
     }
 }
 
+/// Backoff after a failed top-sites query so a broken database does not stall every UI tick.
+const TOP_SITES_RETRY_DELAY: Duration = Duration::from_secs(1);
+
 /// The sites "Jump back in" shows, and which windows showed the empty page at the last tick.
 #[derive(Default)]
 pub(crate) struct TopSites {
@@ -48,6 +52,7 @@ pub(crate) struct TopSites {
     showing: BTreeSet<WindowId>,
     /// The history revision the sites were read at.
     fetched: Option<u64>,
+    retry_after: Option<Instant>,
 }
 
 impl Controller {
@@ -69,23 +74,31 @@ impl Controller {
             .any(|id| !self.top_sites.showing.contains(id));
         let revision = self.history.revision();
         let stale = self.top_sites.fetched != Some(revision);
-        let due = newly || (!showing.is_empty() && stale);
+        let throttled = self
+            .top_sites
+            .retry_after
+            .is_some_and(|until| Instant::now() < until);
+        let due = newly || (!showing.is_empty() && stale && !throttled);
         self.top_sites.showing = showing;
         if !due {
             return false;
         }
         let Some(store) = self.history.store() else {
             self.top_sites.fetched = Some(revision);
+            self.top_sites.retry_after = None;
             let changed = !self.top_sites.sites.is_empty();
             self.top_sites.sites.clear();
             return changed;
         };
         let Ok(sites) = store.top_sites() else {
+            self.top_sites.fetched = None;
+            self.top_sites.retry_after = Some(Instant::now() + TOP_SITES_RETRY_DELAY);
             let changed = !self.top_sites.sites.is_empty();
             self.top_sites.sites.clear();
             return changed;
         };
         self.top_sites.fetched = Some(revision);
+        self.top_sites.retry_after = None;
         let changed = sites != self.top_sites.sites;
         self.top_sites.sites = sites;
         changed
