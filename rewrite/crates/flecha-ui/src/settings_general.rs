@@ -153,7 +153,7 @@ impl Shell {
             .child(self.toggle(
                 "fullscreen-sidebar",
                 "Sidebar in page fullscreen",
-                settings.sidebar_in_page_fullscreen.unwrap_or(false),
+                settings.keeps_sidebar_in_page_fullscreen(),
                 |settings, enabled| settings.sidebar_in_page_fullscreen = Some(enabled),
                 cx,
             ));
@@ -185,7 +185,7 @@ impl Shell {
             .child(self.toggle(
                 "links-flechinha",
                 "Open external links in Flechinha",
-                settings.open_links_in_flechinha.unwrap_or(true),
+                settings.opens_links_in_flechinha(),
                 |settings, enabled| settings.open_links_in_flechinha = Some(enabled),
                 cx,
             ))

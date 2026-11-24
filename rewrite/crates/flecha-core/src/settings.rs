@@ -186,6 +186,17 @@ impl Settings {
         self.search_suggest_enabled.unwrap_or(true)
     }
 
+    /// Whether links from outside Flecha open in a Flechinha (`openLinksInFlechinha !== false`
+    /// in `chromium/shell/lib/settingsCore.ts`).
+    pub fn opens_links_in_flechinha(&self) -> bool {
+        self.open_links_in_flechinha.unwrap_or(true)
+    }
+
+    /// Whether the sidebar stays beside a page in fullscreen (`!!sidebarInPageFullscreen`).
+    pub fn keeps_sidebar_in_page_fullscreen(&self) -> bool {
+        self.sidebar_in_page_fullscreen.unwrap_or(false)
+    }
+
     /// The per-site rule. The global ad-block switch is stored separately.
     pub fn blocks_ads_on(&self, host: &str) -> bool {
         blocks_ads_on(self.ad_block_allowed.as_deref(), host)

@@ -510,6 +510,7 @@ mod tests {
         controller.relaunch(None).unwrap();
         regular_back(&mut controller);
         close_regular(&mut controller);
+        controller.model.core.settings.open_links_in_flechinha = Some(false);
         controller.relaunch(Some("regular.example/again")).unwrap();
         regular_back(&mut controller);
         let opened = controller.model.active(&regular).unwrap();

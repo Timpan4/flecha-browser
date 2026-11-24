@@ -769,14 +769,20 @@ impl Controller {
 type Shared = Rc<RefCell<Controller>>;
 
 impl Controller {
-    /// A later launch of Flecha, which CEF hands to this one. As in Chromium, its address opens in
-    /// the last focused regular window, and a launch without one opens a regular window.
+    /// A later launch of Flecha, which CEF hands to this one. A launch without an address opens a
+    /// regular window. Its address is an external link: it opens in a Flechinha on the last
+    /// focused regular window's Space while "Open external links in Flechinha" is on, and
+    /// otherwise, as in Chromium, in a tab of that window.
     fn relaunch(&mut self, address: Option<&str>) -> Result<()> {
         let focused = self.model.core.focused_window().id.clone();
         let Some(input) = address else {
             return self.act(&focused, Action::NewWindow);
         };
         let url = pinnable_address(input).context("--open requires a browser address")?;
+        if self.model.core.settings.opens_links_in_flechinha() {
+            self.front = Some(self.model.open_flechinha(&focused, url)?);
+            return Ok(());
+        }
         let window = if self.model.regular_closed() {
             self.model.open_regular_window()?
         } else {
@@ -912,4 +918,89 @@ fn sync_windows(controller: &Shared, cx: &mut App) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const LINK: &str = "external.example/page";
+    const URL: &str = "https://external.example/page";
+
+    fn controller(profile: &tempfile::TempDir) -> (Controller, WindowId) {
+        let controller = Controller::open_test_profile(profile.path()).unwrap();
+        let window = controller.model.core.focused_window().id.clone();
+        (controller, window)
+    }
+
+    #[test]
+    fn a_forwarded_address_opens_in_a_flechinha_while_the_setting_is_on() {
+        let profile = tempfile::tempdir().unwrap();
+        let (mut controller, regular) = controller(&profile);
+        assert!(controller.model.core.settings.opens_links_in_flechinha());
+        let tabs = controller.model.core.open_tabs().len();
+
+        controller.relaunch(Some(LINK)).unwrap();
+
+        let [(mini, page)] = controller.model.flechinhas.iter().collect::<Vec<_>>()[..] else {
+            panic!("expected one Flechinha");
+        };
+        assert_eq!(page.tab.url, URL);
+        assert_eq!(page.partition, flecha_cef::Partition::Shared);
+        assert_eq!(
+            &page.space,
+            &controller
+                .model
+                .core
+                .window(&regular)
+                .unwrap()
+                .active_space_id
+        );
+        assert_eq!(controller.front.as_ref(), Some(mini));
+        assert_eq!(
+            controller.model.core.open_tabs().len(),
+            tabs,
+            "the link also opened a tab"
+        );
+
+        // Open in Flecha moves it into the regular window as a tab.
+        let mini = mini.clone();
+        controller.act(&mini, Action::Return).unwrap();
+        assert!(controller.model.flechinhas.is_empty());
+        let active = controller.model.active(&regular).unwrap();
+        assert_eq!(controller.model.core.tab(active).unwrap().url, URL);
+    }
+
+    #[test]
+    fn a_forwarded_address_opens_a_regular_tab_while_the_setting_is_off() {
+        let profile = tempfile::tempdir().unwrap();
+        let (mut controller, regular) = controller(&profile);
+        controller.model.core.settings.open_links_in_flechinha = Some(false);
+
+        controller.relaunch(Some(LINK)).unwrap();
+
+        assert!(controller.model.flechinhas.is_empty());
+        let active = controller.model.active(&regular).unwrap();
+        assert_eq!(controller.model.core.tab(active).unwrap().url, URL);
+        assert_eq!(controller.front.as_ref(), Some(&regular));
+    }
+
+    #[test]
+    fn a_forwarded_address_opens_its_flechinha_in_an_isolated_spaces_context() {
+        let profile = tempfile::tempdir().unwrap();
+        let (mut controller, regular) = controller(&profile);
+        controller.act(&regular, Action::Isolate).unwrap();
+        let space = controller
+            .model
+            .core
+            .window(&regular)
+            .unwrap()
+            .active_space_id
+            .clone();
+
+        controller.relaunch(Some(LINK)).unwrap();
+
+        let page = controller.model.flechinhas.values().next().unwrap();
+        assert_eq!(page.partition, flecha_cef::Partition::Isolated(space));
+    }
 }

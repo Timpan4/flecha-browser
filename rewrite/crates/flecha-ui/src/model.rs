@@ -386,6 +386,30 @@ impl Model {
         Ok(self.peeks.insert(window, transient).map(|old| old.id))
     }
 
+    /// A Flechinha showing `url`, which arrived from outside Flecha, in the current Space of
+    /// the regular window `window` and that Space's request context. It reads the regular state
+    /// directly, so it works while the regular windows are closed beside incognito ones.
+    pub fn open_flechinha(&mut self, window: &WindowId, url: String) -> Result<WindowId> {
+        let space = self
+            .core
+            .window(window)
+            .context("missing Flecha window")?
+            .active_space_id
+            .clone();
+        let partition = self.space_partition(&space);
+        let id = window_id();
+        self.flechinhas.insert(
+            id.clone(),
+            Transient {
+                id: tab_id(),
+                tab: Tab::new(url, now()),
+                space,
+                partition,
+            },
+        );
+        Ok(id)
+    }
+
     pub fn promote(&mut self, window: &WindowId) -> Result<TabId> {
         let page = self.peeks.remove(window).context("no Peek to promote")?;
         let after = self.active(window).cloned();

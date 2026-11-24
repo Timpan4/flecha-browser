@@ -833,18 +833,38 @@ async function incognitoChecks(app, main) {
   relaunch([]);
   assert.equal(active(await reopened('a second launch', reopenedAt)).activeTabId, listTab, 'a second launch lost the regular tab');
   await closeRegular();
+  pass('Ctrl+N and a second launch each brought the regular window back beside the incognito one');
+
+  // A second launch's address is an external link: with "Open external links in Flechinha"
+  // on, its default, it opens in a Flechinha on the regular Space and leaves the regular
+  // window closed.
+  await closeRegular();
   const relaunchUrl = `${base}/open?relaunched=${run}`;
-  reopenedAt = app.events.length;
+  const linkedAt = app.events.length;
   relaunch(['--open', relaunchUrl]);
-  const withAddress = await reopened('a second launch with --open', reopenedAt);
-  const relaunchedTab = active(withAddress).activeTabId;
-  assert.notEqual(relaunchedTab, listTab, 'the second launch\'s address did not open a tab');
-  await app.wait('the second launch\'s address', event =>
-    event.type === 'loaded' && event.tab === relaunchedTab && event.url === relaunchUrl, reopenedAt);
-  pass('Ctrl+N, a second launch and a second launch with --open each brought the regular window back beside the incognito one');
+  const linked = await poll('the second launch\'s Flechinha', async () => {
+    const state = await app.command('snapshot');
+
+    return state.flechinhas.length === 1 && state.nativeWindows.includes(state.flechinhas[0].window) && state;
+  });
+  const [{ window: linkMini, tab: linkPage }] = linked.flechinhas;
+  assert(!linked.nativeWindows.includes(main), 'the second launch\'s address reopened the regular window');
+  await app.wait('the second launch\'s address in its Flechinha', event =>
+    event.type === 'loaded' && event.tab === linkPage && event.url === relaunchUrl, linkedAt);
+  const { browsers: linkBrowsers } = await app.command('snapshot');
+  const linkBrowser = linkBrowsers.find(page => page.tab === linkPage);
+  assert(linkBrowser?.owner?.kind === 'flechinha' && !String(linkBrowser.partition).startsWith('incognito-'),
+    `the link's Flechinha left the regular request contexts: ${JSON.stringify(linkBrowsers)}`);
+  await privateKept('a second launch with --open');
+  await app.command('close_window', { window: linkMini });
+  await poll('the link\'s Flechinha to close', async () => {
+    const state = await app.command('snapshot');
+
+    return !state.nativeWindows.includes(linkMini) && state;
+  });
+  pass('a second launch with --open showed its address in a Flechinha on the regular Space, beside the incognito window');
 
   // Closing the last window of either kind quits.
-  await closeRegular();
   const beforeQuit = app.events.length;
 
   await app.command('close_window', { window: second.window });
