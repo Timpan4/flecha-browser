@@ -123,6 +123,8 @@ async fn run<B: BrowserControl>(
     args: &Args,
 ) -> ToolResult<CallToolResult> {
     let tab = || TabId::new(args.str("tabId").unwrap_or_default());
+    let (on_tab, action) = activity(name, args);
+    backend.activity(on_tab.then(tab).as_ref(), &action);
     Ok(match name {
         "list_tabs" => json_text(&backend.list_tabs().await?),
         "open_tab" => {
@@ -240,6 +242,36 @@ async fn run<B: BrowserControl>(
         "wait_for" => wait_for(backend, &tab(), args).await?,
         other => failure(format!("MCP error -32602: Tool {other} not found")),
     })
+}
+
+/// What the sidebar says a tool is doing, in `nativeHost.ts`'s words, and whether the tool
+/// works on its `tabId`.
+fn activity(name: &str, args: &Args) -> (bool, String) {
+    let selector = || args.str("selector").unwrap_or("the page");
+    let action = match name {
+        "list_tabs" => return (false, "listing tabs".into()),
+        "open_tab" => return (false, "opening a tab".into()),
+        "activate_tab" => "switching tab".into(),
+        "close_tab" => "closing a tab".into(),
+        "navigate" => match (
+            args.str("url").filter(|url| !url.is_empty()),
+            args.str("action"),
+        ) {
+            (Some(url), _) => format!("opening {url}"),
+            (None, Some(action)) => action.into(),
+            (None, None) => "navigating".into(),
+        },
+        "read_page" => "reading the page".into(),
+        "screenshot" => "taking a screenshot".into(),
+        "console_logs" => "reading the console".into(),
+        "click" => format!("clicking {}", args.str("selector").unwrap_or_default()),
+        "type" => format!("typing into {}", selector()),
+        "press_key" => format!("pressing {}", args.str("key").unwrap_or_default()),
+        "evaluate" => "running JavaScript".into(),
+        "wait_for" => format!("waiting for {}", selector()),
+        other => other.into(),
+    };
+    (true, action)
 }
 
 /// Probes every `WAIT_POLL` until the page is ready or `timeoutMs` passes. The deadline and the

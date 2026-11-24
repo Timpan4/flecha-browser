@@ -1,6 +1,7 @@
 use std::time::{Duration, Instant};
 
 use flecha_cef::ConnectionSecurity;
+use flecha_core::suggestions::{ActiveEnvironment, EnvironmentTone, describe_environment};
 use flecha_core::{
     BrowserState, Device, FolderId, PinnedKey, PinnedNode, Placement, SidebarWidth, SpaceId, TabId,
     WindowId, shortcuts,
@@ -15,6 +16,7 @@ use gpui::{
 use uuid::Uuid;
 
 use crate::command_bar::Command;
+use crate::empty_page::{live_dot, port_label};
 use crate::icons::icon;
 use crate::shell_menu::{self, MenuAnchor};
 use crate::shortcuts::{Navigation, platform};
@@ -41,6 +43,20 @@ pub(crate) enum SidebarAction {
     RemoveFolder(FolderId),
     TogglePinned(bool),
     ClearToday,
+    /// The agent folder's Clear: closes the tabs a coding agent opened in this Space.
+    CloseAgentTabs,
+}
+
+/// The agent's folder in a Space (`agentTabs` in ui/app.ts:459): the Today tabs an agent opened.
+fn agent_tabs(core: &BrowserState, space: Option<&flecha_core::WindowSpace>) -> Vec<TabId> {
+    space.map_or_else(Vec::new, |space| {
+        space
+            .today
+            .iter()
+            .filter(|id| core.tab(id).is_some_and(|tab| tab.agent))
+            .cloned()
+            .collect()
+    })
 }
 
 impl Controller {
@@ -79,6 +95,12 @@ impl Controller {
             SidebarAction::ClearToday => {
                 for id in core.clear_today(window, now()) {
                     self.engine.close(&id);
+                }
+            }
+            SidebarAction::CloseAgentTabs => {
+                let tabs = agent_tabs(core, current.spaces.get(&space));
+                for id in tabs {
+                    self.close_tab(&id);
                 }
             }
             SidebarAction::Pin(..) | SidebarAction::Favorite(_) | SidebarAction::ToToday(_) => {
@@ -508,6 +530,9 @@ impl Shell {
                 }
             }
         }
+        if let Some(ws) = window_space {
+            tabs = tabs.children(self.agent_folder(&rows, ws, cx));
+        }
         let new_tab = self.new_tab_row(state, cx);
         tabs = tabs
             .child(
@@ -671,9 +696,11 @@ impl Shell {
                     ),
             )
             .child(self.urlbar(state, &rows, toolbar.loading, cx))
+            .children(agent_status(state))
             .when(!incognito, |sidebar| {
                 sidebar.children(self.favorites(&rows, cx))
             })
+            .children(self.local_servers(&rows, cx))
             .child(self.space_header(space, cx))
             .child(tabs)
             .child(
@@ -782,6 +809,10 @@ impl Shell {
                             palette.text_3
                         },
                     ))
+                    .children(url.and_then(|url| {
+                        describe_environment(url, &state.model.core.settings.environments)
+                            .map(|environment| env_badge(&environment))
+                    }))
                     .child(div().flex_1().min_w_0().truncate().map(|text| {
                         match url {
                             Some(url) => text
@@ -1148,6 +1179,10 @@ impl Shell {
             .today
             .iter()
             .filter_map(|id| {
+                // The agent's tabs sit in its folder above Today.
+                if rows.core.tab(id).is_some_and(|tab| tab.agent) {
+                    return None;
+                }
                 if let Some(pair) = pair.filter(|pair| pair.contains(id)) {
                     if pair_drawn {
                         return None;
@@ -1388,6 +1423,192 @@ impl Shell {
                             .opacity(0.)
                             .group_hover(group, |keys| keys.opacity(1.))
                             .child(kbd(keys)),
+                    )
+                }),
+        )
+    }
+
+    /// `#local-servers` (ui/index.html:59-62, ui/app.ts:393-412): dev servers on this machine.
+    /// A click goes to the server's tab, or opens one.
+    fn local_servers(&self, rows: &Rows<'_>, cx: &Context<Self>) -> Option<gpui::Stateful<Div>> {
+        let servers = rows.state.local_servers();
+        if servers.is_empty() {
+            return None;
+        }
+        let palette = palette();
+        let open_tabs = rows.core.open_tabs();
+        let list = servers.iter().map(|server| {
+            let origin = origin_of(&server.url);
+            let open = open_tabs
+                .iter()
+                .find(|(_, tab)| origin_of(&tab.url) == origin)
+                .map(|(id, _)| (*id).clone());
+            let action = match &open {
+                Some(id) => Action::Select(id.clone()),
+                None => Action::Open(server.url.clone()),
+            };
+            let group = SharedString::from(format!("local-server-{}", server.port));
+            row(&group, false, None)
+                .h(px(tokens::LOCAL_SERVER_ROW))
+                .child(
+                    div()
+                        .id(group.clone())
+                        .flex()
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
+                        .items_center()
+                        .gap(px(tokens::ROW_GAP))
+                        .cursor_pointer()
+                        .aria_label(SharedString::from(server.url.clone()))
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            dispatch(&this.state, &this.id, action.clone(), cx);
+                        }))
+                        .child(live_dot())
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .when(open.is_some(), |title| {
+                                    title.font_weight(FontWeight::MEDIUM)
+                                })
+                                .child(server.name.clone()),
+                        )
+                        .child(port_label(server.port)),
+                )
+        });
+        Some(
+            div()
+                .id("local-servers")
+                .flex()
+                .flex_col()
+                .flex_shrink_0()
+                .child(group_header().child("Running locally"))
+                .children(list)
+                .text_color(palette.text),
+        )
+    }
+
+    /// `#agent-folder` (ui/index.html:78, ui/app.ts:457-502): the tabs a coding agent opened,
+    /// in a folder of their own above Today. The agent works in them in the background;
+    /// dragging one out makes it an ordinary tab.
+    fn agent_folder(
+        &self,
+        rows: &Rows<'_>,
+        space: &flecha_core::WindowSpace,
+        cx: &Context<Self>,
+    ) -> Option<gpui::Stateful<Div>> {
+        let tabs = agent_tabs(rows.core, Some(space));
+        if tabs.is_empty() {
+            return None;
+        }
+        let palette = palette();
+        let busy = rows
+            .state
+            .agents
+            .status(Instant::now())
+            .is_some_and(|status| status.busy);
+        let open = self.agent_folder_open;
+        let group = SharedString::new_static("agent-folder");
+        let chevron = icon("chevron", tokens::ICON, palette.text_3).when(open, |chevron| {
+            chevron.with_transformation(Transformation::rotate(percentage(0.25)))
+        });
+        let header =
+            row(&group, false, None)
+                .child(
+                    div()
+                        .id("agent-folder-toggle")
+                        .flex()
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
+                        .items_center()
+                        .gap(px(tokens::ROW_GAP))
+                        .cursor_pointer()
+                        .aria_label(if open {
+                            "Close the agent's folder"
+                        } else {
+                            "Open the agent's folder"
+                        })
+                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.agent_folder_open = !this.agent_folder_open;
+                            cx.notify();
+                        }))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_none()
+                                .items_center()
+                                .justify_center()
+                                .w(px(tokens::FAVICON))
+                                .map(|slot| {
+                                    if busy {
+                                        slot.child(agent_dot())
+                                    } else {
+                                        slot.child(icon("sparkle", tokens::ICON, palette.agent))
+                                    }
+                                }),
+                        )
+                        .child(div().min_w_0().truncate().text_color(palette.agent).child(
+                            if busy {
+                                "Agent is working…"
+                            } else {
+                                "Agent’s tabs"
+                            },
+                        ))
+                        .child(
+                            div()
+                                .flex()
+                                .ml_auto()
+                                .opacity(0.)
+                                .group_hover(group.clone(), |chevron| chevron.opacity(1.))
+                                .child(chevron),
+                        ),
+                )
+                .child(
+                    text_button("clear-agent-tabs", "Clear")
+                        .aria_label("Close the agent’s tabs")
+                        .opacity(0.)
+                        .group_hover(group, |clear| clear.opacity(1.))
+                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                            dispatch(
+                                &this.state,
+                                &this.id,
+                                Action::Sidebar(SidebarAction::CloseAgentTabs),
+                                cx,
+                            );
+                        })),
+                );
+        let mut guide = palette.agent;
+        guide.a *= tokens::AGENT_GUIDE_SHARE / 100.;
+        Some(
+            div()
+                .id("agent-folder")
+                .flex()
+                .flex_col()
+                .flex_none()
+                .child(header)
+                .when(open, |folder| {
+                    folder.child(
+                        div()
+                            .relative()
+                            .flex()
+                            .flex_col()
+                            .pl(px(tokens::FOLDER_INDENT))
+                            .child(
+                                div()
+                                    .absolute()
+                                    .left(px(tokens::FOLDER_INDENT))
+                                    .top(px(tokens::FOLDER_GUIDE_INSET))
+                                    .bottom(px(tokens::FOLDER_GUIDE_INSET))
+                                    .w(px(tokens::FOLDER_GUIDE))
+                                    .bg(guide),
+                            )
+                            .children(
+                                tabs.iter()
+                                    .map(|id| self.tab_row(rows, id, TabZone::Today, false, cx)),
+                            ),
                     )
                 }),
         )
@@ -1750,6 +1971,78 @@ fn row(group: &SharedString, selected: bool, in_split: Option<bool>) -> Div {
                 row.hover(|row| row.bg(palette.fill_hover))
             }
         })
+}
+
+/// `#agent-status` (ui/index.html:52-55, ui/styles.css:367-396, ui/app.ts:386-391): shown
+/// while a coding agent is connected, with what it is doing right now.
+fn agent_status(state: &Controller) -> Option<Div> {
+    let status = state.agents.status(Instant::now())?;
+    let palette = palette();
+    let mut fill = palette.agent;
+    fill.a *= tokens::AGENT_STATUS_SHARE / 100.;
+    Some(
+        div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(px(tokens::SPACE_2))
+            .h(px(tokens::AGENT_STATUS))
+            .px(px(tokens::AGENT_STATUS_PAD))
+            .rounded(px(tokens::RADIUS_MD))
+            .bg(fill)
+            .text_color(palette.agent)
+            .text_size(px(tokens::TEXT_SM))
+            .font_weight(FontWeight::MEDIUM)
+            .child(agent_dot())
+            .child(div().min_w_0().truncate().child(if status.busy {
+                format!("Agent is {}", status.action)
+            } else {
+                "Agent connected".to_owned()
+            })),
+    )
+}
+
+/// `.env-badge` (ui/styles.css:300-320, ui/app.ts:315-317): the project's label for the
+/// environment the page is on, green for local, amber for staging and red for production.
+fn env_badge(environment: &ActiveEnvironment) -> Div {
+    let palette = palette();
+    div()
+        .flex_none()
+        .py(px(tokens::ENV_BADGE_PAD_Y))
+        .px(px(tokens::ENV_BADGE_PAD_X))
+        .rounded(px(tokens::ENV_BADGE_RADIUS))
+        .bg(match environment.tone {
+            EnvironmentTone::Local => palette.green,
+            EnvironmentTone::Staging => palette.amber,
+            EnvironmentTone::Production => palette.red,
+        })
+        .text_color(tokens::color(".env-badge color", palette.dark))
+        .font_family(tokens::MONO)
+        .font_weight(FontWeight::BOLD)
+        .text_size(px(tokens::ENV_BADGE_TEXT))
+        .line_height(px(tokens::ENV_BADGE_LINE))
+        .child(environment.label.to_uppercase())
+}
+
+/// `.agent-dot` (ui/styles.css:390-396).
+fn agent_dot() -> Div {
+    div()
+        .flex_none()
+        .size(px(tokens::AGENT_DOT))
+        .rounded_full()
+        .bg(palette().agent)
+}
+
+/// `originOf` (ui/app.ts:414-421): a page's origin, with 127.0.0.1 and localhost the same.
+fn origin_of(url: &str) -> String {
+    let (scheme, rest) = url.split_once("://").unwrap_or(("", url));
+    let host = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    format!(
+        "{}://{}",
+        scheme.to_ascii_lowercase(),
+        host.to_ascii_lowercase()
+    )
+    .replace("127.0.0.1", "localhost")
 }
 
 /// `.row-icon` (ui/styles.css:620-625): a 16px column in `--text-2`.

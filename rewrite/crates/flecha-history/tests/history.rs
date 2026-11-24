@@ -1,6 +1,6 @@
 use std::fs;
 
-use flecha_history::{HistoryError, HistoryStore, HistoryVisit, PAGE};
+use flecha_history::{HistoryError, HistoryStore, HistoryVisit, PAGE, TOP_SITES};
 use rusqlite::Connection;
 use tempfile::tempdir;
 
@@ -29,6 +29,34 @@ fn records_one_entry_per_url_and_counts_each_navigation() {
     assert_eq!(entry.title, "Latest title");
     assert_eq!(entry.visit_count, 4);
     assert_eq!(entry.last_visit_ms, 30);
+}
+
+#[test]
+fn top_sites_lists_the_most_visited_pages_up_to_chromiums_limit() {
+    let mut history = HistoryStore::in_memory().unwrap();
+    assert!(history.top_sites().unwrap().is_empty());
+    for index in 0..TOP_SITES + 2 {
+        let url = format!("https://site{index}.test/");
+        // site0 once, site1 twice, ...; the last two tie on visits and differ in recency.
+        let visits = index.min(TOP_SITES) + 1;
+        for visit in 0..visits {
+            let at = (index * 100 + visit) as i64;
+            assert!(history.record_visit(&url, "", at).unwrap());
+        }
+    }
+    let top: Vec<_> = history
+        .top_sites()
+        .unwrap()
+        .into_iter()
+        .map(|entry| (entry.url, entry.visit_count))
+        .collect();
+    assert_eq!(top.len(), TOP_SITES);
+    let expected: Vec<_> = [(TOP_SITES + 1, TOP_SITES + 1), (TOP_SITES, TOP_SITES + 1)]
+        .into_iter()
+        .chain((2..TOP_SITES).rev().map(|index| (index, index + 1)))
+        .map(|(index, visits)| (format!("https://site{index}.test/"), visits as u64))
+        .collect();
+    assert_eq!(top, expected);
 }
 
 #[test]

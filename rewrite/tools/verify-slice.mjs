@@ -1017,9 +1017,10 @@ async function managerFocus(app, left, right) {
   const [x, y] = execFileSync(x11Driver, ['geometry', 'Flecha'], { encoding: 'utf8' })
     .trim().split(' ').map(Number);
 
-  // Tabs & Spaces, the second item in the Settings nav column beside the sidebar: General's
-  // highlight spans y 62-91 in the visual capture, and items sit 2px apart (ui/settings.css:56).
-  execFileSync(x11Driver, ['click', x + 360, y + 108]);
+  // Tabs & Spaces, the second item in the Settings nav column beside the sidebar: below the
+  // 28px search field and its 10px margin (ui/settings.css:1332-1333), General's highlight
+  // spans y 100-129 in the visual capture, and items sit 2px apart (ui/settings.css:56).
+  execFileSync(x11Driver, ['click', x + 360, y + 146]);
   // The selected Settings tab's accent (theme.rs accent_strong), Dark or Light: Theme::System
   // follows Xvfb's Light appearance.
   await captureUntil('tabs-spaces-manager', 'root', path => {

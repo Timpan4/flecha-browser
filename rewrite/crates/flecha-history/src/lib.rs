@@ -13,6 +13,11 @@ use url::Url;
 /// The number of entries requested per read by Flecha's History page.
 pub const PAGE: usize = 100;
 
+/// How many sites [`HistoryStore::top_sites`] returns: Chromium's `kTopSitesNumber`
+/// (`components/history/core/browser/top_sites_constants.h`), the size of the list
+/// `chrome.topSites.get` gave the shell's empty page.
+pub const TOP_SITES: usize = 10;
+
 const SCHEMA_VERSION: i32 = 1;
 const SCHEMA: &str = "
     CREATE TABLE urls (
@@ -271,6 +276,19 @@ impl HistoryStore {
     /// Returns up to `limit` recent matches with their visit counts for command-bar ranking.
     pub fn suggest(&self, text: &str, limit: usize) -> Result<Vec<HistoryEntry>, HistoryError> {
         self.find(text, limit, 0)
+    }
+
+    /// The pages visited most, for the empty page's "Jump back in": up to [`TOP_SITES`] URLs,
+    /// the most visited first and the more recent of a tie first. The shell asked
+    /// `chrome.topSites`, whose most-visited list Chromium cuts at the same size.
+    pub fn top_sites(&self) -> Result<Vec<HistoryEntry>, HistoryError> {
+        let mut stmt = self.db.prepare_cached(
+            "SELECT url, title, visit_count, last_visit_ms FROM urls
+             ORDER BY visit_count DESC, last_visit_ms DESC, url LIMIT ?1",
+        )?;
+        stmt.query_map([TOP_SITES as i64], read_entry)?
+            .collect::<rusqlite::Result<_>>()
+            .map_err(HistoryError::from)
     }
 
     /// Removes the URL and all of its visits. Returns whether the URL existed.

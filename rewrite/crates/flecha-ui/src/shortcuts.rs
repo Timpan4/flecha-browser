@@ -3,6 +3,7 @@ use flecha_cef::{PageZoom, zoom_percentage};
 use flecha_core::{
     BrowserState, TabId, WindowId,
     shortcuts::{self, Keybindings, Platform},
+    suggestions::describe_environment,
 };
 use gpui::{
     ClickEvent, Context, FontWeight, InteractiveElement as _, IntoElement, KeyDownEvent, Keystroke,
@@ -70,6 +71,9 @@ pub(crate) enum Shortcut {
     SelectSpace(usize),
     NewSpace,
     ExitSplit,
+    /// The shown page on its project's next environment (`nextEnvironment` in
+    /// chromium/shell/features.ts:108-115).
+    NextEnvironment,
     // The command bar's actions without a key of their own.
     EditSpace,
     Archive,
@@ -211,6 +215,7 @@ pub(crate) fn shortcut_for_id(id: &str) -> Option<Shortcut> {
         "newSpace" => Shortcut::NewSpace,
         "exitSplit" => Shortcut::ExitSplit,
         "viewSource" => Shortcut::ViewSource,
+        "nextEnvironment" => Shortcut::NextEnvironment,
         id => {
             if let Some(number) = id.strip_prefix("selectSpace:") {
                 return Some(Shortcut::SelectSpace(
@@ -656,6 +661,10 @@ impl Shell {
             }
             Shortcut::ClearToday => Action::ClearToday,
             Shortcut::ExitSplit => Action::ExitSplit,
+            Shortcut::NextEnvironment => match shown.next_environment.clone() {
+                Some(url) => Action::Navigate(url),
+                None => return false,
+            },
             Shortcut::StepSpace(back) => {
                 let count = shown.spaces.len();
                 let Some(index) = shown.spaces.iter().position(|id| *id == shown.space) else {
@@ -696,6 +705,8 @@ pub(crate) struct ShownWindow {
     space: flecha_core::SpaceId,
     spaces: Vec<flecha_core::SpaceId>,
     split: bool,
+    /// The shown page on its project's next environment, when it is on one.
+    next_environment: Option<String>,
 }
 
 impl ShownWindow {
@@ -725,6 +736,14 @@ impl ShownWindow {
             space: current.active_space_id.clone(),
             spaces: core.spaces().iter().map(|space| space.id.clone()).collect(),
             split: current.visible_tabs().len() > 1,
+            next_environment: shown.and_then(|tab| {
+                let environments = &state.model.core.settings.environments;
+                describe_environment(&tab.url, environments)?
+                    .switches
+                    .into_iter()
+                    .next()
+                    .map(|switch| switch.url)
+            }),
         })
     }
 
@@ -749,6 +768,7 @@ impl ShownWindow {
             | Shortcut::DevTools => self.tab.is_some(),
             Shortcut::ViewSource => self.web_page,
             Shortcut::ExitSplit => self.split,
+            Shortcut::NextEnvironment => self.next_environment.is_some(),
             _ => true,
         }
     }

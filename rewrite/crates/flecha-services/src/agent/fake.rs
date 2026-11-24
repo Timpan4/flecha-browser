@@ -48,6 +48,8 @@ pub struct FakeStats {
     pub probed: Mutex<BTreeSet<String>>,
     /// Engine calls dropped before they finished, as when a deadline passes.
     pub dropped: AtomicU64,
+    /// What each tool told the sidebar it was doing, oldest first.
+    pub activity: Mutex<Vec<(Option<TabId>, String)>>,
 }
 
 pub struct FakeBrowser {
@@ -164,6 +166,14 @@ impl Drop for CountDrop<'_> {
 }
 
 impl BrowserControl for FakeBrowser {
+    fn activity(&self, tab: Option<&TabId>, action: &str) {
+        self.stats
+            .activity
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .push((tab.cloned(), action.to_owned()));
+    }
+
     async fn list_tabs(&self) -> ToolResult<Vec<AgentTab>> {
         Ok(state::list_tabs(&self.state()))
     }

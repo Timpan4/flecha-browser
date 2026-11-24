@@ -154,6 +154,10 @@ pub enum Evaluated {
 /// The server calls these from its own runtime thread and drops a future when the tool's
 /// deadline passes or the client goes away; a backend must stop the work it stands for then.
 pub trait BrowserControl: Send + Sync + 'static {
+    /// Told what a tool is about to do ("reading the page"), on `tab` when it names one, so the
+    /// sidebar can show it (`showActivity` in `chromium/shell/nativeHost.ts`).
+    fn activity(&self, _tab: Option<&TabId>, _action: &str) {}
+
     fn list_tabs(&self) -> impl Future<Output = ToolResult<Vec<AgentTab>>> + Send;
 
     /// Opens `input` (command-bar text) as a background Today tab in the focused window's

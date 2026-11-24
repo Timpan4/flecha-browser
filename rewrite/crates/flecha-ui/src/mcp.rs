@@ -13,7 +13,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::Path;
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -57,9 +57,33 @@ pub(crate) fn token_path(profile: &Path) -> std::path::PathBuf {
     profile.join(TOKEN_FILE)
 }
 
+/// `agentActivity` in `nativeHost.ts`: an agent counts as connected this long after its last
+/// tool call ...
+const CONNECTED: Duration = Duration::from_millis(60_000);
+/// ... and as busy for this long.
+const BUSY: Duration = Duration::from_millis(3_500);
+
 /// The server's side of the bridge.
 #[derive(Clone)]
-pub(crate) struct Bridge(mpsc::Sender<Request>);
+pub(crate) struct Bridge {
+    requests: mpsc::Sender<Request>,
+    activity: Arc<Mutex<Option<Activity>>>,
+}
+
+/// The last thing an agent did (`activity` in `nativeHost.ts`).
+struct Activity {
+    at: Instant,
+    tab: Option<TabId>,
+    action: String,
+}
+
+/// What the sidebar shows of a connected agent (`UiState.agent`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AgentStatus {
+    pub(crate) busy: bool,
+    pub(crate) action: String,
+    pub(crate) tab: Option<TabId>,
+}
 
 pub(crate) struct Request {
     op: Op,
@@ -114,7 +138,9 @@ fn unexpected() -> ToolError {
 impl Bridge {
     async fn ask(&self, op: Op) -> ToolResult<Reply> {
         let (reply, answer) = oneshot::channel();
-        self.0.send(Request { op, reply }).map_err(|_| closing())?;
+        self.requests
+            .send(Request { op, reply })
+            .map_err(|_| closing())?;
         answer.await.map_err(|_| closing())?
     }
 
@@ -294,6 +320,14 @@ fn key_events(key: &str) -> (Value, Value) {
 }
 
 impl BrowserControl for Bridge {
+    fn activity(&self, tab: Option<&TabId>, action: &str) {
+        *self.activity.lock().unwrap_or_else(|err| err.into_inner()) = Some(Activity {
+            at: Instant::now(),
+            tab: tab.cloned(),
+            action: action.to_owned(),
+        });
+    }
+
     async fn list_tabs(&self) -> ToolResult<Vec<AgentTab>> {
         match self.ask(Op::ListTabs).await? {
             Reply::Tabs(tabs) => Ok(tabs),
@@ -507,18 +541,31 @@ pub(crate) struct Agents {
     waiting: Vec<Request>,
     calls: BTreeMap<i32, Call>,
     attached: BTreeMap<TabId, Attached>,
+    /// The profile's token, opened once and kept across a stop and a start: a second
+    /// `AgentToken` on the same file would accept only the token it last wrote.
+    token: Option<Arc<AgentToken>>,
+    /// Why the bridge last failed to start, for Settings (`hostError` in the shell).
+    error: Option<String>,
+    /// The status the windows last drew.
+    shown: Option<AgentStatus>,
 }
 
 impl Default for Agents {
     fn default() -> Self {
-        let (sender, requests) = mpsc::channel();
+        let (requests, receiver) = mpsc::channel();
         Self {
-            bridge: Bridge(sender),
-            requests,
+            bridge: Bridge {
+                requests,
+                activity: Arc::default(),
+            },
+            requests: receiver,
             server: None,
             waiting: Vec::new(),
             calls: BTreeMap::new(),
             attached: BTreeMap::new(),
+            token: None,
+            error: None,
+            shown: None,
         }
     }
 }
@@ -526,10 +573,25 @@ impl Default for Agents {
 impl Agents {
     /// Starts the loopback server with the profile's token.
     pub(crate) fn start(&mut self, profile: &Path) -> Result<()> {
-        let token = Arc::new(AgentToken::open(token_path(profile))?);
-        let server = AgentServer::start(Arc::new(self.bridge.clone()), token, DEFAULT_AGENT_PORT)?;
-        self.server = Some(server);
+        let started = self.open_token(profile).and_then(|token| {
+            Ok(AgentServer::start(
+                Arc::new(self.bridge.clone()),
+                token,
+                DEFAULT_AGENT_PORT,
+            )?)
+        });
+        self.error = started.as_ref().err().map(|error| format!("{error:#}"));
+        self.server = Some(started?);
         Ok(())
+    }
+
+    fn open_token(&mut self, profile: &Path) -> Result<Arc<AgentToken>> {
+        if let Some(token) = &self.token {
+            return Ok(token.clone());
+        }
+        let token = Arc::new(AgentToken::open(token_path(profile))?);
+        self.token = Some(token.clone());
+        Ok(token)
     }
 
     /// The address agents connect to while the server runs.
@@ -537,18 +599,82 @@ impl Agents {
         self.server.as_ref().map(AgentServer::endpoint)
     }
 
+    pub(crate) fn port(&self) -> Option<u16> {
+        self.server.as_ref().map(AgentServer::port)
+    }
+
+    /// Why the bridge couldn't start, while it is off for that reason.
+    pub(crate) fn error(&self) -> Option<&str> {
+        self.error.as_deref()
+    }
+
+    /// The bearer token agents send, while the server runs.
+    pub(crate) fn token(&self) -> Option<String> {
+        self.server.as_ref()?;
+        self.token.as_ref().map(|token| token.reveal())
+    }
+
+    /// Replaces the token; agents with the old one fail from their next request on.
+    pub(crate) fn renew_token(&self) -> std::io::Result<()> {
+        match &self.token {
+            Some(token) => token.renew(),
+            None => Ok(()),
+        }
+    }
+
     /// Stops the server and fails every request still open.
     pub(crate) fn stop(&mut self) {
+        self.shut_down(closing);
+    }
+
+    /// Stops the server because Settings turned agents off.
+    pub(crate) fn turn_off(&mut self) {
+        self.shut_down(|| ToolError("Coding agents were turned off in Flecha's Settings".into()));
+        self.error = None;
+    }
+
+    fn shut_down(&mut self, error: fn() -> ToolError) {
         if let Some(server) = self.server.take() {
             server.stop();
         }
         for request in self.waiting.drain(..).chain(self.requests.try_iter()) {
-            let _ = request.reply.send(Err(closing()));
+            let _ = request.reply.send(Err(error()));
         }
         for (_, call) in std::mem::take(&mut self.calls) {
-            call.kind.fail(closing());
+            call.kind.fail(error());
         }
         self.attached.clear();
+        *self
+            .bridge
+            .activity
+            .lock()
+            .unwrap_or_else(|err| err.into_inner()) = None;
+    }
+
+    /// What a connected agent is doing, for the sidebar: connected for [`CONNECTED`] after its
+    /// last call and busy for [`BUSY`].
+    pub(crate) fn status(&self, now: Instant) -> Option<AgentStatus> {
+        let activity = self
+            .bridge
+            .activity
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let activity = activity.as_ref()?;
+        let since = now.saturating_duration_since(activity.at);
+        (since < CONNECTED).then(|| AgentStatus {
+            busy: since < BUSY,
+            action: activity.action.clone(),
+            tab: activity.tab.clone(),
+        })
+    }
+
+    /// Whether the status changed since the windows last drew it, so they redraw as an agent
+    /// starts, settles and goes quiet.
+    pub(crate) fn status_changed(&mut self, now: Instant) -> bool {
+        let status = self.status(now);
+        let changed = status != self.shown;
+        self.shown = status;
+        changed
     }
 
     /// Whether an agent used the tab within `DEBUG_IDLE`, so tab sleep leaves it be.
@@ -698,6 +824,33 @@ impl Op {
 }
 
 impl Controller {
+    /// Starts or stops the bridge as Settings → Coding Agents asks (`syncAgent` in
+    /// `nativeHost.ts`). Agents reach a desktop launch only: --verify and the isolated launcher
+    /// keep the profile closed to them. A bridge that can't start leaves the browser working,
+    /// and Settings says why.
+    pub(crate) fn sync_agents(&mut self) {
+        let wanted = !self.isolated && !self.quitting && self.model.core.settings.agents_enabled();
+        let running = self.agents.endpoint().is_some();
+        if wanted && !running {
+            match self.agents.start(&self.profile) {
+                Ok(()) => eprintln!(
+                    "agent bridge: {} (bearer token in {})",
+                    self.agents.endpoint().unwrap_or_default(),
+                    token_path(&self.profile).display()
+                ),
+                Err(error) => eprintln!("agent bridge: could not start: {error:#}"),
+            }
+        } else if !wanted && (running || self.agents.error().is_some()) {
+            self.agents.turn_off();
+            if running {
+                eprintln!("agent bridge: stopped");
+            }
+        }
+        if let Some(watch) = self.local_watch.get() {
+            watch.exclude(self.agents.port());
+        }
+    }
+
     /// Serves the bridge's requests and fails calls whose page closed. Returns whether the
     /// windows need redrawing.
     pub(crate) fn serve_agents(&mut self) -> bool {
@@ -1442,6 +1595,55 @@ mod tests {
         .unwrap();
         assert_eq!(controller.agents.endpoint(), None);
         assert!(!token_path(verify.path()).exists());
+    }
+
+    #[test]
+    fn the_settings_switch_runs_the_bridge_and_a_new_token_locks_out_the_old_one() {
+        let profile = tempfile::tempdir().unwrap();
+        let (mut controller, _) = controller(&profile);
+        // As a desktop launch: the test profile is otherwise isolated.
+        controller.isolated = false;
+        controller.sync_agents();
+        assert_eq!(
+            controller.agents.endpoint(),
+            None,
+            "agents are off by default"
+        );
+        assert_eq!(controller.agents.token(), None);
+
+        let enable = |controller: &mut Controller, enabled| {
+            controller
+                .edit_settings(|settings| {
+                    settings.agent = Some(flecha_core::AgentPreference { enabled });
+                    Ok(())
+                })
+                .unwrap();
+        };
+        enable(&mut controller, true);
+        let port = controller
+            .agents
+            .port()
+            .expect("the switch started the bridge");
+        let old = controller.agents.token().unwrap();
+        assert!(http(port, Some(&format!("Bearer {old}"))).starts_with("HTTP/1.1 200"));
+
+        controller.agents.renew_token().unwrap();
+        let new = controller.agents.token().unwrap();
+        assert_ne!(new, old);
+        assert!(http(port, Some(&format!("Bearer {old}"))).starts_with("HTTP/1.1 401"));
+        assert!(http(port, Some(&format!("Bearer {new}"))).starts_with("HTTP/1.1 200"));
+
+        enable(&mut controller, false);
+        assert_eq!(controller.agents.endpoint(), None);
+        assert_eq!(
+            controller.agents.token(),
+            None,
+            "Settings shows no token while off"
+        );
+        assert!(
+            TcpStream::connect(("127.0.0.1", port)).is_err(),
+            "the switch left the server listening"
+        );
     }
 
     fn http(port: u16, authorization: Option<&str>) -> String {

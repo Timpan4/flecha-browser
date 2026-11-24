@@ -1,9 +1,13 @@
+#[path = "settings_agents.rs"]
+mod agents;
 #[path = "settings_boosts.rs"]
 mod boosts;
 #[path = "settings_general.rs"]
 mod general;
 #[path = "settings_import.rs"]
 mod import;
+#[path = "settings_search.rs"]
+mod search;
 #[path = "settings_shortcuts.rs"]
 mod shortcuts;
 #[path = "settings_tabs.rs"]
@@ -15,8 +19,9 @@ use anyhow::Result;
 use flecha_core::Settings;
 use gpui::{
     ClickEvent, Context, Div, FontWeight, InteractiveElement as _, Keystroke, Modifiers,
-    ParentElement as _, ScrollHandle, StatefulInteractiveElement as _, Styled as _, Window, div,
-    linear_color_stop, linear_gradient, prelude::FluentBuilder as _, px,
+    MouseButton, MouseDownEvent, ParentElement as _, ScrollHandle, StatefulInteractiveElement as _,
+    Styled as _, Task, Window, div, linear_color_stop, linear_gradient,
+    prelude::FluentBuilder as _, px,
 };
 
 use crate::Controller;
@@ -24,7 +29,8 @@ use crate::icons::icon;
 use crate::text_field::TextField;
 use crate::theme::palette;
 use crate::tokens;
-use crate::view::{Overlay, Shell, text_button};
+use crate::view::{Overlay, Shell, hairline, ring, text_button};
+use tabs::primary;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SettingsTab {
@@ -33,6 +39,7 @@ pub(crate) enum SettingsTab {
     Boosts,
     Import,
     TabsSpaces,
+    Agents,
 }
 
 impl SettingsTab {
@@ -43,9 +50,36 @@ impl SettingsTab {
             Self::Boosts => "Boosts",
             Self::Import => "Import",
             Self::TabsSpaces => "Tabs & Spaces",
+            Self::Agents => "Coding Agents",
         }
     }
 }
+
+/// A pane in the list, with the icon and colour it has there.
+type Pane = (SettingsTab, &'static str, &'static str);
+
+/// The panes in the order and under the headings of settings.html:20-37.
+const NAV: [(Option<&str>, &[Pane]); 3] = [
+    (
+        None,
+        &[
+            (SettingsTab::General, "settings", "gray"),
+            (SettingsTab::TabsSpaces, "stack", "indigo"),
+            (SettingsTab::Import, "import", "teal"),
+        ],
+    ),
+    (
+        Some("Developer"),
+        &[
+            (SettingsTab::Boosts, "zap", "orange"),
+            (SettingsTab::Agents, "sparkle", "purple"),
+        ],
+    ),
+    (
+        Some("Help"),
+        &[(SettingsTab::Shortcuts, "keyboard", "gray")],
+    ),
+];
 
 pub(crate) struct SettingsPanel {
     tab: SettingsTab,
@@ -55,6 +89,11 @@ pub(crate) struct SettingsPanel {
     manager: tabs::Manager,
     scroll: ScrollHandle,
     message: Option<(String, bool)>,
+    /// What Settings search looks for; its results replace the pane while it has words.
+    search: TextField,
+    search_focused: bool,
+    /// The setup a Coding Agents button copied, until it says so for long enough.
+    copied: Option<(agents::Setup, Task<()>)>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -98,10 +137,27 @@ impl SettingsPanel {
             manager: tabs::Manager::default(),
             scroll: ScrollHandle::new(),
             message: None,
+            search: TextField::default(),
+            search_focused: false,
+            copied: None,
         }
     }
 
+    fn searching(&self) -> bool {
+        !self.search.text().trim().is_empty()
+    }
+
+    fn focus_search(&mut self) {
+        self.search = TextField::new(self.search.text().to_owned(), true);
+        self.search_focused = true;
+        self.field = None;
+        self.manager.blur_search();
+    }
+
+    /// Shows `tab`, leaving search as choosing a result or a pane does (ui/settings.ts:155-163).
     fn select(&mut self, tab: SettingsTab) {
+        self.search = TextField::default();
+        self.search_focused = false;
         if self.tab != tab {
             self.tab = tab;
             self.field = None;
@@ -121,6 +177,7 @@ impl SettingsPanel {
             TextField::new(text, true)
         };
         self.field = Some(Draft { field, text });
+        self.search_focused = false;
         self.message = None;
     }
 
@@ -157,11 +214,15 @@ impl Controller {
             || previous.ad_block_allowed != current.ad_block_allowed;
         let downloads_changed = previous.downloads_folder != current.downloads_folder
             || previous.ask_where_to_save != current.ask_where_to_save;
+        let agents_changed = previous.agents_enabled() != current.agents_enabled();
         if adblock_changed {
             self.sync_adblock();
         }
         if downloads_changed {
             self.sync_download_config();
+        }
+        if agents_changed {
+            self.sync_agents();
         }
     }
 }
@@ -172,10 +233,45 @@ impl Shell {
         stroke: &Keystroke,
         cx: &mut Context<Self>,
     ) -> bool {
+        let state = self.state.clone();
         let Some(panel) = self.settings_mut() else {
             return false;
         };
-        if panel.tab == SettingsTab::TabsSpaces && panel.manager.before_shortcuts(stroke) {
+        let plain = stroke.modifiers == Modifiers::none();
+        if panel.search_focused {
+            match stroke.key.as_str() {
+                // Escape empties the search and shows the pane again (ui/settings.ts:168-172);
+                // with nothing typed it closes Settings as before.
+                "escape" if plain && !panel.search.text().is_empty() => {
+                    panel.search = TextField::default();
+                }
+                // Enter opens the first result (ui/settings.ts:167).
+                "enter" if plain => {
+                    let bindings = &state.borrow().model.core.settings.keybindings;
+                    if let Some(hit) = search::find(panel.search.text(), bindings).first() {
+                        panel.select(hit.tab);
+                    }
+                }
+                _ => return false,
+            }
+            cx.notify();
+            return true;
+        }
+        // Ctrl+F finds a setting, except on Tabs & Spaces where it searches the tabs
+        // (ui/settings.ts:175-181).
+        let find = stroke.key == "f"
+            && primary(stroke.modifiers)
+            && !stroke.modifiers.alt
+            && !stroke.modifiers.shift;
+        if find && (panel.tab != SettingsTab::TabsSpaces || panel.searching()) {
+            panel.focus_search();
+            cx.notify();
+            return true;
+        }
+        if panel.tab == SettingsTab::TabsSpaces
+            && !panel.searching()
+            && panel.manager.before_shortcuts(stroke)
+        {
             cx.notify();
             return true;
         }
@@ -217,6 +313,14 @@ impl Shell {
         let Some(panel) = self.settings_mut() else {
             return;
         };
+        if panel.search_focused {
+            panel.search.key(stroke, cx);
+            cx.notify();
+            return;
+        }
+        if panel.searching() {
+            return;
+        }
         if panel.tab == SettingsTab::TabsSpaces {
             self.tabs_settings_key(stroke, cx);
             return;
@@ -264,24 +368,12 @@ impl Shell {
     /// panes on the left and the shown pane's cards on `--pane-bg`.
     pub(crate) fn settings_panel(&self, panel: &SettingsPanel, cx: &Context<Self>) -> Div {
         let palette = palette();
-        // The panes in the order and under the headings of settings.html:19-34, with the icon
-        // and colour each has there.
-        type Pane = (SettingsTab, &'static str, &'static str);
-        let groups: [(Option<&'static str>, &[Pane]); 3] = [
-            (
-                None,
-                &[
-                    (SettingsTab::General, "settings", "gray"),
-                    (SettingsTab::TabsSpaces, "stack", "indigo"),
-                    (SettingsTab::Import, "import", "teal"),
-                ],
-            ),
-            (Some("Developer"), &[(SettingsTab::Boosts, "zap", "orange")]),
-            (
-                Some("Help"),
-                &[(SettingsTab::Shortcuts, "keyboard", "gray")],
-            ),
-        ];
+        let matches = panel.searching().then(|| {
+            search::find(
+                panel.search.text(),
+                &self.state.borrow().model.core.settings.keybindings,
+            )
+        });
         let mut nav = div()
             .id("settings-nav")
             .flex()
@@ -296,8 +388,9 @@ impl Shell {
             .pb(px(tokens::SETTINGS_NAV_PAD_BOTTOM))
             .rounded_l(px(tokens::PAGE_RADIUS))
             .bg(palette.surface)
-            .child(div().flex_none().h(px(tokens::SETTINGS_TITLEBAR)));
-        for (heading, tabs) in groups {
+            .child(div().flex_none().h(px(tokens::SETTINGS_TITLEBAR)))
+            .child(nav_search(panel, cx));
+        for (heading, tabs) in NAV {
             if let Some(heading) = heading {
                 nav = nav.child(
                     div()
@@ -311,15 +404,34 @@ impl Shell {
                 );
             }
             for &(tab, glyph, tint) in tabs {
-                nav = nav.child(nav_item(tab, glyph, tint, tab == panel.tab, cx));
+                // While searching no pane is selected, and panes without a match fade
+                // (ui/settings.ts:112-116).
+                let item = match &matches {
+                    Some(matches) => nav_item(tab, glyph, tint, false, cx)
+                        .when(!matches.iter().any(|hit| hit.tab == tab), |item| {
+                            item.opacity(tokens::NAV_NO_MATCH_OPACITY)
+                        }),
+                    None => nav_item(tab, glyph, tint, tab == panel.tab, cx),
+                };
+                nav = nav.child(item);
             }
         }
-        let content = match panel.tab {
-            SettingsTab::General => self.general_settings(panel, cx),
-            SettingsTab::Shortcuts => self.shortcut_settings(panel, cx),
-            SettingsTab::Boosts => self.boosts_settings(panel, cx),
-            SettingsTab::Import => self.import_settings(panel, cx),
-            SettingsTab::TabsSpaces => self.tabs_settings(panel, cx),
+        let (title, content) = match &matches {
+            Some(matches) => (
+                "Search",
+                self.search_results(panel.search.text(), matches, cx),
+            ),
+            None => (
+                panel.tab.label(),
+                match panel.tab {
+                    SettingsTab::General => self.general_settings(panel, cx),
+                    SettingsTab::Shortcuts => self.shortcut_settings(panel, cx),
+                    SettingsTab::Boosts => self.boosts_settings(panel, cx),
+                    SettingsTab::Import => self.import_settings(panel, cx),
+                    SettingsTab::TabsSpaces => self.tabs_settings(panel, cx),
+                    SettingsTab::Agents => self.agent_settings(panel, cx),
+                },
+            ),
         };
         div()
             .flex()
@@ -351,7 +463,7 @@ impl Shell {
                                 div()
                                     .text_size(px(tokens::TEXT_LG))
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .child(panel.tab.label()),
+                                    .child(title),
                             )
                             .child(text_button("settings-close", "Close").on_click(cx.listener(
                                 |this, _: &ClickEvent, window, cx| this.dismiss_overlay(window, cx),
@@ -378,6 +490,18 @@ impl Shell {
                             .min_h_0()
                             .overflow_y_scroll()
                             .track_scroll(&panel.scroll)
+                            // A press on the pane takes typing away from the search field.
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                                    if let Some(panel) = this.settings_mut()
+                                        && panel.search_focused
+                                    {
+                                        panel.search_focused = false;
+                                        cx.notify();
+                                    }
+                                }),
+                            )
                             .pt(px(tokens::SETTINGS_PANE_PAD_TOP))
                             .px(px(tokens::SETTINGS_PANE_PAD_X))
                             .pb(px(tokens::SETTINGS_PANE_PAD_BOTTOM))
@@ -396,7 +520,6 @@ fn nav_item(
     cx: &Context<Shell>,
 ) -> gpui::Stateful<Div> {
     let palette = palette();
-    let stop = |end: &str| tokens::color(&format!(".nav-icon.{tint} {end}"), false);
     div()
         .id(tab.label())
         .flex()
@@ -416,26 +539,7 @@ fn nav_item(
                 item.hover(|item| item.bg(palette.fill_hover))
             }
         })
-        .child(
-            div()
-                .flex()
-                .flex_none()
-                .items_center()
-                .justify_center()
-                .size(px(tokens::SETTINGS_NAV_ICON))
-                .rounded(px(tokens::SETTINGS_NAV_ICON_RADIUS))
-                .bg(linear_gradient(
-                    180.,
-                    linear_color_stop(stop("top"), 0.),
-                    linear_color_stop(stop("bottom"), 1.),
-                ))
-                .shadow(tokens::shadow_nav_icon())
-                .child(icon(
-                    glyph,
-                    tokens::SETTINGS_NAV_GLYPH,
-                    tokens::color(".nav-icon color", false),
-                )),
-        )
+        .child(nav_icon(glyph, tint))
         .child(tab.label())
         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
             if let Some(panel) = this.settings_mut() {
@@ -443,6 +547,83 @@ fn nav_item(
                 cx.notify();
             }
         }))
+}
+
+/// A pane's coloured `.nav-icon` (ui/settings.css:94-131).
+fn nav_icon(glyph: &'static str, tint: &'static str) -> Div {
+    let stop = |end: &str| tokens::color(&format!(".nav-icon.{tint} {end}"), false);
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .size(px(tokens::SETTINGS_NAV_ICON))
+        .rounded(px(tokens::SETTINGS_NAV_ICON_RADIUS))
+        .bg(linear_gradient(
+            180.,
+            linear_color_stop(stop("top"), 0.),
+            linear_color_stop(stop("bottom"), 1.),
+        ))
+        .shadow(tokens::shadow_nav_icon())
+        .child(icon(
+            glyph,
+            tokens::SETTINGS_NAV_GLYPH,
+            tokens::color(".nav-icon color", false),
+        ))
+}
+
+/// `.nav-search` (ui/settings.css:1327-1358): the search field above the panes.
+fn nav_search(panel: &SettingsPanel, cx: &Context<Shell>) -> gpui::Stateful<Div> {
+    let palette = palette();
+    // GPUI paints a shadow under its element, so the focus ring sits on an opaque layer
+    // beneath the translucent fill instead of tinting it.
+    div()
+        .id("settings-search")
+        .flex_none()
+        .h(px(tokens::NAV_SEARCH))
+        .mb(px(tokens::NAV_SEARCH_BOTTOM))
+        .rounded(px(tokens::RADIUS_SM))
+        .bg(palette.surface)
+        .when(panel.search_focused, |field| {
+            field.shadow(vec![ring(palette.focus, tokens::FOCUS_RING)])
+        })
+        .cursor_text()
+        .child(
+            div()
+                .flex()
+                .size_full()
+                .items_center()
+                .gap(px(tokens::NAV_SEARCH_GAP))
+                .px(px(tokens::NAV_SEARCH_PAD))
+                .rounded(px(tokens::RADIUS_SM))
+                .bg(palette.fill_subtle)
+                .shadow(vec![hairline(palette.surface_line)])
+                .text_color(palette.text_3)
+                .child(icon("search", tokens::NAV_SEARCH_ICON, palette.text_3))
+                .child(panel.search.render_inline("Search", panel.search_focused)),
+        )
+        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+            if let Some(panel) = this.settings_mut()
+                && !panel.search_focused
+            {
+                panel.focus_search();
+                cx.notify();
+            }
+        }))
+}
+
+/// A `.card` (ui/settings.css:218-226).
+fn card() -> Div {
+    let palette = palette();
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(tokens::SETTINGS_ROW_PAD_Y))
+        .px(px(tokens::SETTINGS_ROW_PAD_X))
+        .py(px(tokens::SETTINGS_ROW_PAD_Y))
+        .rounded(px(tokens::RADIUS_LG))
+        .bg(palette.card)
+        .shadow(tokens::shadow_card(palette.dark))
 }
 
 fn row() -> Div {
@@ -456,24 +637,13 @@ fn row() -> Div {
 /// A group of settings on a `.card` (ui/settings.css:218-226), under its name in the style of
 /// `.nav-label` (ui/settings.css:66-72): the shipping panes put one topic on each card.
 fn section(label: &'static str) -> Div {
-    let palette = palette();
-    div()
-        .flex()
-        .flex_col()
-        .gap(px(tokens::SETTINGS_ROW_PAD_Y))
-        .mb(px(tokens::SETTINGS_CARD_GAP))
-        .px(px(tokens::SETTINGS_ROW_PAD_X))
-        .py(px(tokens::SETTINGS_ROW_PAD_Y))
-        .rounded(px(tokens::RADIUS_LG))
-        .bg(palette.card)
-        .shadow(tokens::shadow_card(palette.dark))
-        .child(
-            div()
-                .text_size(px(tokens::TEXT_XS))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(palette.text_3)
-                .child(label),
-        )
+    card().mb(px(tokens::SETTINGS_CARD_GAP)).child(
+        div()
+            .text_size(px(tokens::TEXT_XS))
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(palette().text_3)
+            .child(label),
+    )
 }
 
 /// `.row-text small` (ui/settings.css:264-270).

@@ -170,6 +170,11 @@ pub(crate) const COLORS: &[Css] = &[
     both(".nav-icon.teal bottom", SETTINGS, 438, "#1c97a8"),
     both(".nav-icon.indigo top", SETTINGS, 640, "#6f8cf0"),
     both(".nav-icon.indigo bottom", SETTINGS, 640, "#4a64d0"),
+    both(".nav-icon.amber top", SETTINGS, 123, "#f0b24a"),
+    both(".nav-icon.amber bottom", SETTINGS, 123, "#d98a12"),
+    both(".nav-icon.purple top", SETTINGS, 131, "#8f7cf0"),
+    both(".nav-icon.purple bottom", SETTINGS, 131, "#6d5bd0"),
+    both(".env-badge color", STYLES, 307, "#fff"),
     both(".nav-icon color", SETTINGS, 100, "#fff"),
     both(".switch::after background", SETTINGS, 345, "#fff"),
     both(
@@ -535,6 +540,90 @@ cited! {
     FLECHINHA_CTA_PAD_LEFT = 10., FLECHINHA: 329 "padding: 0 12px 0 10px";
     FLECHINHA_CTA_PAD_RIGHT = 12., FLECHINHA: 329 "padding: 0 12px 0 10px";
     FLECHINHA_ADDRESS_MARGIN = 6., FLECHINHA: 122 "margin: 0 6px";
+
+    // The environment badge, the agent's pill and folder, and "Running locally".
+    ENV_BADGE_PAD_Y = 1., STYLES: 302 "padding: 1px 6px";
+    ENV_BADGE_PAD_X = 6., STYLES: 302 "padding: 1px 6px";
+    ENV_BADGE_RADIUS = 4., STYLES: 303 "border-radius: 4px";
+    ENV_BADGE_TEXT = 10., STYLES: 304 "font: 700 10px / 16px var(--mono)";
+    ENV_BADGE_LINE = 16., STYLES: 304 "font: 700 10px / 16px var(--mono)";
+    AGENT_STATUS = 30., STYLES: 371 "height: 30px";
+    AGENT_STATUS_PAD = 10., STYLES: 372 "padding: 0 10px";
+    /// The agent's colour at this percentage behind its pill.
+    AGENT_STATUS_SHARE = 13., STYLES: 374 "color-mix(in srgb, var(--agent) 13%, transparent)";
+    AGENT_DOT = 7., STYLES: 392 "width: 7px";
+    /// The agent folder's guide in its colour at this percentage.
+    AGENT_GUIDE_SHARE = 40., STYLES: 845 "color-mix(in srgb, var(--agent) 40%, transparent)";
+    LOCAL_SERVER_ROW = 28., STYLES: 894 "height: 28px";
+    LIVE_DOT = 7., STYLES: 900 "width: 7px";
+    LIVE_DOT_MARGIN = 4., STYLES: 902 "margin: 0 4px";
+    LIVE_DOT_RING = 3., STYLES: 905 "box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 20%, transparent)";
+    LIVE_DOT_RING_SHARE = 20., STYLES: 905 "color-mix(in srgb, var(--green) 20%, transparent)";
+
+    // The empty page (ui/styles.css:1629-1820).
+    /// The Space's colour under this percentage of `--surface`.
+    EMPTY_SURFACE_SHARE = 72., STYLES: 1639 "color-mix(in srgb, var(--surface) 72%";
+    EMPTY_HAIRLINE = 0.5, STYLES: 1640 "box-shadow: 0 0 0 0.5px var(--line), var(--shadow-row)";
+    EMPTY_BODY = 560., STYLES: 1655 "width: min(560px, 100% - 48px)";
+    EMPTY_BODY_MARGIN = 48., STYLES: 1655 "width: min(560px, 100% - 48px)";
+    EMPTY_BODY_PAD_TOP = 48., STYLES: 1656 "padding: 48px 0 24px";
+    EMPTY_BODY_PAD_BOTTOM = 24., STYLES: 1656 "padding: 48px 0 24px";
+    EMPTY_SPACE_GAP = 6., STYLES: 1662 "gap: 6px";
+    EMPTY_SPACE_PAD_Y = 4., STYLES: 1663 "padding: 4px 10px";
+    EMPTY_SPACE_PAD_X = 10., STYLES: 1663 "padding: 4px 10px";
+    EMPTY_SPACE_EMOJI = 13., STYLES: 1673 "font-size: 13px";
+    EMPTY_TITLE_TOP = 14., STYLES: 1677 "margin: 14px 0 22px";
+    EMPTY_TITLE_BOTTOM = 22., STYLES: 1677 "margin: 14px 0 22px";
+    EMPTY_TITLE = 28., STYLES: 1678 "font-size: 28px";
+    EMPTY_TITLE_WEIGHT = 650., STYLES: 1679 "font-weight: 650";
+    EMPTY_SEARCH_GAP = 10., STYLES: 1686 "gap: 10px";
+    EMPTY_SEARCH = 48., STYLES: 1688 "height: 48px";
+    EMPTY_SEARCH_PAD_RIGHT = 12., STYLES: 1689 "padding: 0 12px 0 16px";
+    EMPTY_SEARCH_PAD_LEFT = 16., STYLES: 1689 "padding: 0 12px 0 16px";
+    EMPTY_SEARCH_RADIUS = 14., STYLES: 1690 "border-radius: 14px";
+    EMPTY_SEARCH_ICON = 18., STYLES: 1708 "width: 18px";
+    EMPTY_SECTION_TOP = 32., STYLES: 1714 "margin-top: 32px";
+    EMPTY_HEADER_PAD = 4., STYLES: 1722 "margin: 0 4px 10px";
+    EMPTY_HEADER_BOTTOM = 10., STYLES: 1722 "margin: 0 4px 10px";
+    EMPTY_HEADER_WEIGHT = 600., STYLES: 1724 "font-weight: 600";
+    TOP_SITE_COLUMNS = 4., STYLES: 1732 "grid-template-columns: repeat(4, 1fr)";
+    TOP_SITES_GAP = 8., STYLES: 1733 "gap: 8px";
+    TOP_SITE_GAP = 8., STYLES: 1740 "gap: 8px";
+    TOP_SITE_PAD_TOP = 14., STYLES: 1742 "padding: 14px 8px 10px";
+    TOP_SITE_PAD_X = 8., STYLES: 1742 "padding: 14px 8px 10px";
+    TOP_SITE_PAD_BOTTOM = 10., STYLES: 1742 "padding: 14px 8px 10px";
+    TOP_SITE_ICON = 44., STYLES: 1754 "width: 44px";
+    TOP_SITE_ICON_RADIUS = 12., STYLES: 1756 "border-radius: 12px";
+    TOP_SITE_FAVICON = 22., STYLES: 1762 "width: 22px";
+    TOP_SITE_FAVICON_RADIUS = 5., STYLES: 1764 "border-radius: 5px";
+    TOP_SITE_LETTER = 12., STYLES: 1765 "font-size: 12px";
+    LOCAL_CHIPS_GAP = 8., STYLES: 1780 "gap: 8px";
+    LOCAL_CHIP_GAP = 8., STYLES: 1786 "gap: 8px";
+    LOCAL_CHIP = 32., STYLES: 1787 "height: 32px";
+    LOCAL_CHIP_PAD = 12., STYLES: 1788 "padding: 0 12px";
+    EMPTY_HINTS_GAP_Y = 6., STYLES: 1810 "gap: 6px 18px";
+    EMPTY_HINTS_GAP_X = 18., STYLES: 1810 "gap: 6px 18px";
+    EMPTY_HINTS_PAD_TOP = 16., STYLES: 1811 "padding: 16px 24px 20px";
+    EMPTY_HINTS_PAD_X = 24., STYLES: 1811 "padding: 16px 24px 20px";
+    EMPTY_HINTS_PAD_BOTTOM = 20., STYLES: 1811 "padding: 16px 24px 20px";
+    EMPTY_HINT_GAP = 5., STYLES: 1819 "gap: 5px";
+
+    // Settings' search (ui/settings.css:1326-1420) and its lead paragraphs.
+    NAV_SEARCH_GAP = 6., SETTINGS: 1331 "gap: 6px";
+    NAV_SEARCH = 28., SETTINGS: 1332 "height: 28px";
+    NAV_SEARCH_BOTTOM = 10., SETTINGS: 1333 "margin: 0 0 10px";
+    NAV_SEARCH_PAD = 8., SETTINGS: 1334 "padding: 0 8px";
+    NAV_SEARCH_ICON = 13., SETTINGS: 1346 "width: 13px";
+    NAV_NO_MATCH_OPACITY = 0.35, SETTINGS: 1365 "opacity: 0.35";
+    SEARCH_RESULTS_GAP = 2., SETTINGS: 1371 "gap: 2px";
+    RESULT_GAP = 12., SETTINGS: 1381 "gap: 12px";
+    RESULT_PAD_Y = 8., SETTINGS: 1382 "padding: 8px 12px";
+    RESULT_PAD_X = 12., SETTINGS: 1382 "padding: 8px 12px";
+    NO_RESULTS_MARGIN = 40., SETTINGS: 1408 "margin: 40px 0";
+    LEAD_BOTTOM = 16., SETTINGS: 173 "margin: 0 0 16px";
+    LEAD_LINE_HEIGHT = 1.5, SETTINGS: 175 "line-height: 1.5";
+    MONO_SHARE = 0.92, SETTINGS: 188 "font-size: 0.92em";
+    SETTINGS_BUTTON_DISABLED_OPACITY = 0.45, SETTINGS: 303 "opacity: 0.45";
 
     // The page area the browser frame lays out (chromium/patches).
     PAGE_GAP = 8., FRAME_API: 69 "kFlechaGap = 8";

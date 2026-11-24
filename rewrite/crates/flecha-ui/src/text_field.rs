@@ -234,6 +234,26 @@ impl TextField {
         field.child(self.render_line(0..self.text.len()))
     }
 
+    /// The text alone, for a field whose box its owner draws, such as Settings' search: the
+    /// caret and selection show only while `focused`.
+    pub(crate) fn render_inline(&self, placeholder: &'static str, focused: bool) -> Div {
+        let field = div()
+            .flex()
+            .items_center()
+            .flex_1()
+            .min_w_0()
+            .overflow_hidden()
+            .whitespace_nowrap();
+        match (self.text.is_empty(), focused) {
+            (true, true) => field.child(caret()).child(placeholder),
+            (true, false) => field.child(placeholder),
+            (false, true) => field
+                .text_color(palette().text)
+                .child(self.render_line(0..self.text.len())),
+            (false, false) => field.text_color(palette().text).child(self.text.clone()),
+        }
+    }
+
     fn render_line(&self, line: Range<usize>) -> Div {
         let selection = self.selection();
         let start = selection.start.clamp(line.start, line.end);

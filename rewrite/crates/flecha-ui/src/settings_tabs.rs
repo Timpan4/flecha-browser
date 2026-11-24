@@ -266,6 +266,10 @@ impl Manager {
         self.menu = Menu::None;
     }
 
+    pub(super) fn blur_search(&mut self) {
+        self.search_focused = false;
+    }
+
     pub(super) fn before_shortcuts(&mut self, stroke: &Keystroke) -> bool {
         match stroke.key.as_str() {
             "f" if primary(stroke.modifiers)
@@ -341,7 +345,7 @@ impl Manager {
     }
 }
 
-fn primary(modifiers: Modifiers) -> bool {
+pub(super) fn primary(modifiers: Modifiers) -> bool {
     if cfg!(target_os = "macos") {
         modifiers.platform
     } else {
@@ -485,6 +489,7 @@ impl Shell {
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                 if let Some(panel) = this.settings_mut() {
                     panel.manager.focus_search();
+                    panel.search_focused = false;
                     cx.notify();
                 }
             }));
