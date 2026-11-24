@@ -385,6 +385,7 @@ fn snapshot(state: &Controller) -> Result<Value> {
         })),
         "contexts": state.engine.context_partitions().map(partition).collect::<Vec<_>>(),
         "downloads": state.windows.keys().map(|window| (window.as_str().to_owned(), json!(state.download_rows(window)))).collect::<serde_json::Map<_, _>>(),
+        "status": state.status.text(None),
         "downloadPathPrompts": state.downloads.path_prompts().into_iter().map(|(name, reason)| json!({ "name": name, "reason": format!("{reason:?}") })).collect::<Vec<_>>(),
         "liveBrowsers": state.engine.live_browsers(),
         "nativeWindows": state.windows.keys().collect::<Vec<_>>(),
@@ -443,6 +444,27 @@ fn reply(seq: u64, result: Result<Value>) {
         Ok(result) => json!({ "type": "reply", "seq": seq, "result": result }),
         Err(error) => json!({ "type": "reply", "seq": seq, "error": error.to_string() }),
     });
+}
+
+/// A window's overlay opened or went, as `kind`.
+pub(crate) fn overlay(state: &Controller, window: &WindowId, kind: &str) {
+    if state.verify {
+        emit(json!({ "type": "overlay", "window": window, "overlay": kind }));
+    }
+}
+
+/// A page asked for its menu while `overlay` was open or another page had the keyboard.
+pub(crate) fn context_menu_refused(
+    state: &Controller,
+    window: &WindowId,
+    overlay: &str,
+    active: bool,
+) {
+    if state.verify {
+        emit(
+            json!({ "type": "context_menu_refused", "window": window, "overlay": overlay, "active": active }),
+        );
+    }
 }
 
 fn emit(value: Value) {

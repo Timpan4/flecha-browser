@@ -2507,6 +2507,8 @@ async function surfaces(app) {
   });
 
   assert(Math.abs(dragged - (0.5 + 100 / room)) < 0.01, `saved share ${dragged}`);
+  // The frame drawn after the release, without the drag's layer, is the one the clicks hit.
+  await app.present();
   execFileSync(x11Driver, ['click', divider(dragged), middle]);
   execFileSync(x11Driver, ['click', divider(dragged), middle]);
   await poll('a double click to even the panes', async () => await ratio() === 0.5);
@@ -2530,11 +2532,15 @@ async function surfaces(app) {
       const label = `phone-${probes++}`;
       const reply = site.probe(label, stepTimeoutMs);
       reply.catch(() => {});
-      await app.command('script', {
+
+      // The reload replaces the main frame, so a probe can find none for a moment.
+      const { error } = await app.attempt('script', {
         tab: mirror,
         source: `fetch('/probe/${label}?value=' + encodeURIComponent(JSON.stringify([navigator.userAgent, navigator.maxTouchPoints, screen.width])))`,
       });
-      const value = await reply.catch(() => 'no answer');
+
+      assert(!error || /missing CEF main frame/.test(error), error);
+      const value = error ?? await reply.catch(() => 'no answer');
 
       if (/Mobile/.test(value) && JSON.parse(value)[1] > 0 && JSON.parse(value)[2] === 393) return;
 
@@ -2614,11 +2620,14 @@ async function surfaces(app) {
   await app.wait('CEF paint of the menu targets', event => event.type === 'paint' && event.tab === desktop, painted);
   const page = (left, top) => [pageLeft + left, y + 8 + top];
 
+  // GPUI hit-tests a click against the frame it last drew, so a click waits for the frame that
+  // shows the previous command's outcome; a closed panel's backdrop would take it otherwise.
   const menuOn = async (name, [px, py]) => {
+    await app.present();
     execFileSync(x11Driver, ['right-click', px, py]);
     await app.present();
     await captureUntil(name, 'root', path =>
-      surface.includes(pixelAt(path, px + 20, py + 12)) ? undefined : `no menu at ${px},${py}`);
+      surface.includes(pixelAt(path, px + 20, py + 12)) ? undefined : `no menu at ${px},${py}`, AbortSignal.timeout(stepTimeoutMs));
   };
 
   const beforeSplit = app.events.length;
@@ -2641,6 +2650,9 @@ async function surfaces(app) {
 
   await menuOn('page-menu-image', page(70, 190));
   await chooseRow('Copy image');
+  // The outcome shows on the status line, which shortens the page; the next menu waits for it.
+  await poll('Copy image to report its outcome', async () => (await app.command('snapshot')).status === 'Image copied');
+  await app.present();
   pass('the image menu offered Copy image and ran it (page-menu-image.png)');
 
   await app.command('script', {
@@ -2662,6 +2674,7 @@ async function surfaces(app) {
   pass(`the selection's Search row opened ${searched} in front`);
 
   // About Flecha from the window menu, which opens on the menu button's click.
+  await app.present();
   execFileSync(x11Driver, ['click', x + menuButton[0], y + menuButton[1]]);
   await app.present();
   await changed('about-flecha', async () => {

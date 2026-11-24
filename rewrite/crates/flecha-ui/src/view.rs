@@ -64,6 +64,27 @@ impl Overlay {
     pub(crate) fn is_open(&self) -> bool {
         !matches!(self, Self::None)
     }
+
+    /// The overlay's name in the verify harness's events.
+    pub(crate) fn kind(&self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Command(_) => "command",
+            Self::History(_) => "history",
+            Self::Settings(_) => "settings",
+            Self::Archive(_) => "archive",
+            Self::Folder(..) => "folder",
+            Self::Rename(..) => "rename",
+            Self::SpaceEditor(..) => "space_editor",
+            Self::DeleteSpace(_) => "delete_space",
+            Self::Downloads(_) => "downloads",
+            Self::SiteControls => "site_controls",
+            Self::ContextMenu(_) => "context_menu",
+            Self::Menu(_) => "menu",
+            Self::FlechinhaAddress(_) => "flechinha_address",
+            Self::About(_) => "about",
+        }
+    }
 }
 
 pub(crate) struct Shell {
@@ -197,6 +218,7 @@ impl Shell {
     ) {
         self.cancel_context_menu();
         self.overlay = overlay;
+        crate::verify::overlay(&self.state.borrow(), &self.id, self.overlay.kind());
         self.focus.focus(window, cx);
         let _ = self.sync_page_focus(window, cx);
         cx.notify();
@@ -212,6 +234,7 @@ impl Shell {
         if self.overlay.is_open() {
             self.cancel_context_menu();
             self.overlay = Overlay::None;
+            crate::verify::overlay(&self.state.borrow(), &self.id, self.overlay.kind());
             if self.selected_pane.is_some() {
                 self.page_focus.focus(window, cx);
             }
@@ -294,6 +317,7 @@ impl Shell {
         if menu_left {
             self.cancel_context_menu();
             self.overlay = Overlay::None;
+            crate::verify::overlay(&self.state.borrow(), &self.id, self.overlay.kind());
         }
         if self.selected_pane != selection || find_left || menu_left {
             self.selected_pane = selection;
@@ -534,6 +558,7 @@ impl Shell {
                         // The address field loses its focus to the page, and stops being edited.
                         if matches!(this.overlay, Overlay::FlechinhaAddress(_)) {
                             this.overlay = Overlay::None;
+                            crate::verify::overlay(&this.state.borrow(), &this.id, "none");
                             cx.notify();
                         }
                         this.page_focus.focus(window, cx);

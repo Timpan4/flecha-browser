@@ -304,7 +304,14 @@ impl Shell {
                 {
                     self.show_overlay(Overlay::ContextMenu(request), window, cx);
                 } else {
-                    self.state.borrow().engine.dismiss_context_menu(&request.id);
+                    let state = self.state.borrow();
+                    crate::verify::context_menu_refused(
+                        &state,
+                        &self.id,
+                        self.overlay.kind(),
+                        self.active_browser().as_ref() == Some(&request.id.key),
+                    );
+                    state.engine.dismiss_context_menu(&request.id);
                 }
             }
             ContextMenuEvent::Dismissed(id) => {
