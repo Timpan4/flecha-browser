@@ -1,6 +1,7 @@
 mod boosts;
 mod command_bar;
 mod downloads_view;
+mod fullscreen;
 mod history_view;
 mod incognito;
 mod model;
@@ -179,6 +180,7 @@ struct Controller {
     downloads: Downloads,
     permissions: PermissionStore,
     sleep: TabSleep,
+    fullscreen: fullscreen::PageFullscreen,
     toolbars: BTreeMap<WindowId, Toolbar>,
     pending_reloads: BTreeMap<i32, flecha_cef::BrowserKey>,
     store: StateStore,
@@ -270,6 +272,7 @@ impl Controller {
             downloads: Downloads::new(&profile, isolated),
             permissions: PermissionStore::open(&profile),
             sleep: TabSleep::new(Instant::now()),
+            fullscreen: fullscreen::PageFullscreen::default(),
             toolbars: BTreeMap::new(),
             pending_reloads: BTreeMap::new(),
             store,
@@ -723,8 +726,13 @@ impl Controller {
                 Event::LoadFailed { url, .. } => self.history.failed(id, &url),
                 Event::Closed => self.history.forget(id),
                 Event::Created(_) => {}
+                Event::Fullscreen(fullscreen) => {
+                    self.page_fullscreen(&message.key, fullscreen);
+                    changed = true;
+                }
             }
         }
+        changed |= self.sweep_fullscreen();
         changed |= self.finish_history();
         changed |= self.drain_downloads();
         changed |= self.poll_permissions();

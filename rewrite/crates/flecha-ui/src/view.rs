@@ -63,6 +63,9 @@ pub(crate) struct Shell {
     pub(crate) consumed_keys: BTreeSet<String>,
     images: BTreeMap<TabId, Vec<Arc<RenderImage>>>,
     title: String,
+    /// The window went native fullscreen for its page, so leaving page fullscreen undoes it.
+    /// Native fullscreen the user chose stays.
+    page_made_fullscreen: bool,
     _activation: Subscription,
 }
 
@@ -104,6 +107,7 @@ impl Shell {
                 consumed_keys: BTreeSet::new(),
                 images: BTreeMap::new(),
                 title: String::new(),
+                page_made_fullscreen: false,
                 _activation: activation,
             }
         })
@@ -212,6 +216,19 @@ impl Shell {
             self.focused_browser = focused.clone();
         }
         focused
+    }
+
+    /// Puts the window in native fullscreen while its page is in HTML fullscreen, and takes it
+    /// out afterwards unless the user had made it fullscreen first.
+    fn sync_native_fullscreen(&mut self, page_fullscreen: bool, window: &mut Window) {
+        if page_fullscreen {
+            if !self.page_made_fullscreen && !window.is_fullscreen() {
+                window.toggle_fullscreen();
+                self.page_made_fullscreen = true;
+            }
+        } else if std::mem::take(&mut self.page_made_fullscreen) && window.is_fullscreen() {
+            window.toggle_fullscreen();
+        }
     }
 
     pub(crate) fn page_key(
@@ -394,8 +411,23 @@ impl Render for Shell {
             .child(div().absolute().size_0().track_focus(&self.page_focus))
             .child(div().absolute().size_0().track_focus(&self.focus));
         let mut images = BTreeMap::new();
+        let fullscreen = self.state.borrow().fullscreen_pane(&self.id);
+        self.sync_native_fullscreen(fullscreen.is_some(), window);
         let state = self.state.borrow();
-        if let Some(popup) = state.model.popups.get(&self.id) {
+        if let Some((owner, tab)) = fullscreen.clone() {
+            let mut body = div().flex_1().min_h_0().relative().flex();
+            if let Some(core) = state.model.state(&self.id)
+                && let Some(current) = core.window(&self.id)
+                && crate::fullscreen::keeps_sidebar(
+                    &state.model.core.settings,
+                    core.sidebar_visible(&self.id),
+                )
+            {
+                body = body.child(self.sidebar(&state, current, cx));
+            }
+            let page = self.pane(owner, tab, &mut images, cx);
+            main = main.child(body.child(div().flex_1().min_w_0().min_h_0().child(page)));
+        } else if let Some(popup) = state.model.popups.get(&self.id) {
             main = main
                 .child(
                     div()
@@ -507,7 +539,7 @@ impl Render for Shell {
         if let Some(status) = state.status_for(&self.id) {
             main = main.child(div().p_2().child(status.to_owned()));
         }
-        if state.model.peeks.contains_key(&self.id) {
+        if fullscreen.is_none() && state.model.peeks.contains_key(&self.id) {
             main = main.child(
                 div()
                     .absolute()

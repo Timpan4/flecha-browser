@@ -362,6 +362,13 @@ impl Shell {
                 self.dismiss_overlay(window, cx);
                 return true;
             }
+            Shortcut::Escape if self.state.borrow().fullscreen_pane(&self.id).is_some() => {
+                let state = self.state.borrow();
+                if let Some((_, tab)) = state.fullscreen_pane(&self.id) {
+                    state.engine.exit_fullscreen(&tab);
+                }
+                return true;
+            }
             Shortcut::Escape if self.state.borrow().model.peeks.contains_key(&self.id) => {
                 Action::ClosePeek
             }

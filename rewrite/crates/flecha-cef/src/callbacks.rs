@@ -291,6 +291,12 @@ wrap_display_handler! {
                 self.slot.emit(Event::Title(title.to_string()));
             }
         }
+
+        fn on_fullscreen_mode_change(&self, _browser: Option<&mut Browser>, fullscreen: i32) {
+            if !self.slot.retired.get() {
+                self.slot.emit(Event::Fullscreen(fullscreen != 0));
+            }
+        }
     }
 }
 
