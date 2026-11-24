@@ -1361,18 +1361,7 @@ impl Shell {
                         .child(close),
                 );
             }
-            row.when(!selected && rows.active.is_some(), |row| {
-                let split = Action::Split(id.clone());
-                row.child(
-                    text_button(format!("split-{}", id.as_str()), "Split").on_click(cx.listener(
-                        move |this, _: &ClickEvent, _, cx| {
-                            dispatch(&this.state, &this.id, split.clone(), cx);
-                        },
-                    )),
-                )
-            })
-            .child(menu)
-            .child(close)
+            row.child(menu).child(close)
         })
         .when_some(rows.dragging, |row, source| {
             self.tab_row_drop(
