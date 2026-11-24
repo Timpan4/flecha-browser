@@ -172,6 +172,8 @@ pub struct Engine {
     /// The last page frame of tabs whose browser is reopening with CPU copies, shown
     /// until the new browser paints.
     retained: BTreeMap<TabId, flecha_surface::Frame>,
+    /// Set when pages closed for CPU copies, until the shell takes it.
+    reopened: bool,
 }
 
 impl Engine {
@@ -198,6 +200,7 @@ impl Engine {
             discarded: BTreeMap::new(),
             adblock_allowed: Vec::new(),
             retained: BTreeMap::new(),
+            reopened: false,
         }
     }
 
@@ -237,7 +240,16 @@ impl Engine {
         self.popups.compositor.reject_next_import();
     }
 
-    /// Reopens with CPU copies each page whose shared texture could not be imported.
+    /// Whether pages closed for CPU copies since the last call. The shell must draw them
+    /// again so its panes recreate their browsers, because the closed browsers' own
+    /// queued events no longer reach it.
+    pub fn take_reopened(&mut self) -> bool {
+        std::mem::take(&mut self.reopened)
+    }
+
+    /// Closes each page whose shared texture could not be imported, for the shell to
+    /// reopen with CPU copies. Runs only once the shell has every queued event, so a
+    /// popup's placement reaches it before its browser closes.
     fn reopen_failed_imports(&mut self) {
         let failed: Vec<_> = self
             .browsers
@@ -247,6 +259,7 @@ impl Engine {
                 Some((tab.clone(), error))
             })
             .collect();
+        self.reopened |= !failed.is_empty();
         for (tab, error) in failed {
             self.popups.compositor.turn_off(&format!("{error:#}"));
             let frame = self.browsers[&tab].slot.surface.borrow().view.clone();
@@ -704,9 +717,12 @@ impl Engine {
 
     pub fn next_event(&mut self) -> Option<BrowserEvent> {
         self.adopt_popups();
-        self.reopen_failed_imports();
         loop {
-            let message = self.events.borrow_mut().pop_front()?;
+            let next = self.events.borrow_mut().pop_front();
+            let Some(message) = next else {
+                self.reopen_failed_imports();
+                return None;
+            };
             if message.event == Event::Closed && self.closing.remove(&message.key) {
                 // Always finish a retired generation's shutdown bookkeeping.
                 if self.generations.current(&message.key.tab).is_none() {
@@ -927,6 +943,48 @@ mod tests {
                 .is_some_and(|frames| frames.view.is_some()),
             "the page goes blank until its new browser paints"
         );
+    }
+
+    #[test]
+    fn a_popup_whose_first_import_fails_is_placed_before_it_closes() {
+        let mut engine = Engine::new(PathBuf::new(), || TabId::new("popup"));
+        let (_opener, child) = opener_with_pending_popup(&mut engine);
+        let popup = TabId::new("popup");
+        let opened = popup::Opened {
+            url: "https://example.test/popup".into(),
+            disposition: popup::Disposition::Popup,
+            size: Some((480, 360)),
+        };
+        // CEF's order: OnBeforePopup, OnAfterCreated, then a first frame that fails.
+        child.emit(Event::Opened(opened.clone()));
+        assert!(!child.created(2));
+        child.shares_textures.set(true);
+        child
+            .import_failure
+            .replace(Some(anyhow::anyhow!("import failed")));
+
+        let mut events = Vec::new();
+        while let Some(message) = engine.next_event() {
+            if matches!(message.event, Event::Opened(_)) {
+                assert_eq!(message.key.tab, popup);
+                assert!(
+                    engine.opener(&popup).is_some(),
+                    "the shell cannot place a popup whose browser closed"
+                );
+            }
+            events.push(message.event);
+        }
+
+        assert_eq!(
+            events,
+            [Event::Created(1), Event::Opened(opened), Event::Created(2)]
+        );
+        assert!(
+            !engine.browsers.contains_key(&popup),
+            "the popup kept the browser that failed"
+        );
+        assert!(engine.take_reopened(), "the shell is not told to redraw");
+        assert!(!engine.take_reopened());
     }
 
     #[test]

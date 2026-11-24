@@ -664,6 +664,7 @@ impl Controller {
                 Event::Created(_) => {}
             }
         }
+        changed |= self.engine.take_reopened();
         changed |= self.finish_history();
         changed |= self.drain_downloads();
         changed |= self.poll_permissions();
