@@ -87,9 +87,36 @@ const statusPages = {
   </script>`],
 };
 
-const site = await fixture((path, response) => {
+// The partition check's icons: /partition-icon.png answers in the colour of the partition whose
+// cookie the request carries, one colour for each icon URL.
+const partitionColors = { r1: '#7B2FBE', i1: '#E8871E', i2: '#C21F8A', r2: '#2E6FD8', s1: '#1E9E5A' };
+
+const site = await fixture((path, response, request) => {
   if (path === '/icon.png') {
     response.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-store' }).end(solidPng(32, faviconColor));
+
+    return true;
+  }
+
+  const query = new URL(request.url, 'http://localhost').searchParams;
+
+  // Names the page's partition in a cookie, then declares that site's icon.
+  if (path === '/partition-icon') {
+    response.writeHead(200, {
+      'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store',
+      'Set-Cookie': `flecha_icon=${query.get('mark')}; Path=/`,
+    }).end(`<!doctype html><title>Flecha fixture /partition-icon</title>
+      <link rel="icon" href="/partition-icon.png?n=${query.get('n')}">`);
+
+    return true;
+  }
+
+  if (path === '/partition-icon.png') {
+    const mark = /(?:^|; )flecha_icon=([a-z])(?:;|$)/.exec(request.headers.cookie ?? '')?.[1];
+    const color = partitionColors[`${mark}${query.get('n')}`];
+
+    if (color) response.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-store' }).end(solidPng(32, color));
+    else response.writeHead(404).end();
 
     return true;
   }
@@ -1207,6 +1234,58 @@ async function tabStatus(app, main, left) {
   pass('the close button under the split mark closed the page');
 }
 
+
+// Each partition fetches its own copy of a site's icon, since the response can depend on that
+// partition's cookies: an icon one partition downloaded never shows in another. Each page names
+// its partition in a cookie, and the icon answers in that partition's colour.
+async function partitionIcons(app, main) {
+  const histogram = path => execFileSync('magick', [path, '-format', '%c', 'histogram:info:'], { encoding: 'utf8' });
+
+  const shows = (name, title, window, expected, foreign) => poll(`the ${title} window to draw ${name}`, async () => {
+    execFileSync(x11Driver, ['focus', title]);
+    await app.present(window);
+
+    const [x, y, width, height] = execFileSync(x11Driver, ['geometry', title], { encoding: 'utf8' })
+      .trim().split(' ').map(Number);
+
+    const full = join(out, `${name}-root.png`);
+    const cropped = join(out, `${name}.png`);
+    execFileSync('magick', ['import', '-window', 'root', full]);
+    execFileSync('magick', [full, '-crop', `${width}x${height}+${x}+${y}`, '+repage', cropped]);
+
+    // isolated-run.sh binds FLECHA_VISUAL_OUT here; the scratch directory goes when the run passes.
+    if (existsSync('/mnt/visual')) copyFileSync(cropped, join('/mnt/visual', `${name}.png`));
+
+    const colors = histogram(cropped);
+    assert(!colors.includes(foreign), `${name}: the ${title} window drew another partition's icon`);
+
+    return colors.includes(expected);
+  });
+
+  const page = (mark, n) => `${base}/partition-icon?mark=${mark}&n=${n}`;
+
+  await app.command('open', { url: page('r', 1), window: main });
+  await shows('partition-regular', 'Flecha', main, partitionColors.r1, partitionColors.i1);
+
+  const { window: incognito } = await openIncognito(app);
+
+  await app.command('open', { url: page('i', 1), window: incognito });
+  await shows('partition-incognito-after-regular', 'Flecha Incognito', incognito, partitionColors.i1, partitionColors.r1);
+  pass('an incognito tab fetched its own copy of an icon the regular partition had downloaded');
+
+  await app.command('open', { url: page('i', 2), window: incognito });
+  await shows('partition-incognito', 'Flecha Incognito', incognito, partitionColors.i2, partitionColors.r2);
+  await app.command('open', { url: page('r', 2), window: main });
+  await shows('partition-regular-after-incognito', 'Flecha', main, partitionColors.r2, partitionColors.i2);
+  pass('a regular tab fetched its own copy of an icon an incognito tab had downloaded');
+
+  await app.command('new_space', { window: main });
+  await app.command('isolate', { window: main });
+  await app.command('open', { url: page('s', 1), window: main });
+  await shows('partition-isolated-after-regular', 'Flecha', main, partitionColors.s1, partitionColors.r1);
+  pass('a tab in an isolated Space fetched its own copy of an icon the regular partition had downloaded');
+}
+
 // Incognito windows: one in-memory cookie jar per session, kept apart from the regular one,
 // gone when the last incognito window closes, and nowhere in the profile on disk afterwards.
 function incognitoTab(snapshot, window) {
@@ -2015,6 +2094,7 @@ async function verifySlice() {
     await pageFullscreen(app, main, left);
   } else if (mode === 'tab-status') {
     await tabStatus(app, main, left);
+    await partitionIcons(app, main);
     await app.quit();
   } else if (mode === 'visual') {
     await visualParity(app, left);

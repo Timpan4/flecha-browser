@@ -46,7 +46,7 @@ export async function fixture(handle = () => false) {
   const server = createServer((request, response) => {
   const path = new URL(request.url, 'http://localhost').pathname;
 
-  if (handle(path, response)) return;
+  if (handle(path, response, request)) return;
 
   if (path.startsWith('/probe/')) {
     const name = decodeURIComponent(path.slice('/probe/'.length));
