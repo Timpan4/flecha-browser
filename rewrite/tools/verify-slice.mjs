@@ -439,15 +439,19 @@ async function sidebarFocus(app, left) {
   await app.present();
   await capture('focus-left', ['#147A70', '#FFCC49']);
 
-  // Xvfb fixture geometry with one Space and the Site Controls row visible.
+  // Xvfb fixture geometry with one Space, measured from the focus-left capture: the page, then
+  // pane B's row (centred at y 235, ending at x 256) and its Split button, which sits left of
+  // the 22px menu and close buttons with the row's 10px gaps and 6px right padding
+  // (ui/styles.css:582, 586, 631).
   execFileSync(x11Driver, ['click', 340, 110]);
-  execFileSync(x11Driver, ['click', 235, 228]);
+  execFileSync(x11Driver, ['click', 169, 235]);
   const split = await waitForSelection(app, right, 'sidebar Split selected pane B');
 
   assert.deepEqual(active(split).split, [left, right]);
   await keyDelivery(app, { A: left, B: right }, 'y', 'sidebar split', 'B');
 
-  execFileSync(x11Driver, ['click', 95, 265]);
+  // Pane A's row title, one 32px row plus its 2px margins further down.
+  execFileSync(x11Driver, ['click', 95, 269]);
   await waitForSelection(app, left, 'sidebar selected pane A');
   await keyDelivery(app, { A: left, B: right }, 'z', 'sidebar select', 'A');
 
@@ -481,11 +485,12 @@ async function managerFocus(app, left, right) {
   execFileSync(x11Driver, ['chord', 'Control_L', 'comma']);
   await app.present();
 
-  const [x, y, width] = execFileSync(x11Driver, ['geometry', 'Flecha'], { encoding: 'utf8' })
+  const [x, y] = execFileSync(x11Driver, ['geometry', 'Flecha'], { encoding: 'utf8' })
     .trim().split(' ').map(Number);
 
-  // The fifth tab in the centered GPUI Settings panel on the Xvfb fixture.
-  execFileSync(x11Driver, ['click', Math.round(x + width / 2 + 5), y + 105]);
+  // Tabs & Spaces, the second item in the Settings nav column beside the sidebar: General's
+  // highlight spans y 62-91 in the visual capture, and items sit 2px apart (ui/settings.css:56).
+  execFileSync(x11Driver, ['click', x + 360, y + 108]);
   // The selected Settings tab's accent (theme.rs accent_strong), Dark or Light: Theme::System
   // follows Xvfb's Light appearance.
   await captureUntil('tabs-spaces-manager', 'root', path => {
@@ -537,12 +542,13 @@ async function restoreSpaces(app, left, path = '/open') {
   await app.present();
   execFileSync('magick', ['import', '-window', 'root', join(out, 'restore-spaces-prompt.png')]);
 
-  const [x, y, width] = execFileSync(x11Driver, ['geometry', 'Flecha'], { encoding: 'utf8' })
+  const [x, y] = execFileSync(x11Driver, ['geometry', 'Flecha'], { encoding: 'utf8' })
     .trim().split(' ').map(Number);
 
-  // The Restore button below the question in the centered Settings panel.
+  // The Restore button on the Import pane's message card, beside Cancel, measured from the
+  // restore-spaces-prompt capture: the pane starts right of the sidebar and the Settings nav.
   const after = app.events.length;
-  execFileSync(x11Driver, ['click', Math.round(x + (width - 680) / 2 + 115), y + 229]);
+  execFileSync(x11Driver, ['click', x + 629, y + 143]);
   await app.loaded(left, path, after);
   const restored = await app.command('snapshot');
   assert.deepEqual(restored.core.spaces, before.core.spaces);
