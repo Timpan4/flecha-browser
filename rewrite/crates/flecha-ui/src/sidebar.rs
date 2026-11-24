@@ -440,12 +440,6 @@ impl Shell {
                         cx,
                     ))
                     .child(self.command_button("new-tab", "+ Tab", Command::NewTab, cx))
-                    .child(self.action_button(
-                        "new-incognito-window",
-                        "+ Incognito",
-                        Action::NewIncognitoWindow,
-                        cx,
-                    ))
                     .when(!incognito, |row| {
                         row.child(self.action_button(
                             "isolation",
@@ -465,7 +459,14 @@ impl Shell {
                             Action::ExitSplit,
                             cx,
                         ))
-                    }),
+                    })
+                    // Last, so the regular controls keep the places the harness measured.
+                    .child(self.action_button(
+                        "new-incognito-window",
+                        "+ Incognito",
+                        Action::NewIncognitoWindow,
+                        cx,
+                    )),
             )
     }
 
