@@ -1548,6 +1548,8 @@ async function visualParity(app, left) {
   };
 
   for (const wanted of [true, false]) {
+    // GPUI hit-tests the last frame drawn, which may still hold the previous menu.
+    await app.present();
     execFileSync(x11Driver, ['right-click', x + spaceHeader[0], y + spaceHeader[1]]);
     await app.present();
     click(x + spaceHeader[0] + spaceMenuItem[0], y + spaceHeader[1] + spaceMenuItem[1]);
