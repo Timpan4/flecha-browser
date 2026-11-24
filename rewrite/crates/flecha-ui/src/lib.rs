@@ -466,18 +466,8 @@ impl Controller {
             Action::RetryPermissionSave => return self.save_permissions(),
             Action::Site(site, change) => return self.change_current_site(window, &site, change),
             Action::Select(id) => {
-                let state = self
-                    .model
-                    .state_mut(window)
-                    .context("missing Flecha window")?;
-                let change = state.activate(&id, window, Some(now()));
-                for id in change.removed {
+                for id in self.select(window, &id)? {
                     self.engine.close(&id);
-                }
-                if let Some(destination) = change.result.filter(|destination| destination != window)
-                {
-                    self.model.focus_window(&destination);
-                    self.front = Some(destination);
                 }
             }
             Action::Split(right) => {
@@ -686,6 +676,21 @@ impl Controller {
         }
         self.update_visibility();
         self.save()
+    }
+
+    /// Activates a tab from `window`, bringing forward the window that shows it. Returns the
+    /// pages the activation removed, whose browsers the caller closes.
+    fn select(&mut self, window: &WindowId, id: &TabId) -> Result<Vec<TabId>> {
+        let state = self
+            .model
+            .state_mut(window)
+            .context("missing Flecha window")?;
+        let change = state.activate(id, window, Some(now()));
+        if let Some(destination) = change.result.filter(|destination| destination != window) {
+            self.model.focus_window(&destination);
+            self.front = Some(destination);
+        }
+        Ok(change.removed)
     }
 
     fn update_visibility(&mut self) {

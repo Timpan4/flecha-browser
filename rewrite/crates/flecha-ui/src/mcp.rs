@@ -11,7 +11,7 @@
 //! tab's id fails as an unknown one. The tools ported from `chromium/shell/nativeHost.ts` keep
 //! its scripts, key table and limits.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::Path;
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
@@ -27,8 +27,8 @@ use flecha_services::agent::{
 use futures::channel::oneshot;
 use serde_json::{Value, json};
 
+use crate::Controller;
 use crate::model::{self, now};
-use crate::{Action, Controller};
 
 /// The bearer token's file in the profile directory. Only the owner can read it.
 const TOKEN_FILE: &str = "agent-token";
@@ -781,46 +781,85 @@ impl Controller {
         if self.ready && self.agent_viewport().is_none() {
             return Err(no_page_area());
         }
-        // A tab whose page can't start or whose snapshot never replaced the saved one is undone
-        // whole: closing it the usual way would archive its address.
-        let before = self.model.core.clone();
-        let id = agent::state::open_agent_tab(&mut self.model.core, model::tab_id(), input, now())?;
-        if let Err(error) = self.agent_browser(&id).and_then(|_| self.agent_changed()) {
-            self.model.core = before;
-            self.engine.close(&id);
-            self.update_visibility();
-            return Err(error);
-        }
-        Ok(id)
+        self.agent_commit(|this| {
+            let id =
+                agent::state::open_agent_tab(&mut this.model.core, model::tab_id(), input, now())?;
+            this.agent_browser(&id)?;
+            Ok((id, Vec::new()))
+        })
     }
 
     fn agent_activate(&mut self, tab: &TabId) -> ToolResult<()> {
         self.agent_tab(tab)?;
         let window = self.model.core.focused_window().id.clone();
-        self.act(&window, Action::Select(tab.clone()))
-            .map_err(|error| ToolError(error.to_string()))
+        self.agent_commit(|this| {
+            let removed = this
+                .select(&window, tab)
+                .map_err(|error| ToolError(error.to_string()))?;
+            Ok(((), removed))
+        })
     }
 
     fn agent_close(&mut self, tab: &TabId) -> ToolResult<()> {
         self.agent_tab(tab)?;
-        self.close_tab(tab);
-        self.agent_changed()
+        self.agent_commit(|this| {
+            let mut closed = this.model.close_tab(tab);
+            closed.push(tab.clone());
+            Ok(((), closed))
+        })
     }
 
-    /// Saves an agent's change. It fails only when the snapshot never replaced the saved one. A
-    /// snapshot in place whose directory entry could not be synced counts as saved, as an
-    /// import's does, and the regular window's status line says so.
-    fn agent_changed(&mut self) -> ToolResult<()> {
-        self.update_visibility();
-        let synced = self
-            .replace_snapshot()
-            .map_err(|error| ToolError(format!("Could not save the session: {error:#}")))?;
-        if let Err(error) = synced {
-            let warning = format!("Could not sync the session directory to disk: {error}.");
-            eprintln!("agent bridge: {warning}");
-            self.status.set(None, warning);
+    /// The one way an agent changes the regular state, so its answer, memory and disk agree.
+    ///
+    /// `change` edits the state and returns its value with the pages whose browsers close once
+    /// the change is saved. Then the state saves:
+    /// - If the snapshot never replaced the saved one, or `change` failed, the state, the front
+    ///   window and the browsers go back to how they were, and the call fails.
+    /// - If the snapshot is in place but its directory entry could not be synced, the change
+    ///   counts as saved, as an import's does, and the regular window's status line says so.
+    fn agent_commit<T>(
+        &mut self,
+        change: impl FnOnce(&mut Self) -> ToolResult<(T, Vec<TabId>)>,
+    ) -> ToolResult<T> {
+        let core = self.model.core.clone();
+        let front = self.front.clone();
+        let browsers = self.engine.ids().cloned().collect::<BTreeSet<_>>();
+        let saved = change(self).and_then(|(value, closed)| {
+            self.update_visibility();
+            let synced = self
+                .replace_snapshot()
+                .map_err(|error| ToolError(format!("Could not save the session: {error:#}")))?;
+            Ok((value, closed, synced))
+        });
+        match saved {
+            Ok((value, closed, synced)) => {
+                for id in &closed {
+                    self.engine.close(id);
+                }
+                self.update_visibility();
+                if let Err(error) = synced {
+                    let warning = format!("Could not sync the session directory to disk: {error}.");
+                    eprintln!("agent bridge: {warning}");
+                    self.status.set(None, warning);
+                }
+                Ok(value)
+            }
+            Err(error) => {
+                self.model.core = core;
+                self.front = front;
+                let opened = self
+                    .engine
+                    .ids()
+                    .filter(|id| !browsers.contains(*id))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                for id in &opened {
+                    self.engine.close(id);
+                }
+                self.update_visibility();
+                Err(error)
+            }
         }
-        Ok(())
     }
 
     fn agent_status(&self, tab: &TabId) -> ToolResult<Status> {
@@ -981,6 +1020,7 @@ mod tests {
     use std::sync::mpsc as std_mpsc;
 
     use super::*;
+    use crate::Action;
 
     const REGULAR: &str = "https://regular.example/agent-7c1d";
     const PRIVATE: &str = "https://private.example/agent-secret-3e9a";
@@ -1195,57 +1235,156 @@ mod tests {
         );
     }
 
-    #[test]
-    fn open_tab_that_cannot_be_saved_leaves_no_tab_open_or_archived() {
-        let profile = tempfile::tempdir().unwrap();
-        let (mut controller, regular) = controller(&profile);
-        controller.page_area(regular, page_area());
-        let before = controller.model.core.clone();
-        std::fs::remove_dir_all(profile.path().join("session")).unwrap();
+    /// How the save after an agent's change fails.
+    #[derive(Clone, Copy, Debug)]
+    enum SaveFailure {
+        /// The session directory is read-only: the snapshot never replaces the saved one.
+        BeforeReplace,
+        /// The snapshot replaces the saved one, then the directory entry can't be synced.
+        AfterReplace,
+    }
 
-        let opened = tool(
-            &mut controller,
-            "open_tab",
-            json!({ "url": "example.org/agent" }),
-        );
-        assert!(failed(&opened), "{opened}");
-        assert!(
-            controller.model.core == before,
-            "the failed open_tab left its tab behind"
-        );
+    impl SaveFailure {
+        const ALL: [Self; 2] = [Self::BeforeReplace, Self::AfterReplace];
+
+        fn arm(self, profile: &tempfile::TempDir, controller: &Controller) {
+            match self {
+                Self::BeforeReplace => {
+                    let session = profile.path().join("session");
+                    set_mode(&session, 0o555);
+                    assert!(
+                        tempfile::NamedTempFile::new_in(&session).is_err(),
+                        "the read-only session directory still takes files (running as root?)"
+                    );
+                }
+                Self::AfterReplace => controller.store.fail_next_directory_sync(),
+            }
+        }
+
+        /// Whether the change is saved, so the agent's call succeeds.
+        fn saves(self) -> bool {
+            matches!(self, Self::AfterReplace)
+        }
+
+        /// Checks the agent's answer and the status line.
+        fn check_answer(self, answer: &Value, controller: &Controller) {
+            assert_eq!(failed(answer), !self.saves(), "{self:?}: {answer}");
+            let warned = controller
+                .status
+                .text(None)
+                .is_some_and(|text| text.contains("Could not sync the session directory"));
+            assert_eq!(warned, self.saves(), "{self:?}: the sync warning");
+        }
+    }
+
+    fn set_mode(path: &Path, mode: u32) {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    /// The controller a restart makes from what the session directory holds.
+    fn reopen(profile: &tempfile::TempDir, controller: Controller) -> Controller {
+        set_mode(&profile.path().join("session"), 0o755);
+        drop(controller);
+        Controller::open_test_profile(profile.path()).unwrap()
+    }
+
+    fn has_url(controller: &Controller, url: &str) -> bool {
+        controller
+            .model
+            .core
+            .open_tabs()
+            .values()
+            .any(|tab| tab.url == url)
+    }
+
+    fn archived(controller: &Controller, url: &str) -> bool {
+        controller
+            .model
+            .core
+            .archive()
+            .iter()
+            .any(|entry| entry.url == url)
+    }
+
+    const AGENT: &str = "https://example.org/agent";
+
+    #[test]
+    fn open_tab_answer_memory_and_disk_agree_when_its_save_fails() {
+        for failure in SaveFailure::ALL {
+            let profile = tempfile::tempdir().unwrap();
+            let (mut controller, regular) = controller(&profile);
+            controller.page_area(regular, page_area());
+            failure.arm(&profile, &controller);
+
+            let answer = tool(
+                &mut controller,
+                "open_tab",
+                json!({ "url": "example.org/agent" }),
+            );
+            failure.check_answer(&answer, &controller);
+            assert_eq!(has_url(&controller, AGENT), failure.saves(), "{failure:?}");
+            assert!(!archived(&controller, AGENT), "{failure:?}: archived");
+
+            let reopened = reopen(&profile, controller);
+            assert_eq!(has_url(&reopened, AGENT), failure.saves(), "{failure:?}");
+            assert!(!archived(&reopened, AGENT), "{failure:?}: archived");
+        }
     }
 
     #[test]
-    fn open_tab_saved_without_a_directory_sync_stays_open_in_memory_and_on_disk() {
-        let profile = tempfile::tempdir().unwrap();
-        let (mut controller, regular) = controller(&profile);
-        controller.page_area(regular, page_area());
-        controller.store.fail_next_directory_sync();
+    fn close_tab_answer_memory_and_disk_agree_when_its_save_fails() {
+        for failure in SaveFailure::ALL {
+            let profile = tempfile::tempdir().unwrap();
+            let (mut controller, regular) = controller(&profile);
+            let tab = open(&mut controller, &regular, REGULAR);
+            failure.arm(&profile, &controller);
 
-        let opened = tool(
-            &mut controller,
-            "open_tab",
-            json!({ "url": "example.org/agent" }),
-        );
-        assert!(!failed(&opened), "{opened}");
-        let opened: Value = serde_json::from_str(text(&opened)).unwrap();
-        let id = TabId::new(opened["tabId"].as_str().unwrap());
-        assert!(controller.model.core.tab(&id).is_some());
-        assert!(
-            controller
-                .status
-                .text(None)
-                .is_some_and(|text| text.contains("Could not sync the session directory")),
-            "the window did not say the save may not last"
-        );
-        drop(controller);
+            let answer = tool(
+                &mut controller,
+                "close_tab",
+                json!({ "tabId": tab.as_str() }),
+            );
+            failure.check_answer(&answer, &controller);
+            let open = !failure.saves();
+            assert_eq!(
+                controller.model.core.tab(&tab).is_some(),
+                open,
+                "{failure:?}"
+            );
 
-        let reopened = Controller::open_test_profile(profile.path()).unwrap();
-        assert_eq!(
-            reopened.model.core.tab(&id).map(|tab| tab.url.as_str()),
-            Some("https://example.org/agent"),
-            "the saved session lost the tab the agent was told is open"
-        );
+            let reopened = reopen(&profile, controller);
+            assert_eq!(reopened.model.core.tab(&tab).is_some(), open, "{failure:?}");
+            assert_eq!(archived(&reopened, REGULAR), !open, "{failure:?}");
+        }
+    }
+
+    #[test]
+    fn activate_tab_answer_memory_and_disk_agree_when_its_save_fails() {
+        for failure in SaveFailure::ALL {
+            let profile = tempfile::tempdir().unwrap();
+            let (mut controller, regular) = controller(&profile);
+            let first = open(&mut controller, &regular, REGULAR);
+            let second = open(&mut controller, &regular, "https://regular.example/second");
+            assert_eq!(controller.model.active(&regular), Some(&second));
+            failure.arm(&profile, &controller);
+
+            let answer = tool(
+                &mut controller,
+                "activate_tab",
+                json!({ "tabId": first.as_str() }),
+            );
+            failure.check_answer(&answer, &controller);
+            let active = if failure.saves() { &first } else { &second };
+            assert_eq!(
+                controller.model.active(&regular),
+                Some(active),
+                "{failure:?}"
+            );
+
+            let reopened = reopen(&profile, controller);
+            assert_eq!(reopened.model.active(&regular), Some(active), "{failure:?}");
+        }
     }
 
     fn page_area() -> Viewport {
