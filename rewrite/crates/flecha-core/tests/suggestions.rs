@@ -731,4 +731,25 @@ fn padded_credentials_with_single_label_hosts_and_tails_stay_local() {
             "{query:?}"
         );
     }
+
+    for query in [
+        "lunch @ noon?",
+        "anyone free @ noon?",
+        "dinner @ 7pm?",
+        "is it raining @ stockholm?",
+        "meet @ 7/8",
+        "apples @ $2/lb",
+        "rate @ 5%/yr",
+        "who is free @ 3pm/4pm",
+    ] {
+        assert_eq!(
+            resolve_input(query, SearchEngine::Google),
+            InputResolution::Search(SearchEngine::Google.search_url(query)),
+            "{query:?}"
+        );
+    }
+    assert!(
+        !developer_suggestions("mdn lunch @ noon?", None, &[], 0).is_empty(),
+        "mdn alias should work for ordinary question phrases"
+    );
 }

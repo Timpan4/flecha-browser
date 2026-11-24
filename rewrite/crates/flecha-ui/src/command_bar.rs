@@ -524,6 +524,14 @@ mod tests {
             "meet @ noon tomorrow",
             "contact@ example",
             "weather @ stockholm",
+            "lunch @ noon?",
+            "anyone free @ noon?",
+            "dinner @ 7pm?",
+            "is it raining @ stockholm?",
+            "meet @ 7/8",
+            "apples @ $2/lb",
+            "rate @ 5%/yr",
+            "who is free @ 3pm/4pm",
         ] {
             let rows = suggestions_for(&core, None, None, query);
             assert_eq!(rows.len(), 1, "{query:?}");
