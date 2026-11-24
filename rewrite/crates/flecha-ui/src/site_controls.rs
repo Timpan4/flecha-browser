@@ -21,7 +21,7 @@ pub(crate) struct Site {
 }
 
 impl Site {
-    fn from_url(tab: TabId, partition: Partition, url: &str) -> Option<Self> {
+    pub(crate) fn from_url(tab: TabId, partition: Partition, url: &str) -> Option<Self> {
         Some(Self {
             tab,
             partition,

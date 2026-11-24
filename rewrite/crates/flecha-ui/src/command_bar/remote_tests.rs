@@ -205,3 +205,47 @@ fn a_failed_fixture_request_keeps_local_results() {
         ["weather", "Local weather"]
     );
 }
+
+#[test]
+fn an_incognito_window_asks_no_search_provider() {
+    let profile = tempfile::tempdir().unwrap();
+    let mut controller = Controller::open_test_profile(profile.path()).unwrap();
+    let regular = controller.model.core.focused_window().id.clone();
+    controller
+        .act(&regular, Action::Open("https://regular.example/".into()))
+        .unwrap();
+    controller
+        .act(&regular, Action::NewIncognitoWindow)
+        .unwrap();
+    let private = controller.model.incognito_windows()[0].id.clone();
+    controller
+        .act(&private, Action::Open("https://private.example/".into()))
+        .unwrap();
+    // The command bar leaves out the tab it is on.
+    controller
+        .act(&private, Action::Open("https://current.example/".into()))
+        .unwrap();
+    assert!(controller.model.core.settings.search_suggestions_enabled());
+
+    let matches = |window: &WindowId, text: &str| {
+        let sources = controller.command_sources(window).unwrap();
+        CommandMatches::new(sources, controller.model.active(window), text, true)
+    };
+    assert!(matches(&regular, "weather").request.is_some());
+    let private_matches = matches(&private, "weather");
+    assert!(private_matches.request.is_none());
+    assert_eq!(private_matches.rows[0].label, "weather");
+
+    // Each window finds its own tabs.
+    let tabs = |window: &WindowId, text: &str| {
+        matches(window, text)
+            .rows
+            .into_iter()
+            .filter(|row| matches!(row.target, Target::Tab(..)))
+            .map(|row| row.target)
+            .collect::<Vec<_>>()
+    };
+    assert!(tabs(&regular, "private").is_empty());
+    assert!(tabs(&private, "regular").is_empty());
+    assert_eq!(tabs(&private, "private").len(), 1);
+}
