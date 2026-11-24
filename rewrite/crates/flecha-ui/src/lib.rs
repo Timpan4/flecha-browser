@@ -28,7 +28,7 @@ use flecha_adblock::{
     load_cached_rules,
 };
 use flecha_boosts::Boosts;
-use flecha_cef::{Engine, Event, Owner, Runtime, Viewport};
+use flecha_cef::{Engine, Event, IncognitoSession, Owner, Runtime, Viewport};
 use flecha_core::{
     ArchivedTab, Reopened, SpaceId, TabId, WindowId,
     storage::{LoadedState, ReadyState},
@@ -176,7 +176,29 @@ struct Controller {
     quitting: bool,
     verify: bool,
     failure: Rc<RefCell<Option<anyhow::Error>>>,
-    status: String,
+    status: Status,
+}
+
+/// The status line. Regular windows share one; each incognito session has its own, so what goes
+/// wrong in a private window never shows in a regular one.
+#[derive(Default)]
+pub(crate) struct Status(BTreeMap<Option<IncognitoSession>, String>);
+
+impl Status {
+    pub(crate) fn text(&self, session: Option<IncognitoSession>) -> Option<&str> {
+        self.0
+            .get(&session)
+            .map(String::as_str)
+            .filter(|text| !text.is_empty())
+    }
+
+    pub(crate) fn set(&mut self, session: Option<IncognitoSession>, text: impl Into<String>) {
+        self.0.insert(session, text.into());
+    }
+
+    pub(crate) fn clear(&mut self, session: Option<IncognitoSession>) {
+        self.0.remove(&session);
+    }
 }
 
 impl Controller {
@@ -244,7 +266,7 @@ impl Controller {
             quitting: false,
             verify,
             failure,
-            status: String::new(),
+            status: Status::default(),
         };
         state.permissions.restore(&mut state.engine);
         state.sync_adblock();
@@ -651,7 +673,7 @@ impl Controller {
                         tab.title = title;
                         if durable && let Err(error) = self.history.title(&message.key, &tab.title)
                         {
-                            self.status = error.to_string();
+                            self.status.set(None, error.to_string());
                         }
                         save |= durable;
                         changed = true;
@@ -725,15 +747,31 @@ impl Controller {
 
 type Shared = Rc<RefCell<Controller>>;
 
+impl Controller {
+    /// Runs an action from `window` and shows its error on that window's status line.
+    fn act_from(&mut self, window: &WindowId, action: Action) -> Result<()> {
+        let session = self.model.incognito_session(window);
+        self.status.clear(session);
+        self.model.focus_window(window);
+        let result = self.act(window, action);
+        if let Err(error) = &result {
+            self.status.set(session, error.to_string());
+        }
+        result
+    }
+
+    /// The status line `window` shows.
+    pub(crate) fn status_for(&self, window: &WindowId) -> Option<&str> {
+        self.status.text(self.model.incognito_session(window))
+    }
+}
+
 fn dispatch(controller: &Shared, window: &WindowId, action: Action, cx: &mut App) {
     let mut state = controller.borrow_mut();
-    state.status.clear();
-    state.model.focus_window(window);
-    if let Err(error) = state.act(window, action) {
-        state.status = error.to_string();
-        if state.quitting {
-            state.fail(error, cx);
-        }
+    if let Err(error) = state.act_from(window, action)
+        && state.quitting
+    {
+        state.fail(error, cx);
     }
     cx.refresh_windows();
 }

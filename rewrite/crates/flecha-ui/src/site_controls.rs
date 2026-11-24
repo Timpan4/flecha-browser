@@ -138,8 +138,8 @@ impl Shell {
         };
         panel = panel
             .child(div().truncate().child(site.origin.to_string()))
-            .when(!state.status.is_empty(), |panel| {
-                panel.child(state.status.clone())
+            .when_some(state.status_for(&self.id), |panel, status| {
+                panel.child(status.to_owned())
             });
         if let Some(host) = &site.host {
             let settings = &state.model.core.settings;

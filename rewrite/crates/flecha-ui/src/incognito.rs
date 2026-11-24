@@ -72,6 +72,7 @@ impl Controller {
             self.engine.close(id);
         }
         if let Some(session) = closed.ended {
+            self.status.clear(Some(session));
             self.engine.end_incognito(session);
         }
         self.update_visibility();
@@ -307,6 +308,41 @@ mod tests {
             .unwrap();
         assert!(controller.model.is_incognito(&opened));
         assert_eq!(controller.model.core.windows().len(), 1);
+    }
+
+    #[test]
+    fn a_private_error_shows_on_the_private_status_line_only() {
+        let profile = tempfile::tempdir().unwrap();
+        let mut controller = Controller::open_test_profile(profile.path()).unwrap();
+        let regular = controller.model.core.focused_window().id.clone();
+        let private = incognito_window(&mut controller, &regular);
+        // An answer to a download prompt that is no longer asking, as from the private
+        // window's downloads panel.
+        let answer = || {
+            Action::Download(
+                flecha_cef::DownloadHandle(1),
+                crate::downloads_view::DownloadCommand::Accept(Some("/missing/a.txt".into())),
+            )
+        };
+
+        assert!(controller.act_from(&private, answer()).is_err());
+        assert!(controller.status_for(&private).is_some());
+        assert_eq!(controller.status_for(&regular), None);
+
+        assert!(controller.act_from(&regular, answer()).is_err());
+        let private_text = controller.status_for(&private).map(str::to_owned);
+        assert!(controller.act_from(&private, Action::NewSpace).is_err());
+        assert!(
+            controller.status_for(&regular).is_some(),
+            "a private action cleared the regular status line"
+        );
+        assert_ne!(
+            controller.status_for(&private).map(str::to_owned),
+            private_text
+        );
+
+        controller.act(&private, Action::CloseWindow).unwrap();
+        assert!(controller.status.0.keys().all(Option::is_none));
     }
 
     #[test]

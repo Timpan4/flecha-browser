@@ -187,10 +187,15 @@ impl Controller {
         let mut changed = false;
         while let Some(message) = self.engine.next_devtools_event() {
             if let flecha_cef::DevToolsEvent::Result { id, success, .. } = message.event
-                && self.pending_reloads.remove(&id).is_some()
+                && let Some(key) = self.pending_reloads.remove(&id)
                 && !success
             {
-                self.status = "Could not reload the page without its cache.".into();
+                let session = self
+                    .model
+                    .partition(&key.tab)
+                    .and_then(|partition| partition.incognito_session());
+                self.status
+                    .set(session, "Could not reload the page without its cache.");
                 changed = true;
             }
         }

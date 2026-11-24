@@ -279,11 +279,12 @@ impl Controller {
         let mut current = Some(first);
         while let Some(message) = current {
             if matches!(message.event, DownloadEvent::Blocked { .. }) {
-                self.status = self
+                let text = self
                     .downloads
                     .config_error
                     .clone()
                     .unwrap_or_else(|| "Download blocked.".into());
+                self.status.set(message.incognito, text);
             }
             self.downloads.track(message, &list);
             current = self.engine.next_download_event();
@@ -441,8 +442,8 @@ impl Shell {
                         |this, _: &ClickEvent, window, cx| this.dismiss_overlay(window, cx),
                     ))),
             )
-            .when(!state.status.is_empty(), |panel| {
-                panel.child(state.status.clone())
+            .when_some(state.status_for(&self.id), |panel, status| {
+                panel.child(status.to_owned())
             })
             .child(content)
     }

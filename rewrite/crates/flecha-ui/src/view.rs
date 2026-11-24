@@ -504,8 +504,8 @@ impl Render for Shell {
             }
             main = main.child(body);
         }
-        if !state.status.is_empty() {
-            main = main.child(div().p_2().child(state.status.clone()));
+        if let Some(status) = state.status_for(&self.id) {
+            main = main.child(div().p_2().child(status.to_owned()));
         }
         if state.model.peeks.contains_key(&self.id) {
             main = main.child(

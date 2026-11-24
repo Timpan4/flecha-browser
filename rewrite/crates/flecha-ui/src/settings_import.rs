@@ -545,7 +545,7 @@ impl Shell {
             if state.model.core.window(&self.id).is_none()
                 && let Ok(message) = &result
             {
-                state.status.clone_from(message);
+                state.status.set(None, message.clone());
             }
         }
         if let Some(panel) = self.settings_mut() {
