@@ -484,14 +484,16 @@ impl Shell {
         {
             self.consumed_keys.insert(stroke.key.clone());
             cx.stop_propagation();
-        } else {
-            self.page_key(
-                focused,
-                stroke,
-                false,
-                event.is_held,
-                event.prefer_character_input,
-            );
+        } else if self.page_key(
+            focused,
+            stroke,
+            false,
+            event.is_held,
+            event.prefer_character_input,
+        ) {
+            // CEF already receives its character event. GPUI's printable-key fallback would
+            // also insert it through the registered text input handler.
+            cx.stop_propagation();
         }
     }
 

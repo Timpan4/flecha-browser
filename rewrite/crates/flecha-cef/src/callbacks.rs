@@ -9,6 +9,7 @@ use flecha_surface::{Frame as SurfaceFrame, SurfaceTarget};
 use gpui::{Bounds, Pixels, SharedString, point, px, size};
 
 use crate::compositor::{self, Delivery};
+use crate::ime::Ime;
 use crate::popup::{self, Popups};
 use crate::{BrowserEvent, BrowserKey, Event, Partition, Viewport};
 use crate::{adblock, boosts, context_menu, dialogs, downloads, find, permissions, services};
@@ -72,6 +73,7 @@ pub(crate) struct Slot {
     /// Why a shared texture could not be imported. The engine reopens the page with CPU
     /// copies, and the render handler ignores shared textures until then.
     pub import_failure: RefCell<Option<anyhow::Error>>,
+    pub ime: Ime,
     /// Whether the page became audible since its document loaded ([`crate::Engine::is_audible`]).
     pub audible: Cell<bool>,
     delivery: Cell<Option<Delivery>>,
@@ -105,6 +107,7 @@ impl Slot {
             one_time: RefCell::new(Vec::new()),
             shares_textures: Cell::new(false),
             import_failure: RefCell::new(None),
+            ime: Ime::default(),
             audible: Cell::new(false),
             delivery: Cell::new(None),
         }
@@ -274,6 +277,18 @@ wrap_render_handler! {
             }
         }
 
+        fn on_ime_composition_range_changed(
+            &self, _browser: Option<&mut Browser>, range: Option<&Range>, character_bounds: Option<&[Rect]>,
+        ) {
+            self.slot.ime.update_bounds(range, character_bounds.unwrap_or_default());
+        }
+
+        fn on_text_selection_changed(
+            &self, _browser: Option<&mut Browser>, _text: Option<&CefString>, range: Option<&Range>,
+        ) {
+            self.slot.ime.update_selection(range);
+        }
+
         fn on_paint(
             &self, _browser: Option<&mut Browser>, kind: PaintElementType, dirty: Option<&[Rect]>,
             buffer: *const u8, width: i32, height: i32,
@@ -393,7 +408,9 @@ wrap_display_handler! {
 
         fn on_favicon_urlchange(&self, _browser: Option<&mut Browser>, icon_urls: Option<&mut CefStringList>) {
             if !self.slot.retired.get() {
-                let urls = icon_urls.map(|urls| std::mem::take(urls).into_iter().collect()).unwrap_or_default();
+                let urls = icon_urls.map(|urls| {
+                    std::mem::take(urls).into_iter().filter(|url| crate::favicon::is_web_icon(url)).collect()
+                }).unwrap_or_default();
                 self.slot.emit(Event::FaviconUrls(urls));
             }
         }
@@ -439,6 +456,7 @@ wrap_load_handler! {
         ) {
             let Some(frame) = frame.filter(|frame| frame.is_main() != 0) else { return };
             self.slot.committed_navigation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.slot.ime.reset_document();
             // A new document. CEF reports when a page becomes audible, never when it stops.
             self.slot.set_audible(false);
             context_menu::cancel(&self.slot);
@@ -483,9 +501,8 @@ wrap_load_handler! {
 wrap_audio_handler! {
     struct Audio { slot: Rc<Slot> }
     impl AudioHandler {
-        // An Alloy browser asks on the UI thread each time its page becomes audible
-        // (AlloyBrowserHostImpl::OnAudioStateChanged and StartAudioCapturer in CEF 8127).
-        // Declining the capture leaves playback as it was. Nothing reports when sound stops.
+        // Alloy requests parameters when a page becomes audible. Its loopback capture mutes
+        // the source (CEF 8127, CefAudioLoopbackStreamCreator). Declining preserves playback.
         fn audio_parameters(&self, _browser: Option<&mut Browser>, _params: Option<&mut AudioParameters>) -> i32 {
             self.slot.set_audible(true);
             0
