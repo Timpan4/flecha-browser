@@ -81,6 +81,12 @@ The rewrite stores its profile in `$XDG_DATA_HOME/flecha-rewrite`, with
 `FLECHA_PROFILE` to override it. Flecha rejects the shipping profile at
 `~/.config/flecha-browser` and paths inside it.
 
+A desktop check needs at least one monitor powered on. On 2026-11-24, with
+every output off, COSMIC sent no Wayland frame callbacks to the rewrite. GPUI
+presented only its first frame, which came before CEF painted, so the window
+showed a blank page pane and window captures repeated that frame. Read
+`/sys/class/drm/card*-*/dpms` before judging page rendering.
+
 ## Isolated CEF launches
 
 Run every automated CEF launch through an isolated launcher, including tamper

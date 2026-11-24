@@ -1,5 +1,6 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, VecDeque};
+use std::io::Write as _;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -228,7 +229,15 @@ wrap_render_handler! {
                     }
                     self.slot.paint_changed();
                 }
-                Err(_) => self.slot.emit(Event::PaintFailed),
+                Err(error) => {
+                    // CEF callbacks cannot unwind, and `eprintln!` panics when stderr
+                    // rejects the write; a lost diagnostic must not abort the browser.
+                    let _ = writeln!(
+                        std::io::stderr(),
+                        "CEF {kind:?} frame copy ({width}x{height}): {error:#}"
+                    );
+                    self.slot.emit(Event::PaintFailed);
+                }
             }
         }
     }
