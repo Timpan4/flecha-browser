@@ -48,6 +48,16 @@ pub enum FrameEdit {
     SelectAll,
 }
 
+/// The frame a context menu opened on, used to re-check focus when a queued menu edit runs.
+#[derive(Clone)]
+pub struct MenuFrame(Frame);
+
+impl MenuFrame {
+    pub fn is_focused(&self) -> bool {
+        self.0.is_valid() != 0 && self.0.is_focused() != 0
+    }
+}
+
 struct Pending {
     id: ContextMenuId,
     frame: Frame,
@@ -161,8 +171,13 @@ impl Engine {
     /// shell's selection read go to the focused frame, so a page that moves focus while the menu
     /// is open would otherwise redirect them.
     pub fn context_menu_frame_focused(&self, id: &ContextMenuId) -> bool {
-        self.menu_frame(id)
-            .is_some_and(|frame| frame.is_focused() != 0)
+        self.context_menu_frame(id)
+            .is_some_and(|frame| frame.is_focused())
+    }
+
+    /// The menu's frame, when the menu is still open and its frame is valid.
+    pub fn context_menu_frame(&self, id: &ContextMenuId) -> Option<MenuFrame> {
+        self.menu_frame(id).map(MenuFrame)
     }
 
     fn menu_frame(&self, id: &ContextMenuId) -> Option<Frame> {

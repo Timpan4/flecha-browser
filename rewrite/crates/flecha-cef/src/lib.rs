@@ -36,7 +36,7 @@ pub use clipboard::{ClipboardEdit, CopiedSelection};
 pub use compositor::Compositing;
 use compositor::Compositor;
 pub use context_menu::{
-    ContextMenuEvent, ContextMenuId, ContextMenuRequest, FrameEdit, MenuContext,
+    ContextMenuEvent, ContextMenuId, ContextMenuRequest, FrameEdit, MenuContext, MenuFrame,
 };
 pub use devtools::{DevToolsEvent, DevToolsMessage};
 pub use downloads::{

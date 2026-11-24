@@ -1,7 +1,7 @@
 use anyhow::{Context as _, Result};
 use flecha_cef::{
     BrowserKey, ClipboardEdit, ContextMenuEvent, ContextMenuRequest, Disposition, FrameEdit,
-    MenuContext, Owner,
+    MenuContext, MenuFrame, Owner,
 };
 use flecha_core::{TabId, WindowId, suggestions::pinnable_address};
 use gpui::{
@@ -276,12 +276,17 @@ impl Shell {
                 // A copy or cut in this page is still reading, so the edit waits its turn.
                 let context = &request.context;
                 let mut state = self.state.borrow_mut();
-                let focused = state.engine.context_menu_frame_focused(&id);
+                let frame = state
+                    .engine
+                    .context_menu_frame(&id)
+                    .filter(MenuFrame::is_focused);
                 let held = match action {
-                    FrameEdit::Paste => focused.then_some(Held::Paste(None)),
-                    FrameEdit::Cut => {
-                        (focused && context.can_cut).then_some(Held::Read(ClipboardEdit::Cut, None))
-                    }
+                    FrameEdit::Paste => frame.map(Held::MenuPaste),
+                    FrameEdit::Cut => context
+                        .can_cut
+                        .then_some(frame)
+                        .flatten()
+                        .map(Held::MenuCut),
                     _ => (context.can_copy && !context.selection_text.is_empty())
                         .then(|| Held::Write(context.selection_text.clone())),
                 };

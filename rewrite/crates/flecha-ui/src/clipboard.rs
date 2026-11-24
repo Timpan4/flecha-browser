@@ -16,7 +16,7 @@
 use std::collections::VecDeque;
 
 use cef::BrowserHost;
-use flecha_cef::{BrowserKey, ClipboardEdit};
+use flecha_cef::{BrowserKey, ClipboardEdit, MenuFrame};
 use flecha_surface::input;
 use gpui::{App, ClipboardItem, Keystroke, Window};
 
@@ -65,10 +65,14 @@ pub(crate) enum Held {
         repeat: bool,
         altgr: bool,
     },
-    /// A paste from the keyboard, with its key, or from the page menu.
-    Paste(Option<Keystroke>),
-    /// A copy or cut from the keyboard, with its key and repeat flag, or a page menu cut.
-    Read(ClipboardEdit, Option<(Keystroke, bool)>),
+    /// A paste from the keyboard, with its key.
+    Paste(Keystroke),
+    /// A paste from the page menu, delivered only if its frame is still focused.
+    MenuPaste(MenuFrame),
+    /// A copy or cut from the keyboard, with its key and repeat flag.
+    Read(ClipboardEdit, Keystroke, bool),
+    /// A cut from the page menu, delivered only if its frame is still focused.
+    MenuCut(MenuFrame),
     /// A page menu Copy of the selection the menu opened on.
     Write(String),
 }
@@ -126,8 +130,8 @@ impl Shell {
             PageClipboard::Cut => Some(ClipboardEdit::Cut),
         };
         let held = match read {
-            None => Held::Paste(Some(stroke.clone())),
-            Some(edit) => Held::Read(edit, Some((stroke.clone(), repeat))),
+            None => Held::Paste(stroke.clone()),
+            Some(edit) => Held::Read(edit, stroke.clone(), repeat),
         };
         if self.state.borrow_mut().hold(key, held) {
             return true;
@@ -245,19 +249,28 @@ impl Controller {
                 repeat,
                 altgr,
             } => input::key(&host, &stroke, up, repeat, altgr),
-            Held::Paste(stroke) => match (text(cx), stroke) {
-                (Some(text), _) => {
+            Held::Paste(stroke) => match text(cx) {
+                Some(text) => {
                     self.engine.paste_text(&key.tab, &text);
                 }
-                (None, Some(stroke)) => forward(&host, &stroke, false),
-                (None, None) => {}
+                None => forward(&host, &stroke, false),
             },
-            Held::Read(edit, stroke) => {
-                if self.read_selection(key, edit, stroke.clone()) {
+            Held::MenuPaste(frame) => {
+                if frame.is_focused()
+                    && let Some(text) = text(cx)
+                {
+                    self.engine.paste_text(&key.tab, &text);
+                }
+            }
+            Held::Read(edit, stroke, repeat) => {
+                if self.read_selection(key, edit, Some((stroke.clone(), repeat))) {
                     return true;
                 }
-                if let Some((stroke, repeat)) = stroke {
-                    forward(&host, &stroke, repeat);
+                forward(&host, &stroke, repeat);
+            }
+            Held::MenuCut(frame) => {
+                if frame.is_focused() && self.read_selection(key, ClipboardEdit::Cut, None) {
+                    return true;
                 }
             }
             Held::Write(text) => cx.write_to_clipboard(ClipboardItem::new_string(text)),
