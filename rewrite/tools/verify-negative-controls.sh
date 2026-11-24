@@ -70,7 +70,7 @@ for mutation in "${slice_mutations[@]}"; do
     close-archive) expected='closing did not add a fresh archive entry' ;;
     archive-dup) expected='new archive entry belongs to a different page' ;;
     stale-closedat|stale-closedat-ui) expected='archive timestamp predates the close command' ;;
-    peek-blind-click) expected='Peek backdrop passed the click through to Separate cookies' ;;
+    peek-blind-click) expected='Peek backdrop passed the click through to New Space' ;;
     flechinha-old-partition) expected='partition change left a Flechinha on the previous cookie jar' ;;
     popups-allowed) expected='a popup without a user gesture opened' ;;
     popup-keyboard) expected='PASS a scripted popup opened in its own window' ;;
