@@ -120,7 +120,11 @@ wrap_dev_tools_message_observer! {
         ) {
             let Some(slot) = self.slot.upgrade() else { return };
             let services = services::of(&slot);
-            let internal = services.devtools_internal.borrow_mut().remove(&message_id);
+            let internal = services
+                .devtools_internal
+                .borrow_mut()
+                .remove(&message_id)
+                .map(|(_, internal)| internal);
             match internal {
                 None => services.devtools_events.push(self.slot.clone(), DevToolsEvent::Result {
                     id: message_id,
@@ -169,7 +173,10 @@ pub(crate) fn send(
     let id = services.next_devtools_id();
     let message = frame(id, method, params)?;
     if let Some(internal) = internal {
-        services.devtools_internal.borrow_mut().insert(id, internal);
+        services
+            .devtools_internal
+            .borrow_mut()
+            .insert(id, (std::rc::Rc::downgrade(slot), internal));
     }
     let sent = host.send_dev_tools_message(Some(&message)) != 0;
     if !sent {
@@ -177,6 +184,14 @@ pub(crate) fn send(
     }
     ensure!(sent, "CEF did not accept the DevTools message");
     Ok(id)
+}
+
+/// Drops the internal calls `slot`'s browser was still waiting on: their replies never come.
+pub(crate) fn forget(services: &services::Services, slot: &Slot) {
+    services
+        .devtools_internal
+        .borrow_mut()
+        .retain(|_, (owner, _)| !std::ptr::eq(owner.as_ptr(), slot));
 }
 
 #[cfg(test)]

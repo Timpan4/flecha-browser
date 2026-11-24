@@ -1224,7 +1224,7 @@ mod tests {
     }
 
     #[test]
-    fn cef_destroying_a_browser_denies_its_held_permissions_and_cancels_its_held_downloads() {
+    fn cef_destroying_a_browser_denies_its_permissions_and_cancels_its_downloads_and_cdp_calls() {
         use crate::permissions::{self, tests as asks};
 
         let slot = crate::tests::slot("destroyed");
@@ -1254,7 +1254,14 @@ mod tests {
             "the prompt waits for the banner"
         );
 
+        let pending = (Rc::downgrade(&slot), crate::devtools::Internal::Ignore);
+        services.devtools_internal.borrow_mut().insert(1, pending);
+
         slot.destroyed();
+        assert!(
+            services.devtools_internal.borrow().is_empty(),
+            "its CDP replies never come"
+        );
         assert_eq!(
             *answers.borrow(),
             [("held", Some(flecha_permissions::Verdict::Block))]

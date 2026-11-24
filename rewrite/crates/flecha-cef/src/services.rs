@@ -28,8 +28,9 @@ pub(crate) struct Services {
     pub devtools_events: Mailbox<DevToolsEvent>,
     /// The next CDP message id. CDP ids are positive 32-bit integers.
     pub devtools_next: Cell<i32>,
-    /// CDP calls the engine made itself, by message id, whose replies the shell never sees.
-    pub devtools_internal: RefCell<BTreeMap<i32, Internal>>,
+    /// CDP calls the engine made itself, by message id with the browser they went to. The shell
+    /// never sees their replies.
+    pub devtools_internal: RefCell<BTreeMap<i32, (Weak<Slot>, Internal)>>,
 }
 
 impl Services {

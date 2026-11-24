@@ -182,8 +182,15 @@ fn checks(engine: &mut Engine, tab: &TabId, base: &str, probe_hits: &AtomicUsize
         "history after a navigation"
     );
     engine.go_back(tab);
+    wait_loaded(engine, tab, "/page")?;
     wait_settled(engine, tab, "/page");
     ensure!(engine.can_go_forward(tab), "history after going back");
+    // Going back loaded the page again, with blocking back on for the site.
+    let page = settle(engine, tab, |page| page["ok"] == true)?;
+    ensure!(
+        page["adProbe"] == false,
+        "the blocked script ran after going back: {page}"
+    );
     println!("PASS go_back, can_go_back, can_go_forward and is_loading follow CEF's history");
 
     // The lifecycle call freezing uses, then freeze and thaw through the engine.
@@ -231,8 +238,8 @@ fn wait_loaded(engine: &mut Engine, tab: &TabId, path: &str) -> Result<()> {
     }
 }
 
-/// Pumps until the tab shows `path` and CEF reports it done loading. A page restored from the
-/// back/forward cache raises no load events, so this reads the tab's state instead.
+/// Pumps until the tab shows `path` and CEF reports it done loading, which can trail its last
+/// load end.
 fn wait_settled(engine: &mut Engine, tab: &TabId, path: &str) {
     while engine.is_loading(tab) || !engine.url(tab).is_some_and(|url| url.ends_with(path)) {
         while engine.next_event().is_some() {}

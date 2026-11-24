@@ -103,6 +103,7 @@ impl Slot {
         self.browser.take();
         self.devtools.take();
         let services = services::of(self);
+        crate::devtools::forget(&services, self);
         let acts = services.downloads.borrow_mut().browser_closed(self);
         downloads::run(&services, acts);
         if let Some(identifier) = self.identifier.get() {
