@@ -15,7 +15,7 @@ use crate::text_field::TextField;
 use crate::theme::palette;
 use crate::tokens;
 use crate::view::{
-    Overlay, Shell, hairline, icon_button, icon_square, kbd, letter_favicon, menu_item,
+    Overlay, Shell, hairline, icon_button, icon_square, is_dev_url, kbd, letter_favicon, menu_item,
     overlay_panel, primary_button, site, sized_icon_button, text_button, tinted_icon_button,
 };
 use crate::{Action, Controller, dispatch, now};
@@ -1238,27 +1238,6 @@ fn downloads_badge(count: usize) -> Div {
         .flex()
         .justify_center()
         .child(count.to_string())
-}
-
-/// `isDevUrl` (ui/app.ts:611-619): a local or test host, which the address marks with a code
-/// icon instead of a padlock.
-fn is_dev_url(url: &str) -> bool {
-    let host = site(url)
-        .rsplit_once(':')
-        .map_or(site(url), |(host, port)| {
-            if port.chars().all(|c| c.is_ascii_digit()) {
-                host
-            } else {
-                site(url)
-            }
-        });
-    let host = host.to_ascii_lowercase();
-    matches!(
-        host.as_str(),
-        "localhost" | "local" | "test" | "127.0.0.1" | "[::1]"
-    ) || [".localhost", ".local", ".test"]
-        .iter()
-        .any(|suffix| host.ends_with(suffix))
 }
 
 pub(crate) fn tab_label(tab: &flecha_core::Tab) -> String {

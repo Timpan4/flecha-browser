@@ -370,6 +370,25 @@ cited! {
     SITE_CONTROL = 76., STYLES: 1965 "--control: 76px";
     SITE_FAVICON = 24., STYLES: 1980 "width: 24px";
     SITE_ACTION = 32., STYLES: 2019 "height: 32px";
+    SWITCH_KNOB_INSET = 2., STYLES: 1568 "top: 2px";
+    SWITCH_TRAVEL = 13., STYLES: 1583 "transform: translateX(13px)";
+    FIELD_LABEL_TOP = 4., STYLES: 1451 "margin-top: 4px";
+    POPOVER_FOOTER_PAD_TOP = 10., STYLES: 1590 "padding: 10px 14px 12px";
+    POPOVER_FOOTER_PAD_X = 14., STYLES: 1590 "padding: 10px 14px 12px";
+    POPOVER_FOOTER_PAD_BOTTOM = 12., STYLES: 1590 "padding: 10px 14px 12px";
+    POPOVER_RULE = 0.5, STYLES: 1591 "border-top: 0.5px solid var(--surface-line)";
+    SITE_HEADER_GAP = 10., STYLES: 1975 "gap: 10px";
+    SITE_HEADER_PAD_BOTTOM = 10., STYLES: 1976 "padding: var(--inset) var(--inset) 10px";
+    SITE_FAVICON_RADIUS = 6., STYLES: 1982 "border-radius: 6px";
+    SITE_SHIELD_GAP = 10., STYLES: 2054 "gap: 10px";
+    SITE_SHIELD_PAD_Y = 10., STYLES: 2055 "padding: 10px var(--inset)";
+    SITE_SHIELD_ICON = 18., STYLES: 2061 "width: 18px";
+    SITE_LABEL_PAD_TOP = 10., STYLES: 2096 "padding: 10px var(--inset) 2px";
+    SITE_LABEL_PAD_BOTTOM = 2., STYLES: 2096 "padding: 10px var(--inset) 2px";
+    SITE_ROW_GAP = 8., STYLES: 2103 "gap: 8px";
+    SITE_ROW = 32., STYLES: 2104 "height: 32px";
+    MINI_SELECT = 24., STYLES: 2114 "height: 24px";
+    MINI_SELECT_PAD = 6., STYLES: 2115 "padding: 0 6px";
 
     // Peek.
     PILL_GAP = 6., STYLES: 1193 "gap: 6px";

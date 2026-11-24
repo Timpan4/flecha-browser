@@ -1258,3 +1258,125 @@ pub(crate) fn kbd(keys: impl Into<gpui::SharedString>) -> Div {
         .justify_center()
         .child(keys.into())
 }
+
+/// A `.switch`'s geometry: the shell's (ui/styles.css:1551-1584) or Settings' own
+/// (ui/settings.css:323-356).
+#[derive(Clone, Copy)]
+pub(crate) struct SwitchSize {
+    width: f32,
+    height: f32,
+    knob: f32,
+    inset: f32,
+    travel: f32,
+}
+
+pub(crate) const SHELL_SWITCH: SwitchSize = SwitchSize {
+    width: tokens::SWITCH_WIDTH,
+    height: tokens::SWITCH_HEIGHT,
+    knob: tokens::SWITCH_KNOB,
+    inset: tokens::SWITCH_KNOB_INSET,
+    travel: tokens::SWITCH_TRAVEL,
+};
+
+pub(crate) const SETTINGS_SWITCH: SwitchSize = SwitchSize {
+    width: tokens::SETTINGS_SWITCH_WIDTH,
+    height: tokens::SETTINGS_SWITCH_HEIGHT,
+    knob: tokens::SETTINGS_SWITCH_KNOB,
+    inset: tokens::SETTINGS_SWITCH_KNOB_INSET,
+    travel: tokens::SETTINGS_SWITCH_TRAVEL,
+};
+
+/// `.switch`: on in the selection colour with its knob slid across, off in `--surface-line`.
+pub(crate) fn switch(
+    id: impl Into<gpui::ElementId>,
+    on: bool,
+    label: &'static str,
+    size: SwitchSize,
+) -> gpui::Stateful<Div> {
+    let palette = palette();
+    div()
+        .id(id)
+        .relative()
+        .flex_none()
+        .w(px(size.width))
+        .h(px(size.height))
+        .rounded(px(size.height / 2.))
+        .cursor_pointer()
+        .aria_label(label)
+        .map(|track| {
+            if on {
+                track.bg(palette.selection)
+            } else {
+                track
+                    .bg(palette.surface_line)
+                    .shadow(vec![hairline(palette.surface_line)])
+            }
+        })
+        .child(
+            div()
+                .absolute()
+                .top(px(size.inset))
+                .left(px(size.inset + if on { size.travel } else { 0. }))
+                .size(px(size.knob))
+                .rounded_full()
+                .bg(tokens::color(".switch::after background", false))
+                .shadow(tokens::shadow_knob()),
+        )
+}
+
+/// `.popover-footer` (ui/styles.css:1586-1592): a hairline above the popover's last actions.
+pub(crate) fn popover_footer() -> Div {
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_between()
+        .pt(px(tokens::POPOVER_FOOTER_PAD_TOP))
+        .px(px(tokens::POPOVER_FOOTER_PAD_X))
+        .pb(px(tokens::POPOVER_FOOTER_PAD_BOTTOM))
+        .border_t(px(tokens::POPOVER_RULE))
+        .border_color(palette().surface_line)
+}
+
+/// `.text-button.danger` (ui/styles.css:1594-1601): a destructive action in red.
+pub(crate) fn danger_button(
+    id: impl Into<gpui::ElementId>,
+    name: impl Into<gpui::SharedString>,
+) -> gpui::Stateful<Div> {
+    // Its red outranks `.text-button:hover`, which comes earlier in the file.
+    div()
+        .id(id)
+        .flex()
+        .flex_none()
+        .items_center()
+        .px(px(tokens::TEXT_BUTTON_PAD_X))
+        .py(px(tokens::TEXT_BUTTON_PAD_Y))
+        .rounded(px(tokens::RADIUS_SM))
+        .text_size(px(tokens::TEXT_SM))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(palette().red)
+        .cursor_pointer()
+        .hover(|style| style.bg(palette().fill_hover))
+        .child(name.into())
+}
+
+/// `isDevUrl` (ui/app.ts:611-619): a local or test host, which the address marks with a code
+/// icon instead of a padlock.
+pub(crate) fn is_dev_url(url: &str) -> bool {
+    let host = site(url)
+        .rsplit_once(':')
+        .map_or(site(url), |(host, port)| {
+            if port.chars().all(|c| c.is_ascii_digit()) {
+                host
+            } else {
+                site(url)
+            }
+        });
+    let host = host.to_ascii_lowercase();
+    matches!(
+        host.as_str(),
+        "localhost" | "local" | "test" | "127.0.0.1" | "[::1]"
+    ) || [".localhost", ".local", ".test"]
+        .iter()
+        .any(|suffix| host.ends_with(suffix))
+}

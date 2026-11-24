@@ -12,9 +12,9 @@ use gpui::{
 };
 use uuid::Uuid;
 
-use super::{Draft, Field, SettingsPanel, muted, row, section, settings_button, switch};
+use super::{Draft, Field, SettingsPanel, muted, row, section, settings_button};
 use crate::theme::palette;
-use crate::view::Shell;
+use crate::view::{SETTINGS_SWITCH, Shell, switch};
 
 #[derive(Clone, PartialEq, Eq)]
 pub(super) enum GeneralField {
@@ -412,18 +412,20 @@ impl Shell {
         row()
             .justify_between()
             .child(div().font_weight(FontWeight::MEDIUM).child(label))
-            .child(switch(id, enabled, label).on_click(cx.listener(
-                move |this, _: &ClickEvent, _, cx| {
-                    let result = this.state.borrow_mut().edit_settings(|settings| {
-                        edit(settings, !enabled);
-                        Ok(String::new())
-                    });
-                    if let Some(panel) = this.settings_mut() {
-                        panel.result(result);
-                    }
-                    cx.refresh_windows();
-                },
-            )))
+            .child(
+                switch(id, enabled, label, SETTINGS_SWITCH).on_click(cx.listener(
+                    move |this, _: &ClickEvent, _, cx| {
+                        let result = this.state.borrow_mut().edit_settings(|settings| {
+                            edit(settings, !enabled);
+                            Ok(String::new())
+                        });
+                        if let Some(panel) = this.settings_mut() {
+                            panel.result(result);
+                        }
+                        cx.refresh_windows();
+                    },
+                )),
+            )
     }
 
     fn edit_value(

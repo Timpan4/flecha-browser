@@ -4,13 +4,18 @@ use flecha_cef::Partition;
 use flecha_core::{Settings, TabId, WindowId, blocks_ads_on, is_site_host};
 use flecha_permissions::{Decision, Origin, PermissionKind, SiteSettings};
 use gpui::{
-    ClickEvent, Context, Div, ParentElement as _, StatefulInteractiveElement as _, Styled as _,
-    Window, div, prelude::FluentBuilder as _, px,
+    ClickEvent, Context, Div, FontWeight, InteractiveElement as _, ParentElement as _,
+    StatefulInteractiveElement as _, Styled as _, Window, div, prelude::FluentBuilder as _, px,
 };
 
+use crate::icons::icon;
 use crate::permissions_view::permission_label;
 use crate::theme::palette;
-use crate::view::{Overlay, Shell, button, overlay_panel};
+use crate::tokens;
+use crate::view::{
+    Overlay, SHELL_SWITCH, Shell, danger_button, icon_button, is_dev_url, letter_favicon,
+    overlay_panel, popover_footer, site, switch,
+};
 use crate::{Action, Controller, dispatch};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -122,119 +127,202 @@ impl Shell {
         }
     }
 
+    /// `.site-panel` (ui/styles.css:1962-2140): the site's name and connection, its ad shield,
+    /// its permissions, and a way to clear them.
     pub(crate) fn site_controls_panel(&self, cx: &Context<Self>) -> Div {
         let state = self.state.borrow();
-        let mut panel = overlay_panel().w(px(420.)).child(
-            div()
-                .flex()
-                .justify_between()
-                .items_center()
-                .child(div().text_lg().child("Site Controls"))
-                .child(button("close-site-controls", "Close").on_click(cx.listener(
-                    |this, _: &ClickEvent, window, cx| this.dismiss_overlay(window, cx),
-                ))),
-        );
+        let palette = palette();
+        let inset = px(tokens::SITE_INSET);
+        let mut panel = overlay_panel().p_0().gap_0();
         let Some(site) = state.site_for_window(&self.id) else {
-            return panel.child("Site Controls are available on web pages.");
+            return panel.child(
+                site_header(None, None)
+                    .child(close_site_controls(cx))
+                    .child("Site Controls are available on web pages."),
+            );
         };
-        panel = panel
-            .child(div().truncate().child(site.origin.to_string()))
-            .when_some(state.status_for(&self.id), |panel, status| {
-                panel.child(status.to_owned())
-            });
+        let origin = site.origin.to_string();
+        panel = panel.child(
+            site_header(Some(&origin), state.status_for(&self.id)).child(close_site_controls(cx)),
+        );
+        let rule = |section: Div| {
+            section
+                .border_b(px(tokens::POPOVER_RULE))
+                .border_color(palette.surface_line)
+        };
         if let Some(host) = &site.host {
             let settings = &state.model.core.settings;
             let shield_on = settings.blocks_ads_on(host);
             let global_on = settings.ad_block.unwrap_or(true);
             let blocked = state.engine.blocked_count(&site.tab);
             let inherited = inherited_exception(settings, host);
-            let toggle = button(
-                "site-shield",
-                if shield_on { "Turn off" } else { "Turn on" },
-            )
-            .on_click(self.site_click(&site, SiteChange::Shield(!shield_on), cx));
-            panel = panel.child(
+            let note = |text: String| {
+                div()
+                    .text_size(px(tokens::TEXT_XS))
+                    .text_color(palette.text_3)
+                    .child(text)
+            };
+            // `.site-shield` (ui/styles.css:2052-2092).
+            panel = panel.child(rule(
                 div()
                     .flex()
-                    .justify_between()
                     .items_center()
+                    .gap(px(tokens::SITE_SHIELD_GAP))
+                    .py(px(tokens::SITE_SHIELD_PAD_Y))
+                    .px(inset)
+                    .child(icon(
+                        "shield",
+                        tokens::SITE_SHIELD_ICON,
+                        if shield_on {
+                            palette.green
+                        } else {
+                            palette.text_3
+                        },
+                    ))
                     .child(
                         div()
-                            .child(if shield_on {
+                            .flex_1()
+                            .min_w_0()
+                            .child(div().truncate().child(if shield_on {
                                 "Site shield on"
                             } else {
                                 "Site shield off"
-                            })
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .child(format!("{blocked} blocked on this page")),
-                            )
-                            .when_some(inherited, |label, parent| {
-                                label.child(format!(
+                            }))
+                            .child(note(format!("{blocked} blocked on this page")))
+                            .when_some(inherited, |text, parent| {
+                                text.child(note(format!(
                                     "Settings has an exception for {parent} and its subdomains."
-                                ))
+                                )))
                             })
-                            .when(!global_on, |label| {
-                                label.child("Ad blocking is off in Settings.")
+                            .when(!global_on, |text| {
+                                text.child(note("Ad blocking is off in Settings.".into()))
                             }),
                     )
-                    .when(inherited.is_none(), |row| row.child(toggle)),
-            );
+                    .when(inherited.is_none(), |row| {
+                        row.child(
+                            switch(
+                                "site-shield",
+                                shield_on,
+                                if shield_on { "Turn off" } else { "Turn on" },
+                                SHELL_SWITCH,
+                            )
+                            .on_click(self.site_click(
+                                &site,
+                                SiteChange::Shield(!shield_on),
+                                cx,
+                            )),
+                        )
+                    }),
+            ));
         }
+        let message = |text: String| {
+            div()
+                .px(inset)
+                .py(px(tokens::SITE_SHIELD_PAD_Y))
+                .child(text)
+        };
         if let Some(error) = state.permissions.error() {
-            return panel.child(format!("Saved permissions are read-only. {error:#}"));
+            return panel.child(message(format!(
+                "Saved permissions are read-only. {error:#}"
+            )));
         }
         if let Some(error) = state.permissions.save_error() {
             panel = panel.child(
-                div().flex().flex_col()
-                    .child(format!("Permission changes are active in this session. Could not save them. {error:#}"))
-                    .child(self.action_button("retry-permission-save", "Retry save", Action::RetryPermissionSave, cx)),
+                message(format!(
+                    "Permission changes are active in this session. Could not save them. {error:#}"
+                ))
+                .child(self.action_button(
+                    "retry-permission-save",
+                    "Retry save",
+                    Action::RetryPermissionSave,
+                    cx,
+                )),
             );
         }
         if !site.origin.is_potentially_trustworthy() {
-            return panel.child("This origin cannot request site permissions.");
+            return panel.child(message(
+                "This origin cannot request site permissions.".into(),
+            ));
         }
+        // `.site-label` and `.field-label` (ui/styles.css:1450-1455, 2094-2097).
+        panel = panel.child(
+            div()
+                .pt(px(tokens::SITE_LABEL_PAD_TOP))
+                .px(inset)
+                .pb(px(tokens::SITE_LABEL_PAD_BOTTOM))
+                .text_size(px(tokens::TEXT_XS))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(palette.text_3)
+                .child("Permissions"),
+        );
         let permissions = state.site_permissions(&site);
         for kind in PermissionKind::ALL {
             let decision = permissions.decision(kind);
+            // `.site-row` (ui/styles.css:2099-2110), its choice in `.mini-select`'s chip
+            // (ui/styles.css:2112-2121).
             panel = panel.child(
                 div()
                     .flex()
+                    .flex_none()
                     .items_center()
                     .justify_between()
-                    .child(permission_label(kind))
+                    .gap(px(tokens::SITE_ROW_GAP))
+                    .h(px(tokens::SITE_ROW))
+                    .px(inset)
+                    .child(div().min_w_0().truncate().child(permission_label(kind)))
                     .child(
-                        div().flex().gap_1().children(
-                            [
-                                (Decision::Ask, "Ask"),
-                                (Decision::Allow, "Allow"),
-                                (Decision::Block, "Block"),
-                            ]
-                            .map(|(value, label)| {
-                                button(format!("permission-{}-{label}", kind.name()), label)
-                                    .when(decision == value, |button| {
-                                        button
-                                            .bg(palette().selection)
-                                            .text_color(palette().selection_text)
-                                    })
-                                    .on_click(self.site_click(
-                                        &site,
-                                        SiteChange::Permission(kind, value),
-                                        cx,
-                                    ))
-                            }),
-                        ),
+                        div()
+                            .flex()
+                            .flex_none()
+                            .h(px(tokens::MINI_SELECT))
+                            .rounded(px(tokens::RADIUS_SM))
+                            .bg(palette.surface_2)
+                            .text_size(px(tokens::TEXT_SM))
+                            .font_weight(FontWeight::MEDIUM)
+                            .children(
+                                [
+                                    (Decision::Ask, "Ask"),
+                                    (Decision::Allow, "Allow"),
+                                    (Decision::Block, "Block"),
+                                ]
+                                .map(|(value, label)| {
+                                    div()
+                                        .id(format!("permission-{}-{label}", kind.name()))
+                                        .flex()
+                                        .items_center()
+                                        .h_full()
+                                        .px(px(tokens::MINI_SELECT_PAD))
+                                        .rounded(px(tokens::RADIUS_SM))
+                                        .cursor_pointer()
+                                        .map(|choice| {
+                                            if decision == value {
+                                                choice
+                                                    .bg(palette.selection)
+                                                    .text_color(palette.selection_text)
+                                            } else {
+                                                choice
+                                                    .text_color(palette.text_2)
+                                                    .hover(|choice| choice.text_color(palette.text))
+                                            }
+                                        })
+                                        .child(label)
+                                        .on_click(self.site_click(
+                                            &site,
+                                            SiteChange::Permission(kind, value),
+                                            cx,
+                                        ))
+                                }),
+                            ),
                     ),
             );
         }
-        panel.child(
-            button("clear-site-permissions", "Clear permissions").on_click(self.site_click(
+        panel.child(popover_footer().mt(px(tokens::SITE_LABEL_PAD_TOP)).child(
+            danger_button("clear-site-permissions", "Clear permissions").on_click(self.site_click(
                 &site,
                 SiteChange::ClearPermissions,
                 cx,
             )),
-        )
+        ))
     }
 
     fn site_click(
@@ -248,6 +336,75 @@ impl Shell {
             dispatch(&this.state, &this.id, action.clone(), cx);
         })
     }
+}
+
+/// `.site-header` (ui/styles.css:1972-2004): the site's letter, its host, and how the page
+/// connects, worded as ui/app.ts:850-857 words it.
+fn site_header(origin: Option<&str>, status: Option<&str>) -> Div {
+    let palette = palette();
+    let inset = px(tokens::SITE_INSET);
+    let insecure = origin.is_some_and(|url| url.starts_with("http:") && !is_dev_url(url));
+    let security = origin.map(|url| {
+        if is_dev_url(url) {
+            "Local development server"
+        } else if url.starts_with("https:") {
+            "Connection is secure"
+        } else if url.starts_with("http:") {
+            "Connection is not secure"
+        } else {
+            "Not a web page"
+        }
+    });
+    let small = |text: String, color| {
+        div()
+            .text_size(px(tokens::TEXT_XS))
+            .text_color(color)
+            .child(text)
+    };
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(tokens::SITE_HEADER_GAP))
+        .pt(inset)
+        .px(inset)
+        .pb(px(tokens::SITE_HEADER_PAD_BOTTOM))
+        .when_some(origin, |header, url| {
+            header.child(letter_favicon(
+                url,
+                tokens::SITE_FAVICON,
+                tokens::SITE_FAVICON_RADIUS,
+                tokens::FAVICON_LETTER,
+            ))
+        })
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .child(
+                    div()
+                        .truncate()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(origin.map_or("Site Controls", site).to_owned()),
+                )
+                .children(security.map(|text| {
+                    small(
+                        text.to_owned(),
+                        if insecure {
+                            palette.amber
+                        } else {
+                            palette.text_3
+                        },
+                    )
+                }))
+                .children(status.map(|text| small(text.to_owned(), palette.text_3))),
+        )
+}
+
+/// The rewrite's Close button; the shipping panel closes when a click lands outside it.
+fn close_site_controls(cx: &Context<Shell>) -> gpui::Stateful<Div> {
+    icon_button("close-site-controls", "close", "Close Site Controls")
+        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.dismiss_overlay(window, cx)))
 }
 
 #[cfg(test)]
