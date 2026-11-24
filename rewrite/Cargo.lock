@@ -2203,14 +2203,19 @@ name = "flecha-ui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "cef",
+ "chrono",
  "flecha-cef",
  "flecha-core",
+ "flecha-history",
  "flecha-services",
  "flecha-surface",
  "futures",
  "gpui",
  "serde",
  "serde_json",
+ "tempfile",
+ "unicode-segmentation",
  "uuid",
 ]
 
