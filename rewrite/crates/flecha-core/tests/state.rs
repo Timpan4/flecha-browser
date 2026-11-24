@@ -1,8 +1,106 @@
 use flecha_core::storage::{decode, encode};
 use flecha_core::{
     ArchivePolicy, BrowserState, CLOSED_WINDOW_LIMIT, CloseTab, FolderId, Placement, Reopened,
-    SpaceId, Tab, TabId, WindowId,
+    SpaceId, SplitDropTarget, SplitSide, Tab, TabId, WindowId,
 };
+
+#[test]
+fn viewport_drop_keeps_the_focused_pane_and_rejects_a_stale_target() {
+    let space = SpaceId::new("s");
+    let window = WindowId::new("w");
+    let mut state = BrowserState::new(space.clone(), window.clone());
+    let [a, b, c] = ["a", "b", "c"].map(TabId::new);
+    for id in [&a, &b, &c] {
+        assert!(state.open_today(
+            id.clone(),
+            Tab::new(format!("https://example.org/{}", id.as_str()), 0),
+            &window,
+            None,
+            id == &a,
+        ));
+    }
+    assert_eq!(state.page_split_target(&window, &a), None);
+    assert_eq!(state.page_split_target(&window, &b), Some(&a));
+    assert!(
+        state
+            .drop_to_split(
+                &window,
+                b.clone(),
+                SplitSide::Left,
+                SplitDropTarget::Page(a.clone()),
+                1,
+            )
+            .result
+    );
+    assert_eq!(
+        state.focused_window().visible_tabs(),
+        [b.clone(), a.clone()]
+    );
+    assert_eq!(state.page_split_target(&window, &a), None);
+    assert_eq!(state.page_split_target(&window, &c), Some(&b));
+    assert!(
+        !state
+            .drop_to_split(
+                &window,
+                c.clone(),
+                SplitSide::Right,
+                SplitDropTarget::Page(a.clone()),
+                2,
+            )
+            .result
+    );
+    assert_eq!(state.focused_window().visible_tabs(), [b.clone(), a]);
+    assert!(
+        state
+            .drop_to_split(
+                &window,
+                c.clone(),
+                SplitSide::Right,
+                SplitDropTarget::Page(b.clone()),
+                3,
+            )
+            .result
+    );
+    assert_eq!(state.focused_window().visible_tabs(), [b, c.clone()]);
+    assert_eq!(state.focused_window().spaces[&space].active_tab_id, Some(c));
+}
+
+#[test]
+fn viewport_drop_replaces_the_responsive_mirror_even_when_it_has_focus() {
+    let (space, window) = (SpaceId::new("s"), WindowId::new("w"));
+    let mut state = BrowserState::new(space.clone(), window.clone());
+    let [desktop, mirror, source] = ["desktop", "mirror", "source"].map(TabId::new);
+    for id in [&source, &desktop] {
+        assert!(state.open_today(
+            id.clone(),
+            Tab::new("https://example.org", 0),
+            &window,
+            None,
+            true,
+        ));
+    }
+    assert_eq!(
+        state.open_responsive(&window, mirror.clone(), 1),
+        Some(mirror.clone())
+    );
+    assert_eq!(
+        state.activate(&mirror, &window, None).result,
+        Some(window.clone())
+    );
+    assert_eq!(state.page_split_target(&window, &source), Some(&desktop));
+    let change = state.drop_to_split(
+        &window,
+        source.clone(),
+        SplitSide::Right,
+        SplitDropTarget::Page(desktop.clone()),
+        2,
+    );
+    assert!(change.result);
+    assert_eq!(change.removed, std::slice::from_ref(&mirror));
+    assert!(state.tab(&mirror).is_none());
+    assert_eq!(state.focused_window().spaces[&space].split_mode, None);
+    assert_eq!(state.focused_window().visible_tabs(), [desktop, source]);
+}
 
 #[test]
 fn switching_space_claims_its_previously_hidden_selection() {

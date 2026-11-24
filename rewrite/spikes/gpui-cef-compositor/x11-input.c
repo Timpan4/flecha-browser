@@ -157,6 +157,13 @@ int main(int argc, char **argv)
         int x = coordinate(argv[2]), y = coordinate(argv[3]);
         unsigned int button = strcmp(argv[1], "click") == 0 ? 1 : 3;
         ok = x >= 0 && y >= 0 && click(display, x, y, button);
+    } else if (argc == 4 && (strcmp(argv[1], "press") == 0 || strcmp(argv[1], "move") == 0)) {
+        int x = coordinate(argv[2]), y = coordinate(argv[3]);
+        ok = x >= 0 && y >= 0 && XTestFakeMotionEvent(display, DefaultScreen(display), x, y, CurrentTime);
+        if (ok && strcmp(argv[1], "press") == 0)
+            ok = XTestFakeButtonEvent(display, 1, True, CurrentTime);
+    } else if (argc == 2 && strcmp(argv[1], "release") == 0) {
+        ok = XTestFakeButtonEvent(display, 1, False, CurrentTime);
     } else if (argc == 3 && strcmp(argv[1], "key") == 0) {
         ok = tap(display, XStringToKeysym(argv[2]));
     } else if (argc == 4 && strcmp(argv[1], "chord") == 0) {
