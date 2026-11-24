@@ -13,6 +13,9 @@ const out = join(process.env.HOME, '..');
 const x11Driver = join(out, 'x11-input');
 const mode = process.argv[2] ?? 'slice';
 
+// The per-step allowance from chromium/tests/native-workflows.mjs.
+const stepTimeoutMs = 10_000;
+
 const shippingTrace = readFileSync(new URL('./slice-ts-replay.jsonl', import.meta.url), 'utf8')
   .trim().split('\n').map(line => JSON.parse(line));
 
@@ -47,10 +50,10 @@ const { base } = site;
 const pass = message => console.log(`PASS ${message}`);
 let waitingFor = 'start Flecha';
 
-function browser(name) {
-  const env = mode === 'adblock'
-    ? { ...process.env, FLECHA_VERIFY_ADBLOCK_PORT: String(site.server.address().port) }
-    : process.env;
+function browser(name, fixturePort) {
+  const env = { ...process.env };
+
+  if (fixturePort !== undefined) env.FLECHA_VERIFY_ADBLOCK_PORT = String(fixturePort);
 
   const child = spawn('./target/debug/flecha', ['--verify'], { env });
   const log = createWriteStream(join(out, `${name}.log`));
@@ -77,15 +80,16 @@ function browser(name) {
     if (error.code !== 'EPIPE') throw error;
   });
 
-  async function wait(description, match, since = 0) {
+  async function wait(description, match, since = 0, timeoutMs) {
     waitingFor = description;
+    const signal = timeoutMs === undefined ? undefined : AbortSignal.timeout(timeoutMs);
 
     for (;;) {
       const event = events.slice(since).find(match);
 
       if (event) return event;
       assert(!exit, `Flecha exited before ${description}: ${JSON.stringify(exit)}`);
-      await once(emitter, 'message');
+      await once(emitter, 'message', { signal });
     }
   }
 
@@ -739,8 +743,8 @@ async function closeWithPopup(app) {
 
 const apps = [];
 
-function launch(name) {
-  const app = browser(name);
+function launch(name, fixturePort) {
+  const app = browser(name, fixturePort);
   apps.push(app);
 
   return app;
@@ -764,8 +768,9 @@ async function verifyAdblock() {
   const listFile = join(cache, 'easylist.txt');
   assert(!existsSync(cache), 'the scratch profile already has ad-block lists');
 
-  const first = launch('adblock-first');
-  await first.wait('failed initial list downloads', event => event.type === 'adblock' && event.failed);
+  const port = site.server.address().port;
+  const first = launch('adblock-first', port);
+  const initialFailure = await first.wait('failed initial list downloads', event => event.type === 'adblock' && event.failed);
   assert.deepEqual(listRequests, new Set(['/easylist.txt', '/easyprivacy.txt']));
   assert(!existsSync(cache), 'the failed downloads created a cache');
   await first.wait('CEF context ready', event => event.type === 'ready');
@@ -775,7 +780,8 @@ async function verifyAdblock() {
   listResponse = 'valid';
   pass('started with no list cache and displayed a page when both list downloads failed');
 
-  await first.wait('automatic list retry', event => event.type === 'adblock' && !event.failed);
+  const retryBudget = 2 * initialFailure.downloadTimeoutMs + stepTimeoutMs;
+  await first.wait('automatic list retry', event => event.type === 'adblock' && !event.failed, 0, retryBudget);
   assert.deepEqual(await requestFilterResult(first, tab, 'fresh-list-filter'), [false, false]);
   assert.equal(readFileSync(listFile, 'utf8'), easylist);
   assert.equal(readFileSync(join(cache, 'easyprivacy.txt'), 'utf8'), easyprivacy);
@@ -786,7 +792,7 @@ async function verifyAdblock() {
   utimesSync(listFile, 0, 0);
   listResponse = 'corrupt';
   listRequests.clear();
-  const restarted = launch('adblock-corrupt-refresh');
+  const restarted = launch('adblock-corrupt-refresh', port);
   await restarted.wait('fall back to the cached list', event => event.type === 'adblock' && event.usedCache);
   assert.deepEqual(listRequests, new Set(['/easylist.txt']));
   assert.equal(readFileSync(listFile, 'utf8'), easylist);
@@ -795,6 +801,27 @@ async function verifyAdblock() {
   assert.deepEqual(await requestFilterResult(restarted, restored, 'cached-list-filter'), [false, false]);
   await restarted.quit();
   pass('rejected a bad EasyList checksum and kept the previous list and its blocking decisions');
+
+  listRequests.clear();
+  const cached = launch('adblock-cache-only');
+  await cached.wait('load cached lists without a fixture port', event => event.type === 'adblock' && !event.failed, 0, stepTimeoutMs);
+  await cached.wait('CEF context ready from the cache-only launch', event => event.type === 'ready');
+  const loaded = await openTab(cached, '/open');
+  assert.deepEqual(await requestFilterResult(cached, loaded, 'cache-only-filter'), [false, false]);
+  assert.equal(listRequests.size, 0);
+  await cached.quit();
+  pass('loaded cached lists without a fixture port or network requests');
+
+  for (const invalidPort of ['bad-port', '0']) {
+    assert.throws(() => execFileSync('./target/debug/flecha', ['--verify'], {
+      env: { ...process.env, FLECHA_VERIFY_ADBLOCK_PORT: invalidPort },
+      stdio: 'pipe',
+      timeout: stepTimeoutMs,
+      killSignal: 'SIGKILL',
+    }), error => error.status === 1 && error.stderr.includes('FLECHA_VERIFY_ADBLOCK_PORT must be a nonzero TCP port'));
+  }
+
+  pass('rejected malformed and zero fixture ports at startup');
 }
 
 async function verifySlice() {

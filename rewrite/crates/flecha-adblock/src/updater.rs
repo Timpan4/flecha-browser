@@ -10,7 +10,7 @@ use std::{
     path::{Path, PathBuf},
     sync::mpsc::{self, RecvTimeoutError, Sender},
     thread::JoinHandle,
-    time::{Duration, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 
 use crate::{
@@ -19,15 +19,18 @@ use crate::{
         CachedEngineError, EngineKey, SkippedLine, build_engine, engine_key, load_engine,
         save_engine,
     },
-    fetch::{Download, ListFailure, ListSource, ListWarning, cache_age, cache_file, fetch_lists},
+    fetch::{
+        Download, FetchReport, ListFailure, ListWarning, Retry, attempt, cache_age, cache_file,
+        cache_only, fetch_each,
+    },
     lists::{LISTS, MAX_AGE},
 };
 
 pub struct UpdaterConfig {
     /// Where the lists and the serialized engine are kept. The app owns the path.
     pub cache_dir: PathBuf,
-    /// When to try again after a download failed. build-adblock.mjs has no retry: it runs
-    /// again at the next build. The app chooses this value.
+    /// When to try again after an incomplete transport. Rejected downloads and cache-write
+    /// failures wait for the normal refresh interval.
     pub retry_after_failure: Duration,
 }
 
@@ -85,7 +88,80 @@ pub fn update_once(
     installed: &mut Option<EngineKey>,
     retry_after_failure: Duration,
 ) -> UpdateReport {
-    let fetched = fetch_lists(cache, refresh, download);
+    update_scheduled(
+        blocker,
+        cache,
+        refresh,
+        download,
+        installed,
+        retry_after_failure,
+        &mut [None; LISTS.len()],
+    )
+}
+
+/// Builds or deserializes the engine using only the cached lists.
+pub fn load_cached_rules(blocker: &AdBlocker, cache: &Path) -> UpdateReport {
+    let fetched = FetchReport::from_attempts(fetch_each(|_, list| cache_only(list, cache)));
+    install_fetched(blocker, cache, &mut None, fetched)
+}
+
+fn update_scheduled(
+    blocker: &AdBlocker,
+    cache: &Path,
+    refresh: bool,
+    download: &dyn Download,
+    installed: &mut Option<EngineKey>,
+    retry_after_failure: Duration,
+    retry_at: &mut [Option<Instant>; LISTS.len()],
+) -> UpdateReport {
+    let now = Instant::now();
+    let deferred = retry_at.map(|deadline| deadline.filter(|&deadline| !refresh && deadline > now));
+    let attempts = fetch_each(|index, list| {
+        if deferred[index].is_some() {
+            cache_only(list, cache)
+        } else {
+            attempt(list, refresh, cache, download)
+        }
+    });
+    let retries = attempts.each_ref().map(|attempt| attempt.retry);
+    let fetched = FetchReport::from_attempts(attempts);
+    let mut report = install_fetched(blocker, cache, installed, fetched);
+    let now = Instant::now();
+    for ((deadline, deferred), retry) in retry_at.iter_mut().zip(deferred).zip(retries) {
+        *deadline = deferred.or_else(|| {
+            retry.map(|retry| {
+                now + match retry {
+                    Retry::Transport => retry_after_failure,
+                    Retry::Refresh => MAX_AGE,
+                }
+            })
+        });
+    }
+
+    let wall_time = SystemTime::now();
+    report.next_check = LISTS
+        .iter()
+        .zip(retry_at)
+        .map(|(list, deadline)| {
+            deadline.map_or_else(
+                || {
+                    cache_age(&cache_file(cache, list.id), wall_time)
+                        .map_or(MAX_AGE, |age| MAX_AGE.saturating_sub(age))
+                },
+                |deadline| deadline.saturating_duration_since(now),
+            )
+        })
+        .min()
+        .expect("Flecha has filter lists");
+    report
+}
+
+fn install_fetched(
+    blocker: &AdBlocker,
+    cache: &Path,
+    installed: &mut Option<EngineKey>,
+    fetched: FetchReport,
+) -> UpdateReport {
     let lists = match fetched.lists {
         Ok(lists) => lists,
         Err(failures) => {
@@ -93,7 +169,7 @@ pub fn update_once(
                 warnings: fetched.warnings,
                 failures,
                 engine: EngineOutcome::NotBuilt,
-                next_check: retry_after_failure,
+                next_check: Duration::ZERO,
             };
         }
     };
@@ -123,27 +199,11 @@ pub fn update_once(
         *installed = Some(key);
         outcome
     };
-    // A failed refresh leaves the old copy's time, which is already due: wait instead.
-    let failed_refresh = lists
-        .iter()
-        .any(|list| list.source == ListSource::CacheAfterFailedRefresh);
-    let now = SystemTime::now();
-    let due = lists
-        .iter()
-        .map(|list| {
-            cache_age(&cache_file(cache, list.id), now).map(|age| MAX_AGE.saturating_sub(age))
-        })
-        .collect::<Option<Vec<_>>>()
-        .and_then(|waits| waits.into_iter().min());
-    let next_check = match due {
-        Some(due) if !failed_refresh => due,
-        _ => retry_after_failure,
-    };
     UpdateReport {
         warnings: fetched.warnings,
         failures: Vec::new(),
         engine,
-        next_check,
+        next_check: Duration::ZERO,
     }
 }
 
@@ -181,14 +241,16 @@ impl Updater {
                     });
                 }
                 let mut refresh = false;
+                let mut retry_at = [None; LISTS.len()];
                 loop {
-                    let report = update_once(
+                    let report = update_scheduled(
                         &blocker,
                         cache,
                         refresh,
                         download.as_ref(),
                         &mut installed,
                         config.retry_after_failure,
+                        &mut retry_at,
                     );
                     let wait = report.next_check;
                     on_report(report);

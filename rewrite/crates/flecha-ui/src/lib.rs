@@ -16,13 +16,15 @@ mod view;
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::num::NonZeroU16;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Instant;
 
 use anyhow::{Context as _, Result, ensure};
 use flecha_adblock::{
-    DOWNLOAD_TIMEOUT, Download, EngineOutcome, Updater, UpdaterConfig, UreqDownload,
+    DOWNLOAD_TIMEOUT, Download, EngineOutcome, UpdateReport, Updater, UpdaterConfig, UreqDownload,
+    load_cached_rules,
 };
 use flecha_boosts::Boosts;
 use flecha_cef::{Engine, Event, Owner, Runtime, Viewport};
@@ -48,6 +50,7 @@ use view::Shell;
 pub struct Options {
     pub initial: Option<String>,
     pub verify: bool,
+    pub adblock_fixture_port: Option<NonZeroU16>,
 }
 
 pub fn start(
@@ -64,6 +67,7 @@ pub fn start(
         store,
         loaded,
         options.verify,
+        options.adblock_fixture_port,
         failure,
     )?));
     sync_windows(&controller, cx)?;
@@ -125,6 +129,30 @@ enum Action {
     Quit,
 }
 
+enum AdblockLists {
+    Update(Box<dyn Download>),
+    Cached,
+}
+
+fn report_adblock(verify: bool, report: &UpdateReport) {
+    for issue in &report.warnings {
+        eprintln!("{issue}");
+    }
+    for issue in &report.failures {
+        eprintln!("{issue}");
+    }
+    if let EngineOutcome::Parsed {
+        save_error: Some(error),
+        ..
+    } = &report.engine
+    {
+        eprintln!("adblock: could not save the engine: {error}");
+    }
+    if verify {
+        verify::adblock_report(report);
+    }
+}
+
 struct Controller {
     model: Model,
     history: History,
@@ -154,14 +182,19 @@ impl Controller {
         store: StateStore,
         snapshots: LoadedState,
         verify: bool,
+        adblock_fixture_port: Option<NonZeroU16>,
         failure: Rc<RefCell<Option<anyhow::Error>>>,
     ) -> Result<Self> {
         let isolated =
             verify || std::env::var_os("FLECHA_LAUNCHER").as_deref() == Some("isolated".as_ref());
-        let download = if isolated {
-            verify.then(verify::adblock_download).flatten()
+        let lists = if verify {
+            adblock_fixture_port.map_or(AdblockLists::Cached, |port| {
+                AdblockLists::Update(verify::adblock_download(port))
+            })
+        } else if isolated {
+            AdblockLists::Cached
         } else {
-            Some(Box::new(UreqDownload::default()) as Box<dyn Download>)
+            AdblockLists::Update(Box::new(UreqDownload::default()))
         };
         Self::with_profile(
             cef_profile,
@@ -169,7 +202,7 @@ impl Controller {
             snapshots,
             verify,
             isolated,
-            download,
+            Some(lists),
             failure,
         )
     }
@@ -180,7 +213,7 @@ impl Controller {
         mut snapshots: LoadedState,
         verify: bool,
         isolated: bool,
-        download: Option<Box<dyn Download>>,
+        lists: Option<AdblockLists>,
         failure: Rc<RefCell<Option<anyhow::Error>>>,
     ) -> Result<Self> {
         let profile = cef_profile
@@ -212,38 +245,37 @@ impl Controller {
         };
         state.permissions.restore(&mut state.engine);
         state.sync_adblock();
-        if let Some(download) = download {
-            let config = UpdaterConfig {
-                cache_dir: profile.join("adblock"),
-                // After a failure, wait one download window before trying again.
-                retry_after_failure: DOWNLOAD_TIMEOUT,
-            };
-            match Updater::spawn(
-                state.engine.adblocker().clone(),
-                config,
-                download,
-                move |report| {
-                    for issue in &report.warnings {
-                        eprintln!("{issue}");
-                    }
-                    for issue in &report.failures {
-                        eprintln!("{issue}");
-                    }
-                    if let EngineOutcome::Parsed {
-                        save_error: Some(error),
-                        ..
-                    } = &report.engine
-                    {
-                        eprintln!("adblock: could not save the engine: {error}");
-                    }
-                    if verify {
-                        verify::adblock_report(&report);
-                    }
-                },
-            ) {
-                Ok(updater) => state._adblock_updater = Some(updater),
-                Err(error) => eprintln!("adblock: could not start the updater: {error}"),
+        let cache_dir = profile.join("adblock");
+        let blocker = state.engine.adblocker();
+        match lists {
+            Some(AdblockLists::Update(download)) => {
+                let config = UpdaterConfig {
+                    cache_dir,
+                    // The shell has no runtime retry. Reuse DOWNLOAD_TIMEOUT (30 seconds)
+                    // as the wait after an incomplete transport.
+                    retry_after_failure: DOWNLOAD_TIMEOUT,
+                };
+                match Updater::spawn(blocker.clone(), config, download, move |report| {
+                    report_adblock(verify, &report);
+                }) {
+                    Ok(updater) => state._adblock_updater = Some(updater),
+                    Err(error) => eprintln!("adblock: could not start the updater: {error}"),
+                }
             }
+            Some(AdblockLists::Cached) => {
+                let blocker = blocker.clone();
+                if let Err(error) = std::thread::Builder::new()
+                    .name("flecha-adblock-cache".into())
+                    .spawn(move || {
+                        if cache_dir.is_dir() {
+                            report_adblock(verify, &load_cached_rules(&blocker, &cache_dir));
+                        }
+                    })
+                {
+                    eprintln!("adblock: could not start the cache loader: {error}");
+                }
+            }
+            None => {}
         }
         state.engine.set_boosts(state.boosts().clone());
         state.sync_download_config();

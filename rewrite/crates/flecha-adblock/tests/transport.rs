@@ -9,13 +9,15 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
+        mpsc,
     },
     time::Instant,
 };
 
 use common::subscription;
 use flecha_adblock::{
-    DOWNLOAD_TIMEOUT, Download, DownloadRequest, LISTS, UreqDownload, WireResponse,
+    AdBlocker, DOWNLOAD_TIMEOUT, Download, DownloadRequest, LISTS, MAX_AGE, Updater, UpdaterConfig,
+    UreqDownload, WireResponse,
     fetch::{ListWarning, fetch_lists},
 };
 
@@ -77,6 +79,100 @@ impl Download for Local {
         self.inner
             .get(&format!("http://127.0.0.1:{}{path}", self.port), request)
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum RetryScenario {
+    RejectedList,
+    UnwritableCache,
+    TransportFailure,
+    RejectedWithTransportFailure,
+}
+
+fn requests_during_retry_window(scenario: RetryScenario) -> [usize; 2] {
+    let (port, requests) = server(Arc::new(move |path, stream| {
+        let index = usize::from(path.ends_with("/easyprivacy.txt"));
+        match (scenario, index) {
+            (RetryScenario::TransportFailure, _)
+            | (RetryScenario::RejectedWithTransportFailure, 1) => return,
+            _ => {}
+        }
+        let body = match scenario {
+            RetryScenario::RejectedList | RetryScenario::RejectedWithTransportFailure => {
+                subscription(LISTS[1 - index].url, "/wrong-list")
+            }
+            _ => subscription(LISTS[index].url, "/valid-list"),
+        };
+        reply(
+            stream,
+            "200 OK",
+            &[("Content-Length", body.len().to_string())],
+            body.as_bytes(),
+        );
+    }));
+    let profile = tempfile::tempdir().unwrap();
+    let cache_dir = profile.path().join("adblock");
+    if matches!(scenario, RetryScenario::UnwritableCache) {
+        // An ordinary file cannot be used as a cache directory, even by a privileged test.
+        std::fs::write(&cache_dir, b"not a directory").unwrap();
+    }
+    let (blocker, _) = AdBlocker::new(true, &[]);
+    let (reports, received) = mpsc::channel();
+    let updater = Updater::spawn(
+        blocker,
+        UpdaterConfig {
+            cache_dir,
+            retry_after_failure: DOWNLOAD_TIMEOUT,
+        },
+        Box::new(Local {
+            port,
+            deadlines: Mutex::default(),
+            inner: UreqDownload::default(),
+        }),
+        move |report| {
+            let _ = reports.send(report);
+        },
+    )
+    .unwrap();
+    let first = received.recv_timeout(DOWNLOAD_TIMEOUT).unwrap();
+    assert_eq!(first.failures.len(), LISTS.len(), "{scenario:?}: {first:?}");
+    let expected_wait = match scenario {
+        RetryScenario::RejectedList | RetryScenario::UnwritableCache => MAX_AGE,
+        RetryScenario::TransportFailure | RetryScenario::RejectedWithTransportFailure => {
+            DOWNLOAD_TIMEOUT
+        }
+    };
+    assert_eq!(first.next_check, expected_wait, "{scenario:?}");
+    // Observe through the first retry, halfway to the second.
+    std::thread::sleep(DOWNLOAD_TIMEOUT + DOWNLOAD_TIMEOUT / 2);
+    updater.shutdown();
+    let seen = requests.lock().unwrap();
+    LISTS.map(|list| {
+        let file = format!("/{}.txt", list.id);
+        seen.iter().filter(|path| path.ends_with(&file)).count()
+    })
+}
+
+#[test]
+fn only_transport_failures_trigger_a_short_retry() {
+    let cases = [
+        (RetryScenario::RejectedList, [1, 1]),
+        (RetryScenario::UnwritableCache, [1, 1]),
+        (RetryScenario::TransportFailure, [2, 2]),
+        (RetryScenario::RejectedWithTransportFailure, [1, 2]),
+    ];
+    let counts = std::thread::scope(|scope| {
+        cases
+            .map(|(scenario, _)| scope.spawn(move || requests_during_retry_window(scenario)))
+            .map(|thread| thread.join().unwrap())
+    });
+    for ((scenario, _), seen) in cases.into_iter().zip(counts) {
+        println!(
+            "{scenario:?}: EasyList {}, EasyPrivacy {}",
+            seen[0], seen[1]
+        );
+    }
+    assert_eq!(counts, cases.map(|(_, expected)| expected));
 }
 
 #[test]

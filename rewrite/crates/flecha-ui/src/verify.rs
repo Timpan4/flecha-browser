@@ -1,8 +1,10 @@
 use std::io::{self, BufRead as _};
+use std::num::NonZeroU16;
 
 use anyhow::{Context as _, Result, ensure};
 use flecha_adblock::{
-    Download, DownloadRequest, LISTS, UpdateReport, UreqDownload, WireResponse, fetch::ListWarning,
+    DOWNLOAD_TIMEOUT, Download, DownloadRequest, LISTS, UpdateReport, UreqDownload, WireResponse,
+    fetch::ListWarning,
 };
 use flecha_cef::{BrowserEvent, Disposition, Event, Owner, Partition};
 use flecha_core::{SpaceId, TabId, WindowId};
@@ -245,15 +247,11 @@ impl Download for FixtureDownload {
     }
 }
 
-pub(super) fn adblock_download() -> Option<Box<dyn Download>> {
-    let port = std::env::var("FLECHA_VERIFY_ADBLOCK_PORT")
-        .ok()?
-        .parse()
-        .ok()?;
-    Some(Box::new(FixtureDownload {
-        port,
+pub(super) fn adblock_download(port: NonZeroU16) -> Box<dyn Download> {
+    Box::new(FixtureDownload {
+        port: port.get(),
         inner: UreqDownload::default(),
-    }))
+    })
 }
 
 pub(super) fn adblock_report(report: &UpdateReport) {
@@ -261,6 +259,7 @@ pub(super) fn adblock_report(report: &UpdateReport) {
         "type": "adblock",
         "failed": !report.failures.is_empty(),
         "usedCache": report.warnings.iter().any(|warning| matches!(warning, ListWarning::UsedCache { .. })),
+        "downloadTimeoutMs": DOWNLOAD_TIMEOUT.as_millis(),
     }));
 }
 
