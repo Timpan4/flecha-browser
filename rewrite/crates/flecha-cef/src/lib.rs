@@ -2,8 +2,10 @@ mod adblock;
 mod boosts;
 mod callbacks;
 mod compositor;
+mod context_menu;
 mod devtools;
 mod downloads;
+mod find;
 mod identity;
 mod permissions;
 mod popup;
@@ -11,6 +13,7 @@ mod pump;
 mod runtime;
 mod services;
 mod sleep;
+mod zoom;
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
@@ -24,16 +27,20 @@ use cef::{
     RuntimeStyle, WindowInfo, browser_host_create_browser_sync, request_context_create_context,
 };
 use flecha_core::TabId;
-use gpui::{Bounds, Pixels};
+use gpui::{Bounds, Pixels, Point, point, px};
 
 pub use callbacks::Frames;
 use callbacks::{Queue, Slot, Stage};
 pub use compositor::Compositing;
 use compositor::Compositor;
+pub use context_menu::{
+    ContextMenuEvent, ContextMenuId, ContextMenuRequest, FrameEdit, MenuContext,
+};
 pub use devtools::{DevToolsEvent, DevToolsMessage};
 pub use downloads::{
     DownloadConfig, DownloadError, DownloadEvent, DownloadHandle, DownloadMessage,
 };
+pub use find::{FindEvent, FindResult};
 use identity::Generations;
 pub use identity::{BrowserKey, IncognitoSession, Owner, Partition};
 pub use permissions::{PermissionEvent, PermissionPrompt};
@@ -43,6 +50,7 @@ use runtime::path_string;
 pub use runtime::{Relaunches, Runtime, Start, profile_in_use};
 use services::Services;
 pub use sleep::{Discarded, SleepChange};
+pub use zoom::{PageZoom, zoom_percentage};
 
 /// `Opened`: CEF is creating this browser for a page, and the engine already owns it.
 /// `ClosedByPage`: the page closed its browser (`window.close()`), or CEF abandoned
@@ -78,6 +86,7 @@ pub struct BrowserEvent {
 
 #[derive(Clone, Copy, PartialEq)]
 pub struct Viewport {
+    pane_origin: Point<Pixels>,
     origin: (i32, i32),
     size: (i32, i32),
     screen: (i32, i32, i32, i32),
@@ -93,6 +102,7 @@ impl Viewport {
     ) -> Self {
         let pixels = |px| f32::from(px).round() as i32;
         Self {
+            pane_origin: pane.origin,
             origin: (
                 pixels(window.origin.x + pane.origin.x),
                 pixels(window.origin.y + pane.origin.y),
@@ -135,6 +145,10 @@ impl Viewport {
 
     fn screen_origin(self) -> (i32, i32) {
         self.origin
+    }
+
+    fn window_point(self, (x, y): (i32, i32)) -> Point<Pixels> {
+        self.pane_origin + point(px(x as f32), px(y as f32))
     }
 }
 
@@ -565,6 +579,12 @@ impl Engine {
         let Some(mut session) = self.browsers.remove(from) else {
             return;
         };
+        if from != &to || session.owner != owner {
+            if session.slot.finding.get() {
+                find::stop(&session.slot, true);
+            }
+            context_menu::cancel(&session.slot);
+        }
         if from != &to {
             let mut key = session.slot.key.borrow_mut();
             *key = self.generations.transfer(&key, to.clone());
@@ -678,6 +698,8 @@ impl Engine {
         let key = slot.key.borrow().clone();
         self.generations.retire(&key);
         slot.retired.set(true);
+        find::forget(slot);
+        context_menu::cancel(slot);
         match slot.stage.get() {
             // CEF already destroyed it. Its queued ClosedByPage now has a retired key.
             Stage::Closed => {}
@@ -870,6 +892,7 @@ mod tests {
     }
 
     const VIEWPORT: Viewport = Viewport {
+        pane_origin: point(px(0.), px(0.)),
         origin: (0, 0),
         size: (800, 600),
         screen: (0, 0, 800, 600),

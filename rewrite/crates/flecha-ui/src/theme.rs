@@ -28,6 +28,8 @@ pub(crate) struct Palette {
     pub(crate) text: Rgba,
     pub(crate) text_secondary: Rgba,
     pub(crate) muted: Rgba,
+    /// A menu item that does nothing here.
+    pub(crate) disabled: Rgba,
     /// The selected button, tab or row.
     pub(crate) accent: Rgba,
     /// The caret and a focused field's underline.
@@ -57,6 +59,7 @@ impl Palette {
             text: rgb(0xe2edf1),
             text_secondary: rgb(0xc0d1dc),
             muted: rgb(0xa4b5c3),
+            disabled: rgb(0x8b9ba4),
             accent: rgb(0x27547b),
             accent_strong: rgb(0x73b4e4),
             selection: rgb(0x285783),
@@ -80,6 +83,7 @@ impl Palette {
             text: rgb(0x1a2227),
             text_secondary: rgb(0x34434d),
             muted: rgb(0x4a5862),
+            disabled: rgb(0x7a8791),
             accent: rgb(0xc4daf0),
             accent_strong: rgb(0x1f6fb5),
             selection: rgb(0xb5d3f3),

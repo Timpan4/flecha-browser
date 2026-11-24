@@ -1,14 +1,19 @@
 use anyhow::{Context as _, Result};
+use flecha_cef::{PageZoom, zoom_percentage};
 use flecha_core::{
     BrowserState, TabId, WindowId,
     shortcuts::{self, Keybindings, Platform},
 };
-use gpui::{Context, KeyDownEvent, Keystroke, Window};
+use gpui::{
+    ClickEvent, Context, IntoElement, KeyDownEvent, Keystroke, StatefulInteractiveElement as _,
+    Styled as _, Window,
+};
 
 use crate::command_bar::Command;
 use crate::settings_view::SettingsTab;
 use crate::sidebar::SidebarAction;
-use crate::view::{Overlay, Shell};
+use crate::theme::palette;
+use crate::view::{Overlay, Shell, button};
 use crate::{Action, Controller, dispatch};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -26,6 +31,7 @@ pub(crate) struct Toolbar {
     pub(crate) forward: bool,
     pub(crate) loading: bool,
     pub(crate) available: bool,
+    pub(crate) zoom: Option<u16>,
     blocked: u64,
 }
 
@@ -35,6 +41,9 @@ enum Shortcut {
     Close,
     Reopen,
     Browser(Navigation),
+    Find,
+    Zoom(PageZoom),
+    DevTools,
     Cycle(bool),
     Select(usize),
     History,
@@ -96,6 +105,16 @@ impl Bindings {
                 action,
             ));
         }
+        if shortcuts::keys_for(settings, "devTools", platform)
+            == shortcuts::default_keys("devTools", platform)
+        {
+            for keys in ["ctrl-shift-i", "f12"] {
+                bindings.push((
+                    Keystroke::parse_with_os(keys, os).expect("valid DevTools shortcut"),
+                    Shortcut::DevTools,
+                ));
+            }
+        }
         Self {
             settings: settings.clone(),
             bindings,
@@ -109,8 +128,21 @@ impl Bindings {
     }
 
     fn action(&self, stroke: &Keystroke) -> Option<Shortcut> {
-        self.bindings.iter().find_map(|(key, action)| {
-            (stroke.key == key.key && stroke.modifiers == key.modifiers).then_some(*action)
+        let exact = |symbol: &str, modifiers| {
+            self.bindings.iter().find_map(|(key, action)| {
+                (symbol == key.key && modifiers == key.modifiers).then_some(*action)
+            })
+        };
+        exact(&stroke.key, stroke.modifiers).or_else(|| {
+            if !matches!(stroke.key.as_str(), "+" | "add") {
+                return None;
+            }
+            // A keyboard layout may need Shift to produce '+'. Follow the configured '=' accelerator.
+            let mut modifiers = stroke.modifiers;
+            modifiers.shift = false;
+            exact("=", modifiers)
+                .filter(|action| *action == Shortcut::Zoom(PageZoom::In))
+                .or_else(|| exact("=", stroke.modifiers))
         })
     }
 }
@@ -130,6 +162,11 @@ fn shortcut_for_id(id: &str) -> Option<Shortcut> {
         "forward" => Shortcut::Browser(Navigation::Forward),
         "reload" => Shortcut::Browser(Navigation::Reload),
         "hardReload" => Shortcut::Browser(Navigation::HardReload),
+        "find" => Shortcut::Find,
+        "zoomIn" => Shortcut::Zoom(PageZoom::In),
+        "zoomOut" => Shortcut::Zoom(PageZoom::Out),
+        "actualSize" => Shortcut::Zoom(PageZoom::Reset),
+        "devTools" => Shortcut::DevTools,
         "nextTab" => Shortcut::Cycle(false),
         "previousTab" => Shortcut::Cycle(true),
         "history" => Shortcut::History,
@@ -223,6 +260,11 @@ impl Controller {
                         forward: self.engine.can_go_forward(tab),
                         loading: self.engine.is_loading(tab),
                         available: self.engine.host(tab).is_some(),
+                        zoom: self
+                            .engine
+                            .zoom_level(tab)
+                            .map(zoom_percentage)
+                            .filter(|value| *value != 100),
                         blocked: self.engine.blocked_count(tab),
                     });
             if let Some(current) = self.toolbars.get_mut(&window.id) {
@@ -282,6 +324,33 @@ impl Controller {
 }
 
 impl Shell {
+    pub(crate) fn zoom_badge(&self, cx: &Context<Self>) -> Option<impl IntoElement> {
+        let percent = self.state.borrow().toolbars.get(&self.id)?.zoom?;
+        Some(
+            button("reset-page-zoom", format!("{percent}%"))
+                .flex_shrink_0()
+                .bg(palette().surface)
+                .text_xs()
+                .text_color(palette().muted)
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.zoom(PageZoom::Reset, cx);
+                })),
+        )
+    }
+
+    fn zoom(&self, action: PageZoom, cx: &mut Context<Self>) -> bool {
+        let Some(key) = self.active_browser() else {
+            return false;
+        };
+        let state = self.state.borrow();
+        let Some(level) = state.engine.zoom_level(&key.tab) else {
+            return false;
+        };
+        state.engine.set_zoom_level(&key.tab, action.level(level));
+        cx.notify();
+        true
+    }
+
     pub(crate) fn key(
         &mut self,
         event: &KeyDownEvent,
@@ -312,13 +381,21 @@ impl Shell {
             && (if event.is_held
                 && matches!(
                     shortcut,
-                    Shortcut::Command(Command::OpenSettings) | Shortcut::SettingsTab(_)
+                    Shortcut::Command(Command::OpenSettings)
+                        | Shortcut::SettingsTab(_)
+                        | Shortcut::Find
+                        | Shortcut::DevTools
                 ) {
                 true
             } else {
                 self.invoke_shortcut(shortcut, window, cx)
             })
         {
+            self.consumed_keys.insert(stroke.key.clone());
+            cx.stop_propagation();
+            return;
+        }
+        if self.find_key(stroke, window, cx) {
             self.consumed_keys.insert(stroke.key.clone());
             cx.stop_propagation();
             return;
@@ -352,6 +429,21 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> bool {
         let action = match shortcut {
+            Shortcut::Find if !self.overlay.is_open() => return self.open_find(window, cx),
+            Shortcut::Zoom(action) if !self.overlay.is_open() => return self.zoom(action, cx),
+            Shortcut::DevTools if !self.overlay.is_open() => {
+                let Some(key) = self.active_browser() else {
+                    return false;
+                };
+                let state = self.state.borrow();
+                if state.engine.has_dev_tools(&key.tab) {
+                    state.engine.close_dev_tools(&key.tab);
+                } else {
+                    state.engine.show_dev_tools(&key.tab, None);
+                }
+                return true;
+            }
+            Shortcut::Escape if self.find.is_some() && !self.overlay.is_open() => return false,
             Shortcut::Command(command) => return self.open_command(command, window, cx),
             Shortcut::SettingsTab(tab) => return self.toggle_settings(tab, window, cx),
             Shortcut::History if self.state.borrow().model.core.window(&self.id).is_some() => {
@@ -393,7 +485,10 @@ impl Shell {
                 Action::Reopen
             }
             Shortcut::Browser(nav) if !self.overlay.is_open() => Action::Browser(nav),
-            Shortcut::Select(_) | Shortcut::Cycle(_) if !self.overlay.is_open() => {
+            Shortcut::Select(_) | Shortcut::Cycle(_)
+                if !self.overlay.is_open() || matches!(self.overlay, Overlay::ContextMenu(_)) =>
+            {
+                self.dismiss_overlay(window, cx);
                 let state = self.state.borrow();
                 let Some(id) = state.model.state(&self.id).and_then(|core| {
                     tab_for_shortcut(core, &self.id, state.model.active(&self.id), shortcut)
@@ -458,6 +553,15 @@ mod tests {
             (format!("{ctrl}-9"), Shortcut::Select(8)),
             (format!("{ctrl}-n"), Shortcut::NewWindow),
             (format!("{ctrl}-shift-n"), Shortcut::NewIncognitoWindow),
+            (format!("{ctrl}-f"), Shortcut::Find),
+            (format!("{ctrl}-="), Shortcut::Zoom(PageZoom::In)),
+            (format!("{ctrl}-shift-+"), Shortcut::Zoom(PageZoom::In)),
+            (format!("{ctrl}-add"), Shortcut::Zoom(PageZoom::In)),
+            (format!("{ctrl}--"), Shortcut::Zoom(PageZoom::Out)),
+            (format!("{ctrl}-0"), Shortcut::Zoom(PageZoom::Reset)),
+            ("ctrl-shift-i".into(), Shortcut::DevTools),
+            ("f12".into(), Shortcut::DevTools),
+            (format!("alt-{ctrl}-i"), Shortcut::DevTools),
             ("escape".into(), Shortcut::Escape),
         ] {
             assert_eq!(
@@ -482,6 +586,41 @@ mod tests {
             }),
             None
         );
+    }
+
+    #[test]
+    fn browser_tool_shortcuts_follow_keybinding_overrides_and_unbinding() {
+        use shortcuts::BindingEdit;
+        let mut settings = Keybindings::new();
+        shortcuts::set_binding(
+            &mut settings,
+            "devTools",
+            BindingEdit::Set("F8"),
+            platform(),
+        )
+        .unwrap();
+        shortcuts::set_binding(&mut settings, "find", BindingEdit::Set("F12"), platform()).unwrap();
+        shortcuts::set_binding(&mut settings, "zoomIn", BindingEdit::Unbind, platform()).unwrap();
+        let bindings = Bindings::new(&settings);
+        let os = match platform() {
+            Platform::Linux => gpui::OperatingSystem::Linux,
+            Platform::Mac => gpui::OperatingSystem::Mac,
+            Platform::Windows => gpui::OperatingSystem::Windows,
+        };
+        for (keys, expected) in [
+            ("f8", Some(Shortcut::DevTools)),
+            ("f12", Some(Shortcut::Find)),
+            ("secondary-f", None),
+            ("secondary-=", None),
+            ("secondary-add", None),
+            ("ctrl-shift-i", None),
+        ] {
+            assert_eq!(
+                bindings.action(&Keystroke::parse_with_os(keys, os).unwrap()),
+                expected,
+                "{keys}"
+            );
+        }
     }
 
     #[test]

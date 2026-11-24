@@ -1,6 +1,8 @@
 mod boosts;
 mod command_bar;
+mod context_menu;
 mod downloads_view;
+mod find_bar;
 mod fullscreen;
 mod history_view;
 mod incognito;
@@ -156,6 +158,7 @@ pub fn start(
 #[derive(Clone)]
 enum Action {
     Open(String),
+    OpenContext(TabId, String, context_menu::Destination),
     Navigate(String),
     Browser(Navigation),
     Download(flecha_cef::DownloadHandle, DownloadCommand),
@@ -442,6 +445,11 @@ impl Controller {
             }
             Action::Open(url) => {
                 self.model.open(window, url, true)?;
+            }
+            Action::OpenContext(source, url, target) => {
+                if let Some(owner) = self.engine.owner(&source).cloned() {
+                    self.open_context_url(owner, &source, &url, target)?;
+                }
             }
             Action::Navigate(url) => self.navigate_tab(window, url)?,
             Action::Browser(navigation) => return self.browser_navigation(window, navigation),
@@ -820,6 +828,7 @@ impl Controller {
         changed |= self.drain_downloads();
         changed |= self.poll_permissions();
         changed |= self.poll_toolbars();
+        self.poll_page_overlays(cx);
         if self.ready && !self.quitting {
             changed |= self.poll_sleep(Instant::now());
         }

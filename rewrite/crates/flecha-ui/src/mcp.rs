@@ -781,11 +781,14 @@ impl Controller {
         if self.ready && self.agent_viewport().is_none() {
             return Err(no_page_area());
         }
+        // A tab whose page can't start or that can't be saved is undone whole: closing it the
+        // usual way would archive its address.
+        let before = self.model.core.clone();
         let id = agent::state::open_agent_tab(&mut self.model.core, model::tab_id(), input, now())?;
-        self.agent_changed()?;
-        if let Err(error) = self.agent_browser(&id) {
-            self.close_tab(&id);
-            self.agent_changed()?;
+        if let Err(error) = self.agent_browser(&id).and_then(|_| self.agent_changed()) {
+            self.model.core = before;
+            self.engine.close(&id);
+            self.update_visibility();
             return Err(error);
         }
         Ok(id)
@@ -852,19 +855,26 @@ impl Controller {
     /// The size of the page the user sees, for a page no window shows: the focused regular
     /// window's page, else where that window would show one.
     fn agent_viewport(&self) -> Option<Viewport> {
+        // Agents belong to the regular profile: nothing incognito, not even its window's size,
+        // stands in for a closed regular window.
+        if self.model.regular_closed() {
+            return None;
+        }
         let focused = &self.model.core.focused_window().id;
         self.model
             .active(focused)
             .and_then(|tab| self.engine.viewport(tab))
-            .or_else(|| {
-                (!self.model.regular_closed())
-                    .then(|| self.page_areas.get(focused).copied())
-                    .flatten()
-            })
+            .or_else(|| self.page_areas.get(focused).copied())
             .or_else(|| {
                 self.engine
                     .ids()
-                    .filter(|id| matches!(self.engine.owner(id), Some(Owner::Tab(_))))
+                    .filter(|id| {
+                        matches!(self.engine.owner(id), Some(Owner::Tab(_)))
+                            && self
+                                .engine
+                                .partition(id)
+                                .is_some_and(|partition| !partition.is_incognito())
+                    })
                     .find_map(|id| self.engine.viewport(id))
             })
     }
@@ -1138,7 +1148,64 @@ mod tests {
     fn an_empty_window_sizes_the_agents_tab_by_its_page_area() {
         let profile = tempfile::tempdir().unwrap();
         let (mut controller, regular) = controller(&profile);
-        let area = Viewport::new(
+        let area = page_area();
+        assert!(controller.agent_viewport().is_none());
+
+        controller.page_area(regular.clone(), area);
+        assert!(controller.agent_viewport() == Some(area));
+    }
+
+    #[test]
+    fn with_only_incognito_windows_open_tab_fails_and_adds_no_tab() {
+        let profile = tempfile::tempdir().unwrap();
+        let (mut controller, regular) = controller(&profile);
+        controller.page_area(regular.clone(), page_area());
+        controller
+            .act(&regular, Action::NewIncognitoWindow)
+            .unwrap();
+        let private = controller.front.clone().unwrap();
+        controller.page_area(private, page_area());
+        controller.act(&regular, Action::CloseWindow).unwrap();
+        assert!(controller.model.regular_closed());
+        controller.ready = true;
+        let before = controller.model.core.clone();
+
+        assert!(controller.agent_viewport().is_none());
+        let opened = tool(
+            &mut controller,
+            "open_tab",
+            json!({ "url": "example.org/agent" }),
+        );
+        assert!(failed(&opened), "{opened}");
+        assert!(text(&opened).contains("no window to size"), "{opened}");
+        assert!(
+            controller.model.core == before,
+            "open_tab changed the state"
+        );
+    }
+
+    #[test]
+    fn open_tab_that_cannot_be_saved_leaves_no_tab_open_or_archived() {
+        let profile = tempfile::tempdir().unwrap();
+        let (mut controller, regular) = controller(&profile);
+        controller.page_area(regular, page_area());
+        let before = controller.model.core.clone();
+        std::fs::remove_dir_all(profile.path().join("session")).unwrap();
+
+        let opened = tool(
+            &mut controller,
+            "open_tab",
+            json!({ "url": "example.org/agent" }),
+        );
+        assert!(failed(&opened), "{opened}");
+        assert!(
+            controller.model.core == before,
+            "the failed open_tab left its tab behind"
+        );
+    }
+
+    fn page_area() -> Viewport {
+        Viewport::new(
             gpui::Bounds::new(
                 gpui::point(gpui::px(240.), gpui::px(0.)),
                 gpui::size(gpui::px(1040.), gpui::px(800.)),
@@ -1152,18 +1219,7 @@ mod tests {
                 gpui::size(gpui::px(1920.), gpui::px(1080.)),
             ),
             1.0,
-        );
-        assert!(controller.agent_viewport().is_none());
-
-        controller.page_area(regular.clone(), area);
-        assert!(controller.agent_viewport() == Some(area));
-
-        // A closed regular window sizes nothing.
-        controller
-            .act(&regular, Action::NewIncognitoWindow)
-            .unwrap();
-        controller.act(&regular, Action::CloseWindow).unwrap();
-        assert!(controller.agent_viewport().is_none());
+        )
     }
 
     #[test]

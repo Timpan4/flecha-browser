@@ -53,8 +53,11 @@ impl PageFullscreen {
     }
 }
 
-/// A window's native fullscreen on behalf of its page. The window manager applies a request
-/// later, so the page may leave fullscreen before the window has entered it.
+/// A window's native fullscreen on behalf of its page.
+///
+/// The window manager applies a request later or never: X11 sends `_NET_WM_STATE` with
+/// `Toggle`, and neither X11 nor Wayland reports a refusal to GPUI. So the page may leave
+/// fullscreen before the window has entered it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum NativeFullscreen {
     /// Flecha holds no native fullscreen. Native fullscreen the user chose stays theirs.
@@ -64,6 +67,13 @@ pub(crate) enum NativeFullscreen {
     Requested,
     /// The window is in native fullscreen because Flecha asked.
     Held,
+    /// The page left fullscreen before the window entered it. If the entry lands, Flecha undoes
+    /// it; the page entering again asks afresh.
+    Withdrawn,
+    /// The user took the window out of native fullscreen while the page stayed in fullscreen.
+    /// Flecha asks for nothing more until the page leaves, and native fullscreen the user
+    /// chooses again stays theirs.
+    Released,
 }
 
 impl NativeFullscreen {
@@ -71,15 +81,16 @@ impl NativeFullscreen {
     /// and whether to toggle the window's native fullscreen now.
     pub(crate) fn next(self, wanted: bool, window_fullscreen: bool) -> (Self, bool) {
         match (self, wanted, window_fullscreen) {
-            (Self::Idle, true, false) => (Self::Requested, true),
+            (Self::Idle | Self::Withdrawn, true, false) => (Self::Requested, true),
             (Self::Idle, _, _) => (Self::Idle, false),
-            (Self::Requested, true, true) => (Self::Held, false),
-            // The page left before the window entered: undo the entry once it lands.
-            (Self::Requested, false, true) | (Self::Held, false, true) => (Self::Idle, true),
-            (Self::Requested, _, false) => (Self::Requested, false),
-            // The user already took the window out of native fullscreen.
-            (Self::Held, false, false) => (Self::Idle, false),
-            (Self::Held, true, _) => (Self::Held, false),
+            (Self::Requested | Self::Withdrawn, true, true) | (Self::Held, true, true) => {
+                (Self::Held, false)
+            }
+            (Self::Requested, true, false) => (Self::Requested, false),
+            (Self::Requested | Self::Withdrawn, false, false) => (Self::Withdrawn, false),
+            (Self::Requested | Self::Withdrawn | Self::Held, false, true) => (Self::Idle, true),
+            (Self::Held | Self::Released, true, _) => (Self::Released, false),
+            (Self::Held | Self::Released, false, _) => (Self::Idle, false),
         }
     }
 }
@@ -218,6 +229,45 @@ mod tests {
             "re-entered after the user left"
         );
         assert_eq!(state, NativeFullscreen::Idle);
+    }
+
+    #[test]
+    fn a_request_the_window_manager_ignored_does_not_block_the_next_entry() {
+        // Enter, the window manager ignores it, Esc, then the page enters again.
+        let (toggles, state) =
+            native(&[(true, false), (false, false), (false, false), (true, false)]);
+        assert_eq!(
+            toggles,
+            [true, false, false, true],
+            "the second entry asked for nothing"
+        );
+        assert_eq!(state, NativeFullscreen::Requested);
+        // This time the window enters, and Esc undoes it.
+        assert_eq!(state.next(true, true), (NativeFullscreen::Held, false));
+        assert_eq!(
+            NativeFullscreen::Held.next(false, true),
+            (NativeFullscreen::Idle, true)
+        );
+    }
+
+    #[test]
+    fn native_fullscreen_the_user_takes_back_during_page_fullscreen_stays_theirs() {
+        // Flecha enters, the user leaves native fullscreen and enters it again, then Esc.
+        let (toggles, state) = native(&[
+            (true, false),
+            (true, true),
+            (true, false),
+            (true, false),
+            (true, true),
+            (false, true),
+        ]);
+        assert_eq!(
+            toggles,
+            [true, false, false, false, false, false],
+            "Flecha fought the user's native fullscreen"
+        );
+        assert_eq!(state, NativeFullscreen::Idle);
+        assert_eq!(state.next(false, true), (NativeFullscreen::Idle, false));
     }
 
     #[test]

@@ -352,6 +352,37 @@ async function nativeInput(app, tab) {
   pass('an X11 click and key passed through GPUI into the CEF input field');
 }
 
+async function nativeContextMenu(app) {
+  const [x, y] = execFileSync('magick', [
+    join(out, 'open.png'), '-transparent', '#FFCC49', '-alpha', 'extract', '-negate',
+    '-trim', '-format', '%X %Y', 'info:',
+  ], { encoding: 'utf8' }).trim().split(' ').map(Number);
+
+  assert(Number.isFinite(x) && Number.isFinite(y), 'missing page marker');
+
+  const histogram = path => execFileSync('magick', [path, '-format', '%c', 'histogram:info:'], { encoding: 'utf8' });
+  // The menu's border (theme.rs border, Dark or Light): Theme::System follows Xvfb's Light
+  // appearance. Only a colour the window did not already show marks the menu.
+  const shownBefore = histogram(join(out, 'open.png'));
+  const borders = ['#405863', '#B4C2CC'].filter(color => !shownBefore.includes(color));
+
+  assert(borders.length, 'the window already shows both menu border colours');
+  execFileSync(x11Driver, ['right-click', x + 1, y + 1]);
+  await app.present();
+  await captureUntil('page-context-menu', 'root', path =>
+    borders.some(color => histogram(path).includes(color)) ? undefined : 'the menu border is missing');
+  execFileSync(x11Driver, ['key', 'Escape']);
+  await app.present();
+  await captureUntil('page-context-menu-dismissed', 'root', path => {
+    const colors = histogram(path);
+
+    if (borders.some(color => colors.includes(color))) return 'menu border is still visible';
+
+    if (!colors.includes('#FFCC49')) return 'page is missing';
+  });
+  pass('right-click opened the GPUI page menu and Escape dismissed it');
+}
+
 async function keyDelivery(app, tabs, key, step, expected) {
   const received = site.probe(`${step}-key`);
 
@@ -1284,6 +1315,8 @@ async function verifySlice() {
   assert.match(frames, /^page frames: CPU copies, shared textures are unavailable: /, 'Xvfb run did not use CPU copies');
   pass(`Xvfb pages use CPU copies (${frames})`);
   await nativeInput(app, left);
+
+  if (mode === 'slice') await nativeContextMenu(app);
 
   if (mode === 'focus') {
     await sidebarFocus(app, left);

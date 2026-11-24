@@ -32,6 +32,11 @@ pub struct DevToolsMessage {
     pub event: DevToolsEvent,
 }
 
+wrap_client! {
+    struct InspectorClient;
+    impl Client {}
+}
+
 impl crate::Engine {
     /// Sends one CDP method call to the tab's page and returns its message id. The reply
     /// arrives as a [`DevToolsEvent::Result`] with that id from [`Self::next_devtools_event`].
@@ -62,22 +67,37 @@ impl crate::Engine {
 
     /// Opens Chromium's DevTools for the tab in a window of its own.
     pub fn open_devtools(&self, tab: &flecha_core::TabId) -> bool {
+        self.show_dev_tools(tab, None)
+    }
+
+    /// Opens or focuses Chromium's native inspector, optionally at a point in the page view.
+    pub fn show_dev_tools(&self, tab: &flecha_core::TabId, inspect_at: Option<(i32, i32)>) -> bool {
         let Some(host) = self.host(tab) else {
             return false;
         };
+        let point = inspect_at.map(|(x, y)| Point { x, y });
+        let mut client = InspectorClient::new();
         host.show_dev_tools(
             Some(&WindowInfo::default()),
-            None,
+            Some(&mut client),
             Some(&BrowserSettings::default()),
-            None,
+            point.as_ref(),
         );
         true
     }
 
     pub fn close_devtools(&self, tab: &flecha_core::TabId) {
+        self.close_dev_tools(tab);
+    }
+
+    pub fn close_dev_tools(&self, tab: &flecha_core::TabId) {
         if let Some(host) = self.host(tab) {
             host.close_dev_tools();
         }
+    }
+
+    pub fn has_dev_tools(&self, tab: &flecha_core::TabId) -> bool {
+        self.host(tab).is_some_and(|host| host.has_dev_tools() != 0)
     }
 }
 
