@@ -415,28 +415,34 @@ async function managerFocus(app, left, right) {
   assert.equal(await ready, 'ready');
   execFileSync(x11Driver, ['chord', 'Control_L', 'comma']);
   await app.present();
+
   const [x, y, width] = execFileSync(x11Driver, ['geometry', 'Flecha'], { encoding: 'utf8' })
     .trim().split(' ').map(Number);
+
   // The fifth tab in the centered GPUI Settings panel on the Xvfb fixture.
   execFileSync(x11Driver, ['click', Math.round(x + width / 2 + 5), y + 105]);
   await capture('tabs-spaces-manager', ['#73B4E4']);
 
   execFileSync(x11Driver, ['key', 'q']);
   execFileSync(x11Driver, ['chord', 'Control_L', 'a']);
+
   for (const key of 'split') execFileSync(x11Driver, ['key', key]);
   execFileSync(x11Driver, ['key', 'Down']);
   execFileSync(x11Driver, ['key', 'Delete']);
 
   for (;;) {
     const snapshot = await app.command('snapshot');
+
     if (!snapshot.core.tabs[right]) {
       assert(snapshot.core.tabs[left], 'the search excluded the other split tab');
       assert(snapshot.core.archive.some(tab => tab.url === base + '/split'), 'the matching tab reached the Archive');
       break;
     }
+
     waitingFor = 'archive the tab matching the manager search';
     await delay(100);
   }
+
   execFileSync(x11Driver, ['key', 'Escape']);
   const keys = site.probe('manager-keys');
   await app.command('script', { tab: left, source: `fetch('/probe/manager-keys?value=' + JSON.stringify(window.managerKeys));` });
@@ -451,12 +457,15 @@ async function restoreSpaces(app, left) {
   const changed = await app.command('new_space');
   assert.equal(changed.core.spaces.length, before.core.spaces.length + 1);
   execFileSync(x11Driver, ['chord', 'Control_L', 'l']);
+
   for (const key of 'restore') execFileSync(x11Driver, ['key', key]);
   execFileSync(x11Driver, ['key', 'Return']);
   await app.present();
   execFileSync('magick', ['import', '-window', 'root', join(out, 'restore-spaces-prompt.png')]);
+
   const [x, y, width] = execFileSync(x11Driver, ['geometry', 'Flecha'], { encoding: 'utf8' })
     .trim().split(' ').map(Number);
+
   // The Restore button below the question in the centered Settings panel.
   const after = app.events.length;
   execFileSync(x11Driver, ['click', Math.round(x + (width - 680) / 2 + 115), y + 229]);
