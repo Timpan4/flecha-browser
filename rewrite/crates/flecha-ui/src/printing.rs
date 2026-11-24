@@ -1,26 +1,26 @@
+use ashpd::desktop::ResponseError;
 use ashpd::desktop::print::{OutputFileFormat, PrintOptions, PrintProxy};
-use gpui::App;
+use gpui::{App, PromptLevel, WindowHandle};
 
 use crate::Controller;
+use crate::view::Shell;
+
+fn show_print_error(handle: WindowHandle<Shell>, detail: &'static str, cx: &mut App) {
+    let _ = handle.update(cx, |_, window, cx| {
+        drop(window.prompt(
+            PromptLevel::Warning,
+            "Printing unavailable",
+            Some(detail),
+            &["OK"],
+            cx,
+        ));
+    });
+}
 
 impl Controller {
     pub(crate) fn poll_print_jobs(&mut self, cx: &mut App) {
         while let Some((tab, file)) = self.engine.next_print_job() {
             if self.quitting {
-                continue;
-            }
-            let Ok(file) = file else {
-                let session = self
-                    .engine
-                    .partition(&tab)
-                    .and_then(flecha_cef::Partition::incognito_session);
-                self.status
-                    .set(session, "Could not render the page for printing.");
-                cx.refresh_windows();
-                continue;
-            };
-            if self.verify {
-                crate::verify::print_ready(&tab, &file);
                 continue;
             }
             let Some(handle) = self
@@ -32,6 +32,16 @@ impl Controller {
             else {
                 continue;
             };
+            let Ok(file) = file else {
+                cx.defer(move |cx| {
+                    show_print_error(handle, "Could not render the page for printing.", cx)
+                });
+                continue;
+            };
+            if self.verify {
+                crate::verify::print_ready(&tab, &file);
+                continue;
+            }
             cx.spawn(async move |cx| {
                 let result = async {
                     // With no PreparePrint token, the portal asks the user before submitting.
@@ -44,16 +54,11 @@ impl Controller {
                         .response()
                 }
                 .await;
-                if result.is_err_and(|error| !matches!(error, ashpd::Error::Response(_))) {
+                if result.is_err_and(|error| {
+                    !matches!(error, ashpd::Error::Response(ResponseError::Cancelled))
+                }) {
                     cx.update(|cx| {
-                        let _ = handle.update(cx, |shell, _, cx| {
-                            let mut state = shell.state.borrow_mut();
-                            let session = state.model.incognito_session(&shell.id);
-                            state
-                                .status
-                                .set(session, "Could not open the system print dialog.");
-                            cx.notify();
-                        });
+                        show_print_error(handle, "Could not open the system print dialog.", cx)
                     });
                 }
             })

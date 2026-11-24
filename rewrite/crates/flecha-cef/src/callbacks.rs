@@ -6,7 +6,7 @@ use std::sync::atomic::AtomicU64;
 
 use cef::{rc::Rc as _, *};
 use flecha_surface::{Frame as SurfaceFrame, SurfaceTarget};
-use gpui::{Bounds, Pixels, point, px, size};
+use gpui::{Bounds, Pixels, SharedString, point, px, size};
 
 use crate::compositor::{self, Delivery};
 use crate::popup::{self, Popups};
@@ -43,6 +43,8 @@ pub(crate) struct Slot {
     pub surface: RefCell<Frames>,
     pub retired: Cell<bool>,
     pub paint_pending: Cell<bool>,
+    pub cursor: Cell<CursorType>,
+    pub status: RefCell<Option<SharedString>>,
     pub events: Queue,
     pub popups: Rc<Popups>,
     pub stage: Cell<Stage>,
@@ -82,6 +84,8 @@ impl Slot {
             surface: RefCell::new(Frames::default()),
             retired: Cell::new(false),
             paint_pending: Cell::new(false),
+            cursor: Cell::new(CursorType::POINTER),
+            status: RefCell::new(None),
             events,
             popups,
             stage: Cell::new(Stage::Pending),
@@ -166,6 +170,13 @@ impl Slot {
     fn paint_changed(&self) {
         if !self.paint_pending.replace(true) {
             self.emit(Event::Paint);
+        }
+    }
+
+    pub fn set_status(&self, status: Option<SharedString>) {
+        if *self.status.borrow() != status {
+            self.status.replace(status);
+            self.emit(Event::PointerChanged);
         }
     }
 
@@ -370,6 +381,23 @@ wrap_display_handler! {
             }
         }
 
+        fn on_cursor_change(
+            &self, _browser: Option<&mut Browser>, _cursor: cef::sys::cef_cursor_handle_t,
+            kind: CursorType, _custom: Option<&CursorInfo>,
+        ) -> i32 {
+            if !self.slot.retired.get() && self.slot.cursor.replace(kind) != kind {
+                self.slot.emit(Event::PointerChanged);
+            }
+            1
+        }
+
+        fn on_status_message(&self, _browser: Option<&mut Browser>, value: Option<&CefString>) {
+            if !self.slot.retired.get() {
+                self.slot.set_status(value.map(ToString::to_string)
+                    .filter(|text| !text.is_empty()).map(SharedString::from));
+            }
+        }
+
         fn on_fullscreen_mode_change(&self, _browser: Option<&mut Browser>, fullscreen: i32) {
             if !self.slot.retired.get() {
                 self.slot.emit(Event::Fullscreen(fullscreen != 0));
@@ -397,6 +425,7 @@ wrap_load_handler! {
             }
             permissions::forget_one_time(&self.slot);
             if !self.slot.retired.get() {
+                self.slot.set_status(None);
                 boosts::page_committed(&services, frame, &CefString::from(&frame.url()).to_string());
             }
         }

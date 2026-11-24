@@ -14,6 +14,17 @@ const out = join(process.env.HOME, '..');
 const x11Driver = join(out, 'x11-input');
 const mode = process.argv[2] ?? 'slice';
 
+// Points in the main window with the visual mode's 260px sidebar and one favorite, measured from
+// its captures. Xvfb has no compositor, so GPUI keeps the platform's title bar and draws no
+// window controls: the menu button sits right of the sidebar toggle (ui/styles.css:32, 55, 66).
+// The window menu drops 4px below it (settingsUi.ts:202), a 5px-padded list of 25.5px rows with
+// 11px separators (shell.css:78, 88, 132-133); the Space menu opens at the pointer.
+const menuButton = [10 + 30 + 2 + 15, 10 + 14];
+const newWindowRow = [82, 61];
+const zoomRow = [82, 287];
+const spaceHeader = [60, 157];
+const spaceMenuItem = [80, 18];
+
 // The per-step allowance from chromium/tests/native-workflows.mjs.
 const stepTimeoutMs = 10_000;
 
@@ -331,7 +342,7 @@ async function document(app, tab, label, prepare = '') {
 async function nativeInput(app, tab) {
   execFileSync('cc', [
     '-std=c17', '-Wall', '-Wextra', '-Werror', 'spikes/gpui-cef-compositor/x11-input.c',
-    '-lX11', '-lXtst', '-o', x11Driver,
+    '-DFLECHA_VERIFY_CURSOR', '-lX11', '-lXtst', '-lXfixes', '-o', x11Driver,
   ]);
   const center = site.probe('input-center');
   const typed = site.probe('native-key');
@@ -565,6 +576,153 @@ async function sidebarResizeAndReveal(app, tab) {
   pass('the collapsed sidebar revealed over the page at the left edge and hid when the pointer left');
 }
 
+async function quickWins(app) {
+  await app.command('new_space');
+
+  const tab = await openTab(app, '/open');
+
+  const [x, y, , height] = execFileSync(x11Driver, ['geometry', 'Flecha'], { encoding: 'utf8' })
+    .trim().split(' ').map(Number);
+
+  // Default sidebar width and page top inset, also used by the visual parity check.
+  const pageX = x + 260;
+  const pageY = y + 8;
+  const input = (operation, px, py) => execFileSync(x11Driver, [operation, Math.round(px), Math.round(py)]);
+  const cursor = () => execFileSync(x11Driver, ['cursor'], { encoding: 'utf8' }).trim().split(' ').map(Number);
+
+  const captureWhile = (name, check) => poll(name, () => {
+    const path = join(out, `${name}.png`);
+
+    execFileSync('magick', ['import', '-window', 'root', path]);
+
+    return check(path) && path;
+  });
+
+  const pixels = (path, crop, format, output = 'info:') => execFileSync('magick', [
+    path, '-crop', crop, '+repage', '-format', format, output,
+  ], { encoding: 'utf8' }).trim().toUpperCase();
+
+  const boxes = site.probe('quick-wins-boxes', stepTimeoutMs);
+  await app.command('script', { tab, source: `
+    const link = document.querySelector('a');
+    const marker = document.querySelector('#marker');
+    link.href = '/split';
+    link.removeAttribute('target');
+    marker.style.cursor = 'none';
+    const center = element => {
+      const { x, y, width, height } = element.getBoundingClientRect();
+      return [x + width / 2, y + height / 2];
+    };
+    const centers = [link, document.querySelector('input'), marker].map(center);
+    fetch('/probe/quick-wins-boxes?value=' + encodeURIComponent(JSON.stringify(centers)));
+  ` });
+  const [link, field, hidden] = JSON.parse(await boxes).map(([left, top]) => [pageX + left, pageY + top]);
+  const blank = [pageX + 400, pageY + 300];
+  input('move', ...blank);
+  await app.present();
+
+  const [arrow] = cursor();
+
+  input('move', ...link);
+
+  const [hand] = await poll('X11 link cursor', () => {
+    const result = cursor();
+
+    return result[1] && result[0] !== arrow && result;
+  });
+
+  const statusPixel = `1x1+${pageX + 4}+${y + height - 8 - 12}`;
+
+  const linkShot = await captureWhile('quick-wins-link-status', path =>
+    ['FFFFFF', '161E2B'].includes(pixels(path, statusPixel, '%[hex:p{0,0}]').slice(0, 6)));
+
+  input('move', ...field);
+  await poll('X11 text cursor', () => {
+    const [serial, visible] = cursor();
+
+    return visible && serial !== arrow && serial !== hand;
+  });
+  await captureWhile('quick-wins-no-link-status', path =>
+    pixels(path, statusPixel, '%[hex:p{0,0}]').startsWith('147A70'));
+  input('move', ...hidden);
+  await poll('X11 CSS cursor none', () => cursor()[1] === 0);
+  input('move', ...link);
+  await poll('X11 cursor returns to link hand', () => cursor()[0] === hand);
+  pass('X11 changed cursor over links and text, hid it over cursor:none, and drew and cleared the link status pill');
+
+  const dragReady = site.probe('quick-wins-drag-ready', stepTimeoutMs);
+  const dragLeave = site.probe('quick-wins-drag-leave', stepTimeoutMs);
+  await app.command('script', { tab, source: `
+    document.querySelector('input').value = 'Drag to select this text';
+    document.documentElement.addEventListener('mouseleave', event => {
+      fetch('/probe/quick-wins-drag-leave?value=' + event.buttons);
+    }, { once: true });
+    fetch('/probe/quick-wins-drag-ready?value=ready');
+  ` });
+  await dragReady;
+  input('press', ...field);
+
+  try {
+    input('move', field[0] - 8, field[1]);
+    input('move', pageX - 8, field[1]);
+    assert.equal(await dragLeave, '1', 'CEF received the page exit without the held left button');
+  } finally {
+    execFileSync(x11Driver, ['release']);
+  }
+
+  pass('X11 drag selection kept the left button pressed on exit into the sidebar');
+
+  for (const [operation, position, path] of [['click', link, '/split'], ['back', blank, '/open'], ['forward', blank, '/split']]) {
+    const after = app.events.length;
+
+    input(operation, ...position);
+    await app.wait(`${operation} loaded ${path}`, event =>
+      event.type === 'loaded' && event.tab === tab && event.url === base + path, after, stepTimeoutMs);
+  }
+
+  pass('X11 side buttons navigated back and forward in the active tab');
+
+  // The address bar's two 26px actions sit against the 4px inner pad and 6px sidebar pad.
+  const copy = [x + 260 - 6 - 4 - 26 - 13, y + 10 + 28 + 8 + 18];
+  input('move', ...copy);
+  await app.present();
+  const addressCrop = `186x20+${x + 28}+${copy[1] - 10}`;
+  const address = path => pixels(path, addressCrop, '%#');
+  const before = address(await captureWhile('quick-wins-address', () => true));
+  input('click', ...copy);
+  const flashShot = await captureWhile('quick-wins-copy-flash', path => address(path) !== before);
+  assert.equal((await app.command('clipboard')).text, base + '/split');
+  await captureWhile('quick-wins-copy-restored', path => address(path) === before);
+  pass('Copy link wrote the active URL to GPUI clipboard and the confirmation cleared');
+
+  const title = 'MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM';
+  const after = app.events.length;
+  await app.command('script', { tab, source: `document.title = '${title}'` });
+  await app.wait('long sidebar title', event => event.type === 'title' && event.tab === tab && event.title === title, after);
+  const rowY = y + 235; // The first Today row in the one-Space layout used by sidebarFocus.
+  // This strip is the gap between the shortened title and the menu button on hover.
+  const titleCrop = `7x18+${x + 186}+${rowY - 9}`;
+  const hasTitleInk = path => Number(pixels(path, titleCrop, '%k')) > 1;
+  input('move', ...blank);
+  const resting = await captureWhile('quick-wins-row-resting', hasTitleInk);
+  input('move', x + 80, rowY);
+  const hovered = await captureWhile('quick-wins-row-hovered', path => !hasTitleInk(path));
+  pass('the resting tab title occupied the space taken by controls on hover');
+
+  input('click', x + 234, y + 173);
+  await poll('Today Clear to archive the tab', async () => {
+    const snapshot = await app.command('snapshot');
+
+    return !active(snapshot).today.length && snapshot.core.archive.some(entry => entry.url === base + '/split');
+  });
+  await app.wait('CEF closure after clearing Today', event => event.type === 'closed' && event.tab === tab);
+  pass('Today Clear archived the tab and closed its CEF browser');
+
+  if (existsSync('/mnt/visual')) {
+    for (const path of [linkShot, flashShot, resting, hovered]) copyFileSync(path, join('/mnt/visual', relative(out, path)));
+  }
+}
+
 async function keyDelivery(app, tabs, key, step, expected) {
   const received = site.probe(`${step}-key`);
 
@@ -629,6 +787,8 @@ async function sidebarFocus(app, left) {
   // the 22px menu and close buttons with the row's 10px gaps and 6px right padding
   // (ui/styles.css:582, 586, 631).
   execFileSync(x11Driver, ['click', 340, 110]);
+  execFileSync(x11Driver, ['move', 169, 235]);
+  await app.present();
   execFileSync(x11Driver, ['click', 169, 235]);
   const split = await waitForSelection(app, right, 'sidebar Split selected pane B');
 
@@ -762,13 +922,20 @@ async function isolateWithTransients(app, space) {
   await app.present();
   await capture('peek-backdrop', ['#147A70', '#FFCC49']);
 
-  // The centre of the Shared cookies button with two Spaces, measured from this step's capture
-  // on Xvfb's 1280×1024 screen. The button sits in the controls at the foot of the sidebar.
-  execFileSync(x11Driver, ['click', 192, 965]);
+  // The footer's New Space button: inside the sidebar's 6px right and 8px bottom padding, half
+  // the 28px icon button from each (ui/styles.css:32, 136), measured from the visual captures.
+  const [x, y, , height] = execFileSync(x11Driver, ['geometry', 'Flecha'], { encoding: 'utf8' })
+    .trim().split(' ').map(Number);
+
+  const newSpace = [x + 260 - 6 - 14, y + height - 8 - 14];
+  const spaces = snapshot => snapshot.core.spaces.length;
+  const spacesBefore = spaces(await app.command('snapshot'));
+  execFileSync(x11Driver, ['click', ...newSpace]);
 
   for (;;) {
     const state = await app.command('snapshot');
-    assert.equal(isIsolated(state), false, 'Peek backdrop passed the click through to Separate cookies');
+    assert.equal(spaces(state), spacesBefore, 'Peek backdrop passed the click through to New Space');
+    assert.equal(isIsolated(state), false);
 
     if (!state.peeks.length) break;
     await delay(100); // Matches the capture poll.
@@ -776,7 +943,14 @@ async function isolateWithTransients(app, space) {
 
   await app.wait('CEF closure after clicking the Peek backdrop', event =>
     event.type === 'closed' && event.tab === clickedPeek);
-  pass('clicking Separate cookies through the Peek backdrop dismissed Peek and left the Space shared');
+  // Without Peek the same click adds a Space, so the backdrop, not a miss, held it back. GPUI
+  // hit-tests the last frame it drew, so that frame must be the one without the backdrop.
+  await app.present();
+  execFileSync(x11Driver, ['click', ...newSpace]);
+  await poll('New Space from the footer button', async () =>
+    spaces(await app.command('snapshot')) === spacesBefore + 1);
+  await app.command('switch', { space });
+  pass('clicking New Space through the Peek backdrop dismissed Peek and left the Spaces alone');
 
   await cookie(app, 'Shared cookie');
   const [{ window: mini, tab: detached }] = (await app.command('detach')).flechinhas;
@@ -1650,6 +1824,17 @@ async function visualParity(app, left) {
     await shot(`visual-context-menu-${theme}`);
     key('Escape');
 
+    click(x + menuButton[0], y + menuButton[1]);
+    await shot(`visual-app-menu-${theme}`);
+    // The Zoom row opens its submenu beside it.
+    click(x + zoomRow[0], y + zoomRow[1]);
+    await shot(`visual-app-menu-zoom-${theme}`);
+    key('Escape');
+
+    execFileSync(x11Driver, ['right-click', x + spaceHeader[0], y + spaceHeader[1]]);
+    await shot(`visual-space-menu-${theme}`);
+    key('Escape');
+
     // The footer's Downloads button: the sidebar's left and bottom padding, then half the
     // 28px icon button (ui/styles.css:32, 136).
     click(x + 10 + 14, y + height - 8 - 14);
@@ -1676,6 +1861,57 @@ async function visualParity(app, left) {
     const returned = await app.command('return', { window: mini });
     await app.command('select', { tab: active(returned).activeTabId });
   }
+
+  // The window menu's rows act: New window opens a regular window.
+  execFileSync(x11Driver, ['focus', 'Flecha']);
+  const [x, y] = geometry();
+  const windows = async () => (await app.command('snapshot')).core.windows;
+  const before = await windows();
+
+  click(x + menuButton[0], y + menuButton[1]);
+  await app.present();
+  click(x + newWindowRow[0], y + newWindowRow[1]);
+
+  const opened = (await poll('New window from the window menu', async () => {
+    const now = await windows();
+
+    return now.length === before.length + 1 && now;
+  })).find(window => !before.some(old => old.id === window.id));
+
+  await app.command('close_window', { window: opened.id });
+  await poll('GPUI closed the menu\'s window', async () =>
+    !(await app.command('snapshot')).nativeWindows.includes(opened.id));
+  pass('the window menu opened a new window');
+
+  // The Space menu, from a right-click on the Space's name (background.ts spaceMenu), turns
+  // Separate Cookies and Logins on and off. The driver focuses a title only one window has.
+  await poll('one window named Flecha', async () => {
+    try {
+      execFileSync(x11Driver, ['focus', 'Flecha'], { stdio: 'ignore' });
+
+      return true;
+    } catch {
+      return false;
+    }
+  });
+
+  const shown = async () => {
+    const snapshot = await app.command('snapshot');
+
+    return snapshot.core.spaces.find(space => space.id === win(snapshot).activeSpaceId);
+  };
+
+  for (const wanted of [true, false]) {
+    // GPUI hit-tests the last frame drawn, which may still hold the previous menu.
+    await app.present();
+    execFileSync(x11Driver, ['right-click', x + spaceHeader[0], y + spaceHeader[1]]);
+    await app.present();
+    click(x + spaceHeader[0] + spaceMenuItem[0], y + spaceHeader[1] + spaceMenuItem[1]);
+    await poll(`Separate Cookies and Logins ${wanted ? 'on' : 'off'} from the Space menu`, async () =>
+      (await shown()).isolated === wanted);
+  }
+
+  pass('the Space menu turned Separate Cookies and Logins on and off');
 
   const { window: incognito } = await openIncognito(app);
   await app.command('open', { url: base + '/open', window: incognito });
@@ -1946,7 +2182,14 @@ async function verifySlice() {
     await restarted.command('switch', { space: shared });
     await cookie(restarted, 'Shared cookie');
     pass('the isolated cookie persisted after restart and stayed out of the ordinary Space');
+
+    if (mode === 'slice') {
+      await quickWins(restarted);
+      await restarted.command('switch', { space: shared });
+    }
+
     const dragged = mode === 'slice' ? await tabDrags(restarted) : undefined;
+
     await restarted.quit();
 
     const popups = launch('popups');

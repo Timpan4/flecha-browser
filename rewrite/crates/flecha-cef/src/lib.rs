@@ -81,6 +81,7 @@ pub enum Event {
     },
     Paint,
     PaintFailed,
+    PointerChanged,
     Opened(Opened),
     ClosedByPage,
     /// The page entered (`true`) or left HTML fullscreen. With Alloy-style browsers the
@@ -492,6 +493,23 @@ impl Engine {
         }
     }
 
+    pub fn pointer_state(&self, tab: &TabId) -> (gpui::CursorStyle, Option<gpui::SharedString>) {
+        self.browsers
+            .get(tab)
+            .map_or_else(Default::default, |session| {
+                (
+                    flecha_surface::input::cursor_style(session.slot.cursor.get()),
+                    session.slot.status.borrow().clone(),
+                )
+            })
+    }
+
+    pub fn clear_pointer_status(&self, tab: &TabId) {
+        if let Some(session) = self.browsers.get(tab) {
+            session.slot.set_status(None);
+        }
+    }
+
     pub fn host(&self, tab: &TabId) -> Option<BrowserHost> {
         self.browsers
             .get(tab)?
@@ -547,6 +565,9 @@ impl Engine {
         };
         if session.hidden == visible {
             session.hidden = !visible;
+            if !visible {
+                session.slot.set_status(None);
+            }
             if let Some(host) = self.host(tab) {
                 host.was_hidden(i32::from(!visible));
             }
@@ -889,6 +910,7 @@ mod tests {
             Event::LoadFailed { .. } => Event::LoadFailed { url: url.into(), code: -106 },
             Event::Paint => Event::Paint,
             Event::PaintFailed => Event::PaintFailed,
+            Event::PointerChanged => Event::PointerChanged,
             Event::Opened(_) => Event::Opened(Opened {
                 url: url.into(),
                 disposition: Disposition::Popup,

@@ -16,6 +16,7 @@ mod popup;
 #[cfg(target_os = "linux")]
 mod printing;
 mod settings_view;
+mod shell_menu;
 mod shortcuts;
 mod sidebar;
 mod site_controls;
@@ -26,6 +27,7 @@ mod theme;
 mod tokens;
 mod verify;
 mod view;
+mod window_chrome;
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -83,7 +85,9 @@ pub struct FirstWindow {
 
 impl FirstWindow {
     pub fn open(cx: &mut App) -> Result<Self> {
-        let handle = cx.open_window(WindowOptions::default(), |window, cx| {
+        // The first main window takes it over, so it is decorated as one.
+        let options = window_chrome::client_decorated(WindowOptions::default());
+        let handle = cx.open_window(options, |window, cx| {
             window.set_window_title("Flecha");
             cx.new(|_| view::Starting)
         })?;
@@ -202,6 +206,9 @@ enum Action {
     NewWindow,
     /// "New incognito window" (`ui/app.ts`), Ctrl+Shift+N.
     NewIncognitoWindow,
+    /// "New Flechinha window" (`ui/app.ts`): a Flechinha showing the address, in this
+    /// regular window's Space.
+    OpenFlechinha(String),
     Switch(SpaceId),
     NewSpace,
     Isolate,
@@ -257,6 +264,7 @@ struct Controller {
     fullscreen: fullscreen::PageFullscreen,
     agents: mcp::Agents,
     toolbars: BTreeMap<WindowId, Toolbar>,
+    copy_link_flashes: BTreeMap<WindowId, Instant>,
     pending_reloads: BTreeMap<i32, flecha_cef::BrowserKey>,
     store: StateStore,
     session_dir: PathBuf,
@@ -359,6 +367,7 @@ impl Controller {
             fullscreen: fullscreen::PageFullscreen::default(),
             agents: mcp::Agents::default(),
             toolbars: BTreeMap::new(),
+            copy_link_flashes: BTreeMap::new(),
             pending_reloads: BTreeMap::new(),
             store,
             snapshots,
@@ -615,6 +624,10 @@ impl Controller {
             Action::NewWindow => self.front = Some(self.model.open_regular_window()?),
             Action::NewIncognitoWindow => {
                 self.front = Some(self.model.open_incognito_window());
+                return Ok(());
+            }
+            Action::OpenFlechinha(url) => {
+                self.front = Some(self.model.open_flechinha(window, url)?);
                 return Ok(());
             }
             Action::CloseWindow => {
@@ -918,7 +931,7 @@ impl Controller {
                         changed = true;
                     }
                 }
-                Event::Paint => {
+                Event::Paint | Event::PointerChanged => {
                     changed = true;
                 }
                 Event::PaintFailed => {
@@ -961,6 +974,12 @@ impl Controller {
         changed |= self.drain_downloads();
         changed |= self.poll_permissions();
         changed |= self.poll_toolbars();
+        if !self.copy_link_flashes.is_empty() {
+            let pending = self.copy_link_flashes.len();
+            let now = Instant::now();
+            self.copy_link_flashes.retain(|_, until| *until > now);
+            changed |= pending != self.copy_link_flashes.len();
+        }
         self.poll_page_overlays(cx);
         self.poll_clipboard(cx);
         #[cfg(target_os = "linux")]
@@ -1149,13 +1168,20 @@ fn sync_windows(controller: &Shared, cx: &mut App) -> Result<()> {
                 // The root is a Shell now, which `WindowHandle::new` does not check.
                 WindowHandle::<Shell>::new(first.window_id())
             }
-            None => cx.open_window(
-                WindowOptions {
+            None => {
+                let options = WindowOptions {
                     window_bounds: bounds,
                     ..Default::default()
-                },
-                |window, cx| cx.new(|cx| shell(window, cx)),
-            )?,
+                };
+                // A popup has no toolbar to hold the window controls.
+                let options = match kind {
+                    Kind::Popup(_) => options,
+                    Kind::Main | Kind::Incognito | Kind::Flechinha => {
+                        window_chrome::client_decorated(options)
+                    }
+                };
+                cx.open_window(options, |window, cx| cx.new(|cx| shell(window, cx)))?
+            }
         };
         controller.borrow_mut().windows.insert(id, handle);
     }

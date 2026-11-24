@@ -17,8 +17,9 @@ prepare_source() {
       tar -xz --strip-components=1 -C "$tree"
     patch -d "$tree" -p1 --batch --forward < "$patch_file"
     printf '%s\n%s\n' "$repo" "$rev" > "$tree/.flecha-revision"
+  # Force the reverse direction even when a hunk matches only the unpatched tree.
   elif cmp -s "$destination/.flecha-revision" <(printf '%s\n%s\n' "$repo" "$rev") &&
-    patch -d "$destination" -p1 --dry-run --batch --reverse < "$patch_file" >/dev/null; then
+    patch -d "$destination" -p1 --dry-run --force --reverse < "$patch_file" >/dev/null; then
     printf '%s patches already applied\n' "$name"
   else
     printf 'Existing %s does not match the pinned repository, revision or patch. Move aside %s and rerun prepare.sh.\n' "$destination" "$destination" >&2

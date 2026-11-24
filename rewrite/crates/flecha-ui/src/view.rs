@@ -10,15 +10,18 @@ use flecha_surface::{Frame, input, surface};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     Animation, AnimationExt as _, App, ClickEvent, Context, Div, FocusHandle, FontWeight,
-    InteractiveElement as _, IntoElement, KeyUpEvent, MouseButton, MouseDownEvent, MouseExitEvent,
-    MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Render, RenderImage, ScrollEvent,
+    HoverListenerMode, InteractiveElement as _, IntoElement, KeyUpEvent, MouseButton,
+    MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection,
+    ParentElement as _, Pixels, Render, RenderImage, ScrollEvent, SharedString,
     StatefulInteractiveElement as _, Styled as _, Subscription, Window, canvas, deferred, div, px,
     relative,
 };
 
 use crate::icons::icon;
+use crate::shortcuts::Navigation;
 use crate::theme::{DEFAULT_TINT, Palette, palette};
 use crate::tokens::{self, ease};
+use crate::window_chrome::{TitleBar, close_control, resize_edges};
 use crate::{Action, Shared, dispatch};
 use crate::{
     command_bar::{CommandBar, SuggestionClient},
@@ -48,6 +51,7 @@ pub(crate) enum Overlay {
     Downloads(DownloadsPanel),
     SiteControls,
     ContextMenu(ContextMenuRequest),
+    Menu(crate::shell_menu::ShellMenu),
 }
 
 impl Overlay {
@@ -66,11 +70,17 @@ pub(crate) struct Shell {
     pub(crate) overlay: Overlay,
     pub(crate) browser_dialog: Option<BrowserDialog>,
     pub(crate) sidebar_interaction: SidebarInteraction,
+    /// Where the sidebar's menu button was last drawn, for the window menu to drop from.
+    pub(crate) menu_button: Rc<Cell<gpui::Bounds<Pixels>>>,
+    /// The left button went down on a title bar's empty room; the next drag moves the window.
+    pub(crate) moving: bool,
     pub(crate) find: Option<FindSession>,
     pub(crate) suggestion_client: Arc<SuggestionClient>,
     pub(crate) last_suggestion_sent: Option<Instant>,
     pub(crate) bindings: Bindings,
     pub(crate) consumed_keys: BTreeSet<String>,
+    pressed_button: Rc<Cell<Option<MouseButton>>>,
+    pub(crate) hovered_tab_row: Option<TabId>,
     pub(crate) tab_drag: Option<crate::tab_drag::TabDrag>,
     images: BTreeMap<TabId, Vec<Arc<RenderImage>>>,
     title: String,
@@ -114,6 +124,8 @@ impl Shell {
                 this.cancel_tab_drag(window, cx);
             }
             let _ = this.sync_page_focus(window, cx);
+            // The window controls turn grey while another window is focused.
+            cx.notify();
         });
         // Theme::System follows the desktop's light or dark appearance as it changes.
         let appearance = cx.observe_window_appearance(window, |_, _, cx| cx.notify());
@@ -127,11 +139,15 @@ impl Shell {
             overlay: Overlay::None,
             browser_dialog: None,
             sidebar_interaction: SidebarInteraction::default(),
+            menu_button: Rc::default(),
+            moving: false,
             find: None,
             suggestion_client: Arc::default(),
             last_suggestion_sent: None,
             bindings,
             consumed_keys: BTreeSet::new(),
+            pressed_button: Rc::new(Cell::new(None)),
+            hovered_tab_row: None,
             tab_drag: None,
             images: BTreeMap::new(),
             title: String::new(),
@@ -298,6 +314,29 @@ impl Shell {
         .size_full()
     }
 
+    fn pointer_button_probe(&self) -> impl IntoElement {
+        let pressed_button = self.pressed_button.clone();
+        canvas(
+            |_, _, _| (),
+            move |_, (), window, _| {
+                // Capture the native button before GPUI dispatches a pane's hover transition.
+                let motion_button = pressed_button.clone();
+                window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, _| {
+                    if phase.capture() {
+                        motion_button.set(event.pressed_button);
+                    }
+                });
+                window.on_mouse_event(move |event: &MouseExitEvent, phase, _, _| {
+                    if phase.capture() {
+                        pressed_button.set(event.pressed_button);
+                    }
+                });
+            },
+        )
+        .absolute()
+        .size_0()
+    }
+
     /// Puts the window in native fullscreen while its page is in HTML fullscreen, and takes it
     /// out afterwards unless the user had made it fullscreen first. GPUI redraws a window whose
     /// bounds change, as a native fullscreen change does, so a late entry is undone here too.
@@ -346,12 +385,13 @@ impl Shell {
         images: &mut BTreeMap<TabId, Vec<Arc<RenderImage>>>,
         cx: &Context<Self>,
     ) -> Div {
-        let (frames, prompt, writable) = {
+        let (frames, prompt, writable, (cursor, status)) = {
             let state = self.state.borrow();
             (
                 state.engine.frames(&id).unwrap_or_default(),
                 state.engine.pending_permission_prompt(&id),
                 state.permissions.error().is_none(),
+                state.engine.pointer_state(&id),
             )
         };
         let pane_images = [
@@ -366,11 +406,15 @@ impl Shell {
         images.insert(id.clone(), pane_images);
         let state = self.state.clone();
         let origin = Rc::new(Cell::new(gpui::Point::default()));
+        let group = SharedString::new_static("page-pointer");
         let mut element = div()
+            .id(format!("page-viewport-{}", id.as_str()))
+            .group(group.clone())
             .relative()
             .size_full()
             .overflow_hidden()
             .bg(palette().page)
+            .cursor(cursor)
             .child(surface(frames.view, frames.popup))
             .child(
                 canvas(|_, _, _| (), {
@@ -417,7 +461,24 @@ impl Shell {
         }
         element = element
             .on_mouse_move(pointer!(MouseMoveEvent, mouse_move))
-            .on_mouse_exit(pointer!(MouseExitEvent, mouse_exit))
+            .hover_listener_mode(HoverListenerMode::InputModalityIndependent)
+            .on_hover({
+                let (id, origin) = (id.clone(), origin.clone());
+                cx.listener(move |this, hovered: &bool, window, _| {
+                    if !hovered {
+                        let state = this.state.borrow();
+                        state.engine.clear_pointer_status(&id);
+                        if let Some(host) = state.engine.host(&id) {
+                            input::mouse_leave(
+                                &host,
+                                window.mouse_position() - origin.get(),
+                                window.modifiers(),
+                                this.pressed_button.get(),
+                            );
+                        }
+                    }
+                })
+            })
             .on_scroll(pointer!(ScrollEvent, scroll));
         for button in [MouseButton::Left, MouseButton::Middle, MouseButton::Right] {
             let (down_id, down_origin, down_owner) = (id.clone(), origin.clone(), owner.clone());
@@ -469,6 +530,25 @@ impl Shell {
             && find.browser.tab == id
         {
             element = element.child(self.find_panel(find, cx));
+        }
+        if let Some(status) = status {
+            element = element.child(
+                div()
+                    .absolute()
+                    .bottom_0()
+                    .left_0()
+                    .max_w_full()
+                    .invisible()
+                    .group_hover(group, |style| style.visible())
+                    .rounded_tr(px(tokens::RADIUS_SM))
+                    .px(px(tokens::SPACE_2))
+                    .py(px(tokens::SPACE_1))
+                    .bg(palette().surface)
+                    .text_color(palette().text_2)
+                    .text_size(px(tokens::TEXT_XS))
+                    .truncate()
+                    .child(status),
+            );
         }
         div()
             .flex()
@@ -530,6 +610,25 @@ impl Render for Shell {
             .when_some(ui_font(cx), |main, font| main.font_family(font))
             .text_size(px(tokens::TEXT_MD))
             .line_height(relative(tokens::LINE_HEIGHT))
+            .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, _, _| {
+                if !matches!(event.button, MouseButton::Navigate(_)) {
+                    this.pressed_button.set(Some(event.button));
+                }
+            }))
+            .capture_any_mouse_up(cx.listener(|this, event: &MouseUpEvent, _, _| {
+                if this.pressed_button.get() == Some(event.button) {
+                    this.pressed_button.set(None);
+                }
+            }))
+            .on_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                let navigation = match event.button {
+                    MouseButton::Navigate(NavigationDirection::Back) => Navigation::Back,
+                    MouseButton::Navigate(NavigationDirection::Forward) => Navigation::Forward,
+                    _ => return,
+                };
+                cx.stop_propagation();
+                dispatch(&this.state, &this.id, Action::Browser(navigation), cx);
+            }))
             .on_key_down(cx.listener(|this, event, window, cx| this.key(event, window, cx)))
             .on_key_up(cx.listener(|this, event: &KeyUpEvent, window, cx| {
                 if this.consumed_keys.remove(&event.keystroke.key)
@@ -542,12 +641,14 @@ impl Render for Shell {
                 let focused = this.sync_page_focus(window, cx);
                 this.page_key(focused, &event.keystroke, true, false, false);
             }))
+            .child(self.pointer_button_probe())
             .child(self.sidebar_input(cx))
             .child(div().absolute().size_0().track_focus(&self.page_focus))
             .child(div().absolute().size_0().track_focus(&self.focus));
         let mut images = BTreeMap::new();
         let fullscreen = self.state.borrow().fullscreen_pane(&self.id);
         self.sync_native_fullscreen(fullscreen.is_some(), window);
+        let title_bar = TitleBar::of(window);
         let state = self.state.borrow();
         if let Some((owner, tab)) = fullscreen.clone() {
             let mut body = div().flex_1().min_h_0().relative().flex();
@@ -558,7 +659,9 @@ impl Render for Shell {
                     core.sidebar_visible(&self.id),
                 )
             {
-                body = body.child(self.sidebar(&state, current, cx));
+                body = body.child(self.sidebar(&state, current, TitleBar::Platform, window, cx));
+            } else {
+                self.hovered_tab_row = None;
             }
             let page = self.pane(owner, tab, &mut images, cx);
             main = main.child(body.child(div().flex_1().min_w_0().min_h_0().child(page)));
@@ -592,76 +695,96 @@ impl Render for Shell {
             let host = flecha_core::suggestions::display_url(&page.tab.url);
             main = main
                 .child(
-                    // Flechinha's toolbar (ui/flechinha.css): 44 tall on the tint, controls 28
-                    // tall, the address a resting chip.
-                    div()
-                        .h(px(tokens::FLECHINHA_TOOLBAR))
-                        .flex_shrink_0()
-                        .flex()
-                        .items_center()
-                        .gap(px(tokens::TOOLBAR_GAP))
-                        .pl(px(tokens::SPACE_2 - tokens::TOOLBAR_GAP))
-                        .pr(px(tokens::SPACE_2))
-                        .child(window_close("close").on_click(cx.listener(
-                            |this, _: &ClickEvent, _, cx| {
-                                dispatch(&this.state, &this.id, Action::Close, cx);
-                            },
-                        )))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .h(px(tokens::PILL_HEIGHT))
-                                .mx(px(tokens::FLECHINHA_ADDRESS_MARGIN))
-                                .px(px(tokens::URLBAR_PAD_LEFT))
-                                .flex()
-                                .items_center()
-                                .gap(px(tokens::SPACE_2))
-                                .rounded(px(tokens::PAGE_RADIUS))
-                                .bg(palette().fill_subtle)
-                                .shadow(vec![hairline(palette().line)])
-                                .child(
-                                    div()
-                                        .min_w_0()
-                                        .truncate()
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .child(host),
-                                )
-                                .when(!page.tab.title.is_empty(), |address| {
-                                    address.child(
+                    self.window_drag(
+                        // Flechinha's toolbar (ui/flechinha.css): 44 tall on the tint, controls 28
+                        // tall, the address a resting chip. Its empty room moves the window.
+                        div()
+                            .h(px(tokens::FLECHINHA_TOOLBAR))
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .gap(px(tokens::TOOLBAR_GAP))
+                            .pl(px(tokens::SPACE_2 - tokens::TOOLBAR_GAP))
+                            .pr(px(tokens::SPACE_2))
+                            .map(|bar| match title_bar {
+                                TitleBar::Platform => bar.child(close_control().on_click(
+                                    cx.listener(|this, _: &ClickEvent, _, cx| {
+                                        dispatch(&this.state, &this.id, Action::Close, cx);
+                                    }),
+                                )),
+                                _ => bar.children(self.window_controls(
+                                    title_bar,
+                                    (
+                                        tokens::FLECHINHA_WINDOW_CONTROLS_WIDTH,
+                                        tokens::FLECHINHA_WINDOW_CONTROLS_PAD_LEFT,
+                                    ),
+                                    window,
+                                    cx,
+                                )),
+                            })
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .h(px(tokens::PILL_HEIGHT))
+                                    .occlude()
+                                    .mx(px(tokens::FLECHINHA_ADDRESS_MARGIN))
+                                    .px(px(tokens::URLBAR_PAD_LEFT))
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(tokens::SPACE_2))
+                                    .rounded(px(tokens::PAGE_RADIUS))
+                                    .bg(palette().fill_subtle)
+                                    .shadow(vec![hairline(palette().line)])
+                                    .child(
                                         div()
-                                            .flex_1()
                                             .min_w_0()
                                             .truncate()
-                                            .text_color(palette().text_3)
-                                            .child(format!("— {}", page.tab.title)),
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .child(host),
                                     )
-                                }),
-                        )
-                        .children(self.zoom_badge(cx))
-                        .child(
-                            div()
-                                .id("return")
-                                .flex()
-                                .items_center()
-                                .gap(px(tokens::PILL_GAP))
-                                .h(px(tokens::PILL_HEIGHT))
-                                .flex_shrink_0()
-                                .pl(px(tokens::FLECHINHA_CTA_PAD_LEFT))
-                                .pr(px(tokens::FLECHINHA_CTA_PAD_RIGHT))
-                                .rounded(px(tokens::PAGE_RADIUS))
-                                .bg(palette().cta)
-                                .text_color(palette().cta_text)
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_size(px(tokens::TEXT_SM))
-                                .cursor_pointer()
-                                .hover(|cta| cta.bg(palette().cta_hover))
-                                .child(icon("external", tokens::PILL_ICON, palette().cta_text))
-                                .child("Open in Flecha")
-                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                    dispatch(&this.state, &this.id, Action::Return, cx);
-                                })),
-                        ),
+                                    .when(!page.tab.title.is_empty(), |address| {
+                                        address.child(
+                                            div()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .truncate()
+                                                .text_color(palette().text_3)
+                                                .child(format!("— {}", page.tab.title)),
+                                        )
+                                    }),
+                            )
+                            .children(
+                                self.zoom_badge(cx)
+                                    .map(|badge| div().flex_none().occlude().child(badge)),
+                            )
+                            .child(
+                                div()
+                                    .id("return")
+                                    .occlude()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(tokens::PILL_GAP))
+                                    .h(px(tokens::PILL_HEIGHT))
+                                    .flex_shrink_0()
+                                    .pl(px(tokens::FLECHINHA_CTA_PAD_LEFT))
+                                    .pr(px(tokens::FLECHINHA_CTA_PAD_RIGHT))
+                                    .rounded(px(tokens::PAGE_RADIUS))
+                                    .bg(palette().cta)
+                                    .text_color(palette().cta_text)
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_size(px(tokens::TEXT_SM))
+                                    .cursor_pointer()
+                                    .hover(|cta| cta.bg(palette().cta_hover))
+                                    .child(icon("external", tokens::PILL_ICON, palette().cta_text))
+                                    .child("Open in Flecha")
+                                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                        dispatch(&this.state, &this.id, Action::Return, cx);
+                                    })),
+                            ),
+                        title_bar,
+                        cx,
+                    ),
                 )
                 .child(
                     div()
@@ -792,6 +915,9 @@ impl Render for Shell {
                 ));
             }
             let docked = core.sidebar_visible(&self.id);
+            if !docked {
+                self.hovered_tab_row = None;
+            }
             let page_area = div()
                 .flex_1()
                 .min_h_0()
@@ -804,15 +930,16 @@ impl Render for Shell {
             let mut body = div().flex_1().min_h_0().relative().flex();
             if docked {
                 body = body
-                    .child(self.sidebar(&state, current, cx))
+                    .child(self.sidebar(&state, current, title_bar, window, cx))
                     .child(page_area);
             } else {
                 body = body
                     .child(page_area)
-                    .child(self.floating_sidebar(&state, current, cx));
+                    .child(self.floating_sidebar(&state, current, title_bar, window, cx));
             }
             main = main.child(body);
         }
+        main = main.children(resize_edges(title_bar));
         if let Some(status) = state.status_for(&self.id) {
             main = main.child(
                 div()
@@ -860,7 +987,7 @@ impl Render for Shell {
             panel.refresh(&self.state.borrow().downloads);
         }
         let overlay = match &self.overlay {
-            Overlay::None | Overlay::ContextMenu(_) => None,
+            Overlay::None | Overlay::ContextMenu(_) | Overlay::Menu(_) => None,
             Overlay::Command(bar) => Some(self.command_panel(bar, cx)),
             Overlay::History(panel) => Some(self.history_panel(panel, cx)),
             Overlay::Settings(panel) => Some(self.settings_panel(panel, cx)),
@@ -978,6 +1105,9 @@ impl Render for Shell {
         }
         if let Overlay::ContextMenu(menu) = &self.overlay {
             main = main.child(self.context_menu_panel(menu, window, cx));
+        }
+        if let Overlay::Menu(menu) = &self.overlay {
+            main = main.child(self.menu_panel(menu, cx));
         }
         if let Some(drag) = self.sidebar_drag_layer() {
             main = main.child(deferred(drag));
@@ -1221,43 +1351,6 @@ pub(crate) fn hairline(color: gpui::Rgba) -> gpui::BoxShadow {
         spread_radius: px(0.5),
         inset: true,
     }
-}
-
-/// The red close circle of a window without the platform's title bar
-/// (ui/windowControls.css:4-56): a 12px circle in a 20px target, its cross shown on hover.
-pub(crate) fn window_close(id: &'static str) -> gpui::Stateful<Div> {
-    let inset = tokens::WINDOW_CONTROL_INSET;
-    let group = gpui::SharedString::new_static("window-close");
-    div()
-        .id(id)
-        .group(group.clone())
-        .relative()
-        .flex()
-        .flex_none()
-        .items_center()
-        .justify_center()
-        .size(px(tokens::WINDOW_CONTROL))
-        .cursor_pointer()
-        .aria_label("Close window")
-        .child(
-            div()
-                .absolute()
-                .top(px(inset))
-                .left(px(inset))
-                .size(px(tokens::WINDOW_CONTROL - 2. * inset))
-                .rounded_full()
-                .bg(tokens::color(".window-control.close", false))
-                .shadow(tokens::shadow_window_control()),
-        )
-        .child(
-            icon(
-                "window-close",
-                tokens::WINDOW_CONTROL_GLYPH,
-                tokens::color(".window-control svg stroke", false),
-            )
-            .opacity(0.)
-            .group_hover(group, |glyph| glyph.opacity(1.)),
-        )
 }
 
 /// `0 0 0 width color` outside an element: the focus ring.

@@ -519,7 +519,7 @@ pub(super) fn event(message: &BrowserEvent) {
         }
         Event::DialogChanged => json!({ "type": "dialog_changed", "tab": tab }),
         Event::SecurityChanged => json!({ "type": "security_changed", "tab": tab }),
-        Event::PaintFailed => return,
+        Event::PaintFailed | Event::PointerChanged => return,
     };
     value["generation"] = json!(message.key.generation());
     emit(value);
