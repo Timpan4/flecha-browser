@@ -19,7 +19,7 @@ const stepTimeoutMs = 10_000;
 const shippingTrace = readFileSync(new URL('./slice-ts-replay.jsonl', import.meta.url), 'utf8')
   .trim().split('\n').map(line => JSON.parse(line));
 
-assert(['slice', 'open', 'focus', 'popups', 'adblock', 'incognito', 'fullscreen', 'break-restore', 'visual'].includes(mode), 'unknown slice check');
+assert(['slice', 'open', 'focus', 'popups', 'adblock', 'incognito', 'fullscreen', 'break-restore', 'clipboard', 'visual'].includes(mode), 'unknown slice check');
 
 const easylist = '[Adblock Plus 2.0]\n! Title: EasyList\n/fixture-ad$xmlhttprequest\n';
 const easyprivacy = '[Adblock Plus 2.0]\n! Title: EasyPrivacy\n/fixture-tracker$xmlhttprequest\n';
@@ -93,7 +93,8 @@ function browser(name, fixturePort) {
     }
   }
 
-  async function command(op, detail = {}) {
+  /** The reply to one request, which may carry an error. */
+  async function attempt(op, detail = {}) {
     const request = ++seq;
     const sent = events.length;
     child.stdin.write(JSON.stringify({ seq: request, op, ...detail }) + '\n');
@@ -103,13 +104,19 @@ function browser(name, fixturePort) {
       (event.type === 'reply' && event.seq === request) || event.type === 'invalid_request', sent);
 
     assert.notEqual(reply.type, 'invalid_request', `Flecha does not understand the ${op} request`);
+
+    return reply;
+  }
+
+  async function command(op, detail = {}) {
+    const reply = await attempt(op, detail);
     assert.equal(reply.error, undefined, reply.error);
 
     return reply.result;
   }
 
   return {
-    events, command, wait, pid: child.pid,
+    events, attempt, command, wait, pid: child.pid,
     async exited() {
       child.stdin.end();
       assert.deepEqual(await closed, [0, null]);
@@ -1602,9 +1609,473 @@ async function verifySlice() {
   pass('CEF shut down cleanly');
 }
 
+/**
+ * Copy, Cut and Paste between web pages and GPUI's clipboard, from the keyboard and the page
+ * menu. Under X11 the keys go through XTest; a display without input injection dispatches them
+ * to the GPUI window. Every string is a fixture value.
+ */
+async function verifyClipboard() {
+  // Flecha prefers Wayland whenever WAYLAND_DISPLAY is set, even with an XWayland DISPLAY.
+  const x11 = !process.env.WAYLAND_DISPLAY;
+  const app = launch('clipboard');
+  await app.wait('CEF context ready', event => event.type === 'ready');
+  const opened = await app.command('open', { url: base + '/clipboard' });
+  const tab = active(opened).activeTabId;
+  await app.loaded(tab, '/clipboard');
+  await app.wait('CEF paint for the clipboard page', event => event.type === 'paint' && event.tab === tab);
+  await app.present();
+
+  if (x11) {
+    execFileSync('cc', [
+      '-std=c17', '-Wall', '-Wextra', '-Werror', 'spikes/gpui-cef-compositor/x11-input.c',
+      '-lX11', '-lXtst', '-o', x11Driver,
+    ]);
+    execFileSync(x11Driver, ['focus', 'Flecha']);
+  }
+
+  const backend = x11 ? 'X11' : 'Wayland';
+
+  // Each chord is X11 key names, sent back to back with no wait between them under X11.
+  const keys = async (...chords) => {
+    for (const chord of chords) {
+      if (x11) {
+        execFileSync(x11Driver, chord.length === 1 ? ['key', ...chord] : ['chord', ...chord]);
+      } else {
+        const names = { Control_L: 'ctrl', Shift_L: 'shift' };
+
+        await app.command('key', { keystroke: chord.map(name => names[name] ?? name.toLowerCase()).join('-') });
+      }
+    }
+  };
+
+  const press = key => keys(['Control_L', key]);
+
+  let probes = 0;
+
+  const page = async (step, source = 'null') => {
+    const label = `clipboard-${++probes}`;
+    const reply = site.probe(label, stepTimeoutMs);
+    reply.catch(() => {}); // A failed command rejects first; the probe's timeout must not go unhandled.
+    await app.command('script', {
+      tab,
+      source: `{
+        const field = selector => document.querySelector(selector);
+        const result = (() => { ${step}; return ${source}; })();
+        fetch('/probe/${label}?value=' + encodeURIComponent(JSON.stringify(result)), { cache: 'no-store' });
+      }`,
+    });
+    waitingFor = `clipboard page step ${label}`;
+
+    return JSON.parse(await reply);
+  };
+
+  const clipboard = async text => (await app.command('clipboard', text === undefined ? {} : { text })).text;
+  const sentinel = 'flecha-clipboard-sentinel';
+
+  const center = selector => page('', `(() => {
+    const box = field('${selector}').getBoundingClientRect();
+    return [box.x + box.width / 2, box.y + box.height / 2];
+  })()`);
+
+  // The cross-site frame's own report of its fields, focus and selection.
+  const frameState = async () => {
+    const label = `frame-${++probes}`;
+    const reply = site.probe(label, stepTimeoutMs);
+    reply.catch(() => {}); // A failed command rejects first; the probe's timeout must not go unhandled.
+    await page(`field('#frame').contentWindow.postMessage(['report', '${label}'], '*')`);
+    waitingFor = `the frame's ${label} report`;
+
+    return JSON.parse(await reply);
+  };
+
+  // Focuses the frame, asks it to run `command`, and waits until its report passes `ready`.
+  const frame = async (command, ready) => {
+    await page(`field('#frame').focus(); field('#frame').contentWindow.postMessage(['${command}'], '*')`);
+
+    return poll(`the frame to ${command}`, async () => {
+      const state = await frameState();
+
+      return ready(state) ? state : undefined;
+    });
+  };
+
+  // Wayland's handling everywhere, since headless weston gives GPUI no input serial.
+  await app.command('shell_clipboard');
+
+  assert.equal(await clipboard(sentinel), sentinel, `GPUI's ${backend} clipboard did not keep a fixture string`);
+
+  // Each target starts empty, focused and with its caret at the end.
+  const targets = [
+    ['#text', 'value', 'flecha-paste-text'],
+    ['#password', 'value', 'flecha-paste-secret'],
+    ['#area', 'value', 'flecha-paste line one\nline two'],
+    ['#editable', 'textContent', 'flecha-paste-editable'],
+  ];
+
+  for (const [selector, property, text] of targets) {
+    await clipboard(text);
+    await page(`field('${selector}').${property} = ''; field('${selector}').focus()`);
+    await press('v');
+    await poll(`${selector} to receive the pasted text`, async () =>
+      (await page('', `field('${selector}').${property}`)) === text);
+  }
+
+  assert.equal(await page('', 'window.pastes'), 0, 'Chromium pasted on its own');
+  pass(`${backend}: Ctrl+V pasted GPUI's clipboard into a text input, a password input, a textarea and a contenteditable`);
+
+  const copyReport = since => app.wait('the page copy report', event =>
+    event.type === 'page_copy' && event.tab === tab, since, stepTimeoutMs);
+
+  const copy = async (key, step) => {
+    await clipboard(sentinel);
+    const since = app.events.length;
+    await page(step);
+    await press(key);
+
+    return (await copyReport(since)).copied;
+  };
+
+  const select = (selector, value) => `field('${selector}').value = '${value}'; field('${selector}').focus(); field('${selector}').select()`;
+
+  assert.equal(await copy('c', select('#password', 'flecha-copy-secret')), false, 'Ctrl+C read a password field');
+  assert.equal(await clipboard(), sentinel, 'Ctrl+C put a password on the clipboard');
+  assert.equal(await copy('x', select('#password', 'flecha-cut-secret')), false, 'Ctrl+X read a password field');
+  assert.equal(await clipboard(), sentinel, 'Ctrl+X put a password on the clipboard');
+  assert.equal(await page('', `field('#password').value`), 'flecha-cut-secret', 'Ctrl+X deleted a password');
+  // Nothing was copied, so the page got the held keystrokes, as it would without Flecha.
+  await poll('the held Ctrl+C and Ctrl+X to reach the page', async () => (await page('', 'window.editKeys')) === 2);
+  pass(`${backend}: Ctrl+C and Ctrl+X in a password field left GPUI's clipboard and the field unchanged and reached the page as keystrokes`);
+
+  assert.equal(await copy('c', select('#text', 'flecha-copy-text')), true, 'Ctrl+C read nothing');
+  assert.equal(await clipboard(), 'flecha-copy-text', 'Ctrl+C did not copy the input text');
+  assert.equal(await copy('c', `
+    document.activeElement.blur();
+    getSelection().selectAllChildren(document.querySelector('h1'))`), true, 'Ctrl+C read no page selection');
+  assert.equal(await clipboard(), 'Flecha fixture /clipboard', 'Ctrl+C did not copy the page text');
+  assert.equal(await copy('x', select('#area', 'flecha-cut-area')), true, 'Ctrl+X read nothing');
+  assert.equal(await clipboard(), 'flecha-cut-area', 'Ctrl+X did not copy the textarea text');
+  await poll('the cut text to leave the textarea', async () => (await page('', `field('#area').value`)) === '');
+  assert.equal(await copy('x', `
+    field('#editable').textContent = 'flecha-edit-keepflecha-edit-cut';
+    field('#editable').focus();
+    getSelection().setBaseAndExtent(field('#editable').firstChild, 16, field('#editable').firstChild, 31)`), true,
+  'Ctrl+X read nothing in the contenteditable');
+  assert.equal(await clipboard(), 'flecha-edit-cut', 'Ctrl+X did not copy the contenteditable text');
+  await poll('the cut text to leave the contenteditable', async () =>
+    (await page('', `field('#editable').textContent`)) === 'flecha-edit-keep');
+  assert.equal(await page('', 'window.editKeys'), 2, 'a copy or cut with text also reached the page as a keystroke');
+  pass(`${backend}: Ctrl+C copied input and page selections and Ctrl+X cut textarea and contenteditable text to GPUI's clipboard without Chromium's own copy`);
+
+  // Selections the read cannot tie to a focused field fail closed: Chromium copies a password's
+  // mask from them.
+  assert.equal(await copy('c', `
+    shadowPassword.value = 'flecha-shadow-secret';
+    shadowPassword.focus();
+    shadowPassword.select()`), false, 'Ctrl+C read a password in a closed shadow root');
+  assert.equal(await clipboard(), sentinel, 'Ctrl+C put a hidden password mask on the clipboard');
+  assert.equal(await copy('c', `${select('#password', 'flecha-blur-secret')}; document.activeElement.blur()`), false,
+    'Ctrl+C read a blurred password selection');
+  assert.equal(await clipboard(), sentinel, 'Ctrl+C put a blurred password mask on the clipboard');
+  const checkbox = `${select('#password', 'flecha-check-secret')}; field('#check').focus()`;
+
+  assert.equal(await copy('c', checkbox), false, 'Ctrl+C read a password selection behind a focused checkbox');
+  assert.equal(await clipboard(), sentinel, 'Ctrl+C put a password mask behind a focused checkbox on the clipboard');
+  assert.equal(await copy('x', checkbox), false, 'Ctrl+X read a password selection behind a focused checkbox');
+  assert.equal(await clipboard(), sentinel, 'Ctrl+X put a password mask behind a focused checkbox on the clipboard');
+  assert.equal(await page('', `field('#password').value`), 'flecha-check-secret', 'Ctrl+X deleted a password behind a focused checkbox');
+  await poll('the held Ctrl+C and Ctrl+X keystrokes to reach the page', async () => (await page('', 'window.editKeys')) === 6);
+  assert.equal(await copy('c', select('#email', 'flecha@copy.test')), true, 'Ctrl+C read no email field');
+  assert.equal(await clipboard(), 'flecha@copy.test', 'Ctrl+C did not copy the email field');
+  assert.equal(await copy('x', `${select('#text', 'flecha-read-only')}; field('#text').readOnly = true`), false,
+    'Ctrl+X cut from a read-only field');
+  assert.equal(await clipboard(), sentinel, 'Ctrl+X in a read-only field wrote the clipboard');
+  assert.equal(await page('field("#text").readOnly = false', `field('#text').value`), 'flecha-read-only', 'Ctrl+X changed a read-only field');
+  await poll('the held Ctrl+X to reach the page', async () => (await page('', 'window.editKeys')) === 7);
+  pass(`${backend}: Ctrl+C and Ctrl+X refused hidden or blurred password selections, Ctrl+X refused a read-only field, and Ctrl+C copied an email field`);
+
+  // The page menu opens on a right-click that CEF receives, with the field's selection intact.
+  // A row label no menu has tells an open menu from none. Any other answer is a failure.
+  const openMenu = async (x, y) => {
+    await app.command('click', { tab, x, y, right: true });
+    await poll('the page menu to open', async () => {
+      const { error } = await app.attempt('menu_row', { label: 'Menu probe' });
+
+      if (error === 'no page menu is open') return undefined;
+      assert.equal(error, 'the page menu has no enabled Menu probe row');
+
+      return true;
+    });
+  };
+
+  const menu = async (selector, label) => {
+    await openMenu(...await center(selector));
+
+    return app.attempt('menu_row', { label });
+  };
+
+  await clipboard('flecha-menu-paste');
+  await page(`field('#text').value = ''`);
+  assert.equal((await menu('#text', 'Paste')).error, undefined);
+  await poll('the page menu paste', async () => (await page('', `field('#text').value`)) === 'flecha-menu-paste');
+  assert.equal(await page('', 'window.pastes'), 0, 'Chromium pasted on its own');
+
+  await clipboard(sentinel);
+  await page(select('#text', 'flecha-menu-copy'));
+  assert.equal((await menu('#text', 'Copy')).error, undefined);
+  await poll('the page menu copy', async () => (await clipboard()) === 'flecha-menu-copy');
+
+  await clipboard(sentinel);
+  await page(select('#area', 'flecha-menu-cut'));
+  assert.equal((await menu('#area', 'Cut')).error, undefined);
+  await poll('the page menu cut', async () => (await clipboard()) === 'flecha-menu-cut');
+  await poll('the page menu cut to leave the textarea', async () => (await page('', `field('#area').value`)) === '');
+
+  await clipboard(sentinel);
+  await page(select('#password', 'flecha-menu-secret'));
+  assert.equal((await menu('#password', 'Copy')).error, 'the page menu has no enabled Copy row');
+  assert.equal((await app.attempt('menu_row', { label: 'Cut' })).error, 'the page menu has no enabled Cut row');
+  await app.command('key', { keystroke: 'escape' });
+  assert.equal(await clipboard(), sentinel, 'the page menu put a password on the clipboard');
+  pass(`${backend}: the page menu pasted from, copied to and cut to GPUI's clipboard, and refused to copy or cut a password`);
+
+  // A cross-site frame takes pasted text from the keyboard and from a menu opened in it. The
+  // selection read cannot see into it, so Copy fails closed and the frame gets the keystroke.
+  await clipboard('flecha-frame-paste');
+  await frame('focus', state => state.active === 'text');
+  await press('v');
+  await poll('the frame field to receive the pasted text', async () => (await frameState()).text === 'flecha-frame-paste');
+
+  await clipboard('flecha-frame-menu-paste');
+  const { areaCenter } = await frame('clear-area', state => state.active === 'area' && state.area === '');
+  await page(`field('#text').value = ''; field('#text').focus()`);
+
+  const [left, top] = await page('', `(() => {
+    const box = field('#frame').getBoundingClientRect();
+    return [box.x + field('#frame').clientLeft, box.y + field('#frame').clientTop];
+  })()`);
+
+  await openMenu(left + areaCenter[0], top + areaCenter[1]);
+  assert.equal((await app.attempt('menu_row', { label: 'Paste' })).error, undefined);
+  await poll('the frame menu paste', async () => (await frameState()).area === 'flecha-frame-menu-paste');
+  assert.equal(await page('', `field('#text').value`), '', 'the frame menu paste reached the parent page');
+
+  const { editKeys } = await frame('select', state =>
+    state.active === 'text' && state.selection[0] === 0 && state.selection[1] === 'flecha-frame-copy'.length);
+
+  assert.equal(await copy('c', ''), false, 'Ctrl+C read into a cross-site frame');
+  assert.equal(await clipboard(), sentinel, 'Ctrl+C in a cross-site frame wrote the clipboard');
+  await poll('the held Ctrl+C to reach the frame', async () => (await frameState()).editKeys === editKeys + 1);
+  pass(`${backend}: Ctrl+V and the page menu pasted into a cross-site frame, and Ctrl+C there left the clipboard alone and reached the frame`);
+
+  // Races between a copy or cut and the page. Each check reports its own failure, so a run
+  // against an older build shows every check it fails. A cut must copy exactly what it deletes.
+  const failed = [];
+
+  const check = async (name, run) => {
+    try {
+      await run();
+      pass(`${backend}: ${name}`);
+    } catch (error) {
+      failed.push(name);
+      console.error(`FAIL ${name} while waiting for ${waitingFor}`, error);
+    }
+  };
+
+  // Whether `value` is `original` with `clip` taken out in one piece.
+  const cutFrom = (original, value, clip) => {
+    for (let at = 0; at <= value.length; at++) {
+      if (value.slice(0, at) + clip + value.slice(at) === original) return true;
+    }
+
+    return false;
+  };
+
+  // The verifier lost text in 17 to 19 of 20 such cuts on cc0e2dd, so six trials catch it.
+  await check('keys typed right after Ctrl+X move no cut text', async () => {
+    const original = 'flecha-race-cut flecha-race-keep';
+
+    for (let trial = 0; trial < 6; trial++) {
+      await clipboard(sentinel);
+      await page(`field('#text').value = '${original}'; field('#text').focus(); field('#text').setSelectionRange(0, 15)`);
+      const since = app.events.length;
+      await keys(['Control_L', 'x'], ['End'], ['Shift_L', 'Left'], ['Shift_L', 'Left']);
+      const { copied } = await copyReport(since);
+      const value = await page('', `field('#text').value`);
+      const clip = await clipboard();
+      const consistent = copied ? cutFrom(original, value, clip) : value === original && clip === sentinel;
+
+      assert(consistent, `trial ${trial} copied ${JSON.stringify(clip)} and left ${JSON.stringify(value)}`);
+    }
+  });
+
+  // A page that moves focus between two selections as often as it can. The verifier lost text in
+  // 8 and in 34 of 40 such cuts on cc0e2dd, so twenty trials catch it.
+  await check('focus moving during Ctrl+X moves no cut text', async () => {
+    const [first, second] = ['flecha-race-keepA flecha-race-cut', 'flecha-race-keepB'];
+
+    try {
+      for (let trial = 0; trial < 20; trial++) {
+        await clipboard(sentinel);
+        await page(`
+          clearInterval(window.swap);
+          field('#area').value = '${first}';
+          field('#area2').value = '${second}';
+          field('#area').focus();
+          field('#area').setSelectionRange(18, 33);
+          window.swap = setInterval(() => {
+            const [to, start, end] = document.activeElement === field('#area') ? ['#area2', 0, 6] : ['#area', 18, 33];
+            field(to).focus();
+            field(to).setSelectionRange(start, end);
+          }, 0)`);
+        const since = app.events.length;
+        await press('x');
+        const { copied } = await copyReport(since);
+        const [a, b] = await page('clearInterval(window.swap)', `[field('#area').value, field('#area2').value]`);
+        const clip = await clipboard();
+
+        const consistent = copied
+          ? (cutFrom(first, a, clip) && b === second) || (a === first && cutFrom(second, b, clip))
+          : a === first && b === second && clip === sentinel;
+
+        assert(consistent, `trial ${trial} copied ${JSON.stringify(clip)} and left ${JSON.stringify([a, b])}`);
+      }
+    } finally {
+      await page('clearInterval(window.swap)');
+    }
+  });
+
+  // A handler that moves the selection while the cut deletes. The cut copies what left the field.
+  await check('a page handler moving the selection during Ctrl+X moves no cut text', async () => {
+    const original = 'flecha-handler-keep flecha-handler-cut';
+
+    await clipboard(sentinel);
+    await page(`
+      field('#area').value = '${original}';
+      field('#area').focus();
+      field('#area').setSelectionRange(20, 38);
+      field('#area').addEventListener('beforeinput', () => field('#area').setSelectionRange(0, 6), { once: true })`);
+    const since = app.events.length;
+    await press('x');
+    assert.equal((await copyReport(since)).copied, true, 'Ctrl+X read nothing');
+    const value = await page('', `field('#area').value`);
+    const clip = await clipboard();
+
+    assert(cutFrom(original, value, clip), `copied ${JSON.stringify(clip)} and left ${JSON.stringify(value)}`);
+  });
+
+  // The top page forges the read while the user's selection is a password in the cross-site
+  // frame. cc0e2dd deleted that password.
+  await check('a forged selection over a cross-site password deletes nothing there', async () => {
+    const secret = 'flecha-frame-secret';
+
+    await frame('select-password', state =>
+      state.active === 'password' && state.selection[0] === 0 && state.selection[1] === secret.length);
+    await clipboard(sentinel);
+
+    try {
+      const since = app.events.length;
+      await page(`
+        window.realActive = Object.getOwnPropertyDescriptor(Document.prototype, 'activeElement');
+        window.realSelection = Document.prototype.getSelection;
+        Object.defineProperty(Document.prototype, 'activeElement', { get: () => null, configurable: true });
+        Document.prototype.getSelection = () => ({ isCollapsed: false, toString: () => 'flecha-forged' })`);
+      await press('x');
+      await copyReport(since);
+    } finally {
+      await page(`
+        Object.defineProperty(Document.prototype, 'activeElement', window.realActive);
+        Document.prototype.getSelection = window.realSelection`);
+    }
+
+    assert.equal((await frameState()).password, secret, 'Ctrl+X over a forged selection deleted the frame password');
+    assert.notEqual(await clipboard(), secret, 'Ctrl+X put the frame password on the clipboard');
+  });
+
+  // The page swaps the selection between the right-click and Cut. cc0e2dd copied the old
+  // selection and deleted the new one.
+  await check('the page menu cuts the selection it copies', async () => {
+    await clipboard(sentinel);
+    await page(select('#area', 'flecha-race-cut'));
+    await openMenu(...await center('#area'));
+    await page(`field('#area').value = 'flecha-race-keep\\n' + field('#area').value; field('#area').setSelectionRange(0, 16)`);
+    assert.equal((await app.attempt('menu_row', { label: 'Cut' })).error, undefined);
+
+    const clip = await poll('the page menu cut', async () => {
+      const text = await clipboard();
+
+      return text !== sentinel && text;
+    });
+
+    assert.equal(clip, 'flecha-race-keep', 'the page menu did not cut the current selection');
+    assert.equal(await page('', `field('#area').value`), '\nflecha-race-cut', 'the page menu deleted other text');
+  });
+
+  // The page moves focus into the cross-site frame between the right-click and Paste. cc0e2dd
+  // pasted into the frame. A keyboard paste afterwards shows whether the menu's text landed first.
+  await check('the page menu pastes only into its own frame', async () => {
+    await clipboard('flecha-moved-paste');
+    await page(`field('#area').value = ''; field('#area').focus()`);
+    await openMenu(...await center('#area'));
+    await frame('clear-area', state => state.active === 'area' && state.area === '');
+    assert.equal((await app.attempt('menu_row', { label: 'Paste' })).error, undefined);
+    await clipboard('flecha-later-paste');
+    await press('v');
+
+    const { area } = await poll('the keyboard paste in the frame', async () => {
+      const state = await frameState();
+
+      return state.area.includes('flecha-later-paste') && state;
+    });
+
+    assert.equal(area, 'flecha-later-paste', 'the page menu pasted into the frame that took focus');
+    assert.equal(await page('', `field('#area').value`), '', 'the page menu pasted after its frame lost focus');
+  });
+
+  // Keys and pastes after Ctrl+X while the page runs a long task. They must act after the cut,
+  // as in Chromium. The verifier lost the cut text in 10 of 10 trials at every busy length from
+  // 30 to 300 ms on 5203212.
+  const busyCut = (name, after, expected) => check(`${name} on a busy page acts after the cut`, async () => {
+    const original = 'flecha-race-cut flecha-race-keep';
+
+    for (const busy of [30, 100, 300]) {
+      for (let trial = 0; trial < 2; trial++) {
+        await clipboard('flecha-old-clip');
+        await page(`
+          field('#text').value = '${original}';
+          field('#text').focus();
+          field('#text').setSelectionRange(0, 15);
+          setTimeout(() => { const start = performance.now(); while (performance.now() - start < ${busy}); }, 20)`);
+        await delay(40); // Inside the long task, which starts 20 ms after the step.
+        const since = app.events.length;
+
+        await keys(['Control_L', 'x'], ...after);
+        await copyReport(since);
+        let value;
+
+        try {
+          await poll(`the field after ${name}`, async () => (value = await page('', `field('#text').value`)) === expected);
+        } catch {
+          assert.fail(`busy ${busy} ms, trial ${trial}: the field reads ${JSON.stringify(value)}, not ${JSON.stringify(expected)}`);
+        }
+
+        assert.equal(await clipboard(), 'flecha-race-cut', `busy ${busy} ms, trial ${trial}: the cut text is not on the clipboard`);
+      }
+    }
+  });
+
+  await busyCut('typing after Ctrl+X', [['a'], ['b']], 'ab flecha-race-keep');
+  await busyCut('Ctrl+V after Ctrl+X', [['Control_L', 'v']], 'flecha-race-cut flecha-race-keep');
+  await busyCut('End and Ctrl+V after Ctrl+X', [['End'], ['Control_L', 'v']], ' flecha-race-keepflecha-race-cut');
+
+  assert.deepEqual(failed, [], 'clipboard race checks failed');
+  await app.quit();
+}
+
 try {
   if (mode === 'adblock') {
     await verifyAdblock();
+  } else if (mode === 'clipboard') {
+    await verifyClipboard();
   } else {
     await verifySlice();
   }

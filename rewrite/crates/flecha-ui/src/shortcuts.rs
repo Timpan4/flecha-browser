@@ -425,6 +425,11 @@ impl Shell {
                 _ => {}
             }
             cx.stop_propagation();
+        } else if !altgr
+            && self.page_clipboard_key(focused.as_ref(), stroke, event.is_held, window, cx)
+        {
+            self.consumed_keys.insert(stroke.key.clone());
+            cx.stop_propagation();
         } else {
             self.page_key(
                 focused,

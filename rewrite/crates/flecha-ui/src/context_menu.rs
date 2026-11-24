@@ -1,6 +1,7 @@
 use anyhow::{Context as _, Result};
 use flecha_cef::{
-    BrowserKey, ContextMenuEvent, ContextMenuRequest, Disposition, FrameEdit, MenuContext, Owner,
+    BrowserKey, ClipboardEdit, ContextMenuEvent, ContextMenuRequest, Disposition, FrameEdit,
+    MenuContext, MenuFrame, Owner,
 };
 use flecha_core::{TabId, WindowId, suggestions::pinnable_address};
 use gpui::{
@@ -9,6 +10,7 @@ use gpui::{
     div, px,
 };
 
+use crate::clipboard::Held;
 use crate::model::tab_id;
 use crate::popup::{Place, place};
 use crate::shortcuts::Navigation;
@@ -25,7 +27,7 @@ pub(crate) enum Destination {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Item {
+pub(crate) enum Item {
     Link(Destination),
     CopyLink,
     Image,
@@ -76,10 +78,10 @@ fn items(context: &MenuContext) -> Vec<(Item, bool)> {
     }
     let selected = !context.selection_text.is_empty();
     if context.is_editable {
-        items.push((Item::Edit(FrameEdit::Cut), selected));
+        items.push((Item::Edit(FrameEdit::Cut), selected && context.can_cut));
     }
     if selected || context.is_editable {
-        items.push((Item::Edit(FrameEdit::Copy), selected));
+        items.push((Item::Edit(FrameEdit::Copy), selected && context.can_copy));
         if context.is_editable {
             items.push((Item::Edit(FrameEdit::Paste), true));
         }
@@ -219,7 +221,24 @@ impl Shell {
         }
     }
 
-    fn use_context_menu(&mut self, item: Item, window: &mut Window, cx: &mut Context<Self>) {
+    /// The open page menu's enabled row labelled `label`.
+    pub(crate) fn context_menu_row(&self, label: &str) -> Result<Item> {
+        let Overlay::ContextMenu(request) = &self.overlay else {
+            anyhow::bail!("no page menu is open");
+        };
+        items(&request.context)
+            .into_iter()
+            .find_map(|(item, enabled)| (enabled && item.label() == label).then_some(item))
+            .with_context(|| format!("the page menu has no enabled {label} row"))
+    }
+
+    pub(crate) fn use_context_menu(
+        &mut self,
+        item: Item,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let shell_clipboard = self.shell_clipboard(window);
         let Overlay::ContextMenu(request) = &self.overlay else {
             return;
         };
@@ -252,8 +271,69 @@ impl Shell {
                 cx.write_to_clipboard(ClipboardItem::new_string(url.clone()));
                 None
             }
+            Item::Edit(action @ (FrameEdit::Paste | FrameEdit::Copy | FrameEdit::Cut))
+                if shell_clipboard && self.state.borrow().holding(&id.key) =>
+            {
+                // A copy or cut in this page is still reading, so the edit waits its turn.
+                let context = &request.context;
+                let mut state = self.state.borrow_mut();
+                let frame = state
+                    .engine
+                    .context_menu_frame(&id)
+                    .filter(MenuFrame::is_focused);
+                let held = match action {
+                    FrameEdit::Paste => frame.map(Held::MenuPaste),
+                    FrameEdit::Cut => context
+                        .can_cut
+                        .then_some(frame)
+                        .flatten()
+                        .map(Held::MenuCut),
+                    _ => (context.can_copy && !context.selection_text.is_empty())
+                        .then(|| Held::Write(context.selection_text.clone())),
+                };
+                if let Some(held) = held {
+                    state.hold(&id.key, held);
+                }
+                state.engine.dismiss_context_menu(&id);
+                None
+            }
+            Item::Edit(FrameEdit::Paste)
+                if shell_clipboard && let Some(text) = crate::clipboard::text(cx) =>
+            {
+                let focused = self.state.borrow().engine.context_menu_frame_focused(&id);
+                // Dismissing gives the page its focus back before the text arrives.
+                self.dismiss_overlay(window, cx);
+                if focused {
+                    self.state.borrow().engine.paste_text(&id.key.tab, &text);
+                }
+                return;
+            }
             Item::Edit(action) => {
-                self.state.borrow().engine.context_menu_edit(&id, action);
+                let context = &request.context;
+                let mut state = self.state.borrow_mut();
+                // Chromium's Copy and Cut would take the clipboard from the shell. See
+                // `Engine::copy_selection`.
+                match action {
+                    FrameEdit::Copy
+                        if shell_clipboard
+                            && context.can_copy
+                            && !context.selection_text.is_empty() =>
+                    {
+                        cx.write_to_clipboard(ClipboardItem::new_string(
+                            context.selection_text.clone(),
+                        ));
+                        state.engine.dismiss_context_menu(&id);
+                    }
+                    // The selection may have changed since the menu opened, so the cut reads
+                    // it again and deletes what it read. The read goes to the focused frame.
+                    FrameEdit::Cut if shell_clipboard && context.can_cut => {
+                        if state.engine.context_menu_frame_focused(&id) {
+                            state.read_selection(&id.key, ClipboardEdit::Cut, None);
+                        }
+                        state.engine.dismiss_context_menu(&id);
+                    }
+                    _ => state.engine.context_menu_edit(&id, action),
+                }
                 None
             }
             Item::Inspect => None,
@@ -375,6 +455,7 @@ mod tests {
             (
                 MenuContext {
                     selection_text: "selected".into(),
+                    can_copy: true,
                     ..MenuContext::default()
                 },
                 vec![(Edit(Copy), true), (Edit(SelectAll), true)],
@@ -383,11 +464,27 @@ mod tests {
                 MenuContext {
                     is_editable: true,
                     selection_text: "selected".into(),
+                    can_copy: true,
+                    can_cut: true,
                     ..MenuContext::default()
                 },
                 vec![
                     (Edit(Cut), true),
                     (Edit(Copy), true),
+                    (Edit(Paste), true),
+                    (Edit(SelectAll), true),
+                ],
+            ),
+            // Chromium refuses to copy or cut a password field's selection.
+            (
+                MenuContext {
+                    is_editable: true,
+                    selection_text: "secret".into(),
+                    ..MenuContext::default()
+                },
+                vec![
+                    (Edit(Cut), false),
+                    (Edit(Copy), false),
                     (Edit(Paste), true),
                     (Edit(SelectAll), true),
                 ],

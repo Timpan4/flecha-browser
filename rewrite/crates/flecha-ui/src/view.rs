@@ -300,9 +300,22 @@ impl Shell {
         repeat: bool,
         character_input: bool,
     ) {
-        let host = focused.and_then(|key| self.state.borrow().engine.host(&key.tab));
-        if let Some(host) = host {
-            let altgr = character_input && stroke.modifiers.control && stroke.modifiers.alt;
+        let Some(key) = focused else {
+            return;
+        };
+        let altgr = character_input && stroke.modifiers.control && stroke.modifiers.alt;
+        let mut state = self.state.borrow_mut();
+        // Behind a pending copy or cut, the key waits so it cannot change what the read finds.
+        let held = crate::clipboard::Held::Key {
+            stroke: stroke.clone(),
+            up,
+            repeat,
+            altgr,
+        };
+        if state.hold(&key, held) {
+            return;
+        }
+        if let Some(host) = state.engine.host(&key.tab) {
             input::key(&host, stroke, up, repeat, altgr);
         }
     }
