@@ -16,6 +16,8 @@ mod settings_view;
 mod shortcuts;
 mod sidebar;
 mod site_controls;
+mod space_editor;
+mod tab_menu;
 mod tab_sleep;
 mod text_field;
 mod theme;
@@ -196,6 +198,14 @@ enum Action {
     Switch(SpaceId),
     NewSpace,
     Isolate,
+    /// A tab's menu, shortcut or command-bar action on that tab.
+    Tab(TabId, tab_menu::TabAction),
+    /// A Space's menu or editor.
+    Space(SpaceId, space_editor::SpaceAction),
+    /// "Clear Today" (`clearToday`): archives the shown Space's Today tabs.
+    ClearToday,
+    /// A Flechinha showing this address, on the window's Space.
+    OpenFlechinha(String),
     Sidebar(SidebarAction),
     Reopen,
     RestoreArchive(ArchivedTab),
@@ -650,12 +660,26 @@ impl Controller {
                     .space(&id)
                     .context("missing active Space")?
                     .isolated;
-                for tab in self.model.core.set_isolated(&id, !isolated) {
-                    self.reconcile_partition(&tab);
+                self.set_space_isolated(&id, !isolated);
+            }
+            Action::Tab(id, action) => self.tab_action(window, &id, action)?,
+            Action::Space(id, action) => {
+                if let Some(opened) = self.space_action(&id, action)? {
+                    self.front = Some(opened);
                 }
-                for tab in self.model.close_space_transients(&id) {
-                    self.engine.close(&tab);
+            }
+            Action::ClearToday => {
+                let state = self
+                    .model
+                    .state_mut(window)
+                    .context("missing Flecha window")?;
+                for id in state.clear_today(window, now()) {
+                    self.engine.close(&id);
                 }
+            }
+            Action::OpenFlechinha(url) => {
+                self.front = Some(self.model.open_flechinha(window, url)?);
+                return Ok(());
             }
             Action::Sidebar(action) => self.sidebar_action(window, action),
             Action::Reopen => {
@@ -837,7 +861,16 @@ impl Controller {
                 Event::Loaded { url, .. } => self.history.loaded(id, &url),
                 Event::LoadFailed { url, .. } => self.history.failed(id, &url),
                 Event::Closed => self.history.forget(id),
-                Event::Created(_) => {}
+                // A tab muted while it had no browser opens muted.
+                Event::Created(_) => {
+                    if self
+                        .model
+                        .tab(id)
+                        .is_some_and(|tab| tab.muted == Some(true))
+                    {
+                        self.engine.set_audio_muted(id, true);
+                    }
+                }
                 Event::Fullscreen(fullscreen) => {
                     self.page_fullscreen(&message.key, fullscreen);
                     changed = true;

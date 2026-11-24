@@ -118,9 +118,15 @@ impl Controller {
 /// name a site to the regular profile (`siteControls.ts` `setSiteAdBlock`).
 pub(crate) fn refusal(action: &Action) -> Option<&'static str> {
     match action {
-        Action::Switch(_) | Action::NewSpace | Action::Isolate => {
+        Action::Switch(_)
+        | Action::NewSpace
+        | Action::Isolate
+        | Action::Space(..)
+        | Action::Tab(_, crate::tab_menu::TabAction::MoveToSpace(_)) => {
             Some("An incognito window has one Space")
         }
+        // A Flechinha takes the regular Space's cookies.
+        Action::OpenFlechinha(_) => Some("Open Flechinha from a regular window"),
         Action::RestoreArchive(_) | Action::ClearArchive => {
             Some("An incognito window has no archive")
         }

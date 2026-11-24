@@ -160,17 +160,10 @@ struct Session {
     slot: Rc<Slot>,
     hidden: bool,
     opener: Option<Weak<Slot>>,
-    frozen: Frozen,
-}
-
-/// Whether tab sleep froze this browser, and whether freezing muted it.
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
-enum Frozen {
-    #[default]
-    No,
-    Yes {
-        muted: bool,
-    },
+    /// Whether tab sleep froze this browser. A frozen browser stays muted.
+    frozen: bool,
+    /// Whether the tab's own audio is muted, which a thawed browser returns to.
+    muted: bool,
 }
 
 struct PartitionContext {
@@ -374,7 +367,8 @@ impl Engine {
                 partition,
                 hidden: false,
                 opener: None,
-                frozen: Frozen::No,
+                frozen: false,
+                muted: false,
             },
         );
         self.discarded.remove(&tab);
@@ -759,7 +753,8 @@ impl Engine {
                     slot: child,
                     hidden: false,
                     opener: Some(Rc::downgrade(&opener)),
-                    frozen: Frozen::No,
+                    frozen: false,
+                    muted: false,
                 },
             );
         }
@@ -939,7 +934,8 @@ mod tests {
                 slot: opener.clone(),
                 hidden: false,
                 opener: None,
-                frozen: Frozen::No,
+                frozen: false,
+                muted: false,
             },
         );
         let child = popup::open(&opener, 7, None);

@@ -12,6 +12,7 @@ use gpui::{
 use crate::command_bar::Command;
 use crate::settings_view::SettingsTab;
 use crate::sidebar::SidebarAction;
+use crate::tab_menu::TabAction;
 use crate::theme::palette;
 use crate::tokens;
 use crate::view::{Overlay, Shell};
@@ -37,7 +38,7 @@ pub(crate) struct Toolbar {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Shortcut {
+pub(crate) enum Shortcut {
     Command(Command),
     Close,
     Reopen,
@@ -55,6 +56,25 @@ enum Shortcut {
     NewIncognitoWindow,
     Quit,
     Escape,
+    NewFlechinha,
+    /// Pins a Today tab, or unpins a pinned tab or favorite.
+    Pin,
+    Duplicate,
+    Mute,
+    ClearToday,
+    /// Copies the shown tab's link, as Markdown when set.
+    CopyLink(bool),
+    /// The next Space, or the previous one when set.
+    StepSpace(bool),
+    SelectSpace(usize),
+    NewSpace,
+    ExitSplit,
+    ViewSource,
+    // The command bar's actions without a key of their own.
+    EditSpace,
+    Archive,
+    Downloads,
+    RestoreBeforeImport,
 }
 
 pub(crate) struct Bindings {
@@ -152,7 +172,7 @@ pub(crate) fn has_action(id: &str) -> bool {
     shortcut_for_id(id).is_some()
 }
 
-fn shortcut_for_id(id: &str) -> Option<Shortcut> {
+pub(crate) fn shortcut_for_id(id: &str) -> Option<Shortcut> {
     Some(match id {
         "newTab" => Shortcut::Command(Command::NewTab),
         "openLocation" => Shortcut::Command(Command::EditLocation),
@@ -177,9 +197,26 @@ fn shortcut_for_id(id: &str) -> Option<Shortcut> {
         "toggleSidebar" => Shortcut::Sidebar,
         "openInFlecha" => Shortcut::Return,
         "quit" => Shortcut::Quit,
+        "newFlechinha" => Shortcut::NewFlechinha,
+        "pinTab" => Shortcut::Pin,
+        "duplicateTab" => Shortcut::Duplicate,
+        "muteTab" => Shortcut::Mute,
+        "clearToday" => Shortcut::ClearToday,
+        "copyLink" => Shortcut::CopyLink(false),
+        "copyMarkdown" => Shortcut::CopyLink(true),
+        "nextSpace" => Shortcut::StepSpace(false),
+        "previousSpace" => Shortcut::StepSpace(true),
+        "newSpace" => Shortcut::NewSpace,
+        "exitSplit" => Shortcut::ExitSplit,
+        "viewSource" => Shortcut::ViewSource,
         id => {
+            if let Some(number) = id.strip_prefix("selectSpace:") {
+                return Some(Shortcut::SelectSpace(
+                    number.parse::<usize>().ok()?.checked_sub(1)?,
+                ));
+            }
             let number = id.strip_prefix("selectTab:")?.parse::<usize>().ok()?;
-            Shortcut::Select(number - 1)
+            Shortcut::Select(number.checked_sub(1)?)
         }
     })
 }
@@ -392,14 +429,7 @@ impl Shell {
                         | Shortcut::Command(Command::OpenSettings)
                         | Shortcut::SettingsTab(_)
                 ))
-            && (if event.is_held
-                && matches!(
-                    shortcut,
-                    Shortcut::Command(Command::OpenSettings)
-                        | Shortcut::SettingsTab(_)
-                        | Shortcut::Find
-                        | Shortcut::DevTools
-                ) {
+            && (if event.is_held && runs_once(shortcut) {
                 true
             } else {
                 self.invoke_shortcut(shortcut, window, cx)
@@ -420,6 +450,8 @@ impl Shell {
                 Overlay::Command(_) => self.command_key(stroke, window, cx),
                 Overlay::History(_) | Overlay::Archive(_) => self.drawer_key(stroke, cx),
                 Overlay::Folder(..) => self.folder_key(stroke, window, cx),
+                Overlay::Rename(..) => self.rename_key(stroke, window, cx),
+                Overlay::SpaceEditor(..) => self.space_editor_key(stroke, window, cx),
                 Overlay::Settings(_) => self.settings_key(stroke, cx),
                 Overlay::Downloads(_) => self.downloads_key(stroke, cx),
                 _ => {}
@@ -441,7 +473,7 @@ impl Shell {
         }
     }
 
-    fn invoke_shortcut(
+    pub(crate) fn invoke_shortcut(
         &mut self,
         shortcut: Shortcut,
         window: &mut Window,
@@ -505,7 +537,8 @@ impl Shell {
             }
             Shortcut::Browser(nav) if !self.overlay.is_open() => Action::Browser(nav),
             Shortcut::Select(_) | Shortcut::Cycle(_)
-                if !self.overlay.is_open() || matches!(self.overlay, Overlay::ContextMenu(_)) =>
+                if !self.overlay.is_open()
+                    || matches!(self.overlay, Overlay::ContextMenu(_) | Overlay::Menu(_)) =>
             {
                 self.dismiss_overlay(window, cx);
                 let state = self.state.borrow();
@@ -525,11 +558,205 @@ impl Shell {
             Shortcut::NewWindow => Action::NewWindow,
             Shortcut::NewIncognitoWindow => Action::NewIncognitoWindow,
             Shortcut::Quit => Action::Quit,
-            _ => return false,
+            _ => return self.invoke_flecha_command(shortcut, window, cx),
         };
         dispatch(&self.state, &self.id, action, cx);
         true
     }
+
+    /// The commands on the shown tab and Space that shipping runs by key or from the command
+    /// bar (`chromium/shell/background.ts:1551-1586`). Where the window can't run one (an
+    /// incognito window has one Space; a Flechinha has no sidebar), the key goes on to the page.
+    fn invoke_flecha_command(
+        &mut self,
+        shortcut: Shortcut,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(shown) = ShownWindow::read(&self.state.borrow(), &self.id)
+            .filter(|shown| shown.can_run(shortcut))
+        else {
+            return false;
+        };
+        let action = match shortcut {
+            Shortcut::NewFlechinha => return self.open_command(Command::Flechinha, window, cx),
+            Shortcut::NewSpace => return self.new_space(window, cx),
+            Shortcut::EditSpace => {
+                self.open_space_editor(&shown.space, window, cx);
+                return matches!(self.overlay, Overlay::SpaceEditor(..));
+            }
+            Shortcut::Archive => {
+                self.toggle_archive(window, cx);
+                return true;
+            }
+            Shortcut::Downloads => {
+                self.toggle_downloads(window, cx);
+                return true;
+            }
+            Shortcut::RestoreBeforeImport => {
+                self.open_restore_before_import(window, cx);
+                return true;
+            }
+            Shortcut::CopyLink(markdown) => {
+                let Some((text, message)) = shown.link(markdown) else {
+                    return false;
+                };
+                self.copy_text(text, message, cx);
+                return true;
+            }
+            Shortcut::Pin => {
+                let (Some(id), Some(today)) = (shown.tab.clone(), shown.today) else {
+                    return false;
+                };
+                Action::Sidebar(if today {
+                    SidebarAction::Pin(id, None)
+                } else {
+                    SidebarAction::ToToday(id)
+                })
+            }
+            Shortcut::Duplicate | Shortcut::Mute | Shortcut::ViewSource => {
+                let Some(id) = shown.tab.clone() else {
+                    return false;
+                };
+                Action::Tab(
+                    id,
+                    match shortcut {
+                        Shortcut::Duplicate => TabAction::Duplicate,
+                        Shortcut::Mute => TabAction::ToggleMute,
+                        _ => TabAction::ViewSource,
+                    },
+                )
+            }
+            Shortcut::ClearToday => Action::ClearToday,
+            Shortcut::ExitSplit => Action::ExitSplit,
+            Shortcut::StepSpace(back) => {
+                let count = shown.spaces.len();
+                let Some(index) = shown.spaces.iter().position(|id| *id == shown.space) else {
+                    return false;
+                };
+                let next = if back {
+                    (index + count - 1) % count
+                } else {
+                    (index + 1) % count
+                };
+                Action::Switch(shown.spaces[next].clone())
+            }
+            Shortcut::SelectSpace(index) => {
+                let Some(space) = shown.spaces.get(index) else {
+                    return false;
+                };
+                Action::Switch(space.clone())
+            }
+            _ => return false,
+        };
+        if shown.incognito && crate::incognito::refusal(&action).is_some() {
+            return false;
+        }
+        self.dismiss_overlay(window, cx);
+        dispatch(&self.state, &self.id, action, cx);
+        true
+    }
+}
+
+/// What the shell's commands act on in a Flecha window: its shown tab and Space.
+pub(crate) struct ShownWindow {
+    incognito: bool,
+    tab: Option<TabId>,
+    /// Whether the shown tab is a Today tab; `None` without one.
+    today: Option<bool>,
+    web_page: bool,
+    link: Option<(String, String)>,
+    space: flecha_core::SpaceId,
+    spaces: Vec<flecha_core::SpaceId>,
+    split: bool,
+}
+
+impl ShownWindow {
+    pub(crate) fn read(state: &Controller, window: &WindowId) -> Option<Self> {
+        let core = state.model.state(window)?;
+        let current = core.window(window)?;
+        let tab = state.model.active(window).cloned();
+        let shown = tab.as_ref().and_then(|id| core.tab(id));
+        Some(Self {
+            incognito: state.model.is_incognito(window),
+            today: tab
+                .as_ref()
+                .and_then(|id| core.locate(id))
+                .map(|placement| matches!(placement, flecha_core::Placement::Today { .. })),
+            web_page: shown.is_some_and(|tab| {
+                tab.url.starts_with("http://") || tab.url.starts_with("https://")
+            }),
+            link: shown.map(|tab| {
+                (
+                    tab.url.clone(),
+                    tab.custom_title
+                        .clone()
+                        .unwrap_or_else(|| tab.title.clone()),
+                )
+            }),
+            tab,
+            space: current.active_space_id.clone(),
+            spaces: core.spaces().iter().map(|space| space.id.clone()).collect(),
+            split: current.visible_tabs().len() > 1,
+        })
+    }
+
+    /// Whether this window can run `shortcut` now, which the command bar offers only then.
+    pub(crate) fn can_run(&self, shortcut: Shortcut) -> bool {
+        match shortcut {
+            Shortcut::NewFlechinha
+            | Shortcut::NewSpace
+            | Shortcut::EditSpace
+            | Shortcut::Archive
+            | Shortcut::StepSpace(_)
+            | Shortcut::SelectSpace(_)
+            | Shortcut::RestoreBeforeImport => !self.incognito,
+            Shortcut::Pin => !self.incognito && self.today.is_some(),
+            Shortcut::Duplicate
+            | Shortcut::Mute
+            | Shortcut::CopyLink(_)
+            | Shortcut::Browser(_)
+            | Shortcut::DevTools => self.tab.is_some(),
+            Shortcut::ViewSource => self.web_page,
+            Shortcut::ExitSplit => self.split,
+            _ => true,
+        }
+    }
+
+    /// `copyLink` and `copyMarkdown`: the text and the confirmation.
+    fn link(&self, markdown: bool) -> Option<(String, &'static str)> {
+        let (url, name) = self.link.as_ref()?;
+        Some(if markdown {
+            (format!("[{name}]({url})"), "Markdown link copied")
+        } else {
+            (url.clone(), "Link copied")
+        })
+    }
+}
+
+/// A held key runs these once: opening something again, or flipping a tab's pin or mute back
+/// and forth, is not what holding the key means.
+fn runs_once(shortcut: Shortcut) -> bool {
+    matches!(
+        shortcut,
+        Shortcut::Command(Command::OpenSettings)
+            | Shortcut::SettingsTab(_)
+            | Shortcut::Find
+            | Shortcut::DevTools
+            | Shortcut::NewFlechinha
+            | Shortcut::Pin
+            | Shortcut::Duplicate
+            | Shortcut::Mute
+            | Shortcut::ClearToday
+            | Shortcut::CopyLink(_)
+            | Shortcut::NewSpace
+            | Shortcut::ExitSplit
+            | Shortcut::ViewSource
+            | Shortcut::EditSpace
+            | Shortcut::Archive
+            | Shortcut::Downloads
+            | Shortcut::RestoreBeforeImport
+    )
 }
 
 #[cfg(test)]
@@ -605,6 +832,51 @@ mod tests {
             }),
             None
         );
+    }
+
+    #[test]
+    fn flecha_commands_and_space_numbers_have_their_default_keys() {
+        let bindings = Bindings::new(&Keybindings::new());
+        let os = match platform() {
+            Platform::Linux => gpui::OperatingSystem::Linux,
+            Platform::Mac => gpui::OperatingSystem::Mac,
+            Platform::Windows => gpui::OperatingSystem::Windows,
+        };
+        for id in [
+            "newFlechinha",
+            "pinTab",
+            "duplicateTab",
+            "muteTab",
+            "clearToday",
+            "copyLink",
+            "copyMarkdown",
+            "nextSpace",
+            "previousSpace",
+            "newSpace",
+            "exitSplit",
+            "viewSource",
+        ] {
+            assert!(has_action(id), "{id}");
+            let keys = shortcuts::default_keys(id, platform()).expect(id);
+            let stroke = Keystroke::parse_with_os(&gpui_keys(keys), os).unwrap();
+            assert_eq!(bindings.action(&stroke), shortcut_for_id(id), "{id}");
+        }
+        let fixed = shortcuts::fixed_shortcuts(platform());
+        for (keys, id) in fixed
+            .iter()
+            .filter(|(_, id)| id.starts_with("selectSpace:"))
+        {
+            let stroke = Keystroke::parse_with_os(&gpui_keys(keys), os).unwrap();
+            assert!(shortcut_for_id(id).is_some(), "{id}");
+            assert_eq!(bindings.action(&stroke), shortcut_for_id(id), "{id}");
+        }
+        if platform() == Platform::Linux {
+            assert_eq!(
+                bindings.action(&Keystroke::parse_with_os("ctrl-alt-2", os).unwrap()),
+                Some(Shortcut::SelectSpace(1))
+            );
+        }
+        assert_eq!(shortcut_for_id("selectSpace:0"), None);
     }
 
     #[test]

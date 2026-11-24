@@ -153,16 +153,29 @@ int main(int argc, char **argv)
     if (display == NULL)
         return EXIT_FAILURE;
     int ok = 0;
-    if (argc == 4 && (strcmp(argv[1], "click") == 0 || strcmp(argv[1], "right-click") == 0)) {
+    unsigned int button = 0;
+    if (argc == 4 && strcmp(argv[1], "click") == 0)
+        button = 1;
+    else if (argc == 4 && strcmp(argv[1], "middle-click") == 0)
+        button = 2;
+    else if (argc == 4 && strcmp(argv[1], "right-click") == 0)
+        button = 3;
+    if (button != 0) {
         int x = coordinate(argv[2]), y = coordinate(argv[3]);
-        unsigned int button = strcmp(argv[1], "click") == 0 ? 1 : 3;
         ok = x >= 0 && y >= 0 && click(display, x, y, button);
     } else if (argc == 3 && strcmp(argv[1], "key") == 0) {
         ok = tap(display, XStringToKeysym(argv[2]));
-    } else if (argc == 4 && strcmp(argv[1], "chord") == 0) {
-        KeySym modifier = XStringToKeysym(argv[2]);
-        ok = press(display, modifier, True) && tap(display, XStringToKeysym(argv[3])) &&
-             press(display, modifier, False);
+    } else if (argc >= 4 && strcmp(argv[1], "chord") == 0) {
+        // Every argument but the last is a modifier held while the last key is tapped.
+        int held = 2;
+        ok = 1;
+        while (ok && held < argc - 1) {
+            ok = press(display, XStringToKeysym(argv[held]), True);
+            held++;
+        }
+        ok = ok && tap(display, XStringToKeysym(argv[argc - 1]));
+        while (held > 2)
+            ok = press(display, XStringToKeysym(argv[--held]), False) && ok;
     } else if (argc == 3 && strcmp(argv[1], "geometry") == 0) {
         ok = geometry(display, argv[2]);
     } else if (argc == 3 && strcmp(argv[1], "focus") == 0) {

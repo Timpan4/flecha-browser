@@ -92,7 +92,8 @@ enum Command {
     Key {
         keystroke: String,
     },
-    /// Chooses the open page menu's enabled row labelled `label`, and replies once it has.
+    /// Chooses the enabled row labelled `label` in the open tab or Space menu, or else the page
+    /// menu, and replies once it has.
     MenuRow {
         label: String,
     },
@@ -314,8 +315,12 @@ impl Command {
                 // that uses it, so it belongs to the menu that is open then.
                 cx.defer(move |cx| {
                     let used = handle.update(cx, |shell, window, cx| {
-                        let row = shell.context_menu_row(&label)?;
-                        shell.use_context_menu(row, window, cx);
+                        if matches!(shell.overlay, crate::view::Overlay::Menu(_)) {
+                            shell.use_shell_menu_row(&label, window, cx)?;
+                        } else {
+                            let row = shell.context_menu_row(&label)?;
+                            shell.use_context_menu(row, window, cx);
+                        }
                         anyhow::Ok(Value::Null)
                     });
                     reply(seq, used.and_then(|used| used));

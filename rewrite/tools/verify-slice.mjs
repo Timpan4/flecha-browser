@@ -387,6 +387,76 @@ async function nativeContextMenu(app) {
   pass('right-click opened the GPUI page menu and Escape dismissed it');
 }
 
+/**
+ * The tab row's right-click menu, its middle-click close, and the command bar's Tab-for-actions,
+ * on the one Today tab `left` the slice starts with. Each check duplicates `left` and closes the
+ * copy again, so the slice goes on from the same Today list.
+ */
+async function tabRowInput(app, left) {
+  // `left`'s row, the only one in Today: the sidebarFocus geometry's top row (y 235).
+  const row = [95, 235];
+  const today = async () => active(await app.command('snapshot')).today;
+
+  const duplicated = async label => {
+    const [copy, ...rest] = await poll(label, async () => {
+      const tabs = await today();
+
+      return tabs.length === 2 ? tabs : undefined;
+    });
+
+    const state = await app.command('snapshot');
+
+    assert.deepEqual(rest, [left]);
+    assert.equal(state.core.tabs[copy].url, state.core.tabs[left].url);
+    assert.equal(active(state).activeTabId, copy);
+
+    return copy;
+  };
+
+  const closeTop = async label => {
+    execFileSync(x11Driver, ['middle-click', ...row]);
+    await poll(label, async () => {
+      const tabs = await today();
+
+      return tabs.length === 1 && tabs[0] === left;
+    });
+  };
+
+  execFileSync(x11Driver, ['right-click', ...row]);
+  await poll('the tab menu to open', async () => {
+    const { error } = await app.attempt('menu_row', { label: 'Duplicate' });
+
+    return error === undefined;
+  });
+  await duplicated('the tab menu to duplicate the tab');
+  pass('right-clicking a tab row opened its menu, and Duplicate opened a copy above it');
+  await closeTop('middle-click to close the copy');
+  pass('middle-clicking a tab row closed that tab');
+
+  // An empty bar's Tab lists the actions; one letter then matches Duplicate Tab first, which
+  // among pages it would not, so Enter runs it only in the actions mode.
+  execFileSync(x11Driver, ['chord', 'Control_L', 't']);
+  execFileSync(x11Driver, ['key', 'Tab']);
+  execFileSync(x11Driver, ['key', 'd']);
+  execFileSync(x11Driver, ['key', 'Return']);
+  await duplicated('the Duplicate Tab action from the actions mode');
+  await closeTop('middle-click to close the action copy');
+  pass('Tab in an empty command bar searched the actions, and Enter ran Duplicate Tab');
+}
+
+/** Ctrl+Alt+1–9 (Ctrl+1–9 on macOS, `fixed_shortcuts`) switch straight to the numbered Space. */
+async function spaceNumberKeys(app, [first, second]) {
+  execFileSync(x11Driver, ['focus', 'Flecha']);
+
+  for (const [key, space] of [['2', second], ['1', first]]) {
+    execFileSync(x11Driver, ['chord', 'Control_L', 'Alt_L', key]);
+    await poll(`Ctrl+Alt+${key} to switch Spaces`, async () =>
+      win(await app.command('snapshot')).activeSpaceId === space);
+  }
+
+  pass('Ctrl+Alt+2 and Ctrl+Alt+1 switched to the second Space and back');
+}
+
 async function keyDelivery(app, tabs, key, step, expected) {
   const received = site.probe(`${step}-key`);
 
@@ -1441,7 +1511,10 @@ async function verifySlice() {
   pass(`Xvfb pages use CPU copies (${frames})`);
   await nativeInput(app, left);
 
-  if (mode === 'slice') await nativeContextMenu(app);
+  if (mode === 'slice') {
+    await nativeContextMenu(app);
+    await tabRowInput(app, left);
+  }
 
   if (mode === 'focus') {
     await sidebarFocus(app, left);
@@ -1567,6 +1640,7 @@ async function verifySlice() {
     await cookie(app, 'Cookie present');
     await app.command('switch', { space: shared });
     await cookie(app, 'Shared cookie');
+    await spaceNumberKeys(app, [shared, isolated]);
     const before = await app.command('select', { tab: left });
     pass('two tabs in the isolated Space shared the cookie and the ordinary Space did not receive it');
     await app.quit();
