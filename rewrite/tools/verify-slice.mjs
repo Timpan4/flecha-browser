@@ -33,7 +33,7 @@ const stepTimeoutMs = 10_000;
 const shippingTrace = readFileSync(new URL('./slice-ts-replay.jsonl', import.meta.url), 'utf8')
   .trim().split('\n').map(line => JSON.parse(line));
 
-assert(['slice', 'open', 'focus', 'popups', 'adblock', 'incognito', 'fullscreen', 'break-restore', 'clipboard', 'visual', 'tab-status'].includes(mode), 'unknown slice check');
+assert(['slice', 'open', 'focus', 'popups', 'adblock', 'incognito', 'fullscreen', 'break-restore', 'clipboard', 'visual', 'tab-status', 'surfaces'].includes(mode), 'unknown slice check');
 
 const easylist = '[Adblock Plus 2.0]\n! Title: EasyList\n/fixture-ad$xmlhttprequest\n';
 const easyprivacy = '[Adblock Plus 2.0]\n! Title: EasyPrivacy\n/fixture-tracker$xmlhttprequest\n';
@@ -2454,6 +2454,266 @@ async function visualParity(app, left) {
   pass('captured each chrome surface in Light and Dark');
 }
 
+/** A tab's `innerWidth`, which follows its pane's width. */
+async function innerWidth(app, tab, label) {
+  const reply = site.probe(label, stepTimeoutMs);
+  reply.catch(() => {});
+  await app.command('script', { tab, source: `fetch('/probe/${label}?value=' + innerWidth)` });
+
+  return Number(await reply);
+}
+
+/**
+ * The split divider, the responsive view, Site Controls, the page menu's added rows, About
+ * Flecha and the Flechinha toolbar, driven through X11 input and the verify channel.
+ */
+async function surfaces(app) {
+  const [x, y, w, h] = execFileSync(x11Driver, ['geometry', 'Flecha'], { encoding: 'utf8' })
+    .trim().split(' ').map(Number);
+
+  const middle = y + Math.floor(h / 2);
+  const split = await app.command('split', { url: base + '/split' });
+  const [desktop, right] = active(split).split;
+  await app.wait('the right pane to load', event => event.type === 'loaded' && event.tab === right);
+  await app.present();
+
+  // The page area is flush with the docked sidebar and kFlechaGap from the window's right, and
+  // the 8px divider sits between the panes' shares of the rest.
+  const pageLeft = x + split.core.sidebarWidth;
+  const room = x + w - 8 - pageLeft - 8;
+  const divider = ratio => Math.round(pageLeft + room * ratio + 4);
+  const ratio = async () => active(await app.command('snapshot')).splitRatio ?? 0.5;
+  const before = await innerWidth(app, desktop, 'divider-before');
+
+  execFileSync(x11Driver, ['move', divider(0.5), middle]);
+  await app.present();
+  await captureUntil('split-divider-hover', 'root', () => undefined);
+  execFileSync(x11Driver, ['press', divider(0.5), middle]);
+
+  try {
+    execFileSync(x11Driver, ['move', divider(0.5) + 100, middle]);
+    await app.present();
+    assert.equal(await ratio(), 0.5, 'the divider saved its share before the button came up');
+    const during = await innerWidth(app, desktop, 'divider-during');
+    assert(Math.abs(during - before - 100) <= 2, `the left pane is ${during}px wide while dragged, not ${before + 100}`);
+  } finally {
+    execFileSync(x11Driver, ['release']);
+  }
+
+  const dragged = await poll('the divider share to save', async () => {
+    const saved = await ratio();
+
+    return saved !== 0.5 && saved;
+  });
+
+  assert(Math.abs(dragged - (0.5 + 100 / room)) < 0.01, `saved share ${dragged}`);
+  execFileSync(x11Driver, ['click', divider(dragged), middle]);
+  execFileSync(x11Driver, ['click', divider(dragged), middle]);
+  await poll('a double click to even the panes', async () => await ratio() === 0.5);
+  pass('dragging the split divider resized the panes live, saved the share on release, and a double click evened them');
+
+  // The responsive view from the desktop side's tab.
+  await app.command('select', { tab: desktop });
+  await app.command('key', { keystroke: 'ctrl-alt-m' });
+  const responsive = active(await app.command('snapshot'));
+  assert.equal(responsive.splitMode, 'responsive');
+  assert.equal(responsive.split[0], desktop);
+  const mirror = responsive.split[1];
+  let probes = 0;
+
+  // The mirror reports its user agent, touch points and screen width. Emulating reloads it, which
+  // can drop a probe sent just before, so it asks again until a phone answers; the launcher
+  // watchdog bounds the attempts, as it does a capture's. A page without a viewport tag lays out
+  // 980px wide on a phone (Chromium's mobile default), so the emulated screen tells the width.
+  const phone = async step => {
+    for (let previous; ;) {
+      const label = `phone-${probes++}`;
+      const reply = site.probe(label, stepTimeoutMs);
+      reply.catch(() => {});
+      await app.command('script', {
+        tab: mirror,
+        source: `fetch('/probe/${label}?value=' + encodeURIComponent(JSON.stringify([navigator.userAgent, navigator.maxTouchPoints, screen.width])))`,
+      });
+      const value = await reply.catch(() => 'no answer');
+
+      if (/Mobile/.test(value) && JSON.parse(value)[1] > 0 && JSON.parse(value)[2] === 393) return;
+
+      if (value !== previous) console.error(`RETRY ${step}: ${value}`);
+      previous = value;
+      await delay(100); // Matches the capture poll.
+    }
+  };
+
+  await phone('phone emulation');
+  await app.present();
+  await captureUntil('responsive-view', 'root', () => undefined);
+  const followed = app.events.length;
+  await app.command('script', { tab: desktop, source: `location.href = '${base}/split'` });
+
+  await app.wait('the mirror to follow the desktop side', event =>
+    event.type === 'loaded' && event.tab === mirror && event.url === base + '/split', followed);
+
+  await phone('phone emulation after following');
+  await app.command('key', { keystroke: 'ctrl-alt-m' });
+  const closed = await app.command('snapshot');
+  assert.equal(active(closed).split, undefined, 'the responsive split stayed open');
+  assert(!closed.browsers.some(browser => browser.tab === mirror), 'the phone mirror kept its browser');
+  pass('the responsive view opened a 393px phone mirror with a mobile user agent and touch, followed the desktop side, and closed');
+
+  // `--surface` in Light and Dark (ui/tokens.css:51, 107), where a panel or menu covers.
+  const surface = ['FFFFFF', '161E2B'];
+
+  const pixelAt = (path, px, py) => execFileSync('magick', [path, '-format', `%[hex:p{${px},${py}}]`, 'info:'], { encoding: 'utf8' })
+    .trim().slice(0, 6).toUpperCase();
+
+  const signature = path => execFileSync('magick', [path, '-format', '%#', 'info:'], { encoding: 'utf8' }).trim();
+  // Captures the screen once it differs from how it was before `act`.
+
+  const changed = async (name, act) => {
+    const before = join(out, `${name}-before.png`);
+    execFileSync('magick', ['import', '-window', 'root', before]);
+    const old = signature(before);
+    await act();
+    await captureUntil(name, 'root', path => signature(path) === old ? 'the screen has not changed' : undefined);
+  };
+  // A menu opens after the click that asks for it, so its row is chosen once it is open.
+
+  const chooseRow = label => poll(`the ${label} row`, async () => {
+    const { error } = await app.attempt('menu_row', { label });
+    assert(!error || /no page menu is open/.test(error), error);
+
+    return !error;
+  });
+
+  // Site Controls' tools, zoom row and footer, in the popover 92px from the sidebar's top
+  // (ui/styles.css:1012, 1966).
+  const panelPoint = [x + 180, y + 92 + 30];
+  assert.equal(await app.command('site_controls'), true, 'Site Controls did not open');
+  await app.present();
+  await captureUntil('site-controls', 'root', path =>
+    surface.includes(pixelAt(path, ...panelPoint)) ? undefined : `no panel at ${panelPoint} (${pixelAt(path, ...panelPoint)})`);
+  assert.equal(await app.command('site_controls'), false, 'Site Controls did not close');
+  pass('Site Controls opened with its tools, zoom row and footer (site-controls.png)');
+
+  // The page menu's rows for a link, an image and a selection, on targets in the fixture's
+  // yellow so the menu's surface shows where it covers them.
+  const targets = site.probe('menu-targets', stepTimeoutMs);
+  const painted = app.events.length;
+  await app.command('script', {
+    tab: desktop,
+    source: `
+      document.body.insertAdjacentHTML('beforeend', \`
+        <a id="fx-save" href="${base}/jar/download?jar=flecha_save_as#part" style="position:fixed;left:40px;top:40px;width:160px;height:40px;background:#FFCC49">save</a>
+        <a id="fx-split" href="${base}/split" style="position:fixed;left:40px;top:100px;width:160px;height:40px;background:#FFCC49">split</a>
+        <img src="/icon.png" style="position:fixed;left:40px;top:160px;width:64px;height:64px">
+        <p id="fx-words" style="position:fixed;left:40px;top:240px;margin:0;width:200px;font-size:24px;background:#FFCC49">flecha words</p>\`);
+      requestAnimationFrame(() => requestAnimationFrame(() => fetch('/probe/menu-targets?value=ready')));
+    `,
+  });
+  assert.equal(await targets, 'ready');
+  await app.wait('CEF paint of the menu targets', event => event.type === 'paint' && event.tab === desktop, painted);
+  const page = (left, top) => [pageLeft + left, y + 8 + top];
+
+  const menuOn = async (name, [px, py]) => {
+    execFileSync(x11Driver, ['right-click', px, py]);
+    await app.present();
+    await captureUntil(name, 'root', path =>
+      surface.includes(pixelAt(path, px + 20, py + 12)) ? undefined : `no menu at ${px},${py}`);
+  };
+
+  const beforeSplit = app.events.length;
+  await menuOn('page-menu-split', page(60, 120));
+  await chooseRow('Open link in split view');
+
+  const linked = await poll('the link to open in a split', async () => {
+    const pair = active(await app.command('snapshot')).split;
+
+    return pair?.[0] === desktop && pair[1];
+  });
+
+  await app.loaded(linked, '/split', beforeSplit);
+  await app.command('key', { keystroke: 'ctrl-shift--' });
+  await poll('the split to end', async () => active(await app.command('snapshot')).split === undefined);
+  // The link's tab stays in front once the split ends; the targets are on the page beside it.
+  await app.command('select', { tab: desktop });
+  await app.present();
+  pass('Open link in split view opened the link beside the page');
+
+  await menuOn('page-menu-image', page(70, 190));
+  await chooseRow('Copy image');
+  pass('the image menu offered Copy image and ran it (page-menu-image.png)');
+
+  await app.command('script', {
+    tab: desktop,
+    source: "getSelection().selectAllChildren(document.getElementById('fx-words'));",
+  });
+  await menuOn('page-menu-selection', page(60, 252));
+  await chooseRow('Search Google for “flecha words”');
+
+  const searched = await poll('the search tab to open', async () => {
+    const state = await app.command('snapshot');
+    const tab = active(state).activeTabId;
+
+    return tab !== desktop && state.core.tabs?.[tab]?.url;
+  });
+
+  assert.match(searched, /^https:\/\/www\.google\.com\/search\?q=flecha(\+|%20)words/);
+  await app.command('close');
+  pass(`the selection's Search row opened ${searched} in front`);
+
+  // About Flecha from the window menu, which opens on the menu button's click.
+  execFileSync(x11Driver, ['click', x + menuButton[0], y + menuButton[1]]);
+  await app.present();
+  await changed('about-flecha', async () => {
+    await chooseRow('About Flecha');
+    await app.present();
+  });
+  await app.command('key', { keystroke: 'escape' });
+  pass('the window menu opened About Flecha (about-flecha.png)');
+
+  // Last of the page's menus: asking where to save can take the window's focus.
+  await app.command('select', { tab: desktop });
+  await app.present();
+  await menuOn('page-menu-link', page(60, 60));
+  await chooseRow('Save link as…');
+
+  await poll('Save link as to ask where to save', async () =>
+    (await app.command('snapshot')).downloadPathPrompts.some(prompt => prompt.name === 'flecha_save_as.txt' && prompt.reason === 'SaveAs'));
+
+  await app.command('key', { keystroke: 'escape' });
+  execFileSync(x11Driver, ['focus', 'Flecha']);
+  pass('Save link as… on a link with a fragment asked where to save its download');
+
+  // The Flechinha toolbar: its address edits, goes, and copies.
+  await app.command('select', { tab: desktop });
+  const [{ window: mini, tab: page2 }] = (await app.command('detach')).flechinhas;
+  await app.present(mini);
+  await captureUntil('flechinha-toolbar', 'root', () => undefined);
+  await changed('flechinha-editing', async () => {
+    await app.command('key', { window: mini, keystroke: 'ctrl-l' });
+    await app.command('clipboard', { text: base + '/open' });
+    await app.command('key', { window: mini, keystroke: 'ctrl-v' });
+    await app.present(mini);
+  });
+  const went = app.events.length;
+  await app.command('key', { window: mini, keystroke: 'enter' });
+  await app.loaded(page2, '/open', went);
+  await app.command('clipboard', { text: '' });
+  await changed('flechinha-copied', async () => {
+    await app.command('key', { window: mini, keystroke: 'ctrl-shift-c' });
+    await app.present(mini);
+  });
+  assert.equal((await app.command('clipboard', {})).text, base + '/open', 'Copy link copied something else');
+  await app.command('close_window', { window: mini });
+  pass("the Flechinha's address took a new address from its field and Copy link copied it");
+
+  if (existsSync('/mnt/visual')) {
+    for (const name of ['split-divider-hover', 'responsive-view', 'site-controls', 'page-menu-link', 'page-menu-split', 'page-menu-image', 'page-menu-selection', 'about-flecha', 'flechinha-toolbar', 'flechinha-editing', 'flechinha-copied']) {
+      copyFileSync(join(out, `${name}.png`), join('/mnt/visual', `${name}.png`));
+    }
+  }
+}
+
 const apps = [];
 
 function launch(name, fixturePort) {
@@ -2581,6 +2841,9 @@ async function verifySlice() {
     await app.quit();
   } else if (mode === 'visual') {
     await visualParity(app, left);
+    await app.quit();
+  } else if (mode === 'surfaces') {
+    await surfaces(app);
     await app.quit();
   } else if (mode !== 'open') {
     const publicUrl = base.replace('127.0.0.1', 'localtest.me') + '/open';

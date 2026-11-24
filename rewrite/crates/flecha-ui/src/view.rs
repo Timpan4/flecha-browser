@@ -134,7 +134,7 @@ impl Shell {
                 this.finish_split_drag(cx);
                 // Blurring the address field stops editing it (ui/flechinha.ts:118).
                 if matches!(this.overlay, Overlay::FlechinhaAddress(_)) {
-                    this.overlay = Overlay::None;
+                    this.dismiss_overlay(window, cx);
                 }
                 this.hide_floating_sidebar(cx);
                 this.cancel_tab_drag(window, cx);
@@ -781,14 +781,16 @@ impl Render for Shell {
                 pages = pages.child(if view.len() == 1 {
                     frame.flex_1().child(page_card(pane))
                 } else if responsive {
-                    // The phone keeps its width (lib/responsiveViewport.ts), the desktop side
-                    // takes the rest, and there is no share to drag.
+                    // The phone keeps its width and the desktop side takes the rest, never
+                    // less than a tenth (`phoneSplitRatio` in lib/responsiveViewport.ts).
+                    // There is no share to drag.
                     if index == 0 {
                         frame.flex_1().child(page_card(pane))
                     } else {
                         frame
                             .flex_none()
                             .w(px(flecha_cef::PHONE_WIDTH as f32))
+                            .max_w(relative(0.9))
                             .child(page_card(pane))
                     }
                 } else if index == 0 {

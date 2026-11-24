@@ -64,7 +64,13 @@ impl MenuPlace {
     fn of(state: &Controller, tab: &TabId) -> Self {
         Self {
             engine: state.model.core.settings.search_engine,
-            splits: matches!(state.engine.owner(tab), Some(Owner::Tab(_))),
+            // The responsive view's phone mirror is half of a split already, which core
+            // refuses to split again.
+            splits: matches!(state.engine.owner(tab), Some(Owner::Tab(_)))
+                && state
+                    .model
+                    .tab(tab)
+                    .is_some_and(|tab| tab.device != Some(flecha_core::Device::Mobile)),
         }
     }
 }
