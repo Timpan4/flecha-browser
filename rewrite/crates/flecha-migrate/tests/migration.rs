@@ -5,6 +5,7 @@ use std::ffi::OsStr;
 use std::fs;
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use anyhow::Result;
 use flecha_core::{SpaceId, TabId, Theme, WindowId, storage};
@@ -169,6 +170,43 @@ fn assert_session(state: &flecha_core::BrowserState, path: &str) {
         state.settings.ad_block_allowed,
         Some(vec!["good.test".into()])
     );
+}
+
+#[test]
+fn cli_reports_migrated_counts() -> Result<()> {
+    let fixture = Fixture::write(&[
+        ("state", &snapshot(Some(2), "current")),
+        ("boosts", br#"{"site.ts":"export {};","all.css":"body {}"}"#),
+    ])?;
+    let output = Command::new(env!("CARGO_BIN_EXE_flecha-migrate"))
+        .arg(&fixture.old)
+        .arg("Default")
+        .arg(&fixture.new)
+        .output()?;
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(output.status.success(), "{stderr}");
+    assert_eq!(
+        String::from_utf8(output.stdout)?,
+        "Spaces: 1\nWindows: 1\nOpen tabs: 1\nArchive entries: 1\nAd-block sites: 1\nBoosts: 2\n"
+    );
+    assert_session(&fixture.load()?.unwrap(), "current");
+    Ok(())
+}
+
+#[test]
+fn cli_returns_failure_for_a_locked_profile() -> Result<()> {
+    let fixture = Fixture::empty()?;
+    fs::write(fixture.old.join("SingletonLock"), b"")?;
+    let output = Command::new(env!("CARGO_BIN_EXE_flecha-migrate"))
+        .arg(&fixture.old)
+        .arg("Default")
+        .arg(&fixture.new)
+        .output()?;
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8(output.stderr)?.contains("Chromium profile is in use"));
+    assert!(!fixture.new.exists());
+    Ok(())
 }
 
 #[test]

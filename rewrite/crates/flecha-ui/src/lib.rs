@@ -72,6 +72,16 @@ use site_controls::{Site, SiteChange};
 use tab_sleep::TabSleep;
 use view::Shell;
 
+const APP_ID: &str = "flecha-rewrite";
+
+fn window_options(bounds: Option<WindowBounds>) -> WindowOptions {
+    WindowOptions {
+        app_id: Some(APP_ID.into()),
+        window_bounds: bounds,
+        ..Default::default()
+    }
+}
+
 pub struct Options {
     pub initial: Option<String>,
     pub verify: bool,
@@ -96,7 +106,7 @@ pub struct FirstWindow {
 impl FirstWindow {
     pub fn open(cx: &mut App) -> Result<Self> {
         // The first main window takes it over, so it is decorated as one.
-        let options = window_chrome::client_decorated(WindowOptions::default());
+        let options = window_chrome::client_decorated(window_options(None));
         let handle = cx.open_window(options, |window, cx| {
             window.set_window_title("Flecha");
             cx.new(|_| view::Starting)
@@ -1290,10 +1300,7 @@ fn sync_windows(controller: &Shared, cx: &mut App) -> Result<()> {
                 WindowHandle::<Shell>::new(first.window_id())
             }
             None => {
-                let options = WindowOptions {
-                    window_bounds: bounds,
-                    ..Default::default()
-                };
+                let options = window_options(bounds);
                 // A popup has no toolbar to hold the window controls.
                 let options = match kind {
                     Kind::Popup(_) => options,
@@ -1334,6 +1341,14 @@ mod tests {
 
     const LINK: &str = "external.example/page";
     const URL: &str = "https://external.example/page";
+
+    #[test]
+    fn window_options_use_the_desktop_entry_id() {
+        assert_eq!(
+            window_options(None).app_id.as_deref(),
+            Some("flecha-rewrite")
+        );
+    }
 
     fn controller(profile: &tempfile::TempDir) -> (Controller, WindowId) {
         let controller = Controller::open_test_profile(profile.path()).unwrap();
