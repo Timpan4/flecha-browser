@@ -142,7 +142,8 @@ impl Controller {
                     shown: activity.shown
                         || self.engine.is_loading(id)
                         || self.downloads.uses_tab(id)
-                        || self.engine.pending_permission_prompt(id).is_some(),
+                        || self.engine.pending_permission_prompt(id).is_some()
+                        || self.agents.in_use(id, instant),
                     in_hidden_space,
                     state: if self.engine.is_frozen(id) {
                         SleepState::Frozen

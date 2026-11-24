@@ -189,6 +189,9 @@ impl Controller {
     pub(crate) fn poll_toolbars(&mut self) -> bool {
         let mut changed = false;
         while let Some(message) = self.engine.next_devtools_event() {
+            let Some(message) = self.agents.devtools(message) else {
+                continue;
+            };
             if let flecha_cef::DevToolsEvent::Result { id, success, .. } = message.event
                 && let Some(key) = self.pending_reloads.remove(&id)
                 && !success

@@ -4,6 +4,7 @@ mod downloads_view;
 mod fullscreen;
 mod history_view;
 mod incognito;
+mod mcp;
 mod model;
 mod permissions_view;
 mod popup;
@@ -148,6 +149,12 @@ enum Action {
     Quit,
 }
 
+/// Whether this launch keeps the profile closed to the network's list updates and to agents:
+/// `--verify`, or `rewrite/tools/isolated-run.sh` (`FLECHA_LAUNCHER=isolated`).
+fn isolated_launch(verify: bool, launcher: Option<&std::ffi::OsStr>) -> bool {
+    verify || launcher == Some("isolated".as_ref())
+}
+
 enum AdblockLists {
     Update(Box<dyn Download>),
     Cached,
@@ -182,6 +189,7 @@ struct Controller {
     permissions: PermissionStore,
     sleep: TabSleep,
     fullscreen: fullscreen::PageFullscreen,
+    agents: mcp::Agents,
     toolbars: BTreeMap<WindowId, Toolbar>,
     pending_reloads: BTreeMap<i32, flecha_cef::BrowserKey>,
     store: StateStore,
@@ -227,8 +235,7 @@ impl Controller {
         adblock_fixture_port: Option<NonZeroU16>,
         failure: Rc<RefCell<Option<anyhow::Error>>>,
     ) -> Result<Self> {
-        let isolated =
-            verify || std::env::var_os("FLECHA_LAUNCHER").as_deref() == Some("isolated".as_ref());
+        let isolated = isolated_launch(verify, std::env::var_os("FLECHA_LAUNCHER").as_deref());
         let lists = if verify {
             adblock_fixture_port.map_or(AdblockLists::Cached, |port| {
                 AdblockLists::Update(verify::adblock_download(port))
@@ -274,6 +281,7 @@ impl Controller {
             permissions: PermissionStore::open(&profile),
             sleep: TabSleep::new(Instant::now()),
             fullscreen: fullscreen::PageFullscreen::default(),
+            agents: mcp::Agents::default(),
             toolbars: BTreeMap::new(),
             pending_reloads: BTreeMap::new(),
             store,
@@ -322,6 +330,18 @@ impl Controller {
         }
         state.engine.set_boosts(state.boosts().clone());
         state.sync_download_config();
+        // Agents reach a desktop launch only: --verify and the isolated launcher keep the
+        // profile closed to them. A bridge that can't start leaves the browser working.
+        if !isolated {
+            match state.agents.start(&profile) {
+                Ok(()) => eprintln!(
+                    "agent bridge: {} (bearer token in {})",
+                    state.agents.endpoint().unwrap_or_default(),
+                    mcp::token_path(&profile).display()
+                ),
+                Err(error) => eprintln!("agent bridge: could not start: {error:#}"),
+            }
+        }
         Ok(state)
     }
 
@@ -362,6 +382,7 @@ impl Controller {
         match action {
             Action::Quit => {
                 self.quitting = true;
+                self.agents.stop();
                 self.engine.close_all();
                 return self.save();
             }
@@ -654,6 +675,7 @@ impl Controller {
     fn fail(&mut self, error: anyhow::Error, cx: &mut App) {
         *self.failure.borrow_mut() = Some(error);
         self.quitting = true;
+        self.agents.stop();
         self.engine.close_all();
         cx.refresh_windows();
     }
@@ -734,6 +756,7 @@ impl Controller {
             }
         }
         changed |= self.sweep_fullscreen();
+        changed |= self.serve_agents();
         changed |= self.finish_history();
         changed |= self.drain_downloads();
         changed |= self.poll_permissions();
