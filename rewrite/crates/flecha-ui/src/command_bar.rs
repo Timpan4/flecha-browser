@@ -12,6 +12,7 @@ use gpui::{
     prelude::FluentBuilder as _, rgb,
 };
 
+use crate::settings_view::SettingsTab;
 use crate::text_field::TextField;
 use crate::view::{Overlay, Shell, button, overlay_panel};
 use crate::{Action, now};
@@ -22,6 +23,7 @@ pub(crate) enum Command {
     EditLocation,
     Split,
     Peek,
+    OpenSettings,
 }
 
 impl Command {
@@ -31,6 +33,7 @@ impl Command {
             Self::EditLocation => "Edit address",
             Self::Split => "Split with a new tab",
             Self::Peek => "Open Peek",
+            Self::OpenSettings => "Settings",
         }
     }
 }
@@ -232,6 +235,13 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if mode == Command::OpenSettings {
+            if matches!(self.overlay, Overlay::Settings(_)) {
+                self.dismiss_overlay(window, cx);
+                return true;
+            }
+            return self.toggle_settings(SettingsTab::General, window, cx);
+        }
         let next = {
             let state = self.state.borrow();
             let Some(tab) = location(&state.model.core, &self.id, mode) else {
@@ -336,6 +346,7 @@ impl Shell {
             Command::EditLocation => Action::Navigate(url),
             Command::Split => Action::SplitNew(url),
             Command::Peek => Action::Peek(url),
+            Command::OpenSettings => unreachable!("Settings has its own overlay"),
         };
         self.navigate_from_overlay(action, window, cx);
     }

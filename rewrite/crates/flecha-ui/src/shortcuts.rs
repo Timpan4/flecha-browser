@@ -6,6 +6,7 @@ use flecha_core::{
 use gpui::{Context, KeyDownEvent, Keystroke, Window};
 
 use crate::command_bar::Command;
+use crate::settings_view::SettingsTab;
 use crate::sidebar::SidebarAction;
 use crate::view::{Overlay, Shell};
 use crate::{Action, Controller, dispatch};
@@ -27,23 +28,31 @@ enum Shortcut {
     Cycle(bool),
     Select(usize),
     History,
+    SettingsTab(SettingsTab),
     Sidebar,
     Return,
     Quit,
     Escape,
 }
 
-pub(crate) struct Bindings(Vec<(Keystroke, Shortcut)>);
+pub(crate) struct Bindings {
+    settings: Keybindings,
+    bindings: Vec<(Keystroke, Shortcut)>,
+}
+
+pub(crate) const fn platform() -> Platform {
+    if cfg!(target_os = "macos") {
+        Platform::Mac
+    } else if cfg!(target_os = "windows") {
+        Platform::Windows
+    } else {
+        Platform::Linux
+    }
+}
 
 impl Bindings {
     pub(crate) fn new(settings: &Keybindings) -> Self {
-        let platform = if cfg!(target_os = "macos") {
-            Platform::Mac
-        } else if cfg!(target_os = "windows") {
-            Platform::Windows
-        } else {
-            Platform::Linux
-        };
+        let platform = platform();
         let os = match platform {
             Platform::Linux => gpui::OperatingSystem::Linux,
             Platform::Mac => gpui::OperatingSystem::Mac,
@@ -53,30 +62,9 @@ impl Bindings {
         let mut bindings: Vec<_> = map
             .into_iter()
             .filter_map(|(keys, id)| {
-                let shortcut = match id.as_str() {
-                    "newTab" => Shortcut::Command(Command::NewTab),
-                    "openLocation" => Shortcut::Command(Command::EditLocation),
-                    "splitNew" => Shortcut::Command(Command::Split),
-                    "closeTab" => Shortcut::Close,
-                    "reopenTab" => Shortcut::Reopen,
-                    "back" => Shortcut::Browser(Navigation::Back),
-                    "forward" => Shortcut::Browser(Navigation::Forward),
-                    "reload" => Shortcut::Browser(Navigation::Reload),
-                    "hardReload" => Shortcut::Browser(Navigation::HardReload),
-                    "nextTab" => Shortcut::Cycle(false),
-                    "previousTab" => Shortcut::Cycle(true),
-                    "history" => Shortcut::History,
-                    "toggleSidebar" => Shortcut::Sidebar,
-                    "openInFlecha" => Shortcut::Return,
-                    "quit" => Shortcut::Quit,
-                    id => {
-                        let number = id.strip_prefix("selectTab:")?.parse::<usize>().ok()?;
-                        Shortcut::Select(number - 1)
-                    }
-                };
                 Some((
                     Keystroke::parse_with_os(&gpui_keys(&keys), os).ok()?,
-                    shortcut,
+                    shortcut_for_id(&id)?,
                 ))
             })
             .collect();
@@ -92,14 +80,54 @@ impl Bindings {
                 action,
             ));
         }
-        Self(bindings)
+        Self {
+            settings: settings.clone(),
+            bindings,
+        }
+    }
+
+    pub(crate) fn refresh(&mut self, settings: &Keybindings) {
+        if &self.settings != settings {
+            *self = Self::new(settings);
+        }
     }
 
     fn action(&self, stroke: &Keystroke) -> Option<Shortcut> {
-        self.0.iter().find_map(|(key, action)| {
+        self.bindings.iter().find_map(|(key, action)| {
             (stroke.key == key.key && stroke.modifiers == key.modifiers).then_some(*action)
         })
     }
+}
+
+pub(crate) fn has_action(id: &str) -> bool {
+    shortcut_for_id(id).is_some()
+}
+
+fn shortcut_for_id(id: &str) -> Option<Shortcut> {
+    Some(match id {
+        "newTab" => Shortcut::Command(Command::NewTab),
+        "openLocation" => Shortcut::Command(Command::EditLocation),
+        "splitNew" => Shortcut::Command(Command::Split),
+        "closeTab" => Shortcut::Close,
+        "reopenTab" => Shortcut::Reopen,
+        "back" => Shortcut::Browser(Navigation::Back),
+        "forward" => Shortcut::Browser(Navigation::Forward),
+        "reload" => Shortcut::Browser(Navigation::Reload),
+        "hardReload" => Shortcut::Browser(Navigation::HardReload),
+        "nextTab" => Shortcut::Cycle(false),
+        "previousTab" => Shortcut::Cycle(true),
+        "history" => Shortcut::History,
+        "settings" => Shortcut::Command(Command::OpenSettings),
+        "shortcuts" => Shortcut::SettingsTab(SettingsTab::Shortcuts),
+        "editBoost" => Shortcut::SettingsTab(SettingsTab::Boosts),
+        "toggleSidebar" => Shortcut::Sidebar,
+        "openInFlecha" => Shortcut::Return,
+        "quit" => Shortcut::Quit,
+        id => {
+            let number = id.strip_prefix("selectTab:")?.parse::<usize>().ok()?;
+            Shortcut::Select(number - 1)
+        }
+    })
 }
 
 fn gpui_keys(keys: &str) -> String {
@@ -190,12 +218,30 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         let focused = self.sync_page_focus(window, cx);
+        self.bindings
+            .refresh(&self.state.borrow().model.core.settings.keybindings);
         let stroke = &event.keystroke;
         let altgr =
             event.prefer_character_input && stroke.modifiers.control && stroke.modifiers.alt;
+        let settings_open = matches!(self.overlay, Overlay::Settings(_));
         if !altgr
             && let Some(shortcut) = self.bindings.action(stroke)
-            && self.invoke_shortcut(shortcut, window, cx)
+            && (!settings_open
+                || matches!(
+                    shortcut,
+                    Shortcut::Escape
+                        | Shortcut::Command(Command::OpenSettings)
+                        | Shortcut::SettingsTab(_)
+                ))
+            && (if event.is_held
+                && matches!(
+                    shortcut,
+                    Shortcut::Command(Command::OpenSettings) | Shortcut::SettingsTab(_)
+                ) {
+                true
+            } else {
+                self.invoke_shortcut(shortcut, window, cx)
+            })
         {
             self.consumed_keys.insert(stroke.key.clone());
             cx.stop_propagation();
@@ -207,6 +253,7 @@ impl Shell {
                 Overlay::Command(_) => self.command_key(stroke, window, cx),
                 Overlay::History(_) | Overlay::Archive(_) => self.drawer_key(stroke, cx),
                 Overlay::Folder(..) => self.folder_key(stroke, window, cx),
+                Overlay::Settings(_) => self.settings_key(stroke, cx),
                 _ => {}
             }
             cx.stop_propagation();
@@ -229,6 +276,7 @@ impl Shell {
     ) -> bool {
         let action = match shortcut {
             Shortcut::Command(command) => return self.open_command(command, window, cx),
+            Shortcut::SettingsTab(tab) => return self.toggle_settings(tab, window, cx),
             Shortcut::History if self.state.borrow().model.core.window(&self.id).is_some() => {
                 self.toggle_history(window, cx);
                 return true;
@@ -304,6 +352,10 @@ mod tests {
             (format!("{ctrl}-w"), Shortcut::Close),
             (format!("{ctrl}-shift-t"), Shortcut::Reopen),
             (format!("{ctrl}-s"), Shortcut::Sidebar),
+            (
+                format!("{ctrl}-,"),
+                Shortcut::Command(Command::OpenSettings),
+            ),
             (format!("{ctrl}-r"), Shortcut::Browser(Navigation::Reload)),
             ("f5".into(), Shortcut::Browser(Navigation::Reload)),
             ("alt-left".into(), Shortcut::Browser(Navigation::Back)),
@@ -335,5 +387,51 @@ mod tests {
             }),
             None
         );
+    }
+
+    #[test]
+    fn settings_changes_refresh_each_window_and_displace_conflicts() {
+        use shortcuts::BindingEdit;
+
+        let mut settings = Keybindings::new();
+        let mut first = Bindings::new(&settings);
+        let mut second = Bindings::new(&settings);
+        let os = match platform() {
+            Platform::Linux => gpui::OperatingSystem::Linux,
+            Platform::Mac => gpui::OperatingSystem::Mac,
+            Platform::Windows => gpui::OperatingSystem::Windows,
+        };
+        let new_tab = Keystroke::parse_with_os("secondary-t", os).unwrap();
+        let settings_key = Keystroke::parse_with_os("secondary-,", os).unwrap();
+        let open_settings = Some(Shortcut::Command(Command::OpenSettings));
+
+        assert_eq!(
+            shortcuts::set_binding(
+                &mut settings,
+                "settings",
+                BindingEdit::Set("CmdOrCtrl+T"),
+                platform()
+            )
+            .unwrap(),
+            ["newTab"]
+        );
+        for window in [&mut first, &mut second] {
+            window.refresh(&settings);
+            assert_eq!(window.action(&new_tab), open_settings);
+            assert_eq!(window.action(&settings_key), None);
+        }
+        shortcuts::set_binding(&mut settings, "settings", BindingEdit::Reset, platform()).unwrap();
+        first.refresh(&settings);
+        assert_eq!(first.action(&settings_key), open_settings);
+        assert_eq!(first.action(&new_tab), None);
+        settings.clear();
+        for window in [&mut first, &mut second] {
+            window.refresh(&settings);
+            assert_eq!(window.action(&settings_key), open_settings);
+            assert_eq!(
+                window.action(&new_tab),
+                Some(Shortcut::Command(Command::NewTab))
+            );
+        }
     }
 }

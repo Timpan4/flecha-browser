@@ -323,6 +323,12 @@ impl Shell {
                     .child(button("show-archive", "Archive").on_click(cx.listener(
                         |this, _: &ClickEvent, window, cx| this.toggle_archive(window, cx),
                     )))
+                    .child(self.command_button(
+                        "open-settings",
+                        "Settings",
+                        Command::OpenSettings,
+                        cx,
+                    ))
                     .child(self.command_button("new-tab", "+ Tab", Command::NewTab, cx))
                     .child(self.action_button(
                         "isolation",
@@ -663,35 +669,18 @@ fn tab_label(tab: &flecha_core::Tab) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
-
-    use flecha_cef::Engine;
-    use flecha_services::StateStore;
 
     #[test]
     fn sidebar_actions_persist_space_and_tab_placement_changes() {
         let profile = tempfile::tempdir().unwrap();
-        let (store, mut snapshots) = StateStore::open(&profile.path().join("session")).unwrap();
-        let ready = snapshots
-            .apply_recovery(|write| store.write(write))
-            .unwrap();
-        let model = crate::Model::new(ready.state.take());
-        let window = model.core.focused_window().id.clone();
-        let first = model.core.focused_window().active_space_id.clone();
-        let mut controller = Controller {
-            model,
-            history: crate::History::open(profile.path()),
-            engine: Engine::new(profile.path().join("cef"), crate::model::tab_id),
-            store,
-            snapshots,
-            windows: BTreeMap::new(),
-            front: None,
-            ready: false,
-            quitting: false,
-            verify: false,
-            failure: Rc::new(RefCell::new(None)),
-            status: String::new(),
-        };
+        let mut controller = Controller::open_test_profile(profile.path()).unwrap();
+        let window = controller.model.core.focused_window().id.clone();
+        let first = controller
+            .model
+            .core
+            .focused_window()
+            .active_space_id
+            .clone();
         let act = |controller: &mut Controller, action| controller.act(&window, action).unwrap();
         act(&mut controller, Action::NewSpace);
         let second = controller

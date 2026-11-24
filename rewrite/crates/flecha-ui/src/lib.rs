@@ -1,7 +1,9 @@
+mod boosts;
 mod command_bar;
 mod history_view;
 mod model;
 mod popup;
+mod settings_view;
 mod shortcuts;
 mod sidebar;
 mod text_field;
@@ -14,6 +16,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use anyhow::{Context as _, Result, ensure};
+use flecha_boosts::Boosts;
 use flecha_cef::{Engine, Event, Owner, Runtime, Viewport};
 use flecha_core::{
     ArchivedTab, Reopened, SpaceId, TabId, WindowId,
@@ -23,6 +26,7 @@ use flecha_core::{
 use flecha_services::StateStore;
 use gpui::{App, Bounds, WindowBounds, WindowHandle, WindowOptions, px, size};
 
+use boosts::ProfileBoosts;
 use history_view::{ClearRange, History};
 use model::{Model, now};
 use shortcuts::Navigation;
@@ -39,35 +43,22 @@ pub fn start(
     runtime: &mut Runtime,
     cef_profile: PathBuf,
     store: StateStore,
-    mut loaded: LoadedState,
+    loaded: LoadedState,
     options: Options,
     failure: Rc<RefCell<Option<anyhow::Error>>>,
 ) -> Result<()> {
-    let ready = loaded.apply_recovery(|write| store.write(write))?;
-    let model = Model::new(ready.state.take());
-    let initial = options.initial;
-    let profile = cef_profile
-        .parent()
-        .context("CEF data has no profile directory")?;
-    let controller = Rc::new(RefCell::new(Controller {
-        model,
-        history: History::open(profile),
-        engine: Engine::new(cef_profile, model::tab_id),
+    let controller = Rc::new(RefCell::new(Controller::new(
+        cef_profile,
         store,
-        snapshots: loaded,
-        windows: BTreeMap::new(),
-        front: None,
-        ready: false,
-        quitting: false,
-        verify: options.verify,
+        loaded,
+        options.verify,
         failure,
-        status: String::new(),
-    }));
+    )?));
     sync_windows(&controller, cx)?;
     if options.verify {
         verify::install(&controller, cx);
     }
-    if let Some(input) = initial {
+    if let Some(input) = options.initial {
         let url = pinnable_address(&input).context("--open requires a browser address")?;
         let window = controller.borrow().model.core.focused_window().id.clone();
         controller.borrow_mut().act(&window, Action::Open(url))?;
@@ -118,8 +109,10 @@ enum Action {
 struct Controller {
     model: Model,
     history: History,
+    boosts: ProfileBoosts,
     engine: Engine,
     store: StateStore,
+    session_dir: PathBuf,
     snapshots: LoadedState,
     windows: BTreeMap<WindowId, WindowHandle<Shell>>,
     front: Option<WindowId>,
@@ -131,6 +124,43 @@ struct Controller {
 }
 
 impl Controller {
+    fn new(
+        cef_profile: PathBuf,
+        store: StateStore,
+        mut snapshots: LoadedState,
+        verify: bool,
+        failure: Rc<RefCell<Option<anyhow::Error>>>,
+    ) -> Result<Self> {
+        let profile = cef_profile
+            .parent()
+            .context("CEF data has no profile directory")?;
+        let ready = snapshots.apply_recovery(|write| store.write(write))?;
+        Ok(Self {
+            model: Model::new(ready.state.take()),
+            history: History::open(profile),
+            boosts: ProfileBoosts::open(profile.join("boosts")),
+            session_dir: profile.join("session"),
+            engine: Engine::new(cef_profile, model::tab_id),
+            store,
+            snapshots,
+            windows: BTreeMap::new(),
+            front: None,
+            ready: false,
+            quitting: false,
+            verify,
+            failure,
+            status: String::new(),
+        })
+    }
+
+    pub(crate) fn boosts(&self) -> &Boosts {
+        self.boosts.enabled()
+    }
+
+    pub(crate) fn boosts_revision(&self) -> u64 {
+        self.boosts.revision()
+    }
+
     fn snapshots(&mut self) -> &mut ReadyState {
         self.snapshots
             .ready()
@@ -505,6 +535,20 @@ impl Controller {
             return false;
         }
         true
+    }
+}
+
+#[cfg(test)]
+impl Controller {
+    fn open_test_profile(profile: &std::path::Path) -> Result<Self> {
+        let (store, loaded) = StateStore::open(&profile.join("session"))?;
+        Self::new(
+            profile.join("cef"),
+            store,
+            loaded,
+            false,
+            Rc::new(RefCell::new(None)),
+        )
     }
 }
 
