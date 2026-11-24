@@ -9,13 +9,16 @@ use flecha_core::{FolderId, TabId, WindowId};
 use flecha_surface::{Frame, input, surface};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, ClickEvent, Context, Div, FocusHandle, InteractiveElement as _, IntoElement, KeyUpEvent,
-    MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _,
-    Pixels, Render, RenderImage, ScrollEvent, StatefulInteractiveElement as _, Styled as _,
-    Subscription, Window, canvas, deferred, div, px, relative,
+    Animation, AnimationExt as _, App, ClickEvent, Context, Div, FocusHandle, FontWeight,
+    InteractiveElement as _, IntoElement, KeyUpEvent, MouseButton, MouseDownEvent, MouseExitEvent,
+    MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Render, RenderImage, ScrollEvent,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Window, canvas, deferred, div, px,
+    relative,
 };
 
-use crate::theme::{Palette, palette};
+use crate::icons::icon;
+use crate::theme::{DEFAULT_TINT, Palette, palette};
+use crate::tokens::{self, ease};
 use crate::{Action, Shared, dispatch};
 use crate::{
     command_bar::{CommandBar, SuggestionClient},
@@ -126,6 +129,7 @@ impl Shell {
         }
     }
 
+    /// A `.text-button` that dispatches `action`.
     pub(crate) fn action_button(
         &self,
         id: &'static str,
@@ -133,7 +137,7 @@ impl Shell {
         action: Action,
         cx: &Context<Self>,
     ) -> impl IntoElement {
-        button(id, label).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+        text_button(id, label).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
             dispatch(&this.state, &this.id, action.clone(), cx);
         }))
     }
@@ -454,9 +458,24 @@ impl Shell {
 
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let incognito = self.state.borrow().model.is_incognito(&self.id);
-        let theme = self.state.borrow().model.core.settings.theme;
-        crate::theme::draw_with(Palette::resolve(theme, window.appearance(), incognito));
+        let palette_now = {
+            let state = self.state.borrow();
+            let incognito = state.model.is_incognito(&self.id);
+            // A popup or Flechinha window wears the tint of the Space the main window shows,
+            // as Flechinha's page does (chromium/shell/flechinhaApi.ts:36).
+            let core = state.model.state(&self.id).unwrap_or(&state.model.core);
+            let current = core
+                .window(&self.id)
+                .unwrap_or_else(|| core.focused_window());
+            let space = core.space(&current.active_space_id);
+            Palette::resolve(
+                state.model.core.settings.theme,
+                window.appearance(),
+                incognito,
+                space.map_or(DEFAULT_TINT, |space| space.color.as_str()),
+            )
+        };
+        crate::theme::draw_with(palette_now);
         self.bindings
             .refresh(&self.state.borrow().model.core.settings.keybindings);
         self.sync_command_preferences(cx);
@@ -474,8 +493,13 @@ impl Render for Shell {
             .size_full()
             .flex()
             .flex_col()
-            .bg(palette().background)
+            // The window wears the Space's tint around the sidebar and the page, and the body
+            // text is `font: 400 var(--text-md) / 1.35` (ui/styles.css:17).
+            .bg(palette().tint)
             .text_color(palette().text)
+            .when_some(ui_font(cx), |main, font| main.font_family(font))
+            .text_size(px(tokens::TEXT_MD))
+            .line_height(relative(tokens::LINE_HEIGHT))
             .on_key_down(cx.listener(|this, event, window, cx| this.key(event, window, cx)))
             .on_key_up(cx.listener(|this, event: &KeyUpEvent, window, cx| {
                 if this.consumed_keys.remove(&event.keystroke.key) || this.overlay.is_open() {
@@ -510,12 +534,18 @@ impl Render for Shell {
                     div()
                         .h(POPUP_BAR_HEIGHT)
                         .flex_shrink_0()
-                        .px_2()
+                        .px(px(tokens::SPACE_2))
                         .flex()
                         .items_center()
-                        .gap_2()
+                        .gap(px(tokens::SPACE_2))
                         .min_w_0()
-                        .child(div().flex_1().truncate().child(popup.page.tab.url.clone()))
+                        .child(
+                            div()
+                                .flex_1()
+                                .truncate()
+                                .text_color(palette().text_2)
+                                .child(popup.page.tab.url.clone()),
+                        )
                         .children(self.zoom_badge(cx)),
                 )
                 .child(div().flex_1().min_h_0().child(self.pane(
@@ -525,28 +555,107 @@ impl Render for Shell {
                     cx,
                 )));
         } else if let Some(page) = state.model.flechinhas.get(&self.id) {
+            let host = flecha_core::suggestions::display_url(&page.tab.url);
             main = main
                 .child(
+                    // Flechinha's toolbar (ui/flechinha.css): 44 tall on the tint, controls 28
+                    // tall, the address a resting chip.
                     div()
+                        .h(px(tokens::FLECHINHA_TOOLBAR))
+                        .flex_shrink_0()
                         .flex()
-                        .gap_2()
-                        .p_2()
+                        .items_center()
+                        .gap(px(tokens::TOOLBAR_GAP))
+                        .pl(px(tokens::SPACE_2 - tokens::TOOLBAR_GAP))
+                        .pr(px(tokens::SPACE_2))
+                        .child(window_close("close").on_click(cx.listener(
+                            |this, _: &ClickEvent, _, cx| {
+                                dispatch(&this.state, &this.id, Action::Close, cx);
+                            },
+                        )))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .h(px(tokens::PILL_HEIGHT))
+                                .mx(px(tokens::FLECHINHA_ADDRESS_MARGIN))
+                                .px(px(tokens::URLBAR_PAD_LEFT))
+                                .flex()
+                                .items_center()
+                                .gap(px(tokens::SPACE_2))
+                                .rounded(px(tokens::PAGE_RADIUS))
+                                .bg(palette().fill_subtle)
+                                .shadow(vec![hairline(palette().line)])
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .truncate()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child(host),
+                                )
+                                .when(!page.tab.title.is_empty(), |address| {
+                                    address.child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .truncate()
+                                            .text_color(palette().text_3)
+                                            .child(format!("— {}", page.tab.title)),
+                                    )
+                                }),
+                        )
                         .children(self.zoom_badge(cx))
-                        .child(self.action_button("return", "Open in Flecha", Action::Return, cx))
-                        .child(self.action_button("close", "Close", Action::Close, cx)),
+                        .child(
+                            div()
+                                .id("return")
+                                .flex()
+                                .items_center()
+                                .gap(px(tokens::PILL_GAP))
+                                .h(px(tokens::PILL_HEIGHT))
+                                .flex_shrink_0()
+                                .pl(px(tokens::FLECHINHA_CTA_PAD_LEFT))
+                                .pr(px(tokens::FLECHINHA_CTA_PAD_RIGHT))
+                                .rounded(px(tokens::PAGE_RADIUS))
+                                .bg(palette().cta)
+                                .text_color(palette().cta_text)
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_size(px(tokens::TEXT_SM))
+                                .cursor_pointer()
+                                .hover(|cta| cta.bg(palette().cta_hover))
+                                .child(icon("external", tokens::PILL_ICON, palette().cta_text))
+                                .child("Open in Flecha")
+                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                    dispatch(&this.state, &this.id, Action::Return, cx);
+                                })),
+                        ),
                 )
-                .child(div().flex_1().min_h_0().child(self.pane(
-                    Owner::Flechinha(self.id.clone()),
-                    page.id.clone(),
-                    &mut images,
-                    cx,
-                )));
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .px(px(tokens::PAGE_GAP))
+                        .pb(px(tokens::PAGE_GAP))
+                        .child(page_card(self.pane(
+                            Owner::Flechinha(self.id.clone()),
+                            page.id.clone(),
+                            &mut images,
+                            cx,
+                        ))),
+                );
         } else if let Some(core) = state.model.state(&self.id)
             && let Some(current) = core.window(&self.id)
         {
             let active_space = &current.active_space_id;
             let view = current.visible_tabs();
-            let mut pages = div().flex().size_full().overflow_hidden();
+            // The page area, kFlechaGap in from the window's edges and flush with a docked
+            // sidebar (FlechaFrameState::PageInsets, patch 0010). Split panes keep
+            // kFlechaSplitGap between them (patch 0019), so each takes its share of the rest.
+            let mut pages = div()
+                .relative()
+                .flex()
+                .size_full()
+                .gap(px(tokens::SPLIT_GAP))
+                .child(self.page_area_probe());
             for (index, tab) in view.iter().enumerate() {
                 let pane = self.pane(Owner::Tab(self.id.clone()), tab.clone(), &mut images, cx);
                 let ratio = current
@@ -561,62 +670,98 @@ impl Render for Shell {
                 } else {
                     1.0 - ratio
                 };
-                pages = pages.child(div().h_full().w(relative(width)).child(pane));
-            }
-            let mut page_area = div()
-                .relative()
-                .flex_1()
-                .min_h_0()
-                .min_w_0()
-                .child(pages)
-                .child(self.page_area_probe());
-            if let Some(peek) = state.model.peeks.get(&self.id) {
-                page_area = page_area.child(deferred(
+                pages = pages.child(
                     div()
+                        .h_full()
+                        .min_w_0()
+                        .flex_basis(relative(width))
+                        .child(page_card(pane)),
+                );
+            }
+            if let Some(peek) = state.model.peeks.get(&self.id) {
+                // Peek (patch 0026): the page inset 8% of the area's width on each side, 48
+                // from its top and 24 from its bottom, with 12px corners; its toolbar floats
+                // 6px above it (ui/app.ts:1524-1532 and ui/styles.css:1168-1178).
+                let card = div()
+                    .absolute()
+                    .left(relative(0.08))
+                    .right(relative(0.08))
+                    .top(px(48.))
+                    .bottom(px(24.))
+                    .occlude()
+                    .child(page_card(self.pane(
+                        Owner::Peek(self.id.clone()),
+                        peek.id.clone(),
+                        &mut images,
+                        cx,
+                    )));
+                let bar =
+                    div()
+                        .id("peek-bar")
                         .absolute()
                         .left(relative(0.08))
                         .right(relative(0.08))
-                        .top(px(8.))
-                        .bottom(px(24.))
-                        .rounded(px(12.))
-                        .overflow_hidden()
+                        .top(px(48. - tokens::PEEK_BAR - 6.))
+                        .h(px(tokens::PEEK_BAR))
                         .occlude()
                         .flex()
-                        .flex_col()
+                        .items_center()
+                        .gap(px(tokens::PILL_GAP))
+                        .pl(px(tokens::PEEK_BAR_PAD_LEFT))
+                        .pr(px(tokens::PEEK_BAR_PAD_RIGHT))
+                        .rounded(px(tokens::RADIUS_MD))
                         .bg(palette().surface)
+                        .shadow(palette().shadow_pop())
                         .child(
                             div()
-                                .h(px(40.))
-                                .flex_shrink_0()
-                                .px_2()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .children(self.zoom_badge(cx))
-                                .child(self.action_button(
-                                    "promote",
-                                    "Open in tab",
-                                    Action::Promote,
-                                    cx,
-                                ))
-                                .child(self.action_button(
-                                    "close-peek",
-                                    "Close Peek",
-                                    Action::ClosePeek,
-                                    cx,
-                                )),
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_color(palette().text_2)
+                                .font_weight(FontWeight::MEDIUM)
+                                .child(crate::sidebar::tab_label(&peek.tab)),
                         )
-                        .child(div().flex_1().min_h_0().child(self.pane(
-                            Owner::Peek(self.id.clone()),
-                            peek.id.clone(),
-                            &mut images,
-                            cx,
-                        ))),
+                        .children(self.zoom_badge(cx))
+                        .child(
+                            pill_button("promote", "Open as Tab", Some("external")).on_click(
+                                cx.listener(|this, _: &ClickEvent, _, cx| {
+                                    dispatch(&this.state, &this.id, Action::Promote, cx);
+                                }),
+                            ),
+                        )
+                        .child(icon_button("close-peek", "close", "Close Peek").on_click(
+                            cx.listener(|this, _: &ClickEvent, _, cx| {
+                                dispatch(&this.state, &this.id, Action::ClosePeek, cx);
+                            }),
+                        ));
+                pages = pages.child(deferred(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        // The page paints over the bar's shadow, as the shipping Peek's native
+                        // page sits above the sidebar page that draws the bar.
+                        .child(bar)
+                        .child(card)
+                        .with_animation(
+                            "peek-open",
+                            Animation::new(tokens::MEDIUM).with_easing(ease),
+                            |peek, delta| peek.opacity(delta),
+                        ),
                 ));
             }
+            let docked = core.sidebar_visible(&self.id);
+            let page_area = div()
+                .flex_1()
+                .min_h_0()
+                .min_w_0()
+                .pt(px(tokens::PAGE_GAP))
+                .pr(px(tokens::PAGE_GAP))
+                .pb(px(tokens::PAGE_GAP))
+                .when(!docked, |area| area.pl(px(tokens::PAGE_GAP)))
+                .child(pages);
             let sidebar = self.sidebar(&state, current, cx);
             let mut body = div().flex_1().min_h_0().relative().flex();
-            if core.sidebar_visible(&self.id) {
+            if docked {
                 body = body.child(sidebar).child(page_area);
             } else {
                 body = body.child(page_area).child(sidebar);
@@ -624,23 +769,41 @@ impl Render for Shell {
             main = main.child(body);
         }
         if let Some(status) = state.status_for(&self.id) {
-            main = main.child(div().p_2().child(status.to_owned()));
+            main = main.child(
+                div()
+                    .px(px(tokens::SPACE_3))
+                    .pb(px(tokens::SPACE_2))
+                    .text_size(px(tokens::TEXT_SM))
+                    .text_color(palette().text_2)
+                    .child(status.to_owned()),
+            );
         }
         if fullscreen.is_none() && state.model.peeks.contains_key(&self.id) {
             main = main.child(
                 div()
+                    .id("peek-backdrop")
                     .absolute()
                     .top_0()
                     .left_0()
                     .size_full()
                     .occlude()
-                    .bg(palette().backdrop)
+                    .bg(palette().peek_backdrop)
                     .on_any_mouse_down(cx.listener(|this, _: &MouseDownEvent, _, cx| {
                         dispatch(&this.state, &this.id, Action::ClosePeek, cx);
                         cx.stop_propagation();
-                    })),
+                    }))
+                    .with_animation(
+                        "peek-backdrop-fade",
+                        Animation::new(tokens::MEDIUM).with_easing(ease),
+                        |backdrop, delta| backdrop.opacity(delta),
+                    ),
             );
         }
+        let sidebar_width = state.model.core.settings.sidebar_width.pixels() as f32;
+        let docked = state
+            .model
+            .state(&self.id)
+            .is_some_and(|core| core.sidebar_visible(&self.id));
         drop(state);
         if let Overlay::History(panel) = &mut self.overlay {
             panel.refresh(&self.state.borrow().history);
@@ -663,14 +826,101 @@ impl Render for Shell {
             Overlay::SiteControls => Some(self.site_controls_panel(cx)),
         };
         if let Some(panel) = overlay {
-            let drawer = matches!(self.overlay, Overlay::Archive(_) | Overlay::Downloads(_));
-            let site_controls = matches!(self.overlay, Overlay::SiteControls);
+            let placement = match self.overlay {
+                Overlay::Command(_) => Placement::Palette,
+                Overlay::Settings(_) | Overlay::History(_) => Placement::Page,
+                Overlay::Archive(_) | Overlay::Downloads(_) => Placement::SidebarFoot,
+                Overlay::SiteControls => Placement::SidebarTop(tokens::SITE_PANEL_TOP),
+                _ => Placement::SidebarTop(tokens::SPACE_EDITOR_TOP),
+            };
+            let page_left = if docked {
+                sidebar_width
+            } else {
+                tokens::PAGE_GAP
+            };
+            let frame = match placement {
+                // #palette and .palette-box (ui/styles.css:1212-1249).
+                Placement::Palette => div()
+                    .absolute()
+                    .top(relative(tokens::PALETTE_TOP / 100.))
+                    .left_0()
+                    .right_0()
+                    .flex()
+                    .justify_center()
+                    .child(
+                        panel
+                            .w(px(tokens::PALETTE_WIDTH))
+                            .max_w(relative(0.9))
+                            .with_animation(
+                                "palette-drop",
+                                Animation::new(tokens::MEDIUM).with_easing(ease),
+                                |panel, delta| panel.opacity(delta).mt(px(-6. * (1. - delta))),
+                            ),
+                    )
+                    .into_any_element(),
+                // Settings and History are pages of their own in the shipping shell, shown in
+                // the page area.
+                Placement::Page => div()
+                    .absolute()
+                    .top(px(tokens::PAGE_GAP))
+                    .bottom(px(tokens::PAGE_GAP))
+                    .right(px(tokens::PAGE_GAP))
+                    .left(px(page_left))
+                    .flex()
+                    .child(
+                        panel
+                            .flex_1()
+                            .h_full()
+                            .max_h_full()
+                            .rounded(px(tokens::PAGE_RADIUS))
+                            .shadow(tokens::page_shadow(palette().dark))
+                            .with_animation(
+                                "page-fade",
+                                Animation::new(tokens::MEDIUM).with_easing(ease),
+                                |panel, delta| panel.opacity(delta),
+                            ),
+                    )
+                    .into_any_element(),
+                // .popover (ui/styles.css:1010-1033), in the sidebar.
+                Placement::SidebarFoot | Placement::SidebarTop(_) => {
+                    let width = sidebar_width - tokens::POPOVER_LEFT - tokens::POPOVER_RIGHT;
+                    div()
+                        .absolute()
+                        .left(px(tokens::POPOVER_LEFT))
+                        .w(px(width))
+                        .map(|frame| match placement {
+                            Placement::SidebarTop(top) => frame.top(px(top)).bottom(px(0.)),
+                            _ => frame
+                                .bottom(px(tokens::POPOVER_BOTTOM))
+                                .top_0()
+                                .flex()
+                                .flex_col()
+                                .justify_end(),
+                        })
+                        .child(
+                            div()
+                                .max_h(relative(tokens::POPOVER_MAX_HEIGHT / 100.))
+                                .min_h_0()
+                                .flex()
+                                .flex_col()
+                                .child(panel.w_full())
+                                .with_animation(
+                                    "popover-rise",
+                                    Animation::new(tokens::MEDIUM).with_easing(ease),
+                                    |panel, delta| panel.opacity(delta).mt(px(6. * (1. - delta))),
+                                ),
+                        )
+                        .into_any_element()
+                }
+            };
             main = main.child(deferred(
                 div()
                     .absolute()
                     .inset_0()
                     .occlude()
-                    .when(!site_controls, |backdrop| backdrop.bg(palette().backdrop))
+                    .when(placement == Placement::Palette, |backdrop| {
+                        backdrop.bg(palette().backdrop)
+                    })
                     .child(div().absolute().inset_0().on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, _: &MouseDownEvent, window, cx| {
@@ -678,19 +928,7 @@ impl Render for Shell {
                             cx.stop_propagation();
                         }),
                     ))
-                    .child(
-                        div()
-                            .relative()
-                            .flex()
-                            .justify_center()
-                            .pt_10()
-                            .px_4()
-                            .h_full()
-                            .pb_4()
-                            .when(drawer, |frame| frame.justify_end().pt_4())
-                            .when(site_controls, |frame| frame.justify_start())
-                            .child(panel.when(drawer, |drawer| drawer.h_full().w(px(420.)))),
-                    ),
+                    .child(frame),
             ));
         }
         if let Overlay::ContextMenu(menu) = &self.overlay {
@@ -711,36 +949,511 @@ impl Render for Shell {
     }
 }
 
+/// Where an overlay sits, as the shipping shell places the same surface.
+#[derive(Clone, Copy, PartialEq)]
+enum Placement {
+    /// The command bar, centred 16vh from the top over a dimmed window.
+    Palette,
+    /// A page of its own (Settings, History), over the page area.
+    Page,
+    /// A popover above the sidebar's footer (downloads).
+    SidebarFoot,
+    /// A popover this far from the sidebar's top (site controls, the Space editor).
+    SidebarTop(f32),
+}
+
+/// A floating surface: `.popover` (ui/styles.css:1010-1022), and the command bar's box.
 pub(crate) fn overlay_panel() -> Div {
     div()
         .flex()
         .flex_col()
         .min_h_0()
         .max_h_full()
-        .self_start()
-        .w(px(560.))
-        .max_w_full()
         .occlude()
-        .gap_2()
-        .p_3()
-        .text_sm()
-        .rounded_xl()
-        .border_1()
-        .border_color(palette().border)
-        .bg(palette().panel)
-        .shadow_lg()
+        .gap(px(tokens::SPACE_2))
+        .p(px(tokens::SPACE_3))
+        .rounded(px(tokens::RADIUS_LG))
+        .bg(palette().surface)
+        .text_color(palette().text)
+        .shadow(palette().shadow_pop())
 }
 
+/// A text button on a floating surface: `.pill-button` (ui/styles.css:1190-1203), 28 tall.
 pub(crate) fn button(
     id: impl Into<gpui::ElementId>,
     name: impl Into<gpui::SharedString>,
 ) -> gpui::Stateful<Div> {
     div()
         .id(id)
-        .px_2()
-        .py_1()
-        .rounded_md()
+        .px(px(tokens::PILL_PAD))
+        // 28px tall around one line of 13px text at 1.35.
+        .py(px((tokens::PILL_HEIGHT
+            - tokens::TEXT_MD * tokens::LINE_HEIGHT)
+            / 2.))
+        .rounded(px(tokens::RADIUS_SM))
+        .font_weight(FontWeight::MEDIUM)
         .cursor_pointer()
-        .hover(|style| style.bg(palette().hover))
+        .hover(|style| style.bg(palette().surface_2))
         .child(name.into())
+}
+
+/// `.pill-button` with an icon before its label (the Peek bar's "Open as Tab").
+pub(crate) fn pill_button(
+    id: impl Into<gpui::ElementId>,
+    name: impl Into<gpui::SharedString>,
+    leading: Option<&'static str>,
+) -> gpui::Stateful<Div> {
+    div()
+        .id(id)
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(tokens::PILL_GAP))
+        .h(px(tokens::PILL_HEIGHT))
+        .px(px(tokens::PILL_PAD))
+        .rounded(px(tokens::RADIUS_SM))
+        .font_weight(FontWeight::MEDIUM)
+        .cursor_pointer()
+        .hover(|style| style.bg(palette().surface_2))
+        .children(leading.map(|name| icon(name, tokens::PILL_ICON, palette().text)))
+        .child(name.into())
+}
+
+/// `.icon-button` (ui/styles.css:132-155): a 28px square in `--text-2` that fills on hover.
+/// `label` names it for assistive technology.
+pub(crate) fn icon_button(
+    id: impl Into<gpui::ElementId>,
+    name: &'static str,
+    label: &'static str,
+) -> gpui::Stateful<Div> {
+    sized_icon_button(id, name, label, tokens::ICON_BUTTON, tokens::ICON)
+}
+
+/// `.icon-button` at another size: the sidebar toolbar's (ui/styles.css:65-73) or a row's close
+/// button (ui/styles.css:629-650).
+pub(crate) fn sized_icon_button(
+    id: impl Into<gpui::ElementId>,
+    name: &'static str,
+    label: &'static str,
+    size: f32,
+    glyph: f32,
+) -> gpui::Stateful<Div> {
+    tinted_icon_button(id, name, label, (size, glyph), palette().text_2)
+}
+
+/// An icon button whose icon rests in `color` and turns `--text` on hover, as `.url-action`
+/// does in `--text-3` (ui/styles.css:200-224).
+pub(crate) fn tinted_icon_button(
+    id: impl Into<gpui::ElementId>,
+    name: &'static str,
+    label: &'static str,
+    (size, glyph): (f32, f32),
+    color: gpui::Rgba,
+) -> gpui::Stateful<Div> {
+    let group = gpui::SharedString::new_static("icon-button");
+    square(id, label, size)
+        .group(group.clone())
+        .cursor_pointer()
+        .hover(|style| style.bg(palette().fill_hover))
+        .child(
+            icon(name, glyph, color).group_hover(group, |glyph| glyph.text_color(palette().text)),
+        )
+}
+
+/// `.icon-button` with its glyph turned clockwise by `turn` (0 to 1) of a full circle, as an open folder turns its
+/// chevron (ui/styles.css:772-774).
+pub(crate) fn turned_icon_button(
+    id: impl Into<gpui::ElementId>,
+    name: &'static str,
+    label: &'static str,
+    turn: f32,
+) -> gpui::Stateful<Div> {
+    let group = gpui::SharedString::new_static("icon-button");
+    square(id, label, tokens::ICON_BUTTON)
+        .group(group.clone())
+        .cursor_pointer()
+        .hover(|style| style.bg(palette().fill_hover))
+        .child(
+            icon(name, tokens::ICON, palette().text_2)
+                .with_transformation(gpui::Transformation::rotate(gpui::percentage(turn)))
+                .group_hover(group, |glyph| glyph.text_color(palette().text)),
+        )
+}
+
+/// An icon button's square without its hover fill, for a disabled one.
+pub(crate) fn icon_square(
+    id: impl Into<gpui::ElementId>,
+    name: &'static str,
+    label: &'static str,
+    (size, glyph): (f32, f32),
+    color: gpui::Rgba,
+) -> gpui::Stateful<Div> {
+    square(id, label, size).child(icon(name, glyph, color))
+}
+
+fn square(id: impl Into<gpui::ElementId>, label: &'static str, size: f32) -> gpui::Stateful<Div> {
+    div()
+        .id(id)
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .size(px(size))
+        .rounded(px(tokens::RADIUS_SM))
+        .aria_label(label)
+}
+
+/// `.text-button` (ui/styles.css:157-170): a small label in `--text-3` that fills on hover.
+pub(crate) fn text_button(
+    id: impl Into<gpui::ElementId>,
+    name: impl Into<gpui::SharedString>,
+) -> gpui::Stateful<Div> {
+    div()
+        .id(id)
+        .flex_none()
+        .px(px(tokens::TEXT_BUTTON_PAD_X))
+        .py(px(tokens::TEXT_BUTTON_PAD_Y))
+        .rounded(px(tokens::RADIUS_SM))
+        .text_size(px(tokens::TEXT_XS))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(palette().text_3)
+        .cursor_pointer()
+        .hover(|style| style.bg(palette().fill_hover).text_color(palette().text))
+        .child(name.into())
+}
+
+/// `.primary-button` (ui/styles.css:1603-1626): ink on paper, inverted in Dark.
+pub(crate) fn primary_button(
+    id: impl Into<gpui::ElementId>,
+    name: impl Into<gpui::SharedString>,
+) -> gpui::Stateful<Div> {
+    let palette = palette();
+    let (ground, ink) = if palette.dark {
+        (palette.paper, palette.ink)
+    } else {
+        (palette.ink, palette.paper)
+    };
+    div()
+        .id(id)
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .h(px(tokens::PRIMARY_BUTTON))
+        .px(px(tokens::PRIMARY_BUTTON_PAD))
+        .rounded(px(tokens::RADIUS_SM))
+        .bg(ground)
+        .text_color(ink)
+        .font_weight(FontWeight::SEMIBOLD)
+        .cursor_pointer()
+        .child(name.into())
+}
+
+/// A page in the page area: rounded to `--page-radius`, with the frame's drop shadow, on the
+/// empty state's colour until its first frame.
+pub(crate) fn page_card(page: Div) -> Div {
+    div()
+        .size_full()
+        .rounded(px(tokens::PAGE_RADIUS))
+        .shadow(tokens::page_shadow(palette().dark))
+        .bg(palette().page)
+        .overflow_hidden()
+        .child(page)
+}
+
+/// `inset 0 0 0 0.5px color`: the hairline ring the shipping shell draws with box-shadow.
+pub(crate) fn hairline(color: gpui::Rgba) -> gpui::BoxShadow {
+    gpui::BoxShadow {
+        color: color.into(),
+        offset: gpui::point(px(0.), px(0.)),
+        blur_radius: px(0.),
+        spread_radius: px(0.5),
+        inset: true,
+    }
+}
+
+/// The red close circle of a window without the platform's title bar
+/// (ui/windowControls.css:4-56): a 12px circle in a 20px target, its cross shown on hover.
+pub(crate) fn window_close(id: &'static str) -> gpui::Stateful<Div> {
+    let inset = tokens::WINDOW_CONTROL_INSET;
+    let group = gpui::SharedString::new_static("window-close");
+    div()
+        .id(id)
+        .group(group.clone())
+        .relative()
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .size(px(tokens::WINDOW_CONTROL))
+        .cursor_pointer()
+        .aria_label("Close window")
+        .child(
+            div()
+                .absolute()
+                .top(px(inset))
+                .left(px(inset))
+                .size(px(tokens::WINDOW_CONTROL - 2. * inset))
+                .rounded_full()
+                .bg(tokens::color(".window-control.close", false))
+                .shadow(tokens::shadow_window_control()),
+        )
+        .child(
+            icon(
+                "window-close",
+                tokens::WINDOW_CONTROL_GLYPH,
+                tokens::color(".window-control svg stroke", false),
+            )
+            .opacity(0.)
+            .group_hover(group, |glyph| glyph.opacity(1.)),
+        )
+}
+
+/// `0 0 0 width color` outside an element: the focus ring.
+pub(crate) fn ring(color: gpui::Rgba, width: f32) -> gpui::BoxShadow {
+    gpui::BoxShadow {
+        color: color.into(),
+        offset: gpui::point(px(0.), px(0.)),
+        blur_radius: px(0.),
+        spread_radius: px(width),
+        inset: false,
+    }
+}
+
+/// `.shell-menu-item` (chromium/shell/shell.css:85-99): the pointer's item takes the selection
+/// colour.
+pub(crate) fn menu_item(
+    id: impl Into<gpui::ElementId>,
+    name: impl Into<gpui::SharedString>,
+) -> gpui::Stateful<Div> {
+    div()
+        .id(id)
+        .px(px(tokens::MENU_ITEM_PAD_X))
+        .py(px(tokens::MENU_ITEM_PAD_Y))
+        .rounded(px(tokens::MENU_ITEM_RADIUS))
+        .whitespace_nowrap()
+        .cursor_default()
+        .hover(|item| {
+            item.bg(palette().selection)
+                .text_color(palette().selection_text)
+        })
+        .child(name.into())
+}
+
+/// `host()` in ui/app.ts:83-91: a URL's host without `www.`, or the text itself.
+pub(crate) fn site(url: &str) -> &str {
+    let Some((_, rest)) = url.split_once("://") else {
+        return url;
+    };
+    let host = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    let host = host.rsplit_once('@').map_or(host, |(_, host)| host);
+    if host.is_empty() {
+        return url;
+    }
+    host.strip_prefix("www.").unwrap_or(host)
+}
+
+/// `.favicon.letter` (ui/styles.css:741-756, ui/app.ts:112-115): the site's first letter on a
+/// colour of its own, where the shipping shell would show the site's icon.
+pub(crate) fn letter_favicon(url: &str, size: f32, radius: f32, text: f32) -> Div {
+    let site = site(url);
+    let letter = site
+        .trim_start_matches(|c: char| !c.is_ascii_alphanumeric())
+        .chars()
+        .next()
+        .map_or_else(|| "•".to_owned(), |c| c.to_uppercase().collect());
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .size(px(size))
+        .rounded(px(radius))
+        .bg(Palette::letter(tokens::hue_for(site)))
+        .text_color(gpui::white())
+        .text_size(px(text))
+        .line_height(relative(1.))
+        .font_weight(FontWeight::BOLD)
+        .child(letter)
+}
+
+/// `kbd` (ui/tokens.css:158-168): a key name in a small chip.
+pub(crate) fn kbd(keys: impl Into<gpui::SharedString>) -> Div {
+    div()
+        .flex_none()
+        .min_w(px(tokens::KBD_MIN_WIDTH))
+        .px(px(tokens::KBD_PAD_X))
+        .py(px(tokens::KBD_PAD_Y))
+        .rounded(px(tokens::KBD_RADIUS))
+        .bg(palette().fill_subtle)
+        .shadow(vec![hairline(palette().surface_line)])
+        .font_family(tokens::MONO)
+        .font_weight(FontWeight::MEDIUM)
+        .text_size(px(tokens::TEXT_XS))
+        .line_height(px(tokens::KBD_LINE))
+        .text_color(palette().text_2)
+        .flex()
+        .justify_center()
+        .child(keys.into())
+}
+
+/// A `.switch`'s geometry: the shell's (ui/styles.css:1551-1584) or Settings' own
+/// (ui/settings.css:323-356).
+#[derive(Clone, Copy)]
+pub(crate) struct SwitchSize {
+    width: f32,
+    height: f32,
+    knob: f32,
+    inset: f32,
+    travel: f32,
+}
+
+pub(crate) const SHELL_SWITCH: SwitchSize = SwitchSize {
+    width: tokens::SWITCH_WIDTH,
+    height: tokens::SWITCH_HEIGHT,
+    knob: tokens::SWITCH_KNOB,
+    inset: tokens::SWITCH_KNOB_INSET,
+    travel: tokens::SWITCH_TRAVEL,
+};
+
+pub(crate) const SETTINGS_SWITCH: SwitchSize = SwitchSize {
+    width: tokens::SETTINGS_SWITCH_WIDTH,
+    height: tokens::SETTINGS_SWITCH_HEIGHT,
+    knob: tokens::SETTINGS_SWITCH_KNOB,
+    inset: tokens::SETTINGS_SWITCH_KNOB_INSET,
+    travel: tokens::SETTINGS_SWITCH_TRAVEL,
+};
+
+/// `.switch`: on in the selection colour with its knob slid across, off in `--surface-line`.
+pub(crate) fn switch(
+    id: impl Into<gpui::ElementId>,
+    on: bool,
+    label: &'static str,
+    size: SwitchSize,
+) -> gpui::Stateful<Div> {
+    let palette = palette();
+    div()
+        .id(id)
+        .relative()
+        .flex_none()
+        .w(px(size.width))
+        .h(px(size.height))
+        .rounded(px(size.height / 2.))
+        .cursor_pointer()
+        .aria_label(label)
+        .map(|track| {
+            if on {
+                track.bg(palette.selection)
+            } else {
+                track
+                    .bg(palette.surface_line)
+                    .shadow(vec![hairline(palette.surface_line)])
+            }
+        })
+        .child(
+            div()
+                .absolute()
+                .top(px(size.inset))
+                .left(px(size.inset + if on { size.travel } else { 0. }))
+                .size(px(size.knob))
+                .rounded_full()
+                .bg(tokens::color(".switch::after background", false))
+                .shadow(tokens::shadow_knob()),
+        )
+}
+
+/// `.popover-footer` (ui/styles.css:1586-1592): a hairline above the popover's last actions.
+/// `.popover-header` (ui/styles.css:1035-1053): a semibold title that truncates before the
+/// trailing button does.
+pub(crate) fn popover_header(title: impl Into<gpui::SharedString>) -> Div {
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_between()
+        .pt(px(tokens::POPOVER_PAD_TOP))
+        .pr(px(tokens::POPOVER_PAD_RIGHT))
+        .pb(px(tokens::POPOVER_PAD_BOTTOM))
+        .pl(px(tokens::POPOVER_PAD_LEFT))
+        .font_weight(FontWeight::SEMIBOLD)
+        .child(div().min_w_0().truncate().child(title.into()))
+}
+
+pub(crate) fn popover_footer() -> Div {
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_between()
+        .pt(px(tokens::POPOVER_FOOTER_PAD_TOP))
+        .px(px(tokens::POPOVER_FOOTER_PAD_X))
+        .pb(px(tokens::POPOVER_FOOTER_PAD_BOTTOM))
+        .border_t(px(tokens::POPOVER_RULE))
+        .border_color(palette().surface_line)
+}
+
+/// `.text-button.danger` (ui/styles.css:1594-1601): a destructive action in red.
+pub(crate) fn danger_button(
+    id: impl Into<gpui::ElementId>,
+    name: impl Into<gpui::SharedString>,
+) -> gpui::Stateful<Div> {
+    // Its red outranks `.text-button:hover`, which comes earlier in the file.
+    div()
+        .id(id)
+        .flex()
+        .flex_none()
+        .items_center()
+        .px(px(tokens::TEXT_BUTTON_PAD_X))
+        .py(px(tokens::TEXT_BUTTON_PAD_Y))
+        .rounded(px(tokens::RADIUS_SM))
+        .text_size(px(tokens::TEXT_SM))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(palette().red)
+        .cursor_pointer()
+        .hover(|style| style.bg(palette().fill_hover))
+        .child(name.into())
+}
+
+/// The first `--font` family installed here. Without one the shipping shell lands on
+/// `sans-serif`, which Chromium on Linux draws in fontconfig's match for its default sans-serif
+/// family, Arial; GPUI loads only named families, so this asks fontconfig the same question.
+/// Without fontconfig, GPUI's own UI font.
+fn ui_font(cx: &gpui::App) -> Option<gpui::SharedString> {
+    static FONT: std::sync::OnceLock<Option<gpui::SharedString>> = std::sync::OnceLock::new();
+    FONT.get_or_init(|| {
+        let installed = cx.text_system().all_font_names();
+        let is_installed = |name: &str| installed.iter().any(|family| family == name);
+        if let Some(name) = tokens::FONT.iter().find(|name| is_installed(name)) {
+            return Some(gpui::SharedString::new_static(name));
+        }
+        let matched = std::process::Command::new("fc-match")
+            .args(["--format=%{family[0]}", tokens::LINUX_SANS_SERIF])
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .and_then(|output| String::from_utf8(output.stdout).ok())?;
+        is_installed(&matched).then(|| matched.into())
+    })
+    .clone()
+}
+
+/// `isDevUrl` (ui/app.ts:611-619): a local or test host, which the address marks with a code
+/// icon instead of a padlock.
+pub(crate) fn is_dev_url(url: &str) -> bool {
+    let host = site(url)
+        .rsplit_once(':')
+        .map_or(site(url), |(host, port)| {
+            if port.chars().all(|c| c.is_ascii_digit()) {
+                host
+            } else {
+                site(url)
+            }
+        });
+    let host = host.to_ascii_lowercase();
+    matches!(
+        host.as_str(),
+        "localhost" | "local" | "test" | "127.0.0.1" | "[::1]"
+    ) || [".localhost", ".local", ".test"]
+        .iter()
+        .any(|suffix| host.ends_with(suffix))
 }

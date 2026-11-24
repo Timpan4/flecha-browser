@@ -12,13 +12,14 @@ use flecha_downloads::{
     AskReason, DownloadId, DownloadList, DownloadRow, DownloadSettings, RowState, State, Warning,
 };
 use gpui::{
-    ClickEvent, Context, Div, InteractiveElement as _, Keystroke, ParentElement as _,
-    StatefulInteractiveElement as _, Styled as _, Window, div, prelude::FluentBuilder as _,
+    ClickEvent, Context, Div, FontWeight, InteractiveElement as _, Keystroke, ParentElement as _,
+    StatefulInteractiveElement as _, Styled as _, Window, div, prelude::FluentBuilder as _, px,
 };
 
 use crate::text_field::TextField;
 use crate::theme::palette;
-use crate::view::{Overlay, Shell, button, overlay_panel};
+use crate::tokens;
+use crate::view::{Overlay, Shell, icon_button, overlay_panel, popover_header, text_button};
 use crate::{Action, Controller, dispatch};
 
 #[derive(Debug, PartialEq, Eq)]
@@ -374,18 +375,30 @@ impl Shell {
         let list = state.engine.downloads();
         let session = state.model.incognito_session(&self.id);
         let rows = state.download_rows(&self.id);
+        let palette = palette();
+        // #downloads-list (ui/styles.css:1055-1060).
         let mut content = div()
             .id("download-rows")
             .flex()
             .flex_col()
-            .gap_2()
             .min_h_0()
+            .px(px(tokens::DOWNLOADS_LIST_PAD))
+            .pb(px(tokens::DOWNLOADS_LIST_PAD))
             .overflow_y_scroll();
+        let note = |text: String| {
+            div()
+                .pt(px(tokens::DOWNLOADS_EMPTY_PAD_TOP))
+                .px(px(tokens::DOWNLOADS_EMPTY_PAD_X))
+                .pb(px(tokens::DOWNLOADS_EMPTY_PAD_BOTTOM))
+                .text_color(palette.text_3)
+                .child(text)
+        };
         if let Some(error) = &state.downloads.config_error {
-            content = content.child(error.clone());
+            content = content.child(note(error.clone()));
         }
         if state.downloads.prompts_in(session).next().is_none() && rows.is_empty() {
-            content = content.child("No downloads yet.");
+            // #downloads-list .empty (ui/styles.css:1144-1147).
+            content = content.child(note("No downloads yet.".into()));
         }
         for (&handle, prompt) in state.downloads.prompts_in(session).rev() {
             let row = match prompt {
@@ -396,17 +409,15 @@ impl Shell {
                     let name = list
                         .get(*id)
                         .map_or_else(|| "Download".into(), |entry| list.row(entry).filename);
-                    download_card(name)
-                        .child(match warning {
+                    download_card(name, false)
+                        .child(download_status(match warning {
                             Warning::Insecure => {
                                 "This download was delivered over an insecure connection."
                             }
                             _ => "This file type can harm your computer.",
-                        })
+                        }))
                         .child(
-                            div()
-                                .flex()
-                                .gap_1()
+                            download_actions()
                                 .child(self.download_button(
                                     handle,
                                     "keep",
@@ -432,19 +443,19 @@ impl Shell {
                 content = content.child(self.download_row(row, handle, cx));
             }
         }
+        // .popover (ui/styles.css:1010-1022) carries no padding of its own.
         overlay_panel()
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .child(div().text_lg().child("Downloads"))
-                    .child(button("close-downloads", "Close").on_click(cx.listener(
-                        |this, _: &ClickEvent, window, cx| this.dismiss_overlay(window, cx),
-                    ))),
-            )
+            .p_0()
+            .gap_0()
+            .child(popover_header("Downloads").child(
+                icon_button("close-downloads", "close", "Close").on_click(
+                    cx.listener(|this, _: &ClickEvent, window, cx| {
+                        this.dismiss_overlay(window, cx)
+                    }),
+                ),
+            ))
             .when_some(state.status_for(&self.id), |panel, status| {
-                panel.child(status.to_owned())
+                panel.child(note(status.to_owned()).pt_0())
             })
             .child(content)
     }
@@ -468,9 +479,10 @@ impl Shell {
                     .flex()
                     .flex_wrap()
                     .items_center()
-                    .child(div().truncate().child(suggested.clone()))
+                    .gap(px(tokens::DOWNLOAD_ACTIONS_GAP))
+                    .child(download_status(suggested.clone()).min_w_0().truncate())
                     .child(
-                        button(
+                        text_button(
                             ("edit-download-path", handle.0 as usize),
                             "Edit destination",
                         )
@@ -487,16 +499,17 @@ impl Shell {
                 None,
             ),
         };
-        download_card(match reason {
-            AskReason::Conflict => "Choose a path. The suggested name is in use.",
-            AskReason::NameTooLong => "Choose a shorter file name.",
-            _ => "Save download as",
-        })
+        download_card(
+            match reason {
+                AskReason::Conflict => "Choose a path. The suggested name is in use.",
+                AskReason::NameTooLong => "Choose a shorter file name.",
+                _ => "Save download as",
+            },
+            false,
+        )
         .child(field)
         .child(
-            div()
-                .flex()
-                .gap_1()
+            download_actions()
                 .child(self.download_button(
                     handle,
                     "accept",
@@ -527,16 +540,41 @@ impl Shell {
             RowState::Cancelled => "Cancelled",
             RowState::Interrupted => "Interrupted",
         };
-        let mut card = download_card(row.filename).child(div().truncate().child(row.path));
-        card = card.child(if row.total > 0 {
+        let stopped = matches!(row.state, RowState::Cancelled | RowState::Interrupted);
+        let mut card = download_card(row.filename, stopped)
+            .child(download_status(row.path).min_w_0().truncate());
+        card = card.child(download_status(if row.total > 0 {
             format!("{state} · {} of {} bytes", row.received, row.total)
         } else if row.received > 0 {
             format!("{state} · {} bytes", row.received)
         } else {
             state.to_owned()
-        });
+        }));
+        if row.state == RowState::Progressing {
+            // .download .bar and .fill (ui/styles.css:1128-1142); renderDownloads (ui/app.ts:1574)
+            // fills it only when the total is known.
+            let share = if row.total > 0 {
+                (row.received as f32 / row.total as f32).clamp(0., 1.)
+            } else {
+                0.
+            };
+            card = card.child(
+                div()
+                    .h(px(tokens::DOWNLOAD_BAR))
+                    .mt(px(tokens::DOWNLOAD_BAR_GAP))
+                    .rounded(px(tokens::DOWNLOAD_BAR_RADIUS))
+                    .bg(palette().surface_line)
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .h_full()
+                            .w(gpui::relative(share))
+                            .bg(palette().selection),
+                    ),
+            );
+        }
         if let Some(handle) = handle {
-            let mut actions = div().flex().gap_1();
+            let mut actions = download_actions();
             if row.can_resume {
                 actions = actions.child(self.download_button(
                     handle,
@@ -577,7 +615,7 @@ impl Shell {
         command: DownloadCommand,
         cx: &Context<Self>,
     ) -> gpui::Stateful<Div> {
-        button((id, handle.0 as usize), label).on_click(cx.listener(
+        text_button((id, handle.0 as usize), label).on_click(cx.listener(
             move |this, _: &ClickEvent, _, cx| {
                 dispatch(
                     &this.state,
@@ -590,16 +628,46 @@ impl Shell {
     }
 }
 
-fn download_card(title: impl Into<gpui::SharedString>) -> Div {
+/// `.download` (ui/styles.css:1062-1094): a name over its status, which highlights on hover.
+/// A cancelled or interrupted download's name is struck through in `--text-3`.
+fn download_card(title: impl Into<gpui::SharedString>, stopped: bool) -> Div {
+    let palette = palette();
     div()
         .flex()
         .flex_col()
-        .gap_1()
-        .p_2()
         .min_w_0()
-        .rounded_md()
-        .bg(palette().inset)
-        .child(div().truncate().child(title.into()))
+        .py(px(tokens::DOWNLOAD_PAD_Y))
+        .pr(px(tokens::DOWNLOAD_PAD_RIGHT))
+        .pl(px(tokens::DOWNLOAD_PAD_LEFT))
+        .rounded(px(tokens::RADIUS_MD))
+        .hover(move |style| style.bg(palette.surface_2))
+        .child(
+            div()
+                .truncate()
+                .font_weight(FontWeight::MEDIUM)
+                .when(stopped, |name| {
+                    name.text_color(palette.text_3).line_through()
+                })
+                .child(title.into()),
+        )
+}
+
+/// `.download .status` (ui/styles.css:1084-1088).
+fn download_status(text: impl Into<gpui::SharedString>) -> Div {
+    div()
+        .text_size(px(tokens::TEXT_XS))
+        .font_family(tokens::MONO)
+        .text_color(palette().text_2)
+        .child(text.into())
+}
+
+/// `.download .actions` on a line of its own (ui/styles.css:1102-1118).
+fn download_actions() -> Div {
+    div()
+        .flex()
+        .flex_wrap()
+        .justify_end()
+        .gap(px(tokens::DOWNLOAD_ACTIONS_GAP))
 }
 
 #[cfg(test)]

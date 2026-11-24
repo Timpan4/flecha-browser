@@ -5,15 +5,16 @@ use flecha_core::{
     shortcuts::{self, Keybindings, Platform},
 };
 use gpui::{
-    ClickEvent, Context, IntoElement, KeyDownEvent, Keystroke, StatefulInteractiveElement as _,
-    Styled as _, Window,
+    ClickEvent, Context, FontWeight, InteractiveElement as _, IntoElement, KeyDownEvent, Keystroke,
+    ParentElement as _, StatefulInteractiveElement as _, Styled as _, Window, div, px,
 };
 
 use crate::command_bar::Command;
 use crate::settings_view::SettingsTab;
 use crate::sidebar::SidebarAction;
 use crate::theme::palette;
-use crate::view::{Overlay, Shell, button};
+use crate::tokens;
+use crate::view::{Overlay, Shell};
 use crate::{Action, Controller, dispatch};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -326,12 +327,25 @@ impl Controller {
 impl Shell {
     pub(crate) fn zoom_badge(&self, cx: &Context<Self>) -> Option<impl IntoElement> {
         let percent = self.state.borrow().toolbars.get(&self.id)?.zoom?;
+        // `.zoom-value` on the `.zoom-control` ground (ui/styles.css:2123-2150); the shipping
+        // shell shows zoom in the site panel and Chromium's own bubble, not the toolbar.
         Some(
-            button("reset-page-zoom", format!("{percent}%"))
-                .flex_shrink_0()
-                .bg(palette().surface)
-                .text_xs()
-                .text_color(palette().muted)
+            div()
+                .id("reset-page-zoom")
+                .flex()
+                .flex_none()
+                .items_center()
+                .h(px(tokens::ZOOM_VALUE))
+                .px(px(tokens::MINI_SELECT_PAD))
+                .rounded(px(tokens::RADIUS_SM))
+                .bg(palette().surface_2)
+                .text_size(px(tokens::TEXT_XS))
+                .font_family(tokens::MONO)
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(palette().text_2)
+                .cursor_pointer()
+                .hover(|style| style.text_color(palette().text))
+                .child(format!("{percent}%"))
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                     this.zoom(PageZoom::Reset, cx);
                 })),

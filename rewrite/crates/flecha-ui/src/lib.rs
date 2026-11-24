@@ -6,6 +6,7 @@ mod downloads_view;
 mod find_bar;
 mod fullscreen;
 mod history_view;
+mod icons;
 mod incognito;
 mod mcp;
 mod model;
@@ -18,6 +19,7 @@ mod site_controls;
 mod tab_sleep;
 mod text_field;
 mod theme;
+mod tokens;
 mod verify;
 mod view;
 
@@ -59,6 +61,8 @@ pub struct Options {
     pub verify: bool,
     pub adblock_fixture_port: Option<NonZeroU16>,
 }
+
+pub use icons::Assets;
 
 pub fn validate_initial_address(input: &str) -> Result<String> {
     pinnable_address(input).context("--open requires a browser address")

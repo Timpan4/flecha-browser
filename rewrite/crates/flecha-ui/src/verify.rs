@@ -7,12 +7,13 @@ use flecha_adblock::{
     fetch::ListWarning,
 };
 use flecha_cef::{BrowserEvent, Disposition, Event, Owner, Partition};
-use flecha_core::{SpaceId, TabId, WindowId};
+use flecha_core::{FolderId, SpaceId, TabId, WindowId};
 use futures::StreamExt as _;
 use gpui::App;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::sidebar::SidebarAction;
 use crate::{Action, Controller, Shared};
 
 #[derive(Deserialize)]
@@ -100,6 +101,22 @@ enum Command {
     ShellClipboard,
     /// Makes the next shared-texture import fail, to check the switch to CPU copies.
     RejectNextSharedTexture,
+    /// Saves the appearance setting, as Settings' System, Light and Dark choices do.
+    Theme {
+        theme: flecha_core::Theme,
+    },
+    /// The sidebar's "+ Folder" with this name typed in.
+    NewFolder {
+        name: String,
+    },
+    /// Pins the tab in the active Space, inside the folder when one is named.
+    Pin {
+        tab: TabId,
+        folder: Option<FolderId>,
+    },
+    Favorite {
+        tab: TabId,
+    },
 }
 
 impl Command {
@@ -124,6 +141,9 @@ impl Command {
             Self::Switch { space } => Action::Switch(space),
             Self::NewSpace => Action::NewSpace,
             Self::Isolate => Action::Isolate,
+            Self::NewFolder { name } => Action::Sidebar(SidebarAction::FolderName(None, name)),
+            Self::Pin { tab, folder } => Action::Sidebar(SidebarAction::Pin(tab, folder)),
+            Self::Favorite { tab } => Action::Sidebar(SidebarAction::Favorite(tab)),
             Self::Quit => Action::Quit,
             Self::NewIncognitoWindow => Action::NewIncognitoWindow,
             Self::Snapshot => return snapshot(state),
@@ -228,6 +248,14 @@ impl Command {
                 handle.update(cx, |_, window, _| {
                     window.resize(gpui::size(gpui::px(width), gpui::px(height)));
                 })?;
+                return Ok(Value::Null);
+            }
+            Self::Theme { theme } => {
+                state.edit_settings(|settings| {
+                    settings.theme = theme;
+                    Ok(())
+                })?;
+                cx.refresh_windows();
                 return Ok(Value::Null);
             }
             Self::RejectNextSharedTexture => {

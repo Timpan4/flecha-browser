@@ -4,15 +4,15 @@ use gpui::{
     ClickEvent, Context, Div, ParentElement as _, StatefulInteractiveElement as _, Styled as _, div,
 };
 
-use super::{Draft, Field, SettingsPanel, muted, row, section};
+use super::{Draft, Field, SettingsPanel, muted, row, section, settings_button};
 use crate::shortcuts::{has_action, platform};
-use crate::view::{Shell, button};
+use crate::view::Shell;
 
 impl Shell {
     pub(super) fn shortcut_settings(&self, panel: &SettingsPanel, cx: &Context<Self>) -> Div {
         let state = self.state.borrow();
         let bindings = &state.model.core.settings.keybindings;
-        let reset = button("reset-shortcuts", "Reset all defaults").on_click(cx.listener(
+        let reset = settings_button("reset-shortcuts", "Reset all defaults").on_click(cx.listener(
             |this, _: &ClickEvent, _, cx| {
                 let result = this.state.borrow_mut().edit_settings(|settings| {
                     settings.keybindings.clear();
@@ -35,15 +35,16 @@ impl Shell {
             let id = command.id;
             let effective = shortcuts::keys_for(bindings, id, platform());
             let default = shortcuts::default_keys(id, platform());
-            let edit = button(format!("edit-{id}"), label(effective)).on_click(cx.listener({
-                let text = effective.or(default).unwrap_or_default().to_owned();
-                move |this, _: &ClickEvent, _, cx| {
-                    if let Some(panel) = this.settings_mut() {
-                        panel.begin(Field::Shortcut(id), text.clone());
-                        cx.notify();
+            let edit =
+                settings_button(format!("edit-{id}"), label(effective)).on_click(cx.listener({
+                    let text = effective.or(default).unwrap_or_default().to_owned();
+                    move |this, _: &ClickEvent, _, cx| {
+                        if let Some(panel) = this.settings_mut() {
+                            panel.begin(Field::Shortcut(id), text.clone());
+                            cx.notify();
+                        }
                     }
-                }
-            }));
+                }));
             let mut entry = div().flex().flex_col().gap_1().child(
                 row()
                     .justify_between()
@@ -63,32 +64,31 @@ impl Shell {
             }) = &panel.field
                 && *active == id
             {
-                entry = entry.child(text.render("Example: Ctrl+Shift+K")).child(
-                    row()
-                        .child(button(format!("save-{id}"), "Save").on_click(cx.listener(
-                            move |this, _: &ClickEvent, _, cx| {
-                                let Some(Draft { text, .. }) =
-                                    this.settings_mut().and_then(|p| p.field.as_ref())
-                                else {
-                                    return;
-                                };
-                                let text = text.text().trim().to_owned();
-                                this.change_binding(id, BindingEdit::Set(&text), cx);
-                            },
-                        )))
-                        .child(button(format!("reset-{id}"), "Reset").on_click(cx.listener(
-                            move |this, _: &ClickEvent, _, cx| {
-                                this.change_binding(id, BindingEdit::Reset, cx)
-                            },
-                        )))
-                        .child(
-                            button(format!("unbind-{id}"), "Unbind").on_click(cx.listener(
-                                move |this, _: &ClickEvent, _, cx| {
+                entry =
+                    entry.child(text.render("Example: Ctrl+Shift+K")).child(
+                        row()
+                            .child(settings_button(format!("save-{id}"), "Save").on_click(
+                                cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    let Some(Draft { text, .. }) =
+                                        this.settings_mut().and_then(|p| p.field.as_ref())
+                                    else {
+                                        return;
+                                    };
+                                    let text = text.text().trim().to_owned();
+                                    this.change_binding(id, BindingEdit::Set(&text), cx);
+                                }),
+                            ))
+                            .child(settings_button(format!("reset-{id}"), "Reset").on_click(
+                                cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    this.change_binding(id, BindingEdit::Reset, cx)
+                                }),
+                            ))
+                            .child(settings_button(format!("unbind-{id}"), "Unbind").on_click(
+                                cx.listener(move |this, _: &ClickEvent, _, cx| {
                                     this.change_binding(id, BindingEdit::Unbind, cx)
-                                },
+                                }),
                             )),
-                        ),
-                );
+                    );
             }
             content = content.child(entry);
         }

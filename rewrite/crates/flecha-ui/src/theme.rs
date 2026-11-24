@@ -1,5 +1,6 @@
-//! The shell's colors: Dark and Light palettes, `Theme::System` resolved from the window's
-//! appearance, and incognito's own violet palette whatever the theme.
+//! The shell's colours: the shipping shell's Light and Dark tokens (see [`crate::tokens`]),
+//! `Theme::System` resolved from the window's appearance, and the active Space's tint behind
+//! the sidebar. An incognito window is always Dark, as the shipping shell's are.
 //!
 //! `Shell::render` picks its window's palette before it builds any element. GPUI lays out and
 //! paints one window at a time on this thread, so elements built later in the same draw (list
@@ -8,121 +9,149 @@
 use std::cell::Cell;
 
 use flecha_core::Theme;
-use gpui::{Rgba, WindowAppearance, rgb, rgba};
+use gpui::{BoxShadow, Rgba, WindowAppearance};
 
+use crate::tokens::{self, color, mix, parse_color, space_tint};
+
+/// The shipping tokens of one theme, under their CSS names, plus the Space's tint.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Palette {
-    /// The window behind everything.
-    pub(crate) background: Rgba,
-    /// Behind a page before its first frame.
-    pub(crate) page: Rgba,
-    pub(crate) sidebar: Rgba,
-    /// Overlay panels: the command bar, Settings, History.
-    pub(crate) panel: Rgba,
-    /// Raised chips, notices, banners and the Peek frame.
-    pub(crate) surface: Rgba,
-    /// Text fields and cards set into a panel.
-    pub(crate) inset: Rgba,
-    pub(crate) border: Rgba,
-    pub(crate) divider: Rgba,
+    pub(crate) dark: bool,
+    /// The active Space's colour as the sidebar paints it (`--space-color`, `spaceTint`).
+    pub(crate) tint: Rgba,
+    pub(crate) ink: Rgba,
+    pub(crate) paper: Rgba,
+    pub(crate) blue: Rgba,
     pub(crate) text: Rgba,
-    pub(crate) text_secondary: Rgba,
-    pub(crate) muted: Rgba,
-    /// A menu item that does nothing here.
-    pub(crate) disabled: Rgba,
-    /// The selected button, tab or row.
-    pub(crate) accent: Rgba,
-    /// The caret and a focused field's underline.
-    pub(crate) accent_strong: Rgba,
+    pub(crate) text_2: Rgba,
+    pub(crate) text_3: Rgba,
+    /// Fills on the Space tint: a control under the pointer, the selected row, a resting chip.
+    pub(crate) fill_hover: Rgba,
+    pub(crate) fill_active: Rgba,
+    pub(crate) fill_subtle: Rgba,
+    /// Hairlines on the Space tint.
+    pub(crate) line: Rgba,
+    /// Floating surfaces (the command bar, menus, popovers) and what sits on them.
+    pub(crate) surface: Rgba,
+    pub(crate) surface_2: Rgba,
+    pub(crate) surface_line: Rgba,
     pub(crate) selection: Rgba,
-    /// A button under the pointer, and the shown favorite.
-    pub(crate) hover: Rgba,
-    /// A list row under the pointer or selected, and list borders.
-    pub(crate) row: Rgba,
-    /// Errors and destructive confirmations.
-    pub(crate) destructive: Rgba,
-    /// The dimmed page behind an overlay.
+    pub(crate) selection_text: Rgba,
+    pub(crate) focus: Rgba,
+    pub(crate) green: Rgba,
+    pub(crate) amber: Rgba,
+    pub(crate) red: Rgba,
+    pub(crate) agent: Rgba,
+    /// Settings: the content area behind its cards, and the cards.
+    pub(crate) pane_bg: Rgba,
+    pub(crate) card: Rgba,
+    pub(crate) card_line: Rgba,
+    /// Flechinha's one loud control, "Open in Flecha".
+    pub(crate) cta: Rgba,
+    pub(crate) cta_text: Rgba,
+    pub(crate) cta_hover: Rgba,
+    /// Behind a page before its first frame: the empty state's card,
+    /// `color-mix(in srgb, var(--surface) 72%, var(--space-color))` (ui/styles.css:1639).
+    pub(crate) page: Rgba,
+    /// The dimmed page behind the command bar and panels (ui/styles.css:1219).
     pub(crate) backdrop: Rgba,
+    /// The dimmed page behind Peek (ui/styles.css:1154).
+    pub(crate) peek_backdrop: Rgba,
+    /// The dimmed page behind a question (shell.css:150).
+    pub(crate) dialog_backdrop: Rgba,
+    /// A selected command bar result's icon chip and address (ui/styles.css:1346, 1364).
+    pub(crate) selected_chip: Rgba,
+    pub(crate) selected_sub: Rgba,
 }
 
+/// The sidebar's colour when a Space has none it can use (ui/styles.css:35).
+pub(crate) const DEFAULT_TINT: &str = "#cdd9f7";
+
 impl Palette {
-    pub(crate) fn dark() -> Self {
+    pub(crate) fn new(dark: bool, space_color: &str) -> Self {
+        let token = |name| color(name, dark);
+        let tint = space_tint(
+            parse_color(space_color)
+                .filter(|_| space_color.len() == 7)
+                .unwrap_or_else(|| color("#sidebar (no Space colour)", dark)),
+            dark,
+        );
+        let surface = token("--surface");
         Self {
-            background: rgb(0x161c20),
-            page: rgb(0x171e22),
-            sidebar: rgb(0x202a30),
-            panel: rgb(0x1d2a32),
-            surface: rgb(0x26343d),
-            inset: rgb(0x243640),
-            border: rgb(0x405863),
-            divider: rgb(0x30404a),
-            text: rgb(0xe2edf1),
-            text_secondary: rgb(0xc0d1dc),
-            muted: rgb(0xa4b5c3),
-            disabled: rgb(0x8b9ba4),
-            accent: rgb(0x27547b),
-            accent_strong: rgb(0x73b4e4),
-            selection: rgb(0x285783),
-            hover: rgb(0x37545e),
-            row: rgb(0x304855),
-            destructive: rgb(0x542f31),
-            backdrop: rgba(0x00000088),
+            dark,
+            tint,
+            ink: token("--ink"),
+            paper: token("--paper"),
+            blue: token("--blue"),
+            text: token("--text"),
+            text_2: token("--text-2"),
+            text_3: token("--text-3"),
+            fill_hover: token("--fill-hover"),
+            fill_active: token("--fill-active"),
+            fill_subtle: token("--fill-subtle"),
+            line: token("--line"),
+            surface,
+            surface_2: token("--surface-2"),
+            surface_line: token("--surface-line"),
+            selection: token("--selection"),
+            selection_text: token("--selection-text"),
+            focus: token("--focus"),
+            green: token("--green"),
+            amber: token("--amber"),
+            red: token("--red"),
+            agent: token("--agent"),
+            pane_bg: token("--pane-bg"),
+            card: token("--card"),
+            card_line: token("--card-line"),
+            cta: token("--cta"),
+            cta_text: token("--cta-text"),
+            cta_hover: token("--cta-hover"),
+            page: mix(surface, 0.72, tint),
+            backdrop: token("#palette backdrop"),
+            peek_backdrop: token("#peek backdrop"),
+            dialog_backdrop: token(".shell-dialog::backdrop"),
+            selected_chip: token("#palette-results .item.selected .item-icon"),
+            selected_sub: token("#palette-results .item.selected .sub"),
         }
     }
 
-    pub(crate) fn light() -> Self {
-        Self {
-            background: rgb(0xf3f5f7),
-            page: rgb(0xffffff),
-            sidebar: rgb(0xe4e9ed),
-            panel: rgb(0xfbfcfd),
-            surface: rgb(0xd9e1e7),
-            inset: rgb(0xeef2f5),
-            border: rgb(0xb4c2cc),
-            divider: rgb(0xcfd8df),
-            text: rgb(0x1a2227),
-            text_secondary: rgb(0x34434d),
-            muted: rgb(0x4a5862),
-            disabled: rgb(0x7a8791),
-            accent: rgb(0xc4daf0),
-            accent_strong: rgb(0x1f6fb5),
-            selection: rgb(0xb5d3f3),
-            hover: rgb(0xcbd6de),
-            row: rgb(0xd7e0e7),
-            destructive: rgb(0xf3cfd0),
-            backdrop: rgba(0x00000044),
-        }
+    /// The palette of a window with this theme and appearance, whose active Space has
+    /// `space_color`. Incognito windows are always Dark (chromium/shell/flechaApi.ts:23).
+    pub(crate) fn resolve(
+        theme: Theme,
+        appearance: WindowAppearance,
+        incognito: bool,
+        space_color: &str,
+    ) -> Self {
+        let dark = incognito
+            || match theme {
+                Theme::Dark => true,
+                Theme::Light => false,
+                Theme::System => matches!(
+                    appearance,
+                    WindowAppearance::Dark | WindowAppearance::VibrantDark
+                ),
+            };
+        Self::new(dark, space_color)
     }
 
-    /// Dark, with the window and sidebar in the incognito Space's darkened violet.
-    pub(crate) fn incognito() -> Self {
-        Self {
-            background: rgb(crate::incognito::BACKGROUND),
-            sidebar: rgb(crate::incognito::SIDEBAR),
-            ..Self::dark()
-        }
+    pub(crate) fn shadow_row(&self) -> Vec<BoxShadow> {
+        tokens::shadow_row(self.dark)
     }
 
-    /// The palette of a window with this theme and appearance. Incognito windows always look
-    /// incognito.
-    pub(crate) fn resolve(theme: Theme, appearance: WindowAppearance, incognito: bool) -> Self {
-        if incognito {
-            return Self::incognito();
-        }
-        let dark = match theme {
-            Theme::Dark => true,
-            Theme::Light => false,
-            Theme::System => matches!(
-                appearance,
-                WindowAppearance::Dark | WindowAppearance::VibrantDark
-            ),
-        };
-        if dark { Self::dark() } else { Self::light() }
+    pub(crate) fn shadow_pop(&self) -> Vec<BoxShadow> {
+        tokens::shadow_pop(self.dark)
+    }
+
+    /// The letter placeholder of a site without an icon:
+    /// `hsl(var(--hue, 210) 42% 48%)` (ui/styles.css:755).
+    pub(crate) fn letter(hue: u32) -> Rgba {
+        gpui::hsla(hue as f32 / 360., 0.42, 0.48, 1.).into()
     }
 }
 
 thread_local! {
-    static CURRENT: Cell<Palette> = Cell::new(Palette::dark());
+    static CURRENT: Cell<Palette> = Cell::new(Palette::new(false, DEFAULT_TINT));
 }
 
 /// The palette of the window being drawn.
@@ -146,6 +175,27 @@ mod tests {
         WindowAppearance::VibrantDark,
     ];
 
+    /// The Space colours the shipping shell offers (ui/spaceChoices.ts:3).
+    fn space_colors() -> Vec<&'static str> {
+        let source = crate::tokens::tests::source("ui/spaceChoices.ts");
+        let line = source
+            .lines()
+            .find(|line| line.starts_with("export const SPACE_COLORS = ["))
+            .unwrap();
+        line.split('\'').skip(1).step_by(2).collect()
+    }
+
+    /// `foreground` painted over an opaque `background`.
+    fn over(foreground: Rgba, background: Rgba) -> Rgba {
+        let a = foreground.a;
+        Rgba {
+            r: foreground.r * a + background.r * (1. - a),
+            g: foreground.g * a + background.g * (1. - a),
+            b: foreground.b * a + background.b * (1. - a),
+            a: 1.,
+        }
+    }
+
     /// WCAG 2.x contrast ratio.
     fn contrast(a: Rgba, b: Rgba) -> f32 {
         let luminance = |color: Rgba| {
@@ -162,25 +212,64 @@ mod tests {
         (a.max(b) + 0.05) / (a.min(b) + 0.05)
     }
 
-    #[test]
-    fn light_muted_text_reads_on_every_light_background() {
-        let light = Palette::light();
-        for (name, background) in [
-            ("background", light.background),
-            ("page", light.page),
-            ("sidebar", light.sidebar),
-            ("panel", light.panel),
-            ("surface", light.surface),
-            ("inset", light.inset),
-            ("accent", light.accent),
-            ("selection", light.selection),
-            ("hover", light.hover),
-            ("row", light.row),
-            ("destructive", light.destructive),
+    /// Every opaque ground text sits on, in either theme and for every offered Space colour.
+    fn grounds(dark: bool) -> Vec<(String, Rgba)> {
+        let mut grounds = Vec::new();
+        for space in space_colors() {
+            let palette = Palette::new(dark, space);
+            grounds.push((format!("tint {space}"), palette.tint));
+            grounds.push((
+                format!("selected row on {space}"),
+                over(palette.fill_active, palette.tint),
+            ));
+            grounds.push((format!("page {space}"), palette.page));
+        }
+        let palette = Palette::new(dark, DEFAULT_TINT);
+        for (name, ground) in [
+            ("surface", palette.surface),
+            ("surface-2", palette.surface_2),
+            ("pane-bg", palette.pane_bg),
+            ("card", palette.card),
         ] {
-            // WCAG AA for body text.
-            let ratio = contrast(light.muted, background);
-            assert!(ratio >= 4.5, "muted on {name} is {ratio:.2}:1");
+            grounds.push((name.to_owned(), ground));
+        }
+        grounds
+    }
+
+    #[test]
+    fn body_text_reads_on_every_ground() {
+        for dark in [false, true] {
+            let palette = Palette::new(dark, DEFAULT_TINT);
+            for (name, ground) in grounds(dark) {
+                // WCAG AA for body text.
+                let ratio = contrast(over(palette.text, ground), ground);
+                assert!(ratio >= 4.5, "dark {dark}: text on {name} is {ratio:.2}:1");
+            }
+        }
+    }
+
+    /// The shipping `--text-2` is lighter than AA body text on the pastel tints (3.9:1 on the
+    /// default one), so it gets WCAG AA's large-text and non-text minimum here.
+    #[test]
+    fn secondary_text_meets_the_large_text_minimum() {
+        for dark in [false, true] {
+            let palette = Palette::new(dark, DEFAULT_TINT);
+            for (name, ground) in grounds(dark) {
+                let ratio = contrast(over(palette.text_2, ground), ground);
+                assert!(ratio >= 3., "dark {dark}: text-2 on {name} is {ratio:.2}:1");
+            }
+        }
+    }
+
+    #[test]
+    fn selected_text_reads_on_the_selection() {
+        // WCAG 2.2 1.4.3 asks 4.5:1 of body text. The shipping Dark selection, `#fff` on
+        // `#2b7fc4` (ui/tokens.css:55, 110), reaches 4.25:1: the rewrite keeps the shipping
+        // value, and this test holds Light to 4.5:1 and Dark to the large-text 3:1.
+        for (dark, minimum) in [(false, 4.5), (true, 3.)] {
+            let palette = Palette::new(dark, DEFAULT_TINT);
+            let ratio = contrast(palette.selection_text, palette.selection);
+            assert!(ratio >= minimum, "dark {dark}: {ratio:.2}:1");
         }
     }
 
@@ -188,64 +277,73 @@ mod tests {
     fn dark_and_light_ignore_the_system_appearance() {
         for appearance in APPEARANCES {
             assert_eq!(
-                Palette::resolve(Theme::Dark, appearance, false),
-                Palette::dark()
+                Palette::resolve(Theme::Dark, appearance, false, DEFAULT_TINT),
+                Palette::new(true, DEFAULT_TINT)
             );
             assert_eq!(
-                Palette::resolve(Theme::Light, appearance, false),
-                Palette::light()
+                Palette::resolve(Theme::Light, appearance, false, DEFAULT_TINT),
+                Palette::new(false, DEFAULT_TINT)
             );
         }
     }
 
     #[test]
     fn system_follows_the_window_appearance() {
-        for (appearance, expected) in [
-            (WindowAppearance::Light, Palette::light()),
-            (WindowAppearance::VibrantLight, Palette::light()),
-            (WindowAppearance::Dark, Palette::dark()),
-            (WindowAppearance::VibrantDark, Palette::dark()),
+        for (appearance, dark) in [
+            (WindowAppearance::Light, false),
+            (WindowAppearance::VibrantLight, false),
+            (WindowAppearance::Dark, true),
+            (WindowAppearance::VibrantDark, true),
         ] {
             assert_eq!(
-                Palette::resolve(Theme::System, appearance, false),
-                expected,
+                Palette::resolve(Theme::System, appearance, false, DEFAULT_TINT).dark,
+                dark,
                 "{appearance:?}"
             );
         }
     }
 
     #[test]
-    fn incognito_keeps_its_violet_palette_under_every_theme() {
-        let incognito = Palette::incognito();
-        assert_eq!(incognito.background, rgb(crate::incognito::BACKGROUND));
-        assert_eq!(incognito.sidebar, rgb(crate::incognito::SIDEBAR));
+    fn incognito_is_dark_in_its_space_tint_under_every_theme() {
+        let incognito = Palette::new(true, crate::incognito::SPACE_COLOR);
+        // spaceTint('#ddd5f3', true) is #323645.
+        assert_eq!(incognito.tint, parse_color("#323645").unwrap());
         for theme in [Theme::System, Theme::Light, Theme::Dark] {
             for appearance in APPEARANCES {
-                assert_eq!(Palette::resolve(theme, appearance, true), incognito);
+                assert_eq!(
+                    Palette::resolve(theme, appearance, true, crate::incognito::SPACE_COLOR),
+                    incognito
+                );
             }
         }
     }
 
     #[test]
-    fn the_palettes_differ_where_the_window_shows_them() {
-        let (dark, light) = (Palette::dark(), Palette::light());
-        for (name, dark, light) in [
-            ("background", dark.background, light.background),
-            ("sidebar", dark.sidebar, light.sidebar),
-            ("panel", dark.panel, light.panel),
-            ("text", dark.text, light.text),
-            ("muted", dark.muted, light.muted),
-            ("accent", dark.accent, light.accent),
-        ] {
-            assert_ne!(dark, light, "{name}");
-        }
+    fn the_sidebar_wears_the_space_tint() {
+        assert_eq!(
+            Palette::new(false, "#f5e7c4").tint,
+            parse_color("#f5e7c4").unwrap()
+        );
+        assert_ne!(
+            Palette::new(false, "#f5e7c4").tint,
+            Palette::new(true, "#f5e7c4").tint
+        );
+        assert_eq!(
+            tokens::css(tokens::COLORS, "#sidebar (no Space colour)", false),
+            DEFAULT_TINT
+        );
+        // A colour the shell cannot use falls back to the shipping default.
+        assert_eq!(
+            Palette::new(false, "teal").tint,
+            parse_color(DEFAULT_TINT).unwrap()
+        );
     }
 
     #[test]
     fn a_window_draws_with_the_palette_it_set() {
-        draw_with(Palette::light());
-        assert_eq!(palette(), Palette::light());
-        draw_with(Palette::incognito());
-        assert_eq!(palette(), Palette::incognito());
+        draw_with(Palette::new(false, "#f5e7c4"));
+        assert_eq!(palette(), Palette::new(false, "#f5e7c4"));
+        draw_with(Palette::new(true, DEFAULT_TINT));
+        assert_eq!(palette(), Palette::new(true, DEFAULT_TINT));
     }
 }

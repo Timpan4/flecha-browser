@@ -1,12 +1,14 @@
 use std::ops::Range;
 
 use gpui::{
-    App, ClipboardItem, Div, Keystroke, ParentElement as _, Styled as _, div,
-    prelude::FluentBuilder as _, px,
+    App, ClipboardItem, Div, FontWeight, Keystroke, ParentElement as _, Styled as _, div,
+    prelude::FluentBuilder as _, px, relative,
 };
 use unicode_segmentation::UnicodeSegmentation as _;
 
 use crate::theme::palette;
+use crate::tokens;
+use crate::view::hairline;
 
 #[derive(Default)]
 pub(crate) struct TextField {
@@ -177,6 +179,7 @@ impl TextField {
 
     pub(crate) fn render(&self, placeholder: &'static str) -> Div {
         if self.multiline {
+            // `.env-targets` (ui/settings.css:405-417).
             let mut offset = 0;
             return div()
                 .flex()
@@ -184,11 +187,13 @@ impl TextField {
                 .gap_0()
                 .min_w_0()
                 .overflow_hidden()
-                .px_3()
-                .py_2()
-                .rounded_md()
-                .bg(palette().inset)
-                .font_family("monospace")
+                .px(px(tokens::MULTILINE_PAD_X))
+                .py(px(tokens::MULTILINE_PAD_Y))
+                .rounded(px(tokens::RADIUS_MD))
+                .bg(palette().surface_2)
+                .font_family(tokens::MONO)
+                .text_size(px(tokens::MULTILINE_TEXT))
+                .line_height(relative(tokens::MULTILINE_LINE_HEIGHT))
                 .children(self.text.split('\n').map(|line| {
                     let end = offset + line.len();
                     let rendered = self.render_line(offset..end);
@@ -196,23 +201,26 @@ impl TextField {
                     rendered
                 }))
                 .when(self.text.is_empty(), |field| {
-                    field.child(div().text_color(palette().muted).child(placeholder))
+                    field.child(div().text_color(palette().text_3).child(placeholder))
                 });
         }
+        // `.text-field` (ui/styles.css:1434-1448).
         let field = div()
             .flex()
             .items_center()
             .min_w_0()
             .overflow_hidden()
             .whitespace_nowrap()
-            .px_3()
-            .py_2()
-            .rounded_md()
-            .bg(palette().inset);
+            .h(px(tokens::TEXT_FIELD))
+            .px(px(tokens::TEXT_FIELD_PAD))
+            .rounded(px(tokens::RADIUS_MD))
+            .bg(palette().surface_2)
+            .shadow(vec![hairline(palette().surface_line)])
+            .font_weight(FontWeight::MEDIUM);
         if self.text.is_empty() {
             return field
                 .child(caret())
-                .child(div().ml_1().text_color(palette().muted).child(placeholder));
+                .child(div().ml_1().text_color(palette().text_3).child(placeholder));
         }
         field.child(self.render_line(0..self.text.len()))
     }
@@ -224,7 +232,7 @@ impl TextField {
         let has_caret = line.contains(&self.cursor) || self.cursor == line.end;
         let selected = div()
             .flex_shrink_0()
-            .bg(palette().selection)
+            .bg(palette().focus)
             .child(self.text[start..end].to_owned());
         div()
             .flex()
@@ -244,10 +252,11 @@ impl TextField {
     }
 }
 
+/// The insertion point, in the text's colour as Chromium draws an unstyled input's caret.
 fn caret() -> Div {
     div()
         .w(px(1.))
         .h(px(16.))
         .flex_shrink_0()
-        .bg(palette().accent_strong)
+        .bg(palette().text)
 }

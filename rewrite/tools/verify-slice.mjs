@@ -19,7 +19,7 @@ const stepTimeoutMs = 10_000;
 const shippingTrace = readFileSync(new URL('./slice-ts-replay.jsonl', import.meta.url), 'utf8')
   .trim().split('\n').map(line => JSON.parse(line));
 
-assert(['slice', 'open', 'focus', 'popups', 'adblock', 'incognito', 'fullscreen', 'break-restore', 'clipboard'].includes(mode), 'unknown slice check');
+assert(['slice', 'open', 'focus', 'popups', 'adblock', 'incognito', 'fullscreen', 'break-restore', 'clipboard', 'visual'].includes(mode), 'unknown slice check');
 
 const easylist = '[Adblock Plus 2.0]\n! Title: EasyList\n/fixture-ad$xmlhttprequest\n';
 const easyprivacy = '[Adblock Plus 2.0]\n! Title: EasyPrivacy\n/fixture-tracker$xmlhttprequest\n';
@@ -197,49 +197,50 @@ function paneMismatch(path, geometry, ratio, colors) {
 
   const pixel = (x, y) => pixels.readUIntBE((y * width + x) * 3, 3);
   const [left, right] = colors.map(color => Number.parseInt(color.slice(1), 16));
-  // The Dark and Light palettes' sidebars (flecha-ui/src/theme.rs). The default
+  // The default Space's tint in Dark and Light (flecha-ui/src/theme.rs). The default
   // System theme follows the desktop's appearance, which GPUI reads as Light on
   // this session's private bus, where no desktop portal answers.
-  const sidebars = [0x202a30, 0xe4e9ed];
-  // The sidebar's first row starts below the command bar. Its padding
-  // leaves this entire row solid, so both chrome edges come from the
-  // screenshot independently of the page layout.
+  const sidebars = [0x2f3746, 0xcdd9f7];
+  // The page area sits kFlechaGap in from the window's top, right and bottom and flush with
+  // the docked sidebar (patch 0010); split panes keep kFlechaSplitGap between them and share
+  // the rest by the ratio (patch 0019).
+  const pageGap = 8;
+  const splitGap = 8;
+  // Each card's page shadow (patch 0041: 4px down, 14px blur) shades its neighbour's edge.
+  // GPUI's blur fades out by about twice its radius, so pane colours are exact only past that.
+  const shadow = 4 + 2 * 14;
   const [windowX, windowY, windowWidth, windowHeight] = geometry;
-  const origin = Math.max(0, windowX);
-  const end = Math.min(width, windowX + windowWidth);
-  const bottom = Math.min(height, windowY + windowHeight);
-  let top = Math.max(0, windowY);
+  const middle = windowY + Math.floor(windowHeight / 2);
 
-  while (top < bottom && !sidebars.includes(pixel(origin, top))) top++;
+  if (!sidebars.includes(pixel(windowX + 2, middle))) return 'could not locate the sidebar';
 
-  if (top >= bottom) return 'could not locate the sidebar';
+  let pageLeft = windowX;
 
-  const sidebar = pixel(origin, top);
+  while (pageLeft < windowX + windowWidth && pixel(pageLeft, middle) !== left) pageLeft++;
 
-  let edge = origin;
+  if (pageLeft >= windowX + windowWidth) return 'could not locate the left pane';
 
-  while (edge < end && pixel(edge, top) === sidebar) edge++;
-
-  if (edge >= end) return 'could not locate the page area';
-
-  // The split has no gutters or borders. A fractional boundary can
-  // rasterize either way in the single column it crosses.
-  const boundary = edge + (windowX + windowWidth - edge) * ratio;
-  const leftEnd = Math.floor(boundary);
-  const rightStart = Math.ceil(boundary);
+  const pageTop = windowY + pageGap;
+  const pageBottom = windowY + windowHeight - pageGap;
+  const pageRight = windowX + windowWidth - pageGap;
+  // Fractional edges rasterize either way in the one column or row they cross.
+  const leftEnd = pageLeft + (pageRight - pageLeft - splitGap) * ratio;
+  const rightStart = leftEnd + splitGap;
+  const inside = (x, y, x0, x1) => x >= x0 - 1 && x < x1 + 1 && y >= pageTop - 1 && y < pageBottom + 1;
+  const solid = (x, y, x0, x1) => x >= x0 + shadow && x < x1 - shadow && y >= pageTop + shadow && y < pageBottom - shadow;
 
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const actual = pixel(x, y);
-      let matches = actual !== left && actual !== right;
+      const where = `in ${width}×${height}, panes ${pageLeft}–${leftEnd.toFixed(1)} and ${rightStart.toFixed(1)}–${pageRight}, rows ${pageTop}–${pageBottom}`;
 
-      if (y >= top && y < bottom && x >= edge && x < end) {
-        matches = x < leftEnd ? actual === left : x >= rightStart ? actual === right : actual === left || actual === right;
-      }
+      if (actual === left && !inside(x, y, pageLeft, leftEnd)) return `left pane colour outside its pane at (${x}, ${y}) ${where}`;
 
-      if (!matches) {
-        return `unexpected #${actual.toString(16)} at (${x}, ${y}) in ${width}×${height}, page starts at (${edge}, ${top}) and splits at ${boundary}`;
-      }
+      if (actual === right && !inside(x, y, rightStart, pageRight)) return `right pane colour outside its pane at (${x}, ${y}) ${where}`;
+
+      if (solid(x, y, pageLeft, leftEnd) && actual !== left) return `unexpected #${actual.toString(16)} at (${x}, ${y}) in the left pane ${where}`;
+
+      if (solid(x, y, rightStart, pageRight) && actual !== right) return `unexpected #${actual.toString(16)} at (${x}, ${y}) in the right pane ${where}`;
     }
   }
 }
@@ -367,26 +368,22 @@ async function nativeContextMenu(app) {
 
   assert(Number.isFinite(x) && Number.isFinite(y), 'missing page marker');
 
-  const histogram = path => execFileSync('magick', [path, '-format', '%c', 'histogram:info:'], { encoding: 'utf8' });
-  // The menu's border (theme.rs border, Dark or Light): Theme::System follows Xvfb's Light
-  // appearance. Only a colour the window did not already show marks the menu.
-  const shownBefore = histogram(join(out, 'open.png'));
-  const borders = ['#405863', '#B4C2CC'].filter(color => !shownBefore.includes(color));
+  // The menu opens at the click, over the page's yellow marker. A point inside it, past its 8px
+  // corner radius and 5px padding, shows `--surface` (ui/tokens.css:51, 107) while it is open:
+  // Theme::System follows Xvfb's Light appearance, Dark is accepted too.
+  const probe = [x + 20, y + 12];
+  const pixel = path => execFileSync('magick', [path, '-format', `%[hex:p{${probe[0]},${probe[1]}}]`, 'info:'], { encoding: 'utf8' }).trim().slice(0, 6).toUpperCase();
+  const surfaces = ['FFFFFF', '161E2B'];
 
-  assert(borders.length, 'the window already shows both menu border colours');
+  assert.equal(pixel(join(out, 'open.png')), 'FFCC49', 'the menu probe is not on the page marker');
   execFileSync(x11Driver, ['right-click', x + 1, y + 1]);
   await app.present();
   await captureUntil('page-context-menu', 'root', path =>
-    borders.some(color => histogram(path).includes(color)) ? undefined : 'the menu border is missing');
+    surfaces.includes(pixel(path)) ? undefined : `the menu surface is missing (${pixel(path)})`);
   execFileSync(x11Driver, ['key', 'Escape']);
   await app.present();
-  await captureUntil('page-context-menu-dismissed', 'root', path => {
-    const colors = histogram(path);
-
-    if (borders.some(color => colors.includes(color))) return 'menu border is still visible';
-
-    if (!colors.includes('#FFCC49')) return 'page is missing';
-  });
+  await captureUntil('page-context-menu-dismissed', 'root', path =>
+    pixel(path) === 'FFCC49' ? undefined : `the page marker is still covered (${pixel(path)})`);
   pass('right-click opened the GPUI page menu and Escape dismissed it');
 }
 
@@ -449,15 +446,19 @@ async function sidebarFocus(app, left) {
   await app.present();
   await capture('focus-left', ['#147A70', '#FFCC49']);
 
-  // Xvfb fixture geometry with one Space and the Site Controls row visible.
+  // Xvfb fixture geometry with one Space, measured from the focus-left capture: the page, then
+  // pane B's row (centred at y 235, ending at x 256) and its Split button, which sits left of
+  // the 22px menu and close buttons with the row's 10px gaps and 6px right padding
+  // (ui/styles.css:582, 586, 631).
   execFileSync(x11Driver, ['click', 340, 110]);
-  execFileSync(x11Driver, ['click', 235, 228]);
+  execFileSync(x11Driver, ['click', 169, 235]);
   const split = await waitForSelection(app, right, 'sidebar Split selected pane B');
 
   assert.deepEqual(active(split).split, [left, right]);
   await keyDelivery(app, { A: left, B: right }, 'y', 'sidebar split', 'B');
 
-  execFileSync(x11Driver, ['click', 95, 265]);
+  // Pane A's row title, one 32px row plus its 2px margins further down.
+  execFileSync(x11Driver, ['click', 95, 269]);
   await waitForSelection(app, left, 'sidebar selected pane A');
   await keyDelivery(app, { A: left, B: right }, 'z', 'sidebar select', 'A');
 
@@ -491,11 +492,12 @@ async function managerFocus(app, left, right) {
   execFileSync(x11Driver, ['chord', 'Control_L', 'comma']);
   await app.present();
 
-  const [x, y, width] = execFileSync(x11Driver, ['geometry', 'Flecha'], { encoding: 'utf8' })
+  const [x, y] = execFileSync(x11Driver, ['geometry', 'Flecha'], { encoding: 'utf8' })
     .trim().split(' ').map(Number);
 
-  // The fifth tab in the centered GPUI Settings panel on the Xvfb fixture.
-  execFileSync(x11Driver, ['click', Math.round(x + width / 2 + 5), y + 105]);
+  // Tabs & Spaces, the second item in the Settings nav column beside the sidebar: General's
+  // highlight spans y 62-91 in the visual capture, and items sit 2px apart (ui/settings.css:56).
+  execFileSync(x11Driver, ['click', x + 360, y + 108]);
   // The selected Settings tab's accent (theme.rs accent_strong), Dark or Light: Theme::System
   // follows Xvfb's Light appearance.
   await captureUntil('tabs-spaces-manager', 'root', path => {
@@ -547,12 +549,13 @@ async function restoreSpaces(app, left, path = '/open') {
   await app.present();
   execFileSync('magick', ['import', '-window', 'root', join(out, 'restore-spaces-prompt.png')]);
 
-  const [x, y, width] = execFileSync(x11Driver, ['geometry', 'Flecha'], { encoding: 'utf8' })
+  const [x, y] = execFileSync(x11Driver, ['geometry', 'Flecha'], { encoding: 'utf8' })
     .trim().split(' ').map(Number);
 
-  // The Restore button below the question in the centered Settings panel.
+  // The Restore button on the Import pane's message card, beside Cancel, measured from the
+  // restore-spaces-prompt capture: the pane starts right of the sidebar and the Settings nav.
   const after = app.events.length;
-  execFileSync(x11Driver, ['click', Math.round(x + (width - 680) / 2 + 115), y + 229]);
+  execFileSync(x11Driver, ['click', x + 629, y + 143]);
   await app.loaded(left, path, after);
   const restored = await app.command('snapshot');
   assert.deepEqual(restored.core.spaces, before.core.spaces);
@@ -662,7 +665,7 @@ async function openTab(app, path) {
 // or a tab switch ends it. Xvfb runs no window manager, so the native fullscreen request has
 // no effect here and the window keeps its size.
 async function pageFullscreen(app, main, other) {
-  const sidebars = ['#202A30', '#E4E9ED'];
+  const sidebars = ['#2F3746', '#CDD9F7'];
   const page = ['#147A70', '#FFCC49'];
   const tab = await openTab(app, '/fullscreen');
   const histogram = path => execFileSync('magick', [path, '-format', '%c', 'histogram:info:'], { encoding: 'utf8' });
@@ -841,7 +844,7 @@ async function incognitoChecks(app, main) {
   assert(Object.values(running.core.tabs).every(tab => !tab.url.includes(privateJar)),
     'an incognito tab reached the regular state');
   await app.present(first.window);
-  await capture('incognito', ['#2A2338', '#147A70'], 'Flecha Incognito');
+  await capture('incognito', ['#323645', '#147A70'], 'Flecha Incognito');
   pass('the incognito window drew its violet sidebar beside the page');
 
   const closed = await app.command('close_window', { window: first.window });
@@ -1218,6 +1221,121 @@ async function closeWithPopup(app) {
   pass(`closing the last Flecha window with a popup and a beforeunload page open closed all ${open.liveBrowsers} CEF browsers and quit`);
 }
 
+/**
+ * Captures each chrome surface in Light and Dark for the visual parity pass: the sidebar with
+ * pinned, folder, favorite and Today tabs, then each overlay over it. Captures land beside the
+ * run's logs as `visual-<surface>-<theme>.png`, cropped to the window.
+ */
+async function visualParity(app, left) {
+  for (const path of ['/split', '/peek', '/opener']) {
+    const opened = await app.command('open', { url: base + path });
+    await app.loaded(active(opened).activeTabId, path);
+  }
+
+  let state = await app.command('new_folder', { name: 'Reading' });
+  const space = win(state).activeSpaceId;
+  const records = state.core.spaces.find(candidate => candidate.id === space).pinnedFlat;
+  const folder = records.find(record => record.name === 'Reading').id;
+  const [newest, second, third] = active(state).today;
+  await app.command('pin', { tab: third, folder });
+  await app.command('pin', { tab: second });
+  await app.command('favorite', { tab: left });
+  await app.command('new_space');
+  await app.command('switch', { space });
+  state = await app.command('select', { tab: newest });
+  assert.equal(active(state).activeTabId, newest);
+
+  const shot = async (name, window = 'Flecha') => {
+    await app.present();
+    // GPUI's animations (popovers rise in --medium, 200ms) settle before the capture.
+    await delay(400);
+    await app.present();
+
+    const [x, y, width, height] = execFileSync(x11Driver, ['geometry', window], { encoding: 'utf8' })
+      .trim().split(' ').map(Number);
+
+    const full = join(out, `${name}-root.png`);
+    execFileSync('magick', ['import', '-window', 'root', full]);
+    const cropped = join(out, `${name}.png`);
+    execFileSync('magick', [full, '-crop', `${width}x${height}+${x}+${y}`, '+repage', cropped]);
+
+    // isolated-run.sh binds FLECHA_VISUAL_OUT here; the scratch directory goes when the run passes.
+    if (existsSync('/mnt/visual')) copyFileSync(cropped, join('/mnt/visual', `${name}.png`));
+  };
+
+  const geometry = () => execFileSync(x11Driver, ['geometry', 'Flecha'], { encoding: 'utf8' })
+    .trim().split(' ').map(Number);
+
+  const key = (...keys) => execFileSync(x11Driver, keys.length > 1 ? ['chord', ...keys] : ['key', keys[0]]);
+  const click = (x, y) => execFileSync(x11Driver, ['click', Math.round(x), Math.round(y)]);
+
+  for (const theme of ['light', 'dark']) {
+    await app.command('theme', { theme });
+    execFileSync(x11Driver, ['focus', 'Flecha']);
+    const [x, y, width, height] = geometry();
+    // Away from the sidebar's controls, so no row shows its hover state.
+    click(x + width - 40, y + height - 40);
+    await shot(`visual-sidebar-${theme}`);
+
+    key('Control_L', 'l');
+    await shot(`visual-command-bar-${theme}`);
+    key('Escape');
+
+    key('Control_L', 'comma');
+    await shot(`visual-settings-${theme}`);
+    key('Escape');
+
+    key('Control_L', 'h');
+    await shot(`visual-history-${theme}`);
+    key('Escape');
+
+    key('Control_L', 'f');
+    await shot(`visual-find-${theme}`);
+    key('Escape');
+
+    key('Control_L', 'equal');
+    await shot(`visual-zoom-${theme}`);
+    key('Control_L', '0');
+
+    // Near the page's left edge, so the menu opens to the right without clipping.
+    execFileSync(x11Driver, ['right-click', x + 260 + 120, y + 200]);
+    await shot(`visual-context-menu-${theme}`);
+    key('Escape');
+
+    // The footer's Downloads button: the sidebar's left and bottom padding, then half the
+    // 28px icon button (ui/styles.css:32, 136).
+    click(x + 10 + 14, y + height - 8 - 14);
+    await shot(`visual-downloads-${theme}`);
+    key('Escape');
+
+    // The address's site controls button: right of the 36px address, inside its 4px padding
+    // and the sidebar's 6px (ui/styles.css:32, 177-178, 203).
+    click(x + 260 - 6 - 4 - 13, y + 10 + 28 + 8 + 18);
+    await shot(`visual-site-controls-${theme}`);
+    key('Escape');
+
+    await app.command('peek', { url: base + '/peek' });
+    await shot(`visual-peek-${theme}`);
+    await app.command('close_peek');
+
+    await app.command('split', { url: base + '/split' });
+    await shot(`visual-split-${theme}`);
+    await app.command('close');
+    await app.command('select', { tab: newest });
+
+    const [{ window: mini }] = (await app.command('detach')).flechinhas;
+    await shot(`visual-flechinha-${theme}`, 'Flechinha');
+    const returned = await app.command('return', { window: mini });
+    await app.command('select', { tab: active(returned).activeTabId });
+  }
+
+  const { window: incognito } = await openIncognito(app);
+  await app.command('open', { url: base + '/open', window: incognito });
+  await shot('visual-incognito-dark', 'Flecha Incognito');
+  await app.command('close_window', { window: incognito });
+  pass('captured each chrome surface in Light and Dark');
+}
+
 const apps = [];
 
 function launch(name, fixturePort) {
@@ -1336,6 +1454,9 @@ async function verifySlice() {
     await incognitoChecks(app, main);
   } else if (mode === 'fullscreen') {
     await pageFullscreen(app, main, left);
+  } else if (mode === 'visual') {
+    await visualParity(app, left);
+    await app.quit();
   } else if (mode !== 'open') {
     const publicUrl = base.replace('127.0.0.1', 'localtest.me') + '/open';
     const attempted = await app.command('peek', { url: publicUrl });
