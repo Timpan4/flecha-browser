@@ -701,3 +701,34 @@ fn jwt_privacy_decodes_percent_escaped_fullwidth_percent_as_an_escape() {
     assert!(!suggestable(&token));
     assert!(!suggestable(&format!("note {token}")));
 }
+
+#[test]
+fn padded_credentials_with_single_label_hosts_and_tails_stay_local() {
+    for query in [
+        "user@ intranet/private",
+        "user @intranet/private",
+        "user@\u{feff}intranet/private",
+        "user@\u{feff}intranet",
+        "user@\u{200b}intranet",
+        "user@ intranet?token=x",
+        "user@ intranet#x",
+        "admin@ nas/share/secret",
+        "mdn user@ intranet/private",
+        "mdn user@\u{feff}intranet/private",
+        "mdn user@\u{feff}intranet",
+    ] {
+        assert_eq!(
+            resolve_input(query, SearchEngine::Google),
+            Target::Invalid,
+            "{query:?}"
+        );
+        assert!(
+            SearchEngine::Google.suggestion_url(query).is_none(),
+            "{query:?}"
+        );
+        assert!(
+            developer_suggestions(query, None, &[], 0).is_empty(),
+            "{query:?}"
+        );
+    }
+}
