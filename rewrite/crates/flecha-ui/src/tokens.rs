@@ -505,6 +505,14 @@ pub(crate) fn page_shadow(dark: bool) -> Vec<BoxShadow> {
 /// The first family of `--mono` (ui/tokens.css:66), which ships with the shell.
 pub(crate) const MONO: &str = "JetBrains Mono";
 
+/// The named families of `--font` (ui/tokens.css:65), in order. Its `-apple-system` and
+/// `BlinkMacSystemFont` keywords and the generic `sans-serif` have no family name GPUI can load.
+pub(crate) const FONT: &[&str] = &["SF Pro Text", "Inter"];
+
+/// Chromium's Linux `sans-serif` family (chrome/app/resources/locale_settings_linux.grd:169-171,
+/// Chromium 158), which fontconfig then substitutes with an installed face.
+pub(crate) const LINUX_SANS_SERIF: &str = "Arial";
+
 /// The `--ease` curve, `cubic-bezier(0.2, 0.8, 0.2, 1)` (ui/tokens.css:90).
 pub(crate) const EASE: (f32, f32, f32, f32) = (0.2, 0.8, 0.2, 1.);
 
@@ -914,6 +922,14 @@ pub(crate) mod tests {
     fn page_geometry_follows_the_frame_patches() {
         assert!(line("ui/tokens.css", 86).contains("calc(var(--window-radius) - 8px)"));
         assert!(line("ui/tokens.css", 66).contains(&format!("--mono: '{MONO}',")));
+        let font = FONT
+            .iter()
+            .map(|name| format!("'{name}'"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        assert!(
+            line("ui/tokens.css", 65).contains(&format!("BlinkMacSystemFont, {font}, sans-serif"))
+        );
         assert_eq!(PAGE_RADIUS, 12.);
         let shadow = source("../patches/0041-page-area-shadow.patch");
         for expected in [

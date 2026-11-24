@@ -484,6 +484,7 @@ impl Render for Shell {
             // text is `font: 400 var(--text-md) / 1.35` (ui/styles.css:17).
             .bg(palette().tint)
             .text_color(palette().text)
+            .when_some(ui_font(cx), |main, font| main.font_family(font))
             .text_size(px(tokens::TEXT_MD))
             .line_height(relative(tokens::LINE_HEIGHT))
             .on_key_down(cx.listener(|this, event, window, cx| this.key(event, window, cx)))
@@ -1395,6 +1396,29 @@ pub(crate) fn danger_button(
         .cursor_pointer()
         .hover(|style| style.bg(palette().fill_hover))
         .child(name.into())
+}
+
+/// The first `--font` family installed here. Without one the shipping shell lands on
+/// `sans-serif`, which Chromium on Linux draws in fontconfig's match for its default sans-serif
+/// family, Arial; GPUI loads only named families, so this asks fontconfig the same question.
+/// Without fontconfig, GPUI's own UI font.
+fn ui_font(cx: &gpui::App) -> Option<gpui::SharedString> {
+    static FONT: std::sync::OnceLock<Option<gpui::SharedString>> = std::sync::OnceLock::new();
+    FONT.get_or_init(|| {
+        let installed = cx.text_system().all_font_names();
+        let is_installed = |name: &str| installed.iter().any(|family| family == name);
+        if let Some(name) = tokens::FONT.iter().find(|name| is_installed(name)) {
+            return Some(gpui::SharedString::new_static(name));
+        }
+        let matched = std::process::Command::new("fc-match")
+            .args(["--format=%{family[0]}", tokens::LINUX_SANS_SERIF])
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .and_then(|output| String::from_utf8(output.stdout).ok())?;
+        is_installed(&matched).then(|| matched.into())
+    })
+    .clone()
 }
 
 /// `isDevUrl` (ui/app.ts:611-619): a local or test host, which the address marks with a code
