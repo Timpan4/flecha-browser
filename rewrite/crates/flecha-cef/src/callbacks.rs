@@ -228,7 +228,10 @@ wrap_render_handler! {
                     }
                     self.slot.paint_changed();
                 }
-                Err(_) => self.slot.emit(Event::PaintFailed),
+                Err(error) => {
+                    eprintln!("CEF {kind:?} frame copy ({width}x{height}): {error:#}");
+                    self.slot.emit(Event::PaintFailed);
+                }
             }
         }
     }
