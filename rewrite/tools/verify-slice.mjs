@@ -1461,21 +1461,14 @@ async function pageFullscreen(app, main, other) {
 
   const native = () => app.command('native_fullscreen', { window: main });
 
-  // Every _NET_WM_STATE fullscreen request Flecha sends, as a window manager would receive it.
-  const listener = spawn(x11Driver, ['wm-requests'], { stdio: ['ignore', 'pipe', 'inherit'] });
-  const requests = [];
+  const wm = await windowManagerRequests();
 
-  const listening = new Promise(resolve => {
-    createInterface({ input: listener.stdout }).on('line', line => {
-      if (line === 'ready') resolve();
-      else if (line.endsWith(' _NET_WM_STATE_FULLSCREEN')) requests.push(line);
-    });
-  });
-
-  await listening;
-
+  // GPUI sends each fullscreen request as a checked request, so the server has it before the
+  // frame that sent it ends. A frame later, the marker follows every request this step sent.
   const requestsAre = async (label, count) => {
-    await poll(`${label}: ${count} native fullscreen requests`, () => requests.length >= count);
+    await app.present(main);
+    const requests = await wm.drained();
+
     assert.equal(requests.length, count, `${label}: native fullscreen requests ${JSON.stringify(requests)}`);
   };
 
@@ -1633,8 +1626,52 @@ async function pageFullscreen(app, main, other) {
   await ended('Esc beside the sidebar', after);
   await requestsAre('Esc beside the sidebar', 8);
   pass('Esc ended fullscreen beside the sidebar');
-  listener.kill();
   await app.quit();
+}
+
+// Every _NET_WM_STATE fullscreen request a client sends, as a window manager would receive it.
+// The run's final cleanup stops the listener.
+async function windowManagerRequests() {
+  const listener = spawn(x11Driver, ['wm-requests'], { stdio: ['ignore', 'pipe', 'inherit'] });
+
+  listeners.push(listener);
+
+  const requests = [];
+  const marks = new Map();
+  let ready;
+  const listening = new Promise(resolve => { ready = resolve; });
+
+  const gone = new Promise((_, reject) => {
+    listener.on('error', reject);
+    listener.on('exit', (code, signal) => reject(new Error(`the wm-requests listener exited (${code ?? signal})`)));
+  });
+
+  gone.catch(() => {}); // The final cleanup's kill rejects it after the last wait.
+
+  createInterface({ input: listener.stdout }).on('line', line => {
+    const [first, ...rest] = line.split(' ');
+
+    if (line === 'ready') ready();
+    else if (first === 'mark') marks.get(rest[0])?.();
+    else if (rest.includes('_NET_WM_STATE_FULLSCREEN')) requests.push(line);
+  });
+  await Promise.race([listening, gone]);
+
+  let mark = 0;
+
+  return {
+    // The requests the server received before this call, once the listener has printed them all.
+    async drained() {
+      mark += 1;
+
+      const seen = new Promise(resolve => marks.set(String(mark), resolve));
+
+      execFileSync(x11Driver, ['mark', String(mark)]);
+      await Promise.race([seen, gone]);
+
+      return [...requests];
+    },
+  };
 }
 
 // The tab row's status marks as ui/app.ts:543-590 draws them: the icon the page declares once it
@@ -3007,6 +3044,7 @@ async function surfaces(app) {
 }
 
 const apps = [];
+const listeners = [];
 
 function launch(name, fixturePort) {
   const app = browser(name, fixturePort);
@@ -3850,6 +3888,9 @@ try {
   process.exitCode = 1;
 } finally {
   for (const app of apps) app.release();
+
+  for (const listener of listeners) listener.kill();
+
   site.server.closeAllConnections();
   site.server.close();
 }
