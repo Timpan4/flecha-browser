@@ -17,6 +17,7 @@ use gpui::{
     deferred, div, percentage, px, relative, svg,
 };
 
+use crate::fullscreen::PageWants;
 use crate::icons::icon;
 use crate::shortcuts::Navigation;
 use crate::theme::{DEFAULT_TINT, Palette, palette};
@@ -119,7 +120,7 @@ pub(crate) struct Shell {
     /// draws from the window's sprite atlas.
     favicons_drawn: RefCell<Vec<Arc<RenderImage>>>,
     title: String,
-    native_fullscreen: crate::fullscreen::NativeFullscreen,
+    pub(crate) native_fullscreen: crate::fullscreen::NativeFullscreen,
     _activation: Subscription,
     _appearance: Subscription,
     _display: Subscription,
@@ -419,13 +420,11 @@ impl Shell {
         .size_0()
     }
 
-    /// Puts the window in native fullscreen while its page is in HTML fullscreen, and takes it
-    /// out afterwards unless the user had made it fullscreen first. GPUI redraws a window whose
+    /// Puts the window in native fullscreen while its page takes the screen, and takes it out
+    /// afterwards unless the user had made it fullscreen first. GPUI redraws a window whose
     /// bounds change, as a native fullscreen change does, so a late entry is undone here too.
-    fn sync_native_fullscreen(&mut self, page_fullscreen: bool, window: &mut Window) {
-        let (next, toggle) = self
-            .native_fullscreen
-            .next(page_fullscreen, window.is_fullscreen());
+    fn sync_native_fullscreen(&mut self, page: PageWants, window: &mut Window) {
+        let (next, toggle) = self.native_fullscreen.next(page, window.is_fullscreen());
         self.native_fullscreen = next;
         if toggle {
             window.toggle_fullscreen();
@@ -807,25 +806,36 @@ impl Render for Shell {
             .child(div().absolute().size_0().track_focus(&self.focus));
         let mut images = BTreeMap::new();
         let favicons_before = self.favicons_drawn.take();
-        let fullscreen = self.state.borrow().fullscreen_pane(&self.id);
-        self.sync_native_fullscreen(fullscreen.is_some(), window);
+        let (fullscreen, keeps_sidebar) = {
+            let state = self.state.borrow();
+            (
+                state.fullscreen_pane(&self.id),
+                state.keeps_sidebar_in_fullscreen(&self.id),
+            )
+        };
+        self.sync_native_fullscreen(PageWants::of(fullscreen.is_some(), keeps_sidebar), window);
         let title_bar = TitleBar::of(window);
         let state = self.state.borrow();
         if let Some((owner, tab)) = fullscreen.clone() {
-            let mut body = div().flex_1().min_h_0().relative().flex();
-            if let Some(core) = state.model.state(&self.id)
-                && let Some(current) = core.window(&self.id)
-                && crate::fullscreen::keeps_sidebar(
-                    &state.model.core.settings,
-                    core.sidebar_visible(&self.id),
-                )
-            {
-                body = body.child(self.sidebar(&state, current, TitleBar::Platform, window, cx));
-            } else {
-                self.hovered_tab_row = None;
-            }
+            let body = div().flex_1().min_h_0().relative().flex();
             let page = self.pane(owner, tab, &mut images, cx);
-            main = main.child(body.child(div().flex_1().min_w_0().min_h_0().child(page)));
+            // Beside the kept sidebar the page keeps the docked layout's inset card, also in
+            // the user's own fullscreen or while the window leaves a promotion (patch 0075
+            // leaves PageInsets alone); a page alone fills the screen edge to edge (patch 0072).
+            main = main.child(
+                if keeps_sidebar
+                    && let Some(current) = state
+                        .model
+                        .state(&self.id)
+                        .and_then(|core| core.window(&self.id))
+                {
+                    body.child(self.sidebar(&state, current, title_bar, window, cx))
+                        .child(page_area(true, page_card(page)))
+                } else {
+                    self.hovered_tab_row = None;
+                    body.child(div().flex_1().min_w_0().min_h_0().child(page))
+                },
+            );
         } else if let Some(popup) = state.model.popups.get(&self.id) {
             main = main
                 .child(
@@ -873,9 +883,8 @@ impl Render for Shell {
         {
             let active_space = &current.active_space_id;
             let view = current.visible_tabs();
-            // The page area, kFlechaGap in from the window's edges and flush with a docked
-            // sidebar (FlechaFrameState::PageInsets, patch 0010). Split panes keep
-            // kFlechaSplitGap between them (patch 0019), so each takes its share of the rest.
+            // Split panes keep kFlechaSplitGap between them (patch 0019), so each takes its
+            // share of the page area.
             let mut pages = div()
                 .relative()
                 .flex()
@@ -1012,15 +1021,7 @@ impl Render for Shell {
             if !docked {
                 self.hovered_tab_row = None;
             }
-            let page_area = div()
-                .flex_1()
-                .min_h_0()
-                .min_w_0()
-                .pt(px(tokens::PAGE_GAP))
-                .pr(px(tokens::PAGE_GAP))
-                .pb(px(tokens::PAGE_GAP))
-                .when(!docked, |area| area.pl(px(tokens::PAGE_GAP)))
-                .child(pages);
+            let page_area = page_area(docked, pages);
             let mut body = div().flex_1().min_h_0().relative().flex();
             if docked {
                 body = body
@@ -1455,6 +1456,20 @@ pub(crate) fn primary_button(
         .font_weight(FontWeight::SEMIBOLD)
         .cursor_pointer()
         .child(name.into())
+}
+
+/// The page area, kFlechaGap in from the window's edges and flush with a docked sidebar
+/// (FlechaFrameState::PageInsets, patch 0010).
+fn page_area(docked: bool, pages: Div) -> Div {
+    div()
+        .flex_1()
+        .min_h_0()
+        .min_w_0()
+        .pt(px(tokens::PAGE_GAP))
+        .pr(px(tokens::PAGE_GAP))
+        .pb(px(tokens::PAGE_GAP))
+        .when(!docked, |area| area.pl(px(tokens::PAGE_GAP)))
+        .child(pages)
 }
 
 /// A page in the page area: rounded to `--page-radius`, with the frame's drop shadow, on the
