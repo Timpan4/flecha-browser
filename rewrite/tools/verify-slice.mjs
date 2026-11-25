@@ -369,12 +369,13 @@ function paneMismatch(path, geometry, ratio, colors) {
   }
 }
 
-async function capture(name, colors, window = 'root') {
+// Retries until the capture shows every fixture colour and `also`, if given, accepts it.
+async function capture(name, colors, window = 'root', also = () => undefined) {
   await captureUntil(name, window, path => {
     const histogram = execFileSync('magick', [path, '-format', '%c', 'histogram:info:'], { encoding: 'utf8' });
     const missing = colors.filter(color => !histogram.includes(color));
 
-    if (!missing.length) return;
+    if (!missing.length) return also(path);
 
     if (name === 'restart-split' && histogram.includes(blankRestartColor)) {
       return 'blank restart control rendered its replacement frame';
@@ -3147,9 +3148,8 @@ async function verifySlice() {
   await app.wait('CEF paint for initial page', event => event.type === 'paint' && event.tab === left);
   const checked = checkProcessEnvironment(app.pid);
   pass(`checked /proc environ for the app and its CEF descendants (${checked} processes, including a renderer or zygote child)`);
-  await capture('open', ['#147A70', '#FFCC49']);
+  await capture('open', ['#147A70', '#FFCC49'], 'root', path => cornerNotRounded(path, '#147A70'));
   pass('opened a durable tab, received CEF load and paint, and captured the GPUI fixture frame');
-  await captureUntil('open-corners', 'root', path => cornerNotRounded(path, '#147A70'));
   pass('the page in its card has all four corners rounded to the page radius');
   // Under Xvfb GPUI's adapter cannot import Vulkan dma-bufs, so these checks cover the CPU
   // copy path, not shared textures.

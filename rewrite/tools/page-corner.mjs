@@ -23,7 +23,7 @@ const insideStep = Math.ceil(crossing) + 1;
 
 const magick = args => execFileSync('magick', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
 
-/** The bounding box of `color` in `path`, with each corner's direction into the page. */
+/** The bounding box of `color` in `path`, with each corner's direction into the page, if any. */
 function corners(path, color) {
   // The black border keeps -trim working when the page reaches the capture's edge.
   const [width, height, x, y] = magick([
@@ -33,7 +33,8 @@ function corners(path, color) {
 
   const [left, top] = [x - 1, y - 1];
 
-  if (![width, height, left, top].every(Number.isInteger) || left < 0 || top < 0) throw new Error(`no ${color} page in ${path}`);
+  // A capture without the colour trims to nothing, which magick reports at offset -1.
+  if (![width, height, left, top].every(Number.isInteger) || left < 0 || top < 0) return undefined;
 
   const [right, bottom] = [left + width - 1, top + height - 1];
 
@@ -68,7 +69,11 @@ function windowTint(hex) {
 export function cornerNotRounded(path, color) {
   const page = color.toUpperCase();
 
-  for (const { name, x, y, dx, dy } of corners(path, color)) {
+  const box = corners(path, color);
+
+  if (!box) return `no ${color} page in ${path}`;
+
+  for (const { name, x, y, dx, dy } of box) {
     const [corner, outside, inside] = colors(path, [
       [x, y], [x + dx * outsideStep, y + dy * outsideStep], [x + dx * insideStep, y + dy * insideStep],
     ]);
@@ -85,6 +90,9 @@ export function cornerNotRounded(path, color) {
 export function cornerNotSquare(path, color) {
   const page = color.toUpperCase();
   const box = corners(path, color);
+
+  if (!box) return `no ${color} page in ${path}`;
+
   const found = colors(path, box.map(({ x, y }) => [x, y]));
   const index = found.findIndex(hex => hex !== page);
 
