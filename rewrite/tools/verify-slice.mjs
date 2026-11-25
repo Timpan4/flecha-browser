@@ -1637,25 +1637,29 @@ async function windowManagerRequests() {
   listeners.push(listener);
 
   const requests = [];
+  // Each marker's number, with the requests printed before it.
   const marks = new Map();
-  let ready;
-  const listening = new Promise(resolve => { ready = resolve; });
+  let ready = false;
+  let gone;
 
-  const gone = new Promise((_, reject) => {
-    listener.on('error', reject);
-    listener.on('exit', (code, signal) => reject(new Error(`the wm-requests listener exited (${code ?? signal})`)));
-  });
-
-  gone.catch(() => {}); // The final cleanup's kill rejects it after the last wait.
+  listener.on('error', error => { gone ??= error; });
+  listener.on('exit', (code, signal) => { gone ??= new Error(`the wm-requests listener exited (${code ?? signal})`); });
 
   createInterface({ input: listener.stdout }).on('line', line => {
     const [first, ...rest] = line.split(' ');
 
-    if (line === 'ready') ready();
-    else if (first === 'mark') marks.get(rest[0])?.();
+    if (line === 'ready') ready = true;
+    else if (first === 'mark') marks.set(rest[0], [...requests]);
     else if (rest.includes('_NET_WM_STATE_FULLSCREEN')) requests.push(line);
   });
-  await Promise.race([listening, gone]);
+
+  const unlessGone = check => () => {
+    if (gone) throw gone;
+
+    return check();
+  };
+
+  await poll('the wm-requests listener to start', unlessGone(() => ready));
 
   let mark = 0;
 
@@ -1664,12 +1668,11 @@ async function windowManagerRequests() {
     async drained() {
       mark += 1;
 
-      const seen = new Promise(resolve => marks.set(String(mark), resolve));
+      const name = String(mark);
 
-      execFileSync(x11Driver, ['mark', String(mark)]);
-      await Promise.race([seen, gone]);
+      execFileSync(x11Driver, ['mark', name]);
 
-      return [...requests];
+      return poll(`the wm-requests listener to reach mark ${name}`, unlessGone(() => marks.get(name)));
     },
   };
 }
