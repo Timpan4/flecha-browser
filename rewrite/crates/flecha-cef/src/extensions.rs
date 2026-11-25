@@ -25,7 +25,7 @@ wrap_preference_observer! {
 }
 
 pub(crate) struct Watch {
-    _registration: Option<Registration>,
+    registration: Option<Registration>,
     dirty: Rc<Cell<bool>>,
     pub installed: Vec<Extension>,
 }
@@ -37,7 +37,7 @@ impl Watch {
         let registration = PreferenceManager::from(context)
             .add_preference_observer(Some(&PREF.into()), Some(&mut observer));
         Self {
-            _registration: registration,
+            registration,
             dirty,
             installed: Vec::new(),
         }
@@ -49,7 +49,8 @@ impl Watch {
         profile: &Path,
         unpacked: &BTreeSet<PathBuf>,
     ) -> bool {
-        if !self.dirty.replace(false) {
+        // Without an observer registration nothing marks the watch dirty, so every poll reads.
+        if !self.dirty.replace(self.registration.is_none()) {
             return false;
         }
         let preferences = PreferenceManager::from(context)
@@ -63,6 +64,7 @@ impl Watch {
             })
             .or_else(|| disk_preferences(profile).ok());
         let Some(preferences) = preferences else {
+            self.dirty.set(true);
             return false;
         };
         let installed = inventory(preferences, profile, unpacked);
@@ -156,25 +158,25 @@ impl ExtensionSettings {
             .context("Invalid ExtensionInstallForcelist")?
             .iter()
             .map(|entry| {
-                let (id, url) = entry
-                    .as_str()
-                    .and_then(|entry| entry.split_once(';'))
-                    .context("Invalid managed extension entry")?;
+                let entry = entry.as_str().context("Invalid managed extension entry")?;
+                // Chromium's policy reads a bare ID as a Chrome Web Store install.
+                let (id, url) = entry.split_once(';').unwrap_or((entry, STORE_UPDATE_URL));
                 ensure!(valid_id(id), "Invalid managed extension ID");
                 Ok((id.to_owned(), url.to_owned()))
             })
             .collect()
     }
 
+    /// Replaces the force-install list and keeps any other policy in the file.
     fn write_policy(&self, policy: BTreeMap<String, String>) -> Result<()> {
+        let path = self.policy_directory().join(POLICY_FILE);
         let list: Vec<_> = policy
             .into_iter()
             .map(|(id, url)| format!("{id};{url}"))
             .collect();
-        write_json(
-            &self.policy_directory().join(POLICY_FILE),
-            &json!({"ExtensionInstallForcelist": list}),
-        )
+        let mut value = read_json(&path)?;
+        value["ExtensionInstallForcelist"] = json!(list);
+        write_json(&path, &value)
     }
 
     pub fn unpacked(&self) -> Result<BTreeSet<PathBuf>> {
@@ -183,6 +185,15 @@ impl ExtensionSettings {
             || Ok(BTreeSet::new()),
             |paths| serde_json::from_value(paths).context("Invalid unpacked extension folders"),
         )
+    }
+
+    /// The folders a launch passes to `--load-extension`. One unusable path skips them all.
+    pub fn startup_folders(&self) -> Result<BTreeSet<PathBuf>> {
+        let folders = self.unpacked()?;
+        for folder in &folders {
+            unpacked_argument(folder)?;
+        }
+        Ok(folders)
     }
 
     pub fn add_unpacked(&self, directory: &Path) -> Result<()> {
@@ -514,5 +525,80 @@ pub fn requested_permissions(manifest: &Value) -> Result<Vec<String>> {
             }
         }
     }
+    if manifest.get("devtools_page").is_some() {
+        permissions.insert("Run code in pages you inspect with DevTools".to_owned());
+    }
     Ok(permissions.into_iter().collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn consent_lists_every_capability_the_manifest_declares() {
+        let manifest = json!({
+            "permissions": ["storage"],
+            "optional_host_permissions": ["https://example.com/*"],
+            "content_scripts": [{ "matches": ["https://*/*"] }],
+            "devtools_page": "devtools.html",
+        });
+        assert_eq!(
+            requested_permissions(&manifest).unwrap(),
+            [
+                "Run code in pages you inspect with DevTools",
+                "Run scripts on https://*/*",
+                "https://example.com/* (optional)",
+                "storage",
+            ]
+        );
+        assert!(requested_permissions(&json!({ "permissions": "storage" })).is_err());
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn managed_edits_keep_bare_ids_and_other_policies() {
+        let profile = tempfile::tempdir().unwrap();
+        let settings = ExtensionSettings::new(profile.path());
+        let path = settings.policy_directory().join(POLICY_FILE);
+        let bare = "cjpalhdlnbpafiamejdnhcphjbkeiagm";
+        let added = "eimadpbcbfnmbkopoojfekhnkhdbieeh";
+        write_json(
+            &path,
+            &json!({ "ExtensionInstallForcelist": [bare], "BlockExternalExtensions": true }),
+        )
+        .unwrap();
+        settings.add_store(added).unwrap();
+        assert_eq!(
+            read_json(&path).unwrap(),
+            json!({
+                "ExtensionInstallForcelist": [
+                    format!("{bare};{STORE_UPDATE_URL}"),
+                    format!("{added};{STORE_UPDATE_URL}"),
+                ],
+                "BlockExternalExtensions": true,
+            })
+        );
+    }
+
+    #[test]
+    fn store_ids_come_only_from_ids_and_store_detail_links() {
+        let id = "cjpalhdlnbpafiamejdnhcphjbkeiagm";
+        for input in [
+            id.to_owned(),
+            format!("https://chromewebstore.google.com/detail/ublock/{id}"),
+            format!("https://chrome.google.com/webstore/detail/ublock/{id}/"),
+        ] {
+            assert_eq!(store_id(&input).unwrap(), id, "{input}");
+        }
+        for input in [
+            format!("http://chromewebstore.google.com/detail/ublock/{id}"),
+            format!("https://user@chromewebstore.google.com/detail/ublock/{id}"),
+            format!("https://example.com/detail/ublock/{id}"),
+            format!("https://chromewebstore.google.com/detail/a/b/{id}"),
+            "cjpalhdlnbpafiamejdnhcphjbkeiagz".to_owned(),
+        ] {
+            assert!(store_id(&input).is_err(), "{input}");
+        }
+    }
 }

@@ -369,9 +369,11 @@ impl Shell {
         }
         let previous_path =
             (draft.field == Field::ImportPath).then(|| draft.text.text().to_owned());
+        let previous_store =
+            (draft.field == Field::StoreExtension).then(|| draft.text.text().to_owned());
         draft.text.key(stroke, cx);
-        if draft.field == Field::StoreExtension {
-            panel.extensions = extensions::Editor::default();
+        if previous_store.is_some_and(|text| text != draft.text.text()) {
+            panel.extensions.invalidate_review();
         }
         if previous_path.is_some_and(|path| path != draft.text.text()) {
             panel.import.clear_preview();

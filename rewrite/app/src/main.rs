@@ -26,7 +26,9 @@ fn main() -> Result<()> {
         options.initial = Some(flecha_ui::validate_initial_address(input)?);
     }
     let mut runtime = Runtime::entry()?;
-    runtime.configure_extensions(&profile)?;
+    for problem in runtime.configure_extensions(&profile) {
+        eprintln!("{problem:#}");
+    }
     let runtime = Rc::new(RefCell::new(runtime));
     let (store, loaded) = StateStore::open(&profile.join("session"))?;
     let cef_profile = profile.join("cef");

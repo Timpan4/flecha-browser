@@ -84,6 +84,8 @@ if [[ -n ${FLECHA_VISUAL_OUT:-} ]]; then
 fi
 
 cc -std=c17 -Wall -Wextra -Werror "$rewrite/tools/pidfd-run.c" -o "$scratch/pidfd-run"
+host_net=$(readlink /proc/self/ns/net)
+[[ -n $host_net ]] || { printf 'Could not read the host network namespace\n' >&2; exit 1; }
 # The shipping Chromium native harness supplies the watchdog. The command
 # runs as PID 1: its exit makes the kernel reap the private namespace.
 exec "$scratch/pidfd-run" "${FLECHA_HARNESS_TIMEOUT_MS:-600000}" "$scratch" \
@@ -104,11 +106,12 @@ exec "$scratch/pidfd-run" "${FLECHA_HARNESS_TIMEOUT_MS:-600000}" "$scratch" \
   --ro-bind "$runtime" /mnt/cef --bind "$scratch" /mnt/scratch --chdir /mnt/work \
   "${visual[@]}" \
   "${node_mount[@]}" --clearenv --setenv PATH /mnt/bin:/usr/bin:/bin \
-  bash -c 'if [[ $(readlink /proc/self/ns/net) == "$1" ]]; then
-      printf "Harness inherited the host network namespace\n" >&2; exit 1
+  bash -c 'own=$(readlink /proc/self/ns/net) || exit
+    if [[ -z $own || -z $1 || $own == "$1" ]]; then
+      printf "Harness could not prove it left the host network namespace\n" >&2; exit 1
     fi
     shift
     if [[ $4 == offline ]]; then ip link set lo up || exit; fi
     exec setpriv --bounding-set=-all --inh-caps=-all --ambient-caps=-all \
     bash /mnt/work/tools/isolated-session.sh "$@"' launcher \
-  "$(readlink /proc/self/ns/net)" "$backend" /mnt/cef "$sha1" "$network" "$@"
+  "$host_net" "$backend" /mnt/cef "$sha1" "$network" "$@"

@@ -23,6 +23,14 @@ pub(super) struct Editor {
     picker: Option<Task<()>>,
 }
 
+impl Editor {
+    /// Drops the review and any download for a Store input that changed.
+    pub(super) fn invalidate_review(&mut self) {
+        self.review = None;
+        self.pending = None;
+    }
+}
+
 struct Review {
     id: String,
     name: String,
@@ -124,6 +132,11 @@ impl Shell {
         let settings = &state.extensions;
         let installed = self.extension_entries(&state);
         let mut list = card();
+        if let Some(problem) = &settings.problem {
+            list = list.child(row().child(note(format!(
+                "Extension settings could not be read, so their lists are empty: {problem}"
+            ))));
+        }
         if installed.is_empty() {
             list = list.child(row().child("No extensions installed in this Space."));
         }
@@ -207,7 +220,7 @@ impl Shell {
             if let Some(review) = &panel.extensions.review {
                 let permissions = div().flex().flex_col().gap(px(tokens::SPACE_1)).min_w_0()
                     .child(format!("{} · {}", review.name, review.version))
-                    .child(note("Managed installation grants the required permissions automatically. Future updates can change them."))
+                    .child(note("This is the Store's current version. Flecha adds the extension ID to its managed list, and on restart Chromium installs whatever version the Store serves then, which can be newer than this one. Managed installation grants that version's required permissions automatically, and later updates can change them."))
                     .child(note(if review.permissions.is_empty() { "No permissions declared.".into() } else { review.permissions.join(", ") }));
                 store = store.child(
                     row()
@@ -215,18 +228,15 @@ impl Shell {
                         .gap(px(tokens::SPACE_2))
                         .child(permissions)
                         .child(
-                            primary_button(
-                                "install-reviewed-extension",
-                                "Grant permissions and install",
-                            )
-                            .relative()
-                            .child(self.track_extension_control(
-                                "store-confirm".into(),
-                                Default::default(),
-                            ))
-                            .on_click(cx.listener(
-                                |shell, _: &ClickEvent, _, cx| shell.install_reviewed_extension(cx),
-                            )),
+                            primary_button("install-reviewed-extension", "Add to managed installs")
+                                .relative()
+                                .child(self.track_extension_control(
+                                    "store-confirm".into(),
+                                    Default::default(),
+                                ))
+                                .on_click(cx.listener(|shell, _: &ClickEvent, _, cx| {
+                                    shell.install_reviewed_extension(cx)
+                                })),
                         ),
                 );
             }
@@ -374,7 +384,12 @@ impl Shell {
     ) {
         let result = {
             let mut state = self.state.borrow_mut();
-            edit(&state.extensions.settings).and_then(|()| state.extensions.reload_settings())
+            edit(&state.extensions.settings).and_then(|()| {
+                state
+                    .extensions
+                    .reload_settings()
+                    .context("Saved. Restart Flecha to apply it, but the list could not refresh")
+            })
         };
         if let Some(panel) = self.settings_mut() {
             panel.result(result.map(|()| message.to_owned()));

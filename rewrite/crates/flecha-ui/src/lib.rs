@@ -403,7 +403,7 @@ impl Controller {
             boosts: ProfileBoosts::open(profile.join("boosts")),
             session_dir: profile.join("session"),
             engine: Engine::new(cef_profile, model::tab_id),
-            extensions: extensions::Extensions::new(&profile)?,
+            extensions: extensions::Extensions::new(&profile),
             _adblock_updater: None,
             downloads: Downloads::new(&profile, isolated),
             permissions: PermissionStore::open(&profile),

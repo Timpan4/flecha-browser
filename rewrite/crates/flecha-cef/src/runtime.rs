@@ -205,21 +205,32 @@ impl Runtime {
         })
     }
 
-    pub fn configure_extensions(&mut self, profile: &Path) -> Result<()> {
+    /// Reads the unpacked folders and prepares the managed policy directory. Each part that
+    /// fails is skipped and returned, so a broken extension setting never stops the browser.
+    pub fn configure_extensions(&mut self, profile: &Path) -> Vec<anyhow::Error> {
         let settings = crate::extensions::ExtensionSettings::new(profile);
-        let folders = settings.unpacked()?;
-        let folders = folders
-            .iter()
-            .map(|path| crate::extensions::unpacked_argument(path))
-            .collect::<Result<Vec<_>>>()?;
-        *self.unpacked.borrow_mut() = (!folders.is_empty()).then(|| folders.join(","));
+        let mut problems = Vec::new();
+        match settings.startup_folders() {
+            Ok(folders) => {
+                let folders = folders
+                    .iter()
+                    .filter_map(|path| path.to_str())
+                    .collect::<Vec<_>>();
+                *self.unpacked.borrow_mut() = (!folders.is_empty()).then(|| folders.join(","));
+            }
+            Err(error) => problems.push(error.context("Skipped unpacked extensions")),
+        }
         if crate::extensions::MANAGED_POLICY_SUPPORTED {
             let policy = settings.policy_directory();
-            std::fs::create_dir_all(policy.join("managed"))
-                .context("Create Flecha extension policy directory")?;
-            self.chrome_policy = Some(policy);
+            match std::fs::create_dir_all(policy.join("managed")) {
+                Ok(()) => self.chrome_policy = Some(policy),
+                Err(error) => problems.push(anyhow::Error::new(error).context(format!(
+                    "Skipped managed extensions: create {}",
+                    policy.display()
+                ))),
+            }
         }
-        Ok(())
+        problems
     }
 
     /// Starts CEF on `profile`. `open` is the address this launch asks for, which reaches the

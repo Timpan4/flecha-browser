@@ -29,6 +29,8 @@ pub(crate) struct Extensions {
     pub folders: BTreeSet<PathBuf>,
     pub pins: BTreeSet<String>,
     startup: BTreeSet<PathBuf>,
+    /// Why the extension settings files could not be read.
+    pub problem: Option<String>,
     icons: BTreeMap<PathBuf, Option<Arc<RenderImage>>>,
     popups: BTreeMap<WindowId, ExtensionPopup>,
 }
@@ -43,27 +45,44 @@ pub(crate) struct ExtensionPopup {
 }
 
 impl Extensions {
-    pub fn new(profile: &Path) -> Result<Self> {
+    /// A settings file Flecha can't read leaves its list empty and shows the error in Settings,
+    /// so the browser still opens.
+    pub fn new(profile: &Path) -> Self {
         let settings = ExtensionSettings::new(profile);
-        let managed = settings.managed_ids()?;
-        let startup = settings.unpacked()?;
-        let pins = settings.pinned()?;
-        Ok(Self {
+        let mut extensions = Self {
+            startup: settings.startup_folders().unwrap_or_default(),
             settings,
-            managed,
-            pins,
-            folders: startup.clone(),
-            startup,
+            managed: BTreeSet::new(),
+            pins: BTreeSet::new(),
+            folders: BTreeSet::new(),
+            problem: None,
             icons: BTreeMap::new(),
             popups: BTreeMap::new(),
-        })
+        };
+        let _ = extensions.reload_settings();
+        extensions
     }
 
+    /// Replaces the lists only when every file reads, and records the failure otherwise.
     pub fn reload_settings(&mut self) -> Result<()> {
-        self.managed = self.settings.managed_ids()?;
-        self.folders = self.settings.unpacked()?;
-        self.pins = self.settings.pinned()?;
-        Ok(())
+        let read = (|| {
+            Ok::<_, anyhow::Error>((
+                self.settings.managed_ids()?,
+                self.settings.unpacked()?,
+                self.settings.pinned()?,
+            ))
+        })();
+        match read {
+            Ok((managed, folders, pins)) => {
+                (self.managed, self.folders, self.pins) = (managed, folders, pins);
+                self.problem = None;
+                Ok(())
+            }
+            Err(error) => {
+                self.problem = Some(format!("{error:#}"));
+                Err(error)
+            }
+        }
     }
 
     pub fn starting_folders(&self) -> &BTreeSet<PathBuf> {
@@ -327,13 +346,11 @@ impl Shell {
                                 )
                                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                                     let mut state = this.state.borrow_mut();
-                                    let updated = state
-                                        .extensions
-                                        .settings
-                                        .toggle_pin(&pin)
-                                        .and_then(|()| state.extensions.reload_settings());
-                                    if let Err(error) = updated {
-                                        state.status.set(None, format!("{error:#}"));
+                                    let settings = &state.extensions.settings;
+                                    match settings.toggle_pin(&pin).and_then(|()| settings.pinned())
+                                    {
+                                        Ok(pins) => state.extensions.pins = pins,
+                                        Err(error) => state.status.set(None, format!("{error:#}")),
                                     }
                                     cx.refresh_windows();
                                 })),

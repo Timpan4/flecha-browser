@@ -487,13 +487,19 @@ impl Shell {
             return;
         }
         if matches!(self.overlay, Overlay::ExtensionPopup(_)) {
-            self.page_key(
-                focused,
-                stroke,
-                false,
-                event.is_held,
-                event.prefer_character_input,
-            );
+            if !altgr
+                && self.page_clipboard_key(focused.as_ref(), stroke, event.is_held, window, cx)
+            {
+                self.consumed_keys.insert(stroke.key.clone());
+            } else {
+                self.page_key(
+                    focused,
+                    stroke,
+                    false,
+                    event.is_held,
+                    event.prefer_character_input,
+                );
+            }
             cx.stop_propagation();
             return;
         }

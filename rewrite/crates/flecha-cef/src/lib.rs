@@ -419,8 +419,24 @@ impl Engine {
         viewport: Viewport,
         extension_popup: bool,
     ) -> Result<()> {
+        // A popup browser may only show pages of the extension it opened for.
+        let popup_host = if extension_popup {
+            let url = url::Url::parse(url)?;
+            ensure!(
+                url.scheme() == "chrome-extension",
+                "Invalid extension popup URL"
+            );
+            Some(
+                url.host_str()
+                    .context("Invalid extension popup URL")?
+                    .to_owned(),
+            )
+        } else {
+            None
+        };
         if let Some(session) = self.browsers.get_mut(&tab)
             && session.partition == partition
+            && *session.slot.extension_popup.borrow() == popup_host
         {
             session.owner = owner;
             self.resize(&tab, viewport);
@@ -437,15 +453,7 @@ impl Engine {
             self.events.clone(),
             self.popups.clone(),
         ));
-        if extension_popup {
-            let url = url::Url::parse(url)?;
-            ensure!(
-                url.scheme() == "chrome-extension",
-                "Invalid extension popup URL"
-            );
-            slot.extension_popup
-                .replace(url.host_str().map(str::to_owned));
-        }
+        slot.extension_popup.replace(popup_host);
         slot.partition.replace(Some(partition.clone()));
         let shared = !extension_popup && self.popups.compositor.shares_textures();
         slot.shares_textures.set(shared);

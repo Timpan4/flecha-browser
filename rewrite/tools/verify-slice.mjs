@@ -105,6 +105,12 @@ const extensionPopup = '#189456';
 const site = await fixture((path, response, request) => {
   requestAgents.push({ path, agent: request.headers['user-agent'] ?? '' });
 
+  if ((path === '/extension-update.xml' || path === '/extension.crx') && !extensionPackage) {
+    response.writeHead(404).end();
+
+    return true;
+  }
+
   if (path === '/extension-update.xml') {
     extensionRequests.push(path);
     response.setHeader('Content-Type', 'application/xml');
@@ -3492,6 +3498,7 @@ async function verifyStoreExtensions() {
       .map(script => new URL(script.url).pathname);
 
     console.log(JSON.stringify({ name, executedContentScripts: executed }));
+    assert(executed.length > 0, `${name} ran no content script on the fixture page`);
   }
 
   console.log(JSON.stringify({ name: 'uBlock Origin Lite', adRequestWithoutExtensions: originalAd, adRequestWithExtensions: await adCheck(tab) }));
@@ -3529,18 +3536,14 @@ async function inspectStorePopup(app, tab, name) {
     publish();
   })()` });
 
-  try {
-    await app.wait(`settled popup for ${name}`, event => {
-      const report = state(event);
+  const settled = await app.wait(`settled popup for ${name}`, event => {
+    const report = state(event);
 
-      return report?.update !== 'pending' && report?.tabs !== 'pending'
-        && (name === 'Bitwarden' ? /log in|email/i.test(report?.body) : report?.body);
-    }, after, stepTimeoutMs);
-  } catch (error) {
-    if (error.name !== 'AbortError') throw error;
-  }
+    return report?.update !== 'pending' && report?.tabs !== 'pending'
+      && (name === 'Bitwarden' ? /log in|email/i.test(report?.body) : report?.body);
+  }, after, stepTimeoutMs);
 
-  return app.events.slice(after).map(state).filter(Boolean).at(-1) ?? { body: null, tabs: null, update: null };
+  return state(settled);
 }
 
 async function verifySlice() {
