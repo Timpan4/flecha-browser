@@ -958,9 +958,7 @@ impl Render for Shell {
                 ));
             }
             let docked = core.sidebar_visible(&self.id);
-            if docked {
-                self.sidebar_interaction.clear_peek();
-            } else {
+            if !docked {
                 self.hovered_tab_row = None;
             }
             let page_area = div()

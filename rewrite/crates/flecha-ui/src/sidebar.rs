@@ -70,11 +70,8 @@ impl Controller {
         let space = current.active_space_id.clone();
         match action {
             SidebarAction::Toggle => {
-                let visible = !core.sidebar_visible(window);
-                core.set_sidebar_visible(window, visible);
-                if visible {
-                    self.sidebar_deadlines.remove(window);
-                }
+                core.set_sidebar_visible(window, !core.sidebar_visible(window));
+                self.sidebar_peeks.remove(window);
             }
             SidebarAction::FolderName(Some(id), name) => {
                 core.edit_folder(&id, Some(&name), None);
@@ -188,11 +185,17 @@ const PEEK_DELAY: Duration = Duration::from_millis(300);
 const PEEK_IN: Duration = Duration::from_millis(180);
 const PEEK_OUT: Duration = Duration::from_millis(160);
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SidebarPeek {
+    pub(crate) leaving: bool,
+    pub(crate) hide_at: Option<Instant>,
+}
+
 impl Controller {
     pub(crate) fn poll_sidebars(&self, cx: &mut App) {
         let now = Instant::now();
-        for (id, deadline) in &self.sidebar_deadlines {
-            if *deadline <= now
+        for (id, peek) in &self.sidebar_peeks {
+            if peek.hide_at.is_some_and(|deadline| deadline <= now)
                 && let Some(handle) = self.windows.get(id).copied()
             {
                 cx.defer(move |cx| {
@@ -205,16 +208,7 @@ impl Controller {
 
 #[derive(Default)]
 pub(crate) struct SidebarInteraction {
-    peek: bool,
-    leaving: bool,
     drag: Option<SidebarDrag>,
-}
-
-impl SidebarInteraction {
-    pub(crate) fn clear_peek(&mut self) {
-        self.peek = false;
-        self.leaving = false;
-    }
 }
 
 struct SidebarDrag {
@@ -250,6 +244,7 @@ impl Shell {
             .is_some_and(|core| !core.sidebar_visible(&self.id));
         let fullscreen = state.fullscreen_pane(&self.id).is_some();
         let width = self.sidebar_width(&state);
+        let peek = state.sidebar_peeks.get(&self.id).copied();
         drop(state);
         if !collapsed || fullscreen {
             self.hide_floating_sidebar(cx);
@@ -257,7 +252,7 @@ impl Shell {
         }
         let mouse = window.mouse_position();
         let within_height = mouse.y >= px(0.) && mouse.y < window.viewport_size().height;
-        let hover_width = if self.sidebar_interaction.peek {
+        let hover_width = if peek.is_some() {
             width + FLOATING_INSET
         } else {
             SIDEBAR_EDGE
@@ -268,10 +263,13 @@ impl Shell {
             && !self.overlay.is_open()
             && self.browser_dialog.is_none()
         {
-            self.state.borrow_mut().sidebar_deadlines.remove(&self.id);
-            if !self.sidebar_interaction.peek || self.sidebar_interaction.leaving {
-                self.sidebar_interaction.peek = true;
-                self.sidebar_interaction.leaving = false;
+            let mut state = self.state.borrow_mut();
+            let entry = state.sidebar_peeks.entry(self.id.clone()).or_default();
+            entry.hide_at = None;
+            let changed = peek.is_none() || entry.leaving;
+            entry.leaving = false;
+            drop(state);
+            if changed {
                 cx.notify();
             }
         } else {
@@ -280,26 +278,24 @@ impl Shell {
     }
 
     fn leave_floating_sidebar(&self) {
-        if !self.sidebar_interaction.peek
-            || self.sidebar_interaction.drag.is_some()
+        if self.sidebar_interaction.drag.is_some()
             || self.overlay.is_open()
             || self.browser_dialog.is_some()
         {
             return;
         }
-        self.state
-            .borrow_mut()
-            .sidebar_deadlines
-            .entry(self.id.clone())
-            .or_insert_with(|| Instant::now() + PEEK_DELAY);
+        if let Some(peek) = self.state.borrow_mut().sidebar_peeks.get_mut(&self.id) {
+            peek.hide_at
+                .get_or_insert_with(|| Instant::now() + PEEK_DELAY);
+        }
     }
 
     fn advance_sidebar_hide(&mut self, now: Instant, cx: &mut Context<Self>) {
         let mut state = self.state.borrow_mut();
-        let Some(deadline) = state
-            .sidebar_deadlines
+        let Some(peek) = state
+            .sidebar_peeks
             .get_mut(&self.id)
-            .filter(|deadline| **deadline <= now)
+            .filter(|peek| peek.hide_at.is_some_and(|deadline| deadline <= now))
         else {
             return;
         };
@@ -307,25 +303,28 @@ impl Shell {
             || self.browser_dialog.is_some()
             || self.sidebar_interaction.drag.is_some()
         {
-            state.sidebar_deadlines.remove(&self.id);
-            if std::mem::take(&mut self.sidebar_interaction.leaving) {
+            peek.hide_at = None;
+            if std::mem::take(&mut peek.leaving) {
                 cx.notify();
             }
-        } else if self.sidebar_interaction.leaving {
-            drop(state);
-            self.hide_floating_sidebar(cx);
+        } else if peek.leaving {
+            state.sidebar_peeks.remove(&self.id);
+            cx.notify();
         } else {
-            *deadline = now + PEEK_OUT;
-            self.sidebar_interaction.leaving = true;
+            peek.hide_at = Some(now + PEEK_OUT);
+            peek.leaving = true;
             cx.notify();
         }
     }
 
     pub(crate) fn hide_floating_sidebar(&mut self, cx: &mut Context<Self>) {
-        let hover = &mut self.sidebar_interaction;
-        hover.leaving = false;
-        if std::mem::take(&mut hover.peek) {
-            self.state.borrow_mut().sidebar_deadlines.remove(&self.id);
+        if self
+            .state
+            .borrow_mut()
+            .sidebar_peeks
+            .remove(&self.id)
+            .is_some()
+        {
             cx.notify();
         }
     }
@@ -338,11 +337,9 @@ impl Shell {
         window: &Window,
         cx: &Context<Self>,
     ) -> Option<Div> {
-        if !self.sidebar_interaction.peek {
-            return None;
-        }
+        let peek = state.sidebar_peeks.get(&self.id).copied()?;
         let slide = self.sidebar_width(state) + FLOATING_INSET;
-        let leaving = self.sidebar_interaction.leaving;
+        let leaving = peek.leaving;
         Some(
             div()
                 .absolute()
@@ -666,8 +663,13 @@ impl Shell {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                            let width = this.state.borrow().model.core.settings.sidebar_width;
-                            this.state.borrow_mut().sidebar_deadlines.remove(&this.id);
+                            let mut state = this.state.borrow_mut();
+                            let width = state.model.core.settings.sidebar_width;
+                            if let Some(peek) = state.sidebar_peeks.get_mut(&this.id) {
+                                peek.hide_at = None;
+                                peek.leaving = false;
+                            }
+                            drop(state);
                             this.sidebar_interaction.drag = Some(SidebarDrag {
                                 start_x: event.position.x,
                                 start_width: width,
@@ -2216,5 +2218,18 @@ mod tests {
         let visible = controller.model.core.sidebar_visible(&window);
         sidebar(&mut controller, SidebarAction::Toggle);
         assert_ne!(controller.model.core.sidebar_visible(&window), visible);
+        controller.sidebar_peeks.insert(
+            window.clone(),
+            SidebarPeek {
+                leaving: true,
+                hide_at: Some(Instant::now()),
+            },
+        );
+        sidebar(&mut controller, SidebarAction::Toggle);
+        assert!(controller.model.core.sidebar_visible(&window));
+        assert!(!controller.sidebar_peeks.contains_key(&window));
+        sidebar(&mut controller, SidebarAction::Toggle);
+        assert!(!controller.model.core.sidebar_visible(&window));
+        assert!(!controller.sidebar_peeks.contains_key(&window));
     }
 }
