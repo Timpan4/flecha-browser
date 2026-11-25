@@ -134,7 +134,12 @@ impl Shell {
         let mut list = card();
         if let Some(problem) = &settings.problem {
             list = list.child(row().child(note(format!(
-                "Extension settings could not be read, so their lists are empty: {problem}"
+                "Extension settings could not be read, so the lists below may be empty or out of date: {problem}"
+            ))));
+        }
+        if let Some(skipped) = &settings.skipped {
+            list = list.child(row().child(note(format!(
+                "This launch skipped every unpacked folder, and restarting skips them again until the list is fixed: {skipped}"
             ))));
         }
         if installed.is_empty() {

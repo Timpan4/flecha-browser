@@ -31,6 +31,8 @@ pub(crate) struct Extensions {
     startup: BTreeSet<PathBuf>,
     /// Why the extension settings files could not be read.
     pub problem: Option<String>,
+    /// Why this launch loaded none of the unpacked folders.
+    pub skipped: Option<String>,
     icons: BTreeMap<PathBuf, Option<Arc<RenderImage>>>,
     popups: BTreeMap<WindowId, ExtensionPopup>,
 }
@@ -49,8 +51,10 @@ impl Extensions {
     /// so the browser still opens.
     pub fn new(profile: &Path) -> Self {
         let settings = ExtensionSettings::new(profile);
+        let startup = settings.startup_folders();
         let mut extensions = Self {
-            startup: settings.startup_folders().unwrap_or_default(),
+            skipped: startup.as_ref().err().map(|error| format!("{error:#}")),
+            startup: startup.unwrap_or_default(),
             settings,
             managed: BTreeSet::new(),
             pins: BTreeSet::new(),

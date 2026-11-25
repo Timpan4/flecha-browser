@@ -210,6 +210,8 @@ impl Runtime {
     pub fn configure_extensions(&mut self, profile: &Path) -> Vec<anyhow::Error> {
         let settings = crate::extensions::ExtensionSettings::new(profile);
         let mut problems = Vec::new();
+        *self.unpacked.borrow_mut() = None;
+        self.chrome_policy = None;
         match settings.startup_folders() {
             Ok(folders) => {
                 let folders = folders

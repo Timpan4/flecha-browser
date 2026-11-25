@@ -3490,15 +3490,33 @@ async function verifyStoreExtensions() {
   const since = app.events.length;
   await app.command('script', { tab, source: `location.href = ${JSON.stringify(base + '/split')}` });
   await app.loaded(tab, '/split', since);
-  const coverage = await probe(tab, 'Profiler.takePreciseCoverage');
 
-  for (const [name, id] of store) {
-    const executed = coverage.result.filter(script => script.url.startsWith(`chrome-extension://${id}/`)
-      && script.functions.some(fn => fn.ranges.some(range => range.count > 0)))
-      .map(script => new URL(script.url).pathname);
+  // Scripts can inject at document_idle or later, and each snapshot resets the counts, so
+  // gather executed scripts across snapshots until every extension has one.
+  const executed = new Map(store.map(([name]) => [name, new Set()]));
+  const deadline = Date.now() + stepTimeoutMs;
 
-    console.log(JSON.stringify({ name, executedContentScripts: executed }));
-    assert(executed.length > 0, `${name} ran no content script on the fixture page`);
+  while (true) {
+    const coverage = await probe(tab, 'Profiler.takePreciseCoverage');
+
+    for (const [name, id] of store) {
+      for (const script of coverage.result) {
+        if (script.url.startsWith(`chrome-extension://${id}/`)
+          && script.functions.some(fn => fn.ranges.some(range => range.count > 0))) {
+          executed.get(name).add(new URL(script.url).pathname);
+        }
+      }
+    }
+
+    // Each DevTools round trip paces the next snapshot.
+    if ([...executed.values()].every(scripts => scripts.size > 0) || Date.now() > deadline) break;
+  }
+
+  for (const [name] of store) {
+    const scripts = [...executed.get(name)];
+
+    console.log(JSON.stringify({ name, executedContentScripts: scripts }));
+    assert(scripts.length > 0, `${name} ran no content script on the fixture page`);
   }
 
   console.log(JSON.stringify({ name: 'uBlock Origin Lite', adRequestWithoutExtensions: originalAd, adRequestWithExtensions: await adCheck(tab) }));
