@@ -369,20 +369,41 @@ function paneMismatch(path, geometry, ratio, colors) {
   }
 }
 
+// A capture check that accepts a frame once `ready` and then `then` accept it. Once a frame is
+// ready, `then` gets one step allowance to settle, then fails the run with its reason instead of
+// retrying until the launcher watchdog.
+function settled(name, ready, then) {
+  let since;
+
+  return path => {
+    const waiting = ready(path);
+
+    if (waiting) return waiting;
+
+    since ??= Date.now();
+
+    const reason = then(path);
+
+    assert(!reason || Date.now() - since < stepTimeoutMs, `${name}: ${reason}`);
+
+    return reason;
+  };
+}
+
 // Retries until the capture shows every fixture colour and `also`, if given, accepts it.
 async function capture(name, colors, window = 'root', also = () => undefined) {
-  await captureUntil(name, window, path => {
+  await captureUntil(name, window, settled(name, path => {
     const histogram = execFileSync('magick', [path, '-format', '%c', 'histogram:info:'], { encoding: 'utf8' });
     const missing = colors.filter(color => !histogram.includes(color));
 
-    if (!missing.length) return also(path);
+    if (!missing.length) return;
 
     if (name === 'restart-split' && histogram.includes(blankRestartColor)) {
       return 'blank restart control rendered its replacement frame';
     }
 
     return `missing fixture colors ${missing.join(', ')}`;
-  });
+  }, also));
 }
 
 async function captureUntil(name, window, mismatch, signal) {
@@ -1502,7 +1523,9 @@ async function pageFullscreen(app, main, other) {
     ], { encoding: 'utf8' })) - 1 - windowY;
   };
 
-  const layout = (label, keepSidebar, docked) => captureUntil(label, 'root', path => {
+  // The fullscreen layout: a page beside the sidebar sits in its rounded card, and a page alone
+  // fills the screen square.
+  const layout = (label, keepSidebar, docked) => captureUntil(label, 'root', settled(label, path => {
     if (sidebarShown(path) !== keepSidebar) {
       return keepSidebar ? 'the sidebar is not beside the fullscreen page' : 'the sidebar stayed beside the fullscreen page';
     }
@@ -1513,10 +1536,7 @@ async function pageFullscreen(app, main, other) {
     const expected = keepSidebar ? docked : 0;
 
     if (top !== expected) return `the fullscreen page starts at ${top}, not ${expected}`;
-
-    // A page beside the sidebar sits in its rounded card, and a page alone fills the screen square.
-    return (keepSidebar ? cornerNotRounded : cornerNotSquare)(path, page[0]);
-  });
+  }, path => (keepSidebar ? cornerNotRounded : cornerNotSquare)(path, page[0])));
 
   const stillFullscreen = async label => {
     const value = site.probe(label);
