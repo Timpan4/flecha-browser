@@ -84,11 +84,14 @@ impl NativeFullscreen {
     }
 
     /// Whether the window should be in native fullscreen: its page is in fullscreen without the
-    /// sidebar beside it. A request stands until the page leaves, whatever the sidebar does
-    /// meanwhile, as patch 0075 only ever promotes a page to the screen. Withdrawing it would
-    /// toggle again before the window manager answered, and two X11 toggles cancel out.
+    /// sidebar beside it. Once Flecha has asked, the page stays promoted until it leaves,
+    /// whatever the sidebar does meanwhile, as patch 0075 only ever promotes a page to the
+    /// screen. Withdrawing the request would toggle again before the window manager answered,
+    /// and two X11 toggles cancel out. Forgetting `Released` would ask again over the user's
+    /// choice the next time the sidebar hides.
     pub(crate) fn wanted(self, page_fullscreen: bool, keeps_sidebar: bool) -> bool {
-        page_fullscreen && (!keeps_sidebar || self.asks())
+        let promoted = matches!(self, Self::Requested | Self::Held | Self::Released);
+        page_fullscreen && (!keeps_sidebar || promoted)
     }
 
     /// The next state, from whether the page wants fullscreen and whether the window is in it,
@@ -245,6 +248,31 @@ mod tests {
         assert_eq!(
             state.next(state.wanted(false, true), true),
             (NativeFullscreen::Idle, true)
+        );
+    }
+
+    #[test]
+    fn native_fullscreen_the_user_leaves_stays_theirs_while_the_sidebar_toggles() {
+        // Promoted with the sidebar hidden, the user leaves native fullscreen, then shows and
+        // hides the sidebar while the page stays in fullscreen.
+        let mut state = NativeFullscreen::Idle;
+        let mut toggles = Vec::new();
+        for (keeps_sidebar, window) in [
+            (false, false),
+            (false, true),
+            (false, false),
+            (true, false),
+            (false, false),
+        ] {
+            let (next, toggle) = state.next(state.wanted(true, keeps_sidebar), window);
+            state = next;
+            toggles.push(toggle);
+        }
+        assert_eq!(toggles, [true, false, false, false, false]);
+        assert_eq!(state, NativeFullscreen::Released);
+        assert_eq!(
+            state.next(state.wanted(false, false), false),
+            (NativeFullscreen::Idle, false)
         );
     }
 

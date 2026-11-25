@@ -1411,8 +1411,6 @@ pub(crate) fn primary_button(
         .child(name.into())
 }
 
-/// A page in the page area: rounded to `--page-radius`, with the frame's drop shadow, on the
-/// empty state's colour until its first frame.
 /// The page area, kFlechaGap in from the window's edges and flush with a docked sidebar
 /// (FlechaFrameState::PageInsets, patch 0010).
 fn page_area(docked: bool, pages: Div) -> Div {
@@ -1427,6 +1425,8 @@ fn page_area(docked: bool, pages: Div) -> Div {
         .child(pages)
 }
 
+/// A page in the page area: rounded to `--page-radius`, with the frame's drop shadow, on the
+/// empty state's colour until its first frame.
 pub(crate) fn page_card(page: Div) -> Div {
     div()
         .size_full()

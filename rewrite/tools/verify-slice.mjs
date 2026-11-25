@@ -1461,9 +1461,10 @@ async function pageFullscreen(app, main, other) {
 
   const screenFullscreen = () => app.command('native_fullscreen', { window: main });
 
-  // The top of the page colour's bounding box: kFlechaGap down in the docked layout, at the
-  // window's top for a page alone. A black border keeps -trim from taking a page that reaches
-  // the capture's edge as border.
+  // The top of the page colour's bounding box in a root capture. Without a window manager the
+  // window sits at the screen's origin, so a page alone starts at 0 and the docked layout
+  // kFlechaGap below it. A black border keeps -trim from taking a page that reaches the
+  // capture's edge as border.
   const pageTop = path => Number(execFileSync('magick', [
     path, '-alpha', 'off', '-fill', 'black', '+opaque', page[0], '-bordercolor', 'black', '-border', '1',
     '-trim', '-format', '%Y', 'info:',
@@ -1473,6 +1474,10 @@ async function pageFullscreen(app, main, other) {
     const after = app.events.length;
 
     await clickElement(app, tab, '#full', page, label, main);
+    // clickElement captured the docked layout before the click.
+    const docked = pageTop(join(out, `${label}.png`));
+
+    assert(docked > 0, `the docked page starts at the window's top (${docked})`);
     await app.wait(`${label}: the page to enter fullscreen`, event =>
       event.type === 'fullscreen' && event.tab === tab && event.fullscreen, after);
     await app.present(main);
@@ -1483,9 +1488,10 @@ async function pageFullscreen(app, main, other) {
 
       if (!page.every(color => histogram(path).includes(color))) return 'the fullscreen page is not on screen';
 
-      if ((pageTop(path) > 0) !== keepSidebar) {
-        return keepSidebar ? 'the page beside the sidebar lost the docked inset' : 'the page alone kept an inset';
-      }
+      const top = pageTop(path);
+      const expected = keepSidebar ? docked : 0;
+
+      return top === expected ? undefined : `the fullscreen page starts at ${top}, not ${expected}`;
     });
     assert.equal(await screenFullscreen(), !keepSidebar, keepSidebar
       ? 'the window asked for native fullscreen with the sidebar beside the page'
