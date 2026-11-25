@@ -150,21 +150,25 @@ impl ExtensionSettings {
     }
 
     fn policy(&self) -> Result<BTreeMap<String, String>> {
-        let value = read_json(&self.policy_directory().join(POLICY_FILE))?;
+        let path = self.policy_directory().join(POLICY_FILE);
+        let value = read_json(&path)?;
         let Some(list) = value.get("ExtensionInstallForcelist") else {
             return Ok(BTreeMap::new());
         };
-        list.as_array()
-            .context("Invalid ExtensionInstallForcelist")?
-            .iter()
-            .map(|entry| {
-                let entry = entry.as_str().context("Invalid managed extension entry")?;
-                // Chromium's policy reads a bare ID as a Chrome Web Store install.
-                let (id, url) = entry.split_once(';').unwrap_or((entry, STORE_UPDATE_URL));
-                ensure!(valid_id(id), "Invalid managed extension ID");
-                Ok((id.to_owned(), url.to_owned()))
-            })
-            .collect()
+        let policy: Result<BTreeMap<String, String>> = (|| {
+            list.as_array()
+                .context("Invalid ExtensionInstallForcelist")?
+                .iter()
+                .map(|entry| {
+                    let entry = entry.as_str().context("Invalid managed extension entry")?;
+                    // Chromium's policy reads a bare ID as a Chrome Web Store install.
+                    let (id, url) = entry.split_once(';').unwrap_or((entry, STORE_UPDATE_URL));
+                    ensure!(valid_id(id), "Invalid managed extension ID");
+                    Ok((id.to_owned(), url.to_owned()))
+                })
+                .collect()
+        })();
+        policy.with_context(|| format!("Read {}", path.display()))
     }
 
     /// Replaces the force-install list and keeps any other policy in the file.
@@ -579,6 +583,9 @@ mod tests {
                 "BlockExternalExtensions": true,
             })
         );
+        write_json(&path, &json!({ "ExtensionInstallForcelist": 5 })).unwrap();
+        let error = format!("{:#}", settings.managed_ids().unwrap_err());
+        assert!(error.contains(&path.display().to_string()), "{error}");
     }
 
     #[test]
