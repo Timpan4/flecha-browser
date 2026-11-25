@@ -70,7 +70,11 @@ impl Controller {
         let space = current.active_space_id.clone();
         match action {
             SidebarAction::Toggle => {
-                core.set_sidebar_visible(window, !core.sidebar_visible(window));
+                let visible = !core.sidebar_visible(window);
+                core.set_sidebar_visible(window, visible);
+                if visible {
+                    self.sidebar_deadlines.remove(window);
+                }
             }
             SidebarAction::FolderName(Some(id), name) => {
                 core.edit_folder(&id, Some(&name), None);
@@ -206,6 +210,13 @@ pub(crate) struct SidebarInteraction {
     drag: Option<SidebarDrag>,
 }
 
+impl SidebarInteraction {
+    pub(crate) fn clear_peek(&mut self) {
+        self.peek = false;
+        self.leaving = false;
+    }
+}
+
 struct SidebarDrag {
     start_x: Pixels,
     start_width: SidebarWidth,
@@ -326,70 +337,42 @@ impl Shell {
         title_bar: TitleBar,
         window: &Window,
         cx: &Context<Self>,
-    ) -> Div {
+    ) -> Option<Div> {
         if !self.sidebar_interaction.peek {
-            let palette = palette();
-            let controls_room = (
-                tokens::WINDOW_CONTROLS_WIDTH,
-                tokens::WINDOW_CONTROLS_PAD_LEFT,
-            );
-            return div()
+            return None;
+        }
+        let slide = self.sidebar_width(state) + FLOATING_INSET;
+        let leaving = self.sidebar_interaction.leaving;
+        Some(
+            div()
                 .absolute()
-                .top(px(tokens::SIDEBAR_PAD_TOP))
-                .left(px(tokens::SIDEBAR_PAD_LEFT))
-                .occlude()
-                .flex()
-                .items_center()
-                .gap(px(tokens::TOOLBAR_GAP))
-                .rounded(px(tokens::RADIUS_SM))
-                .bg(palette.tint)
-                .shadow(palette.shadow_row())
-                .children(self.window_controls(title_bar, controls_room, window, cx))
-                .child(self.toolbar_button(
-                    "sidebar-toggle",
-                    "sidebar",
-                    "Show sidebar",
-                    Action::Sidebar(SidebarAction::Toggle),
-                    cx,
-                ))
-                .when(!state.model.peeks.contains_key(&self.id), |bar| {
-                    bar.children(self.zoom_badge(cx))
-                });
-        }
-
-        let mut float = div()
-            .absolute()
-            .left_0()
-            .top_0()
-            .bottom_0()
-            .w(px(SIDEBAR_EDGE));
-        if self.sidebar_interaction.peek {
-            let slide = self.sidebar_width(state) + FLOATING_INSET;
-            let leaving = self.sidebar_interaction.leaving;
-            float = float.child(
-                self.sidebar(state, current, title_bar, window, cx)
-                    .absolute()
-                    .left(px(FLOATING_INSET))
-                    .top(px(FLOATING_INSET))
-                    .bottom(px(FLOATING_INSET))
-                    .rounded(px(tokens::WINDOW_RADIUS - FLOATING_INSET))
-                    .shadow(palette().shadow_pop())
-                    .occlude()
-                    .with_animation(
-                        if leaving {
-                            "sidebar-slide-out"
-                        } else {
-                            "sidebar-slide-in"
-                        },
-                        Animation::new(if leaving { PEEK_OUT } else { PEEK_IN })
-                            .with_easing(tokens::ease),
-                        move |card, delta| {
-                            card.ml(px(-slide * if leaving { delta } else { 1. - delta }))
-                        },
-                    ),
-            );
-        }
-        float
+                .left_0()
+                .top_0()
+                .bottom_0()
+                .w(px(SIDEBAR_EDGE))
+                .child(
+                    self.sidebar(state, current, title_bar, window, cx)
+                        .absolute()
+                        .left(px(FLOATING_INSET))
+                        .top(px(FLOATING_INSET))
+                        .bottom(px(FLOATING_INSET))
+                        .rounded(px(tokens::WINDOW_RADIUS - FLOATING_INSET))
+                        .shadow(palette().shadow_pop())
+                        .occlude()
+                        .with_animation(
+                            if leaving {
+                                "sidebar-slide-out"
+                            } else {
+                                "sidebar-slide-in"
+                            },
+                            Animation::new(if leaving { PEEK_OUT } else { PEEK_IN })
+                                .with_easing(tokens::ease),
+                            move |card, delta| {
+                                card.ml(px(-slide * if leaving { delta } else { 1. - delta }))
+                            },
+                        ),
+                ),
+        )
     }
 
     pub(crate) fn sidebar_input(&self, cx: &Context<Self>) -> impl IntoElement {

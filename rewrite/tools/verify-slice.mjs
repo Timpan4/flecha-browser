@@ -784,11 +784,14 @@ async function sidebarResizeAndReveal(app, tab) {
   const middle = y + Math.floor(height / 2);
   const move = clientX => execFileSync(x11Driver, ['move', x + clientX, middle]);
 
-  const sidebar = path => {
-    const pixel = execFileSync('magick', [path, '-format', `%[hex:p{${x + 20},${middle}}]`, 'info:'], { encoding: 'utf8' });
+  const sidebarAt = (path, py) => {
+    const pixel = execFileSync('magick', [path, '-format', `%[hex:p{${x + 20},${py}}]`, 'info:'], { encoding: 'utf8' });
 
     return ['CDD9F7', '2F3746'].includes(pixel.trim().slice(0, 6).toUpperCase());
   };
+
+  const sidebar = path => sidebarAt(path, middle);
+  const topCornerChrome = path => sidebarAt(path, y + 13);
 
   const pageWidth = async label => {
     const reply = site.probe(label, stepTimeoutMs);
@@ -817,16 +820,18 @@ async function sidebarResizeAndReveal(app, tab) {
 
   execFileSync(x11Driver, ['chord', 'Control_L', 's']);
   await app.present();
-  await captureUntil('sidebar-collapsed', 'root', path => sidebar(path) ? 'sidebar stayed docked' : undefined);
+  await captureUntil('sidebar-collapsed', 'root', path =>
+    sidebar(path) ? 'sidebar stayed docked' : topCornerChrome(path) ? 'floating controls stayed over the collapsed page' : undefined);
   const unoccluded = await pageWidth('collapsed-sidebar-width');
   move(2);
   await app.present();
   await captureUntil('sidebar-hover-reveal', 'root', path => sidebar(path) ? undefined : 'floating sidebar missing');
   assert.equal(await pageWidth('floating-sidebar-width'), unoccluded, 'the floating sidebar resized the page');
   move(width + 80);
-  await captureUntil('sidebar-hover-leave', 'root', path => sidebar(path) ? 'floating sidebar stayed open' : undefined);
+  await captureUntil('sidebar-hover-leave', 'root', path =>
+    sidebar(path) ? 'floating sidebar stayed open' : topCornerChrome(path) ? 'floating controls stayed over the page after leave' : undefined);
   execFileSync(x11Driver, ['chord', 'Control_L', 's']);
-  pass('the collapsed sidebar revealed over the page at the left edge and hid when the pointer left');
+  pass('the collapsed sidebar hid cleanly with no floating pill, revealed at the left edge, and hid again when the pointer left');
 }
 
 async function quickWins(app) {

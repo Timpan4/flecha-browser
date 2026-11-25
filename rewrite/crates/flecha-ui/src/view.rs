@@ -958,7 +958,9 @@ impl Render for Shell {
                 ));
             }
             let docked = core.sidebar_visible(&self.id);
-            if !docked {
+            if docked {
+                self.sidebar_interaction.clear_peek();
+            } else {
                 self.hovered_tab_row = None;
             }
             let page_area = div()
@@ -978,7 +980,7 @@ impl Render for Shell {
             } else {
                 body = body
                     .child(page_area)
-                    .child(self.floating_sidebar(&state, current, title_bar, window, cx));
+                    .children(self.floating_sidebar(&state, current, title_bar, window, cx));
             }
             main = main.child(body);
         }
