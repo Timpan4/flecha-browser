@@ -40,7 +40,9 @@ export function cornerNotRounded(path, color) {
   const corner = pageCorner(path, color);
   const channels = [1, 3, 5].map(start => Number.parseInt(corner.color.slice(start, start + 2), 16));
 
-  if (channels.some((value, index) => value > tint[index] || value < darkest[index])) {
+  const outsideShadow = channels.some((value, index) => value > tint[index] || value < darkest[index]);
+
+  if (corner.color === color.toUpperCase() || outsideShadow) {
     return `the ${color} page's top-left corner (${corner.x}, ${corner.y}) is ${corner.color}, not the window tint`;
   }
 }
