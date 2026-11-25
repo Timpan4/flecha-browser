@@ -1,4 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
+#include <X11/Xatom.h>
 #include <X11/Xlib.h>
 #include <X11/extensions/XTest.h>
 #ifdef FLECHA_VERIFY_CURSOR
@@ -225,6 +226,63 @@ int main(int argc, char **argv)
         Window window = named(display, argv[2]);
         ok = window != None && XRaiseWindow(display, window) &&
              XSetInputFocus(display, window, RevertToParent, CurrentTime);
+    } else if (argc == 4 && strcmp(argv[1], "fullscreen") == 0 &&
+               (strcmp(argv[3], "on") == 0 || strcmp(argv[3], "off") == 0)) {
+        // What a window manager does when it applies a _NET_WM_STATE fullscreen request: Xvfb
+        // has none. The window stays focused either way.
+        Window window = named(display, argv[2]);
+        Atom state[] = {
+            XInternAtom(display, "_NET_WM_STATE_FOCUSED", False),
+            XInternAtom(display, "_NET_WM_STATE_FULLSCREEN", False),
+        };
+        int count = strcmp(argv[3], "on") == 0 ? 2 : 1;
+        ok = window != None &&
+             XChangeProperty(display, window, XInternAtom(display, "_NET_WM_STATE", False),
+                             XA_ATOM, 32, PropModeReplace, (unsigned char *)state, count);
+    } else if (argc == 2 && strcmp(argv[1], "wm-requests") == 0) {
+        // Prints each _NET_WM_STATE request a client sends to the root window, as a window
+        // manager receives it, until killed: Xvfb has none. Each line is the action and the
+        // request's two state atoms. A `mark` request prints `mark <n>` in the same order the
+        // server received it. Selecting SubstructureNotify, not SubstructureRedirect, leaves
+        // every other window request to the server.
+        Window root = DefaultRootWindow(display);
+        Atom wm_state = XInternAtom(display, "_NET_WM_STATE", False);
+        Atom mark = XInternAtom(display, "FLECHA_HARNESS_MARK", False);
+        XSelectInput(display, root, SubstructureNotifyMask);
+        XSync(display, False);
+        printf("ready\n");
+        fflush(stdout);
+        for (;;) {
+            XEvent event;
+            XNextEvent(display, &event);
+            if (event.type != ClientMessage)
+                continue;
+            if (event.xclient.message_type == mark) {
+                printf("mark %ld\n", event.xclient.data.l[0]);
+            } else if (event.xclient.message_type == wm_state) {
+                printf("%ld", event.xclient.data.l[0]);
+                for (int slot = 1; slot <= 2; slot++) {
+                    Atom atom = (Atom)event.xclient.data.l[slot];
+                    char *name = atom == None ? NULL : XGetAtomName(display, atom);
+                    printf(" %s", name != NULL ? name : "None");
+                    if (name != NULL)
+                        XFree(name);
+                }
+                printf("\n");
+            }
+            fflush(stdout);
+        }
+    } else if (argc == 3 && strcmp(argv[1], "mark") == 0) {
+        // Sends `wm-requests` a marker after every request the server has already received.
+        int number = coordinate(argv[2]);
+        XEvent event = {0};
+        event.xclient.type = ClientMessage;
+        event.xclient.window = DefaultRootWindow(display);
+        event.xclient.message_type = XInternAtom(display, "FLECHA_HARNESS_MARK", False);
+        event.xclient.format = 32;
+        event.xclient.data.l[0] = number;
+        ok = number >= 0 && XSendEvent(display, DefaultRootWindow(display), False,
+                                         SubstructureNotifyMask, &event);
     } else if (argc == 2 && strcmp(argv[1], "copy") == 0) {
         ok = press(display, XK_Control_L, True) && tap(display, XK_a) &&
              tap(display, XK_c) && press(display, XK_Control_L, False);
