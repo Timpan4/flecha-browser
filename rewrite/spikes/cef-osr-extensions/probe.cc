@@ -2,15 +2,19 @@
 #include "include/capi/cef_browser_capi.h"
 #include "include/capi/cef_client_capi.h"
 #include "include/capi/cef_devtools_message_observer_capi.h"
+#include "include/capi/cef_display_handler_capi.h"
 
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
+#include <functional>
 #include <iostream>
 #include <map>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <thread>
+#include <vector>
 
 namespace {
 
@@ -33,6 +37,8 @@ void SetString(cef_string_t* field, const std::string& value) {
 
 std::map<std::string, cef_request_context_t*> contexts;
 std::map<int, cef_browser_t*> browsers;
+// Only the UI thread changes the browser registry and pending creation count.
+std::size_t pending_creations = 0;
 bool quitting = false;
 std::thread commands;
 std::string initial_url;
@@ -61,21 +67,36 @@ void Open(const std::string& context, const std::string& url) {
   SetString(&address, url);
   auto* request_context = contexts.at(context);
   request_context->base.base.add_ref(&request_context->base.base);
+  ++pending_creations;
   const int queued = cef_browser_host_create_browser(
       &window, &client, &address, &settings, nullptr, request_context);
   cef_string_clear(&address);
   if (!queued) std::abort();
 }
 
+void CloseBrowser(cef_browser_t* browser) {
+  auto* host = browser->get_host(browser);
+  host->close_browser(host, true);
+  host->base.release(&host->base);
+}
+
+void MaybeQuit() {
+  if (quitting && pending_creations == 0 && browsers.empty()) cef_quit_message_loop();
+}
+
 void RunCommand(const std::string& line) {
+  if (quitting) return;
   if (line == "quit") {
     quitting = true;
-    if (browsers.empty()) cef_quit_message_loop();
-    const auto closing = browsers;
-    for (const auto& [id, browser] : closing) {
-      auto* host = browser->get_host(browser);
-      host->close_browser(host, true);
-      host->base.release(&host->base);
+    if (browsers.empty()) {
+      MaybeQuit();
+      return;
+    }
+    std::vector<int> closing;
+    for (const auto& [id, browser] : browsers) closing.push_back(id);
+    for (int id : closing) {
+      if (const auto found = browsers.find(id); found != browsers.end())
+        CloseBrowser(found->second);
     }
     return;
   }
@@ -86,26 +107,31 @@ void RunCommand(const std::string& line) {
   Open(context, url);
 }
 
-struct Command : cef_task_t {
-  explicit Command(std::string value) : line(std::move(value)) {
+struct UiTask : cef_task_t {
+  explicit UiTask(std::function<void()> callback) : work(std::move(callback)) {
     base.size = sizeof(cef_task_t);
     base.add_ref = [](cef_base_ref_counted_t* self) { ++From(self)->refs; };
     base.release = [](cef_base_ref_counted_t* self) {
-      auto* command = From(self);
-      if (--command->refs != 0) return 0;
-      delete command;
+      auto* task = From(self);
+      if (--task->refs != 0) return 0;
+      delete task;
       return 1;
     };
     base.has_one_ref = [](cef_base_ref_counted_t* self) -> int { return From(self)->refs == 1; };
     base.has_at_least_one_ref = [](cef_base_ref_counted_t*) { return 1; };
-    execute = [](cef_task_t* self) { RunCommand(static_cast<Command*>(self)->line); };
+    execute = [](cef_task_t* self) { static_cast<UiTask*>(self)->work(); };
   }
-  static Command* From(cef_base_ref_counted_t* self) {
-    return static_cast<Command*>(reinterpret_cast<cef_task_t*>(self));
+  static UiTask* From(cef_base_ref_counted_t* self) {
+    return static_cast<UiTask*>(reinterpret_cast<cef_task_t*>(self));
   }
   std::atomic<int> refs{1};
-  std::string line;
+  std::function<void()> work;
 };
+
+void PostUiTask(std::function<void()> work) {
+  // The CEF ABI consumes the task's reference.
+  if (!cef_post_task(TID_UI, new UiTask(std::move(work)))) std::abort();
+}
 
 }  // namespace
 
@@ -125,8 +151,7 @@ int main(int argc, char** argv) {
     commands = std::thread([] {
       std::string line;
       while (std::getline(std::cin, line)) {
-        // The CEF ABI consumes the task's reference.
-        if (!cef_post_task(TID_UI, new Command(line))) std::abort();
+        PostUiTask([line] { RunCommand(line); });
         if (line == "quit") return;
       }
     });
@@ -143,8 +168,27 @@ int main(int argc, char** argv) {
   static auto render = StaticHandler<cef_render_handler_t>();
   static auto life = StaticHandler<cef_life_span_handler_t>();
   static auto observer = StaticHandler<cef_dev_tools_message_observer_t>();
+  static auto display = StaticHandler<cef_display_handler_t>();
   client.get_render_handler = [](cef_client_t*) { return &render; };
   client.get_life_span_handler = [](cef_client_t*) { return &life; };
+  client.get_display_handler = [](cef_client_t*) { return &display; };
+  display.on_address_change = [](cef_display_handler_t*, cef_browser_t* browser,
+                                 cef_frame_t* frame, const cef_string_t* url) {
+    if (frame->is_main(frame)) {
+      cef_string_utf8_t address{};
+      if (cef_string_utf16_to_utf8(url->str, url->length, &address) && address.str) {
+        const std::string_view value(address.str, address.length);
+        if (value.starts_with("chrome-extension://") &&
+            value.find("/popup.html?report=") != std::string_view::npos) {
+          std::printf("popup-browser %d %s\n", browser->get_identifier(browser), address.str);
+          std::fflush(stdout);
+        }
+      }
+      cef_string_utf8_clear(&address);
+    }
+    frame->base.release(&frame->base);
+    browser->base.release(&browser->base);
+  };
   render.get_view_rect = [](cef_render_handler_t*, cef_browser_t*, cef_rect_t* rect) {
     *rect = {0, 0, 640, 480};
   };
@@ -165,7 +209,18 @@ int main(int argc, char** argv) {
     return 1;
   };
   life.on_after_created = [](cef_life_span_handler_t*, cef_browser_t* browser) {
-    browsers.emplace(browser->get_identifier(browser), browser);
+    if (pending_creations == 0) std::abort();
+    --pending_creations;
+    const int id = browser->get_identifier(browser);
+    browsers.emplace(id, browser);
+    if (quitting) {
+      // Defer closing until CEF has returned from its creation callback.
+      PostUiTask([id] {
+        if (const auto found = browsers.find(id); found != browsers.end())
+          CloseBrowser(found->second);
+      });
+      return;
+    }
     if (!observer_registration && std::getenv("PROBE_CEF_CDP")) {
       auto* host = browser->get_host(browser);
       observer_registration = host->add_dev_tools_message_observer(host, &observer);
@@ -178,7 +233,7 @@ int main(int argc, char** argv) {
     const auto retained = browsers.extract(browser->get_identifier(browser));
     if (retained) retained.mapped()->base.release(&retained.mapped()->base);
     browser->base.release(&browser->base);
-    if (quitting && browsers.empty()) cef_quit_message_loop();
+    MaybeQuit();
   };
 
   cef_settings_t settings{};

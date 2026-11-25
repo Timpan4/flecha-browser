@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if ! node_major=$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null) || (( node_major < 24 )); then
+  printf 'The CEF extensions spike requires Node.js 24 or newer.\n' >&2
+  exit 1
+fi
+if [[ ! -x /usr/bin/bsdtar ]]; then
+  printf 'The CEF extensions spike requires bsdtar at /usr/bin/bsdtar for CRX packaging in the isolated runner.\n' >&2
+  exit 1
+fi
+
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source "$here/../gpui-cef-compositor/runtime-paths.sh"
 runtime_paths linux64 cef_linux_x86_64
