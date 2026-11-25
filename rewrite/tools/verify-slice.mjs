@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { createHash, generateKeyPairSync, sign } from 'node:crypto';
 import { once, EventEmitter } from 'node:events';
-import { copyFileSync, createWriteStream, existsSync, readdirSync, readFileSync, renameSync, utimesSync } from 'node:fs';
+import { copyFileSync, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, utimesSync, writeFileSync } from 'node:fs';
 import { createServer as createHttpsServer } from 'node:https';
 import { join, relative } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -34,7 +35,7 @@ const stepTimeoutMs = 10_000;
 const shippingTrace = readFileSync(new URL('./slice-ts-replay.jsonl', import.meta.url), 'utf8')
   .trim().split('\n').map(line => JSON.parse(line));
 
-assert(['slice', 'open', 'focus', 'popups', 'adblock', 'incognito', 'fullscreen', 'break-restore', 'clipboard', 'visual', 'tab-status', 'surfaces'].includes(mode), 'unknown slice check');
+assert(['slice', 'open', 'focus', 'popups', 'adblock', 'incognito', 'fullscreen', 'break-restore', 'clipboard', 'visual', 'tab-status', 'surfaces', 'extensions', 'store-extensions'].includes(mode), 'unknown slice check');
 
 const easylist = '[Adblock Plus 2.0]\n! Title: EasyList\n/fixture-ad$xmlhttprequest\n';
 const easyprivacy = '[Adblock Plus 2.0]\n! Title: EasyPrivacy\n/fixture-tracker$xmlhttprequest\n';
@@ -96,9 +97,32 @@ const statusPages = {
 // The partition check's icons: /partition-icon.png answers in the colour of the partition whose
 // cookie the request carries, one colour for each icon URL.
 const partitionColors = { r1: '#7B2FBE', i1: '#E8871E', i2: '#C21F8A', r2: '#2E6FD8', s1: '#1E9E5A' };
+let extensionPackage;
+const extensionRequests = [];
+const extensionIcon = '#A612C5';
+const extensionPopup = '#189456';
 
 const site = await fixture((path, response, request) => {
   requestAgents.push({ path, agent: request.headers['user-agent'] ?? '' });
+
+  if (path === '/extension-update.xml') {
+    extensionRequests.push(path);
+    response.setHeader('Content-Type', 'application/xml');
+    response.end(`<?xml version="1.0" encoding="UTF-8"?>
+      <gupdate xmlns="http://www.google.com/update2/response" protocol="2.0">
+        <app appid="${extensionPackage.id}"><updatecheck codebase="${base}/extension.crx" version="1.0"/></app>
+      </gupdate>`);
+
+    return true;
+  }
+
+  if (path === '/extension.crx') {
+    extensionRequests.push(path);
+    response.setHeader('Content-Type', 'application/x-chrome-extension');
+    response.end(extensionPackage.bytes);
+
+    return true;
+  }
 
   if (path === '/icon.png') {
     response.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-store' }).end(solidPng(32, faviconColor));
@@ -473,11 +497,15 @@ async function document(app, tab, label, prepare = '') {
   return JSON.parse(await reply);
 }
 
-async function nativeInput(app, tab) {
+function compileX11Driver() {
   execFileSync('cc', [
     '-std=c17', '-Wall', '-Wextra', '-Werror', 'spikes/gpui-cef-compositor/x11-input.c',
     '-DFLECHA_VERIFY_CURSOR', '-lX11', '-lXtst', '-lXfixes', '-o', x11Driver,
   ]);
+}
+
+async function nativeInput(app, tab) {
+  compileX11Driver();
   const center = site.probe('input-center');
   const typed = site.probe('native-key');
 
@@ -3155,6 +3183,350 @@ async function verifyAdblock() {
   pass('rejected malformed and zero fixture ports at startup');
 }
 
+function extensionFixture(label, icon) {
+  const directory = join(out, `extension-${label}`);
+  mkdirSync(directory);
+  writeFileSync(join(directory, 'manifest.json'), JSON.stringify({
+    manifest_version: 3, name: `Flecha ${label} fixture`, version: '1.0',
+    action: { default_popup: 'popup.html', default_icon: { 32: 'icon.png' } },
+    content_scripts: [{ matches: ['http://127.0.0.1/*'], js: ['content.js'], run_at: 'document_start' }],
+  }));
+  writeFileSync(join(directory, 'content.js'),
+    `document.addEventListener('DOMContentLoaded', () => document.documentElement.dataset.flechaExtension = ${JSON.stringify(label)});`);
+  writeFileSync(join(directory, 'popup.html'), '<!doctype html><link rel="stylesheet" href="popup.css"><p>Flecha fixture popup</p>');
+  writeFileSync(join(directory, 'popup.css'), `html {background:${extensionPopup}; color:#fff}`);
+  writeFileSync(join(directory, 'icon.png'), solidPng(32, icon));
+
+  return directory;
+}
+
+// CRX3 signs the CRX ID and ZIP bytes (components/crx_file/crx3.proto). A fresh fixture key
+// never leaves this process.
+function packExtension(directory) {
+  const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const der = publicKey.export({ type: 'spki', format: 'der' });
+  const digest = createHash('sha256').update(der).digest().subarray(0, 16);
+  const id = [...digest.toString('hex')].map(hex => 'abcdefghijklmnop'[Number.parseInt(hex, 16)]).join('');
+
+  const zip = execFileSync('bsdtar', ['--format', 'zip', '-cf', '-', '-C', directory,
+    'manifest.json', 'content.js', 'popup.html', 'popup.css', 'icon.png']);
+
+  const varint = value => {
+    const encoded = [];
+
+    while (value > 127) {
+      encoded.push((value & 127) | 128);
+      value >>>= 7;
+    }
+
+    return Buffer.from([...encoded, value]);
+  };
+
+  const bytes = (field, data) => Buffer.concat([varint((field << 3) | 2), varint(data.length), data]);
+
+  const le = value => {
+    const buffer = Buffer.alloc(4);
+    buffer.writeUInt32LE(value);
+
+    return buffer;
+  };
+
+  const signed = bytes(1, digest);
+  const payload = Buffer.concat([Buffer.from('CRX3 SignedData\0'), le(signed.length), signed, zip]);
+  const proof = Buffer.concat([bytes(1, der), bytes(2, sign('sha256', payload, privateKey))]);
+  const header = Buffer.concat([bytes(2, proof), bytes(10_000, signed)]);
+
+  return { id, bytes: Buffer.concat([Buffer.from('Cr24'), le(3), le(header.length), header, zip]) };
+}
+
+async function verifyExtensions() {
+  compileX11Driver();
+
+  const marker = async (app, tab, label) => {
+    const result = site.probe(label);
+    await app.command('script', { tab, source: `fetch('/probe/${label}?value=' + encodeURIComponent(
+      document.documentElement.dataset.flechaExtension ?? 'absent'))` });
+
+    return result;
+  };
+
+  const without = launch('extension-negative');
+  await without.wait('CEF context ready', event => event.type === 'ready');
+  const baseline = await openTab(without, '/open');
+  assert.equal(await marker(without, baseline, 'extension-negative'), 'absent');
+  assert(!without.events.some(event => event.type === 'extension_control'));
+  await without.quit();
+  pass('negative control displayed no action or injected content before installation');
+
+  const profile = process.env.FLECHA_PROFILE;
+  const policy = join(profile, 'extension-policy', 'managed', 'flecha.json');
+  extensionPackage = packExtension(extensionFixture('policy', extensionIcon));
+  writeFileSync(policy, JSON.stringify({ ExtensionInstallForcelist: [`${extensionPackage.id};${base}/extension-update.xml`] }));
+  const app = launch('extension-policy');
+  await app.wait('CEF context ready', event => event.type === 'ready');
+  const menu = await app.wait('managed extension action menu', event => event.type === 'extension_control' && event.id === 'menu', 0, stepTimeoutMs);
+  assert(extensionRequests.includes('/extension-update.xml') && extensionRequests.includes('/extension.crx'));
+  const tab = await openTab(app, '/open');
+  assert.equal(await marker(app, tab, 'extension-content'), 'policy');
+  pass('managed policy requested its signed CRX, installed it, and ran its content script');
+
+  const click = ({x, y}) => execFileSync(x11Driver, ['click', Math.round(x), Math.round(y)]);
+
+  const control = (id, since) => app.wait(id, event => event.type === 'extension_control' && event.id === id,
+    since, stepTimeoutMs);
+
+  let since = app.events.length;
+  click(menu);
+  click(await control(`pin-${extensionPackage.id}`, since));
+  const action = await control(`action-${extensionPackage.id}`, since);
+  execFileSync(x11Driver, ['key', 'Escape']);
+  await app.present();
+  await captureUntil('extension-sidebar-icon', 'root', path => {
+    const colors = execFileSync('magick', [path, '-crop', `1x1+${Math.round(action.x)}+${Math.round(action.y)}`,
+      '-format', '%c', 'histogram:info:'], { encoding: 'utf8' });
+
+    return colors.includes(extensionIcon) ? undefined : 'missing sidebar extension icon';
+  }, AbortSignal.timeout(stepTimeoutMs));
+  pass('the extensions menu pinned the action and its manifest icon painted in the sidebar');
+
+  since = app.events.length;
+  click(action);
+
+  const popup = await app.wait('extension popup load', event => event.type === 'loaded'
+    && event.url === `chrome-extension://${extensionPackage.id}/popup.html`, since, stepTimeoutMs);
+
+  assert.notEqual(popup.tab, tab);
+  await captureUntil('extension-popup', 'root', path => {
+    const colors = execFileSync('magick', [path, '-format', '%c', 'histogram:info:'], { encoding: 'utf8' });
+
+    return colors.includes(extensionPopup) ? undefined : 'missing extension popup paint';
+  }, AbortSignal.timeout(stepTimeoutMs));
+  pass('clicking its icon opened a separate OSR browser and painted the extension popup');
+  execFileSync(x11Driver, ['key', 'Escape']);
+
+  since = app.events.length;
+  const agent = await app.command('open_agent_fixture', { url: base + '/split' });
+  await app.command('select', { tab: agent.tab });
+  await app.loaded(agent.tab, '/split', since);
+  assert.equal(await marker(app, agent.tab, 'extension-agent'), 'absent');
+  since = app.events.length;
+  await app.present();
+  assert(!app.events.slice(since).some(event => event.type === 'extension_control' && event.id === 'menu'));
+  pass('agent tabs had no extension content script or sidebar action');
+
+  since = app.events.length;
+  const { window } = await openIncognito(app);
+  const privateTab = incognitoTab(await app.command('open', { url: base + '/open', window }), window);
+  await app.loaded(privateTab, '/open', since);
+  assert.equal(await marker(app, privateTab, 'extension-private'), 'absent');
+  await app.present(window);
+  assert(!app.events.slice(since).some(event => event.type === 'extension_control' && event.window === window));
+  pass('private window had neither the content script nor an extension action');
+
+  await app.command('close_window', { window });
+  execFileSync(x11Driver, ['focus', 'Flecha']);
+  since = app.events.length;
+  await app.command('extension_settings');
+  click(await control(`remove-${extensionPackage.id}`, since));
+  await poll('removed policy entry', () => JSON.parse(readFileSync(policy, 'utf8')).ExtensionInstallForcelist.length === 0);
+  await app.quit();
+  const removed = launch('extension-removed');
+  await removed.wait('CEF context ready', event => event.type === 'ready');
+  const reopened = await openTab(removed, '/open');
+  assert.equal(await marker(removed, reopened, 'extension-removed'), 'absent');
+  await removed.present();
+  assert(!removed.events.some(event => event.type === 'extension_control'));
+  await removed.quit();
+  pass('removing the policy entry removed the content script and sidebar action on restart');
+
+  const unpacked = extensionFixture('unpacked', extensionIcon);
+  writeFileSync(join(profile, 'extensions.json'), JSON.stringify({ unpacked: [unpacked] }));
+  const developer = launch('extension-developer');
+  await developer.wait('CEF context ready', event => event.type === 'ready');
+  const devTab = await openTab(developer, '/open');
+  assert.equal(await marker(developer, devTab, 'extension-developer'), 'unpacked');
+  await developer.wait('unpacked extension action', event => event.type === 'extension_control' && event.id === 'menu', 0, stepTimeoutMs);
+  await developer.quit();
+  pass('the configured unpacked folder loaded at startup and ran on its first new document');
+
+  if (existsSync('/mnt/visual')) {
+    for (const name of ['extension-sidebar-icon.png', 'extension-popup.png', 'extension-policy.log']) {
+      copyFileSync(join(out, name), join('/mnt/visual', name));
+    }
+  }
+}
+
+async function verifyStoreExtensions() {
+  compileX11Driver();
+
+  const store = [
+    ['uBlock Origin Lite', 'ddkjiahejlhfcafbddmgiahcphecmpfh'],
+    ['Bitwarden', 'nngceckbapebfimnlniiiahkandclblb'],
+    ['Dark Reader', 'eimadpbcbfnmbkopoojfekhnkhdbieeh'],
+  ];
+
+  const profile = process.env.FLECHA_PROFILE;
+  const path = join(profile, 'extension-policy', 'managed', 'flecha.json');
+  const policy = () => existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')).ExtensionInstallForcelist : [];
+  let app = launch('store-review');
+  await app.wait('CEF context ready', event => event.type === 'ready');
+  const baselineTab = await openTab(app, '/open');
+  const click = ({x, y}) => execFileSync(x11Driver, ['click', Math.round(x), Math.round(y)]);
+  const control = (id, since = 0) => app.wait(id, event => event.type === 'extension_control' && event.id === id, since, stepTimeoutMs);
+
+  const probe = async (tab, method, params = {}) => {
+    const since = app.events.length;
+    const { id } = await app.command('extension_probe', { tab, method, params });
+    const reply = await app.wait(method, event => event.type === 'extension_probe' && event.tab === tab && event.id === id, since, stepTimeoutMs);
+    assert(reply.success, `${method} failed: ${reply.result}`);
+
+    return JSON.parse(reply.result);
+  };
+
+  const evaluate = async (tab, expression) => {
+    const response = await probe(tab, 'Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
+    assert(!response.exceptionDetails, `Evaluation failed: ${JSON.stringify(response.exceptionDetails)}`);
+
+    return response.result.value;
+  };
+
+  const adCheck = tab => evaluate(tab, `fetch('https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js', { mode: 'no-cors' })
+    .then(() => 'allowed', () => 'blocked or unavailable')`);
+
+  const originalAd = await adCheck(baselineTab);
+
+  const reviewed = new Map();
+
+  for (const [name, id] of store) {
+    const since = app.events.length;
+    await app.command('extension_settings');
+    click(await control('store-input', since));
+    await app.command('clipboard', { text: name === 'uBlock Origin Lite' ? `https://chromewebstore.google.com/detail/ublock-origin-lite/${id}` : id });
+    execFileSync(x11Driver, ['chord', 'Control_L', 'v']);
+    execFileSync(x11Driver, ['key', 'Return']);
+
+    const review = await app.wait(`permission review for ${name}`, event => event.type === 'extension_review' && event.id === id,
+      since, stepTimeoutMs);
+
+    assert(review.permissions.length > 0);
+    assert(!policy().some(entry => entry.startsWith(`${id};`)), 'policy was written before permission review');
+    click(await control('store-confirm', since));
+    assert(await poll(`policy write for ${name}`, () => policy().includes(`${id};https://clients2.google.com/service/update2/crx`)));
+    execFileSync(x11Driver, ['key', 'Escape']);
+    reviewed.set(id, review);
+  }
+
+  await app.quit();
+  app = launch('store-policy');
+  await app.wait('CEF context ready', event => event.type === 'ready');
+  const tab = await openTab(app, '/open');
+
+  for (const [name, id] of store) {
+    const review = reviewed.get(id);
+
+    const installed = await poll(`Chrome Web Store install for ${name}`, () => {
+      const directory = join(profile, 'cef', 'Default', 'Extensions', id);
+
+      if (!existsSync(directory)) return;
+
+      for (const version of readdirSync(directory)) {
+        const manifest = join(directory, version, 'manifest.json');
+
+        if (existsSync(manifest)) return JSON.parse(readFileSync(manifest, 'utf8'));
+      }
+    });
+
+    assert.equal(installed.version, review.version);
+    console.log(JSON.stringify({ name, install: installed.version, updateUrl: installed.update_url, permissions: review.permissions }));
+    let since = app.events.length;
+    await app.present();
+    click(await control('menu', since));
+    click(await control(`pin-${id}`, since));
+    const action = await control(`action-${id}`, since);
+    execFileSync(x11Driver, ['key', 'Escape']);
+    since = app.events.length;
+    click(action);
+
+    const popup = await app.wait(`popup for ${name}`, event => event.type === 'loaded'
+      && event.url?.startsWith(`chrome-extension://${id}/`), since, stepTimeoutMs);
+
+    await app.wait(`paint for ${name}`, event => event.type === 'paint' && event.tab === popup.tab, since, stepTimeoutMs);
+    const title = app.events.findLast(event => event.type === 'title' && event.tab === popup.tab)?.title;
+    const state = await inspectStorePopup(app, popup.tab, name);
+    console.log(JSON.stringify({ name, popup: new URL(popup.url).pathname, title, loadStatus: popup.status, painted: true, ...state }));
+
+    if (existsSync('/mnt/visual')) {
+      await app.present();
+      execFileSync('magick', ['import', '-window', 'root', join('/mnt/visual', `${id}.png`)]);
+    }
+
+    execFileSync(x11Driver, ['key', 'Escape']);
+  }
+
+  await probe(tab, 'Profiler.enable');
+  await probe(tab, 'Profiler.startPreciseCoverage', { callCount: true });
+  const since = app.events.length;
+  await app.command('script', { tab, source: `location.href = ${JSON.stringify(base + '/split')}` });
+  await app.loaded(tab, '/split', since);
+  const coverage = await probe(tab, 'Profiler.takePreciseCoverage');
+
+  for (const [name, id] of store) {
+    const executed = coverage.result.filter(script => script.url.startsWith(`chrome-extension://${id}/`)
+      && script.functions.some(fn => fn.ranges.some(range => range.count > 0)))
+      .map(script => new URL(script.url).pathname);
+
+    console.log(JSON.stringify({ name, executedContentScripts: executed }));
+  }
+
+  console.log(JSON.stringify({ name: 'uBlock Origin Lite', adRequestWithoutExtensions: originalAd, adRequestWithExtensions: await adCheck(tab) }));
+  console.log(JSON.stringify({ name: 'Dark Reader', documentMode: await evaluate(tab,
+    "document.documentElement.getAttribute('data-darkreader-mode')") }));
+  await app.quit();
+  const log = join(out, 'store-policy.log');
+  console.log(JSON.stringify({ stackSmashing: (readFileSync(log, 'utf8').match(/stack smashing detected/g) ?? []).length }));
+
+  if (existsSync('/mnt/visual')) copyFileSync(log, join('/mnt/visual', 'store-policy.log'));
+  pass('reviewed three Store extensions, restarted with the managed list, and measured their popups and content scripts');
+}
+
+async function inspectStorePopup(app, tab, name) {
+  const marker = 'flecha-extension-state:';
+  const after = app.events.length;
+
+  const state = event => event.type === 'title' && event.tab === tab && event.title.startsWith(marker)
+    ? JSON.parse(event.title.slice(marker.length)) : undefined;
+
+  // Report the signed-out document and extension API results through CEF's title event.
+  await app.command('script', { tab, source: `(() => {
+    const report = { tabs: 'pending', update: 'pending' };
+    const publish = () => {
+      report.body = document.body?.innerText.trim() ?? '';
+      document.title = ${JSON.stringify(marker)} + JSON.stringify(report);
+    };
+    new MutationObserver(publish).observe(document.body, { childList: true, subtree: true, characterData: true });
+    const watch = (key, query) => Promise.resolve().then(query).then(value => {
+      report[key] = value;
+      publish();
+    }, error => { report[key] = error.message; publish(); });
+    watch('tabs', async () => (await chrome.tabs.query({ active: true, currentWindow: true })).length);
+    watch('update', async () => (await chrome.runtime.requestUpdateCheck()).status);
+    publish();
+  })()` });
+
+  try {
+    await app.wait(`settled popup for ${name}`, event => {
+      const report = state(event);
+
+      return report?.update !== 'pending' && report?.tabs !== 'pending'
+        && (name === 'Bitwarden' ? /log in|email/i.test(report?.body) : report?.body);
+    }, after, stepTimeoutMs);
+  } catch (error) {
+    if (error.name !== 'AbortError') throw error;
+  }
+
+  return app.events.slice(after).map(state).filter(Boolean).at(-1) ?? { body: null, tabs: null, update: null };
+}
+
 async function verifySlice() {
   const app = launch('first');
   await app.wait('CEF context ready', event => event.type === 'ready');
@@ -3909,6 +4281,10 @@ try {
     await verifyAdblock();
   } else if (mode === 'clipboard') {
     await verifyClipboard();
+  } else if (mode === 'extensions') {
+    await verifyExtensions();
+  } else if (mode === 'store-extensions') {
+    await verifyStoreExtensions();
   } else {
     await verifySlice();
   }

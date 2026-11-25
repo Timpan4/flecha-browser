@@ -22,12 +22,16 @@ impl PageInput {
     fn is_current(&self, state: &Controller, window: &Window) -> bool {
         window.is_window_active()
             && self.focus.is_focused(window)
-            && state
-                .model
-                .keyboard_pane(&self.window)
-                .is_some_and(|(owner, tab)| {
-                    tab == &self.browser.tab && state.engine.owner(tab) == Some(&owner)
-                })
+            && (state
+                .extensions
+                .popup(&self.window)
+                .is_some_and(|popup| popup.tab == self.browser.tab)
+                || state
+                    .model
+                    .keyboard_pane(&self.window)
+                    .is_some_and(|(owner, tab)| {
+                        tab == &self.browser.tab && state.engine.owner(tab) == Some(&owner)
+                    }))
             && state.engine.ime(&self.browser).is_some()
     }
 

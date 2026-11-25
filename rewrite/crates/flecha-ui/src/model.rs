@@ -524,12 +524,19 @@ impl Model {
         {
             return Some(incognito.partition());
         }
-        Some(match self.core.locate(id)? {
+        let partition = match self.core.locate(id)? {
             Placement::Favorite => Partition::Shared,
             Placement::Pinned { space, .. } | Placement::Today { space, .. } => {
                 self.space_partition(space)
             }
-        })
+        };
+        if self.core.tab(id)?.agent {
+            return Some(Partition::Agent(match partition {
+                Partition::Isolated(id) => Some(id),
+                _ => None,
+            }));
+        }
+        Some(partition)
     }
 
     fn origin_space(&self, window: &WindowId, source: Option<&TabId>) -> Result<&SpaceId> {

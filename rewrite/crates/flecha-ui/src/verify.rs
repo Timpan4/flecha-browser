@@ -69,6 +69,15 @@ enum Command {
         tab: TabId,
         source: String,
     },
+    ExtensionProbe {
+        tab: TabId,
+        method: String,
+        params: Value,
+    },
+    ExtensionSettings,
+    OpenAgentFixture {
+        url: String,
+    },
     /// Resizes the window's content area, in logical pixels.
     Resize {
         width: f32,
@@ -252,6 +261,34 @@ impl Command {
                 );
                 return Ok(Value::Null);
             }
+            Self::ExtensionProbe {
+                tab,
+                method,
+                params,
+            } => {
+                ensure!(
+                    matches!(
+                        method.as_str(),
+                        "Profiler.enable"
+                            | "Profiler.startPreciseCoverage"
+                            | "Profiler.takePreciseCoverage"
+                            | "Runtime.evaluate"
+                    ),
+                    "unexpected extension probe method"
+                );
+                let id =
+                    state
+                        .engine
+                        .send_devtools_message(&tab, &method, Some(&params.to_string()))?;
+                return Ok(json!({"id": id}));
+            }
+            Self::OpenAgentFixture { url } => {
+                let tab = state
+                    .agent_open(&url)
+                    .map_err(|error| anyhow::anyhow!("{error}"))?;
+                cx.refresh_windows();
+                return Ok(json!({"tab": tab}));
+            }
             Self::Resize { width, height } => {
                 let handle = *state
                     .windows
@@ -349,6 +386,21 @@ impl Command {
                 });
                 return Ok(Value::Null);
             }
+            Self::ExtensionSettings => {
+                let handle = *state.windows.get(window).context("no GPUI window")?;
+                cx.defer(move |cx| {
+                    let opened = handle.update(cx, |shell, window, cx| {
+                        shell.toggle_settings(
+                            crate::settings_view::SettingsTab::Extensions,
+                            window,
+                            cx,
+                        );
+                        Value::Null
+                    });
+                    reply(seq, opened);
+                });
+                return Ok(Value::Null);
+            }
             Self::MenuRow { label } => {
                 let handle = *state.windows.get(window).context("no GPUI window")?;
                 // Deferred and replied to like Key. The row is looked up in the same update
@@ -423,6 +475,7 @@ fn partition(partition: &Partition) -> Value {
         Partition::Shared => json!("shared"),
         Partition::Isolated(space) => json!(space),
         Partition::Incognito(session) => json!(format!("incognito-{}", session.number())),
+        Partition::Agent(space) => json!({"agent": space.as_ref().map(|space| space.as_str())}),
     }
 }
 
@@ -452,7 +505,10 @@ pub(super) fn install(controller: &Shared, cx: &mut App) {
                     .unwrap_or_else(|| state.model.core.focused_window().id.clone());
                 let deferred = matches!(
                     request.command,
-                    Command::Key { .. } | Command::MenuRow { .. } | Command::SiteControls
+                    Command::Key { .. }
+                        | Command::MenuRow { .. }
+                        | Command::SiteControls
+                        | Command::ExtensionSettings
                 );
                 match request.command.run(&mut state, &id, cx, request.seq) {
                     Ok(_) if deferred => {}
@@ -533,6 +589,31 @@ pub(super) fn adblock_report(report: &UpdateReport) {
 
 pub(super) fn ready() {
     emit(json!({ "type": "ready" }));
+}
+
+pub(super) fn extension_control(window: &WindowId, id: &str, point: gpui::Point<gpui::Pixels>) {
+    emit(
+        json!({ "type": "extension_control", "window": window, "id": id,
+        "x": f32::from(point.x), "y": f32::from(point.y) }),
+    );
+}
+
+pub(super) fn extension_probe(message: &flecha_cef::DevToolsMessage) {
+    if let flecha_cef::DevToolsEvent::Result {
+        id,
+        success,
+        result,
+    } = &message.event
+    {
+        emit(json!({ "type": "extension_probe", "tab": message.tab,
+            "id": id, "success": success, "result": result }));
+    }
+}
+
+pub(super) fn extension_review(id: &str, name: &str, version: &str, permissions: &[String]) {
+    emit(
+        json!({ "type": "extension_review", "id": id, "name": name, "version": version, "permissions": permissions }),
+    );
 }
 
 /// The shell asked the platform to bring this window to the front.

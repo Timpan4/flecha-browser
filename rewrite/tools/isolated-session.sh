@@ -4,7 +4,8 @@ set -euo pipefail
 backend=$1
 cef_runtime=$2
 cef_sha1=$3
-shift 3
+network=$4
+shift 4
 export HOME=/mnt/scratch/home XDG_CONFIG_HOME=/mnt/scratch/config XDG_CACHE_HOME=/mnt/scratch/cache
 export XDG_DATA_HOME=/mnt/scratch/data XDG_STATE_HOME=/mnt/scratch/state XDG_RUNTIME_DIR=/mnt/scratch/runtime
 export TMPDIR=/mnt/scratch/tmp XDG_SESSION_TYPE="$backend"
@@ -14,7 +15,7 @@ export FLECHA_PROFILE=/mnt/scratch/profile FLECHA_LAUNCHER=isolated
 umask 077
 mkdir -p "$HOME" "$XDG_RUNTIME_DIR" "$TMPDIR" "$FLECHA_PROFILE"
 
-bash /mnt/work/tools/verify-launcher-isolation.sh
+bash /mnt/work/tools/verify-launcher-isolation.sh "$network"
 
 dbus-daemon --config-file=/mnt/work/tools/session-bus.conf --address="$DBUS_SESSION_BUS_ADDRESS" \
   --nofork --print-address > /mnt/scratch/bus.address 2> /mnt/scratch/bus.log &

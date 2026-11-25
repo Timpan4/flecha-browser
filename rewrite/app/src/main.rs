@@ -25,7 +25,9 @@ fn main() -> Result<()> {
     if let Some(input) = options.initial.as_deref() {
         options.initial = Some(flecha_ui::validate_initial_address(input)?);
     }
-    let runtime = Rc::new(RefCell::new(Runtime::entry()?));
+    let mut runtime = Runtime::entry()?;
+    runtime.configure_extensions(&profile)?;
+    let runtime = Rc::new(RefCell::new(runtime));
     let (store, loaded) = StateStore::open(&profile.join("session"))?;
     let cef_profile = profile.join("cef");
     std::fs::create_dir_all(&cef_profile)?;

@@ -31,6 +31,8 @@ pub enum Owner {
 pub enum Partition {
     Shared,
     Isolated(SpaceId),
+    /// A separate off-the-record cookie jar for agent tabs in a persistent partition.
+    Agent(Option<SpaceId>),
     /// The incognito windows of one session. Their cookies, cache, storage and permission
     /// decisions stay in memory, and go when the session ends ([`crate::Engine::end_incognito`]).
     Incognito(IncognitoSession),
@@ -65,7 +67,7 @@ impl Partition {
                     Sha256::digest(space.as_str().as_bytes())
                 ))
             }
-            Self::Incognito(_) => None,
+            Self::Incognito(_) | Self::Agent(_) => None,
         }
     }
 
@@ -76,7 +78,7 @@ impl Partition {
     pub fn incognito_session(&self) -> Option<IncognitoSession> {
         match self {
             Self::Incognito(session) => Some(*session),
-            Self::Shared | Self::Isolated(_) => None,
+            Self::Shared | Self::Isolated(_) | Self::Agent(_) => None,
         }
     }
 }

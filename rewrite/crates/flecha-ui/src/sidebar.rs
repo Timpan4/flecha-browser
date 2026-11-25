@@ -687,6 +687,7 @@ impl Shell {
                     ),
             )
             .child(self.urlbar(state, &rows, toolbar.loading, cx))
+            .children(self.extension_actions(state, cx))
             .children(agent_status(state))
             .when(!incognito, |sidebar| {
                 sidebar.children(self.favorites(&rows, cx))

@@ -2,6 +2,8 @@
 mod agents;
 #[path = "settings_boosts.rs"]
 mod boosts;
+#[path = "settings_extensions.rs"]
+mod extensions;
 #[path = "settings_general.rs"]
 mod general;
 #[path = "settings_import.rs"]
@@ -40,6 +42,7 @@ pub(crate) enum SettingsTab {
     Import,
     TabsSpaces,
     Agents,
+    Extensions,
 }
 
 impl SettingsTab {
@@ -51,6 +54,7 @@ impl SettingsTab {
             Self::Import => "Import",
             Self::TabsSpaces => "Tabs & Spaces",
             Self::Agents => "Coding Agents",
+            Self::Extensions => "Extensions",
         }
     }
 }
@@ -65,6 +69,7 @@ const NAV: [(Option<&str>, &[Pane]); 3] = [
         &[
             (SettingsTab::General, "settings", "gray"),
             (SettingsTab::TabsSpaces, "stack", "indigo"),
+            (SettingsTab::Extensions, "puzzle", "purple"),
             (SettingsTab::Import, "import", "teal"),
         ],
     ),
@@ -94,6 +99,7 @@ pub(crate) struct SettingsPanel {
     search_focused: bool,
     /// The setup a Coding Agents button copied, until it says so for long enough.
     copied: Option<(agents::Setup, Task<()>)>,
+    extensions: extensions::Editor,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -103,6 +109,7 @@ enum Field {
     BoostHost,
     BoostSource,
     ImportPath,
+    StoreExtension,
 }
 
 struct Draft {
@@ -140,6 +147,7 @@ impl SettingsPanel {
             search: TextField::default(),
             search_focused: false,
             copied: None,
+            extensions: extensions::Editor::default(),
         }
     }
 
@@ -163,6 +171,7 @@ impl SettingsPanel {
             self.field = None;
             self.message = None;
             self.import.confirm_restore = false;
+            self.extensions = extensions::Editor::default();
             self.scroll = ScrollHandle::new();
             if tab == SettingsTab::TabsSpaces {
                 self.manager.focus_search();
@@ -351,12 +360,19 @@ impl Shell {
                     self.preview_import(cx);
                     return;
                 }
+                Field::StoreExtension => {
+                    self.review_store_extension(cx);
+                    return;
+                }
                 Field::General(_) | Field::BoostSource | Field::BoostHost => {}
             }
         }
         let previous_path =
             (draft.field == Field::ImportPath).then(|| draft.text.text().to_owned());
         draft.text.key(stroke, cx);
+        if draft.field == Field::StoreExtension {
+            panel.extensions = extensions::Editor::default();
+        }
         if previous_path.is_some_and(|path| path != draft.text.text()) {
             panel.import.clear_preview();
             panel.message = None;
@@ -430,6 +446,7 @@ impl Shell {
                     SettingsTab::Import => self.import_settings(panel, cx),
                     SettingsTab::TabsSpaces => self.tabs_settings(panel, cx),
                     SettingsTab::Agents => self.agent_settings(panel, cx),
+                    SettingsTab::Extensions => self.extension_settings(panel, cx),
                 },
             ),
         };
