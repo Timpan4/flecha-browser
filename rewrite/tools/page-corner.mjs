@@ -23,16 +23,24 @@ export function pageCorner(path, color) {
   return { x, y, color: `#${hex.trim().slice(0, 6).toUpperCase()}` };
 }
 
+// The page area's Light drop shadow (flecha-ui/src/tokens.rs page_shadow): Flecha's ink in two
+// layers at 0x1a and 0x0f alpha. Where both layers reach full strength, the tint is darkest.
+const ink = [11, 37, 69];
+
+const darkest = tint.map((value, index) => Math.floor([0x1a, 0x0f]
+  .reduce((under, alpha) => under + (ink[index] - under) * alpha / 255, value)));
+
 /**
  * Why the page in `color` is not rounded, if it is not. Outside the rounded corner the window's
  * tint shows, darkened by the card's shadow at most. The card's own background is lighter than
- * the tint, so a square background under a rounded page fails too.
+ * the tint, and anything darker than the full shadow is not the window, so a square background
+ * under a rounded page or a corner filled with another colour fails too.
  */
 export function cornerNotRounded(path, color) {
   const corner = pageCorner(path, color);
   const channels = [1, 3, 5].map(start => Number.parseInt(corner.color.slice(start, start + 2), 16));
 
-  if (corner.color === color.toUpperCase() || channels.some((value, index) => value > tint[index])) {
+  if (channels.some((value, index) => value > tint[index] || value < darkest[index])) {
     return `the ${color} page's top-left corner (${corner.x}, ${corner.y}) is ${corner.color}, not the window tint`;
   }
 }

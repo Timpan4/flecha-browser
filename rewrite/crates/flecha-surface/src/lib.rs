@@ -300,7 +300,8 @@ impl SurfaceTarget {
 
 /// Paint the view, with `corner_radii` cut from its corners, followed by its optional
 /// popup. Popup bounds are in logical pixels relative to the browser view, as supplied
-/// by CEF.
+/// by CEF. The popup stays square and may cover a cut corner, as Chromium's popup widgets
+/// draw over the page's rounded corners in the shipping browser.
 pub fn surface(
     view: Option<Frame>,
     popup: Option<(Bounds<Pixels>, Frame)>,
