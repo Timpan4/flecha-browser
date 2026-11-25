@@ -139,7 +139,7 @@ impl Shell {
         }
         if let Some(skipped) = &settings.skipped {
             list = list.child(row().child(note(format!(
-                "This launch skipped every unpacked folder, and restarting skips them again until the list is fixed: {skipped}"
+                "This launch skipped every unpacked folder: {skipped}"
             ))));
         }
         if installed.is_empty() {
