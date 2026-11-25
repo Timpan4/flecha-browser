@@ -197,16 +197,24 @@ wrap_resource_request_handler! {
 }
 
 wrap_request_handler! {
-    pub(crate) struct Requests { filter: ResourceRequestHandler, committed_navigation: Arc<AtomicU64> }
+    pub(crate) struct Requests { filter: ResourceRequestHandler, committed_navigation: Arc<AtomicU64>, extension_popup: Option<String> }
     impl RequestHandler {
         fn on_before_browse(
             &self, browser: Option<&mut Browser>, frame: Option<&mut Frame>,
-            _request: Option<&mut Request>, _gesture: i32, _redirect: i32,
+            request: Option<&mut Request>, _gesture: i32, _redirect: i32,
         ) -> i32 {
-            if frame.is_some_and(|frame| frame.is_main() != 0)
-                && let Some(browser) = browser
-            {
-                dialogs::new_navigation(browser);
+            if frame.is_some_and(|frame| frame.is_main() != 0) {
+                if let Some(id) = &self.extension_popup {
+                    let same_extension = request.is_some_and(|request| {
+                        url::Url::parse(&CefString::from(&request.url()).to_string()).is_ok_and(|url| {
+                            url.scheme() == "chrome-extension" && url.host_str() == Some(id)
+                        })
+                    });
+                    if !same_extension { return 1; }
+                }
+                if let Some(browser) = browser {
+                    dialogs::new_navigation(browser);
+                }
             }
             0
         }
@@ -251,8 +259,12 @@ wrap_request_handler! {
     }
 }
 
-pub(crate) fn handler(io: Io, committed_navigation: Arc<AtomicU64>) -> RequestHandler {
-    Requests::new(Filter::new(io), committed_navigation)
+pub(crate) fn handler(
+    io: Io,
+    committed_navigation: Arc<AtomicU64>,
+    extension_popup: Option<String>,
+) -> RequestHandler {
+    Requests::new(Filter::new(io), committed_navigation, extension_popup)
 }
 
 /// The page registry that holds ad hiding's adopted style sheets.

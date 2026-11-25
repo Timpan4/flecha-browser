@@ -112,8 +112,11 @@ tools/verify-slice.sh focus
 tools/verify-slice.sh popups
 tools/verify-slice.sh clipboard
 tools/verify-slice.sh tab-status
+tools/verify-slice.sh extensions
 tools/verify-negative-controls.sh
 ```
+
+See [Extensions on stock CEF](docs/extensions.md) for managed installs, unpacked extensions, isolation, and the networked Store check.
 
 The launcher needs a C compiler, bubblewrap, `ip`, `setpriv`, D-Bus and the selected compositor. The Xvfb verifier also needs Node, ImageMagick, and X11 and Xtst development headers. The launcher prints each scratch directory, removes it after a successful run, and retains it on failure. The watchdog uses the same default and `FLECHA_HARNESS_TIMEOUT_MS` override as the Chromium native harness. It signals the launcher by pidfd, so it also works without a delegated cgroup on CI. The kernel reaps the isolated PID namespace when its init exits.
 

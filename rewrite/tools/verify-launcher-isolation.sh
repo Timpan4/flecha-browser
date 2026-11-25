@@ -13,6 +13,10 @@ if [[ -n $sockets || -e /run/systemd/resolve || -e /var/run/systemd/resolve ]]; 
   exit 1
 fi
 getent hosts localhost >/dev/null
+if [[ ${1:-offline} == online ]]; then
+  printf 'Isolation check passed: runtime sockets absent, localhost resolved in the private network namespace\n'
+  exit 0
+fi
 if getent hosts localtest.me >/dev/null; then
   printf 'Public name localtest.me resolved inside the launcher\n' >&2
   exit 1

@@ -7,6 +7,7 @@ mod context_menu;
 mod devtools;
 mod dialogs;
 mod downloads;
+pub mod extensions;
 mod favicon;
 mod find;
 mod identity;
@@ -24,7 +25,7 @@ mod zoom;
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
 use std::time::Duration;
 
@@ -233,6 +234,7 @@ struct Session {
 }
 
 struct PartitionContext {
+    extension_watch: Option<extensions::Watch>,
     handle: RequestContext,
     ready: Rc<Cell<bool>>,
     /// Whether its content settings hold the saved permission decisions, which they must
@@ -390,8 +392,51 @@ impl Engine {
         url: &str,
         viewport: Viewport,
     ) -> Result<()> {
+        self.ensure_browser(tab, owner, partition, url, viewport, false)
+    }
+
+    pub fn ensure_extension_popup(
+        &mut self,
+        tab: TabId,
+        owner: Owner,
+        partition: Partition,
+        url: &str,
+        viewport: Viewport,
+    ) -> Result<()> {
+        ensure!(
+            partition.directory().is_some(),
+            "Extension popups require a regular profile"
+        );
+        self.ensure_browser(tab, owner, partition, url, viewport, true)
+    }
+
+    fn ensure_browser(
+        &mut self,
+        tab: TabId,
+        owner: Owner,
+        partition: Partition,
+        url: &str,
+        viewport: Viewport,
+        extension_popup: bool,
+    ) -> Result<()> {
+        // A popup browser may only show pages of the extension it opened for.
+        let popup_host = if extension_popup {
+            let url = url::Url::parse(url)?;
+            ensure!(
+                url.scheme() == "chrome-extension",
+                "Invalid extension popup URL"
+            );
+            Some(
+                url.host_str()
+                    .context("Invalid extension popup URL")?
+                    .to_owned(),
+            )
+        } else {
+            None
+        };
         if let Some(session) = self.browsers.get_mut(&tab)
             && session.partition == partition
+            && *session.slot.extension_popup.borrow() == popup_host
         {
             session.owner = owner;
             self.resize(&tab, viewport);
@@ -408,8 +453,9 @@ impl Engine {
             self.events.clone(),
             self.popups.clone(),
         ));
+        slot.extension_popup.replace(popup_host);
         slot.partition.replace(Some(partition.clone()));
-        let shared = self.popups.compositor.shares_textures();
+        let shared = !extension_popup && self.popups.compositor.shares_textures();
         slot.shares_textures.set(shared);
         slot.surface.borrow_mut().view = self.retained.remove(&tab);
         let mut client = callbacks::client(slot.clone());
@@ -460,6 +506,7 @@ impl Engine {
         if !self.contexts.contains_key(partition) {
             let context = if *partition == Partition::Shared {
                 PartitionContext {
+                    extension_watch: None,
                     handle: cef::request_context_get_global_context()
                         .context("get shared CEF request context")?,
                     // CEF initializes the global context before the app's first callback.
@@ -490,6 +537,7 @@ impl Engine {
                     "CEF gave the incognito request context a folder on disk"
                 );
                 PartitionContext {
+                    extension_watch: None,
                     handle,
                     ready,
                     reconciled: false,
@@ -527,6 +575,30 @@ impl Engine {
 
     pub fn contexts_changed(&self) -> bool {
         self.contexts_changed.replace(false)
+    }
+
+    pub fn refresh_extensions(&mut self, unpacked: &BTreeSet<PathBuf>) -> Result<bool> {
+        self.context(&Partition::Shared)?;
+        let mut changed = false;
+        for (partition, context) in &mut self.contexts {
+            if !context.ready.get() || partition.directory().is_none() {
+                continue;
+            }
+            let path = CefString::from(&context.handle.cache_path()).to_string();
+            let path = Path::new(&path);
+            let watch = context
+                .extension_watch
+                .get_or_insert_with(|| extensions::Watch::new(&context.handle));
+            changed |= watch.refresh(&context.handle, path, unpacked);
+        }
+        Ok(changed)
+    }
+
+    pub fn installed_extensions(&self, partition: &Partition) -> &[extensions::Extension] {
+        self.contexts
+            .get(partition)
+            .and_then(|context| context.extension_watch.as_ref())
+            .map_or(&[], |watch| &watch.installed)
     }
 
     pub fn resize(&self, tab: &TabId, viewport: Viewport) {

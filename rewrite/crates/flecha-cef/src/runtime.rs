@@ -40,6 +40,7 @@ wrap_app! {
         ready: Rc<Cell<bool>>,
         relaunches: Relaunches,
         open: Rc<RefCell<Option<String>>>,
+        unpacked: Rc<RefCell<Option<String>>>,
         // GPUI's GPU, where Chromium must allocate the textures it shares.
         render_node: Rc<RefCell<Option<String>>>,
         // GPUI's display connection, once `initialize` knows it.
@@ -63,6 +64,9 @@ wrap_app! {
                 command_line.append_switch(Some(&"no-startup-window".into()));
                 // Route HTTP challenges to GetAuthCredentials in the windowless shell.
                 command_line.append_switch(Some(&"disable-chrome-login-prompt".into()));
+                if process_type.is_none() && let Some(folders) = self.unpacked.borrow().as_deref() {
+                    command_line.append_switch_with_value(Some(&"load-extension".into()), Some(&folders.into()));
+                }
                 if process_type.is_none()
                     && let Some(open) = self.open.borrow().as_deref()
                 {
@@ -133,6 +137,8 @@ pub struct Runtime {
     ready: Rc<Cell<bool>>,
     relaunches: Relaunches,
     open: Rc<RefCell<Option<String>>>,
+    unpacked: Rc<RefCell<Option<String>>>,
+    chrome_policy: Option<PathBuf>,
     render_node: Rc<RefCell<Option<String>>>,
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     ozone: Rc<Cell<Option<&'static str>>>,
@@ -166,6 +172,7 @@ impl Runtime {
         let ready = Rc::new(Cell::new(false));
         let relaunches = Relaunches::default();
         let open = Rc::new(RefCell::new(None));
+        let unpacked = Rc::new(RefCell::new(None));
         let render_node = Rc::new(RefCell::new(None));
         let ozone = Rc::new(Cell::new(None));
         let mut app = FlechaApp::new(
@@ -173,6 +180,7 @@ impl Runtime {
             ready.clone(),
             relaunches.clone(),
             open.clone(),
+            unpacked.clone(),
             render_node.clone(),
             ozone.clone(),
         );
@@ -186,6 +194,8 @@ impl Runtime {
             ready,
             relaunches,
             open,
+            unpacked,
+            chrome_policy: None,
             render_node,
             ozone,
             pump: Some(pump),
@@ -193,6 +203,36 @@ impl Runtime {
             #[cfg(target_os = "macos")]
             _loader: loader,
         })
+    }
+
+    /// Reads the unpacked folders and prepares the managed policy directory. Each part that
+    /// fails is skipped and returned, so a broken extension setting never stops the browser.
+    pub fn configure_extensions(&mut self, profile: &Path) -> Vec<anyhow::Error> {
+        let settings = crate::extensions::ExtensionSettings::new(profile);
+        let mut problems = Vec::new();
+        *self.unpacked.borrow_mut() = None;
+        self.chrome_policy = None;
+        match settings.startup_folders() {
+            Ok(folders) => {
+                let folders = folders
+                    .iter()
+                    .filter_map(|path| path.to_str())
+                    .collect::<Vec<_>>();
+                *self.unpacked.borrow_mut() = (!folders.is_empty()).then(|| folders.join(","));
+            }
+            Err(error) => problems.push(error.context("Skipped unpacked extensions")),
+        }
+        if crate::extensions::MANAGED_POLICY_SUPPORTED {
+            let policy = settings.policy_directory();
+            match std::fs::create_dir_all(policy.join("managed")) {
+                Ok(()) => self.chrome_policy = Some(policy),
+                Err(error) => problems.push(anyhow::Error::new(error).context(format!(
+                    "Skipped managed extensions: create {}",
+                    policy.display()
+                ))),
+            }
+        }
+        problems
     }
 
     /// Starts CEF on `profile`. `open` is the address this launch asks for, which reaches the
@@ -223,6 +263,9 @@ impl Runtime {
             log_severity: LogSeverity::DISABLE,
             ..Default::default()
         };
+        if let Some(policy) = &self.chrome_policy {
+            settings.chrome_policy_id = path_string(policy)?;
+        }
         if let Some(runtime) = std::env::var_os("FLECHA_CEF_RUNTIME_DIR").map(PathBuf::from) {
             settings.resources_dir_path = path_string(&runtime)?;
             settings.locales_dir_path = path_string(&runtime.join("locales"))?;

@@ -54,6 +54,7 @@ pub(crate) struct Slot {
     pub dialogs: dialogs::Dialogs,
     pub certificate_error: RefCell<Option<String>>,
     pub committed_navigation: Arc<AtomicU64>,
+    pub extension_popup: RefCell<Option<String>>,
     /// Popups this browser has asked CEF for that CEF hasn't created yet, by popup ID.
     pub opening: RefCell<BTreeMap<i32, Rc<Slot>>>,
     /// For a popup still being created: its opener and its popup ID there.
@@ -98,6 +99,7 @@ impl Slot {
             dialogs: dialogs::Dialogs::default(),
             certificate_error: RefCell::new(None),
             committed_navigation: Arc::new(AtomicU64::new(0)),
+            extension_popup: RefCell::new(None),
             opening: RefCell::new(BTreeMap::new()),
             origin: RefCell::new(None),
             identifier: Cell::new(None),
@@ -373,6 +375,9 @@ wrap_life_span_handler! {
             client: Option<&mut Option<Client>>, settings: Option<&mut BrowserSettings>,
             _extra: Option<&mut Option<DictionaryValue>>, _no_javascript: Option<&mut i32>,
         ) -> i32 {
+            if self.slot.extension_popup.borrow().is_some() {
+                return 1;
+            }
             let allowed = popup::before_popup(&self.slot, popup_id, url, disposition, features, window, client);
             if allowed && let Some(settings) = settings {
                 settings.windowless_frame_rate = self.slot.viewport.get().frame_rate();
@@ -560,6 +565,7 @@ wrap_client! {
 
 /// Every browser the engine owns gets these handlers, popups included.
 pub(crate) fn client(slot: Rc<Slot>) -> Client {
+    let extension_popup = slot.extension_popup.borrow().clone();
     let io = adblock::Io {
         blocker: slot.popups.services.adblock.clone(),
         blocked: slot.blocked.clone(),
@@ -567,7 +573,7 @@ pub(crate) fn client(slot: Rc<Slot>) -> Client {
     OsrClient::new(
         Osr::new(slot.clone()),
         Life::new(slot.clone()),
-        adblock::handler(io, slot.committed_navigation.clone()),
+        adblock::handler(io, slot.committed_navigation.clone(), extension_popup),
         downloads::handler(slot.clone()),
         permissions::handler(slot.clone()),
         PageHandlers {

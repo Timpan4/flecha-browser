@@ -274,6 +274,9 @@ impl Controller {
     pub(crate) fn poll_toolbars(&mut self) -> bool {
         let mut changed = false;
         while let Some(message) = self.engine.next_devtools_event() {
+            if self.verify {
+                crate::verify::extension_probe(&message);
+            }
             let Some(message) = self.agents.devtools(message) else {
                 continue;
             };
@@ -480,6 +483,23 @@ impl Shell {
         }
         if self.find_key(stroke, window, cx) {
             self.consumed_keys.insert(stroke.key.clone());
+            cx.stop_propagation();
+            return;
+        }
+        if matches!(self.overlay, Overlay::ExtensionPopup(_)) {
+            if !altgr
+                && self.page_clipboard_key(focused.as_ref(), stroke, event.is_held, window, cx)
+            {
+                self.consumed_keys.insert(stroke.key.clone());
+            } else {
+                self.page_key(
+                    focused,
+                    stroke,
+                    false,
+                    event.is_held,
+                    event.prefer_character_input,
+                );
+            }
             cx.stop_propagation();
             return;
         }

@@ -9,12 +9,12 @@ use flecha_core::{FolderId, SpaceId, TabId, WindowId};
 use flecha_surface::{Frame, input, surface};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    Animation, AnimationExt as _, AnyElement, App, ClickEvent, Context, Corners, Div, ElementId,
-    FocusHandle, FontWeight, HoverListenerMode, InteractiveElement as _, IntoElement, KeyUpEvent,
-    MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection,
-    ObjectFit, ParentElement as _, Pixels, Render, RenderImage, ScrollEvent, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Subscription, Transformation, Window, canvas,
-    deferred, div, percentage, px, relative, svg,
+    Animation, AnimationExt as _, AnyElement, App, Bounds, ClickEvent, Context, Corners, Div,
+    ElementId, FocusHandle, FontWeight, HoverListenerMode, InteractiveElement as _, IntoElement,
+    KeyUpEvent, MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent,
+    NavigationDirection, ObjectFit, ParentElement as _, Pixels, Render, RenderImage, ScrollEvent,
+    SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, Transformation,
+    Window, canvas, deferred, div, percentage, px, relative, svg,
 };
 
 use crate::fullscreen::PageWants;
@@ -54,6 +54,8 @@ pub(crate) enum Overlay {
     DeleteSpace(SpaceId),
     Downloads(DownloadsPanel),
     SiteControls,
+    Extensions(Bounds<Pixels>, Option<String>),
+    ExtensionPopup(Bounds<Pixels>),
     ContextMenu(ContextMenuRequest),
     Menu(crate::shell_menu::ShellMenu),
     /// A Flechinha's address, edited in its toolbar.
@@ -80,6 +82,8 @@ impl Overlay {
             Self::DeleteSpace(_) => "delete_space",
             Self::Downloads(_) => "downloads",
             Self::SiteControls => "site_controls",
+            Self::Extensions(..) => "extensions",
+            Self::ExtensionPopup(_) => "extension_popup",
             Self::ContextMenu(_) => "context_menu",
             Self::Menu(_) => "menu",
             Self::FlechinhaAddress(_) => "flechinha_address",
@@ -159,7 +163,12 @@ impl Shell {
                 this.finish_sidebar_resize(None, cx);
                 this.finish_split_drag(cx);
                 // Blurring the address field stops editing it (ui/flechinha.ts:118).
-                if matches!(this.overlay, Overlay::FlechinhaAddress(_)) {
+                if matches!(
+                    this.overlay,
+                    Overlay::FlechinhaAddress(_)
+                        | Overlay::Extensions(..)
+                        | Overlay::ExtensionPopup(_)
+                ) {
                     this.dismiss_overlay(window, cx);
                 }
                 this.hide_floating_sidebar(cx);
@@ -227,6 +236,9 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         self.cancel_context_menu();
+        if matches!(self.overlay, Overlay::ExtensionPopup(_)) {
+            self.state.borrow_mut().close_extension_popup(&self.id);
+        }
         self.overlay = overlay;
         crate::verify::overlay(&self.state.borrow(), &self.id, self.overlay.kind());
         self.focus.focus(window, cx);
@@ -243,6 +255,9 @@ impl Shell {
         }
         if self.overlay.is_open() {
             self.cancel_context_menu();
+            if matches!(self.overlay, Overlay::ExtensionPopup(_)) {
+                self.state.borrow_mut().close_extension_popup(&self.id);
+            }
             self.overlay = Overlay::None;
             crate::verify::overlay(&self.state.borrow(), &self.id, self.overlay.kind());
             if self.selected_pane.is_some() {
@@ -258,6 +273,8 @@ impl Shell {
     fn dismiss_stale_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let state = self.state.borrow();
         let gone = match &self.overlay {
+            Overlay::ExtensionPopup(_) => !state.extension_popup_current(&self.id),
+            Overlay::Extensions(..) => state.extension_partition(&self.id).is_none(),
             Overlay::Rename(id, _) => state
                 .model
                 .state(&self.id)
@@ -315,7 +332,16 @@ impl Shell {
             .model
             .keyboard_pane(&self.id)
             .map(|(owner, tab)| (owner, tab.clone()));
-        let browser = self.active_browser();
+        let extension_popup = matches!(self.overlay, Overlay::ExtensionPopup(_));
+        let browser = if extension_popup {
+            let state = self.state.borrow();
+            state
+                .extensions
+                .popup(&self.id)
+                .and_then(|popup| state.engine.key(&popup.tab))
+        } else {
+            self.active_browser()
+        };
         let find_left = self
             .find
             .as_ref()
@@ -342,7 +368,7 @@ impl Shell {
         }
 
         let focused = browser.filter(|_| {
-            !self.overlay.is_open()
+            (!self.overlay.is_open() || extension_popup)
                 && self.browser_dialog.is_none()
                 && window.is_window_active()
                 && self.page_focus.is_focused(window)
@@ -457,7 +483,7 @@ impl Shell {
         true
     }
 
-    fn pane(
+    pub(crate) fn pane(
         &self,
         owner: Owner,
         id: TabId,
@@ -791,7 +817,8 @@ impl Render for Shell {
             .on_key_down(cx.listener(|this, event, window, cx| this.key(event, window, cx)))
             .on_key_up(cx.listener(|this, event: &KeyUpEvent, window, cx| {
                 if this.consumed_keys.remove(&event.keystroke.key)
-                    || this.overlay.is_open()
+                    || (this.overlay.is_open()
+                        && !matches!(this.overlay, Overlay::ExtensionPopup(_)))
                     || this.browser_dialog.is_some()
                 {
                     cx.stop_propagation();
@@ -1086,6 +1113,8 @@ impl Render for Shell {
             Overlay::None
             | Overlay::ContextMenu(_)
             | Overlay::Menu(_)
+            | Overlay::Extensions(..)
+            | Overlay::ExtensionPopup(_)
             | Overlay::FlechinhaAddress(_) => None,
             Overlay::Command(bar) => Some(self.command_panel(bar, cx)),
             Overlay::History(panel) => Some(self.history_panel(panel, cx)),
@@ -1223,6 +1252,12 @@ impl Render for Shell {
         }
         if let Overlay::Menu(menu) = &self.overlay {
             main = main.child(self.menu_panel(menu, cx));
+        }
+        if let Overlay::Extensions(anchor, message) = &self.overlay {
+            main = main.child(self.extensions_menu(*anchor, message.as_deref(), cx));
+        }
+        if let Overlay::ExtensionPopup(anchor) = &self.overlay {
+            main = main.children(self.extension_popover(*anchor, window, &mut images, cx));
         }
         if let Some(drag) = self.sidebar_drag_layer() {
             main = main.child(deferred(drag));

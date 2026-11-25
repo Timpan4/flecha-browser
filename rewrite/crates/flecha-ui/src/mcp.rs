@@ -930,7 +930,7 @@ impl Controller {
         agent::state::tab(&self.model.core, tab)
     }
 
-    fn agent_open(&mut self, input: &str) -> ToolResult<TabId> {
+    pub(crate) fn agent_open(&mut self, input: &str) -> ToolResult<TabId> {
         if self.ready && self.agent_viewport().is_none() {
             return Err(no_page_area());
         }

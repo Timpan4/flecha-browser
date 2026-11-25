@@ -6,6 +6,7 @@ mod context_menu;
 mod dialogs;
 mod downloads_view;
 mod empty_page;
+mod extensions;
 mod favicons;
 mod find_bar;
 mod flechinha;
@@ -288,6 +289,7 @@ struct Controller {
     history: History,
     boosts: ProfileBoosts,
     engine: Engine,
+    extensions: extensions::Extensions,
     _adblock_updater: Option<Updater>,
     downloads: Downloads,
     permissions: PermissionStore,
@@ -401,6 +403,7 @@ impl Controller {
             boosts: ProfileBoosts::open(profile.join("boosts")),
             session_dir: profile.join("session"),
             engine: Engine::new(cef_profile, model::tab_id),
+            extensions: extensions::Extensions::new(&profile),
             _adblock_updater: None,
             downloads: Downloads::new(&profile, isolated),
             permissions: PermissionStore::open(&profile),
@@ -902,10 +905,11 @@ impl Controller {
     fn update_visibility(&mut self) {
         let ids = self.engine.ids().cloned().collect::<Vec<_>>();
         for id in ids {
-            let visible = self
-                .engine
-                .owner(&id)
-                .is_some_and(|owner| self.model.page(owner, &id).is_some());
+            let visible = self.extensions.has_popup(&id)
+                || self
+                    .engine
+                    .owner(&id)
+                    .is_some_and(|owner| self.model.page(owner, &id).is_some());
             self.engine.set_visible(&id, visible);
         }
         self.note_shown_tabs(Instant::now());
@@ -938,6 +942,15 @@ impl Controller {
     fn pane(&mut self, owner: Owner, id: TabId, viewport: Viewport) -> Result<()> {
         if !self.ready || self.quitting {
             return Ok(());
+        }
+        if let Some(popup) = self.extensions.popup_by_tab(&id) {
+            return self.engine.ensure_extension_popup(
+                id,
+                owner,
+                popup.partition.clone(),
+                &popup.url,
+                viewport,
+            );
         }
         let Some(tab) = self.model.page(&owner, &id) else {
             return Ok(());
@@ -984,6 +997,19 @@ impl Controller {
             }
         }
         let mut changed = self.engine.contexts_changed();
+        if self.ready && !self.quitting {
+            match self
+                .engine
+                .refresh_extensions(self.extensions.starting_folders())
+            {
+                Ok(true) => {
+                    self.extensions.refresh_icons(&self.engine);
+                    changed = true;
+                }
+                Ok(false) => {}
+                Err(error) => self.fail(error, cx),
+            }
+        }
         let mut save = false;
         while let Some(message) = self.engine.next_event() {
             let id = &message.key.tab;
@@ -1040,6 +1066,12 @@ impl Controller {
                     changed = true;
                 }
                 Event::ClosedByPage => {
+                    if self.extensions.has_popup(id) {
+                        self.extensions.forget_popup(id);
+                        self.engine.close(id);
+                        changed = true;
+                        continue;
+                    }
                     self.history.forget(id);
                     if let Err(error) = self.page_closed(id) {
                         self.fail(error, cx);
@@ -1241,6 +1273,7 @@ fn sync_windows(controller: &Shared, cx: &mut App) -> Result<()> {
                 state.windows.remove(id);
                 state.sidebar_peeks.remove(id);
                 state.forget_download_window(id);
+                state.close_extension_popup(id);
                 state.page_areas.remove(id);
                 state.sleep.window_activation(id, false);
             }

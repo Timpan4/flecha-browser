@@ -69,6 +69,16 @@ const ROWS: &[(SettingsTab, &str, &str)] = &[
     (SettingsTab::Import, "Pre-import backup", ""),
     (SettingsTab::Boosts, "New Boost", ""),
     (SettingsTab::Boosts, "Saved Boosts", ""),
+    (
+        SettingsTab::Extensions,
+        "Chrome Web Store",
+        "Managed installation",
+    ),
+    (
+        SettingsTab::Extensions,
+        "Developer mode",
+        "Unpacked extensions",
+    ),
     (SettingsTab::Agents, agents::SWITCH.0, agents::SWITCH.1),
     (SettingsTab::Agents, agents::CLAUDE_CODE, "Copy Command"),
     (
@@ -271,6 +281,7 @@ mod tests {
             SettingsTab::General => include_str!("settings_general.rs"),
             SettingsTab::TabsSpaces => include_str!("settings_tabs.rs"),
             SettingsTab::Import => include_str!("settings_import.rs"),
+            SettingsTab::Extensions => include_str!("settings_extensions.rs"),
             SettingsTab::Boosts => include_str!("settings_boosts.rs"),
             SettingsTab::Agents | SettingsTab::Shortcuts => "",
         };
