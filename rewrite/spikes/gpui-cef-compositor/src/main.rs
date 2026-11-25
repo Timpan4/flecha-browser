@@ -413,6 +413,7 @@ struct Demo {
     capture_requests: Vec<u64>,
     failure: Rc<RefCell<Option<anyhow::Error>>>,
     shutdown_on_exit: Rc<Cell<bool>>,
+    scroll_carry: input::ScrollCarry,
 }
 
 impl Demo {
@@ -758,10 +759,10 @@ impl Render for Demo {
             }))
             .on_scroll(cx.listener(|demo, event: &gpui::ScrollEvent, _, _| {
                 if let Some(host) = demo.host() {
-                    input::scroll(&host, event, point(px(0.), px(0.)));
+                    input::scroll(&host, event, point(px(0.), px(0.)), &demo.scroll_carry);
                 }
             }))
-            .child(surface(view, popup))
+            .child(surface(view, popup, gpui::Corners::default()))
             .child(
                 gpui::canvas(
                     |_, _, _| (),
@@ -955,6 +956,7 @@ fn start(
         capture_requests: Vec::new(),
         failure,
         shutdown_on_exit,
+        scroll_carry: input::ScrollCarry::default(),
     });
     let focus = demo.read(cx).focus.clone();
     focus.focus(window, cx);

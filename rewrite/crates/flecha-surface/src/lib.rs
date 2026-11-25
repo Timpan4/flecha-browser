@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, Result, ensure};
 use cef::AcceleratedPaintInfo;
-use gpui::{Bounds, Canvas, ContentMask, Pixels, RenderImage, Styled as _, canvas};
+use gpui::{Bounds, Canvas, ContentMask, Corners, Pixels, RenderImage, Styled as _, canvas};
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -298,19 +298,25 @@ impl SurfaceTarget {
     }
 }
 
-/// Paint the view followed by its optional popup. Popup bounds are in logical
-/// pixels relative to the browser view, as supplied by CEF.
-pub fn surface(view: Option<Frame>, popup: Option<(Bounds<Pixels>, Frame)>) -> Canvas<()> {
+/// Paint the view, with `corner_radii` cut from its corners, followed by its optional
+/// popup. Popup bounds are in logical pixels relative to the browser view, as supplied
+/// by CEF. The popup stays square and may cover a cut corner, as Chromium's popup widgets
+/// draw over the page's rounded corners in the shipping browser.
+pub fn surface(
+    view: Option<Frame>,
+    popup: Option<(Bounds<Pixels>, Frame)>,
+    corner_radii: Corners<Pixels>,
+) -> Canvas<()> {
     canvas(
         |_, _, _| (),
         move |bounds, (), window, _| {
             window.with_content_mask(Some(ContentMask { bounds }), |window| {
                 if let Some(view) = view {
-                    paint(view, bounds, window);
+                    paint(view, bounds, corner_radii, window);
                 }
                 if let Some((relative, frame)) = popup {
                     let popup = Bounds::new(bounds.origin + relative.origin, relative.size);
-                    paint(frame, popup, window);
+                    paint(frame, popup, Corners::default(), window);
                 }
             });
         },
@@ -318,7 +324,12 @@ pub fn surface(view: Option<Frame>, popup: Option<(Bounds<Pixels>, Frame)>) -> C
     .size_full()
 }
 
-fn paint(frame: Frame, bounds: Bounds<Pixels>, window: &mut gpui::Window) {
+fn paint(
+    frame: Frame,
+    bounds: Bounds<Pixels>,
+    corner_radii: Corners<Pixels>,
+    window: &mut gpui::Window,
+) {
     match frame.0 {
         #[cfg(target_os = "linux")]
         FrameStorage::Texture {
@@ -331,13 +342,11 @@ fn paint(frame: Frame, bounds: Bounds<Pixels>, window: &mut gpui::Window) {
                 .surface_device()
                 .is_some_and(|gpu| gpu.device == device)
             {
-                window.paint_texture_surface(bounds, view, source_uv);
+                window.paint_texture_surface(bounds, corner_radii, view, source_uv);
             }
         }
         FrameStorage::Image(image) => {
-            if let Err(error) =
-                window.paint_image(bounds, bounds, Default::default(), image, 0, false)
-            {
+            if let Err(error) = window.paint_image(bounds, bounds, corner_radii, image, 0, false) {
                 eprintln!("CEF image paint: {error:#}");
             }
         }

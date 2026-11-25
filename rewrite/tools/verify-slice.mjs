@@ -9,6 +9,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { crc32, deflateSync } from 'node:zlib';
 
 import { blankRestartColor, defaultPageColors, downloadBody, fixture, openerColors } from './fixture.mjs';
+import { cornerNotRounded, cornerNotSquare } from './page-corner.mjs';
 import { checkProcessEnvironment } from './verify-process-env.mjs';
 
 const out = join(process.env.HOME, '..');
@@ -1510,7 +1511,10 @@ async function pageFullscreen(app, main, other) {
     const top = pageTop(path);
     const expected = keepSidebar ? docked : 0;
 
-    return top === expected ? undefined : `the fullscreen page starts at ${top}, not ${expected}`;
+    if (top !== expected) return `the fullscreen page starts at ${top}, not ${expected}`;
+
+    // A page beside the sidebar sits in its rounded card, and a page alone fills the screen square.
+    return (keepSidebar ? cornerNotRounded : cornerNotSquare)(path, page[0]);
   });
 
   const stillFullscreen = async label => {
@@ -1550,7 +1554,7 @@ async function pageFullscreen(app, main, other) {
 
   await enter('fullscreen');
   await requestsAre('entering alone', 1);
-  pass('a page entered HTML fullscreen through CEF and the window showed it without the sidebar');
+  pass('a page entered HTML fullscreen through CEF and the window showed it square, without the sidebar');
 
   let after = app.events.length;
 
@@ -3145,6 +3149,8 @@ async function verifySlice() {
   pass(`checked /proc environ for the app and its CEF descendants (${checked} processes, including a renderer or zygote child)`);
   await capture('open', ['#147A70', '#FFCC49']);
   pass('opened a durable tab, received CEF load and paint, and captured the GPUI fixture frame');
+  assert.equal(cornerNotRounded(join(out, 'open.png'), '#147A70'), undefined);
+  pass('the page in its card has rounded corners');
   // Under Xvfb GPUI's adapter cannot import Vulkan dma-bufs, so these checks cover the CPU
   // copy path, not shared textures.
   const frames = /^page frames: .*$/m.exec(readFileSync(join(out, 'first.log'), 'utf8'))?.[0] ?? '';

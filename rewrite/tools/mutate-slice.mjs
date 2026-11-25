@@ -22,9 +22,9 @@ const mutations = {
     '{ let pick = state.model.core.window(&self.id).and_then(|w| w.spaces.get(&w.active_space_id)).and_then(|s| s.split.clone()).filter(|s| s[0] == id).map(|s| s[1].clone()).unwrap_or_else(|| id.clone()); state.engine.frames(&pick).unwrap_or_default() },'],
   'pane-size-restart': [`${ui}/view.rs`, '} else if index == 0 {\n                    ratio\n',
     '} else if index == 0 {\n                    if std::path::Path::new("/mnt/scratch/restart.log").exists() { ratio * 0.5 } else { ratio }\n'],
-  'blank-restart': [`${ui}/view.rs`, '.child(surface(frames.view, frames.popup))', `
-            .when(std::path::Path::new("/mnt/scratch/restart.log").exists(), |pane| pane.bg(rgb(0x${blankRestartColor.slice(1)})))
-            .child(surface(if std::path::Path::new("/mnt/scratch/restart.log").exists() { None } else { frames.view }, frames.popup))`],
+  'blank-restart': [`${ui}/view.rs`, '.child(surface(self.view, self.popup, corners))', `
+            .when(std::path::Path::new("/mnt/scratch/restart.log").exists(), |pane| pane.bg(gpui::rgb(0x${blankRestartColor.slice(1)})))
+            .child(surface(if std::path::Path::new("/mnt/scratch/restart.log").exists() { None } else { self.view }, self.popup, corners))`],
   'close-archive': [`${ui}/sidebar.rs`, '        self.engine.close(tab);\n        for removed in self.model.close_tab(tab) {', '        self.engine.close(tab);\n        self.model.core.tab_mut(tab).unwrap().url = "about:blank".into();\n        for removed in self.model.close_tab(tab) {'],
   'stale-closedat-ui': [`${ui}/model.rs`, '.map(|(state, _)| state.close_tab(id, now()).removed)', '.map(|(state, _)| { let stale = state.tab(id).and_then(|t| t.last_active).map_or(now(), |at| at as flecha_core::EpochMillis); state.close_tab(id, stale).removed })'],
   'stale-closedat': ['crates/flecha-core/src/state.rs', '        let result = self.close_tab_recording(id, now, |id| removed.push(id));\n',

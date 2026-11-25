@@ -26,10 +26,11 @@ provide the DRI3 device that CEF's X11 allocator requires.
   comparison](https://github.com/zed-industries/zed/compare/08cbb88...f126950f9d3b62666f97437ae5d4ccac2272c4db)
 - **Selected Zed patch.** [zed.patch](patches/zed.patch) keeps the exact Zed
   revision. It exposes the Linux window's wgpu adapter, device, and queue,
-  requests the dma-buf feature when available, and adds a texture view and
-  source rectangle to its surface primitive. The wgpu renderer reuses its
-  surface pipeline and clips and draws in GPUI scene order. The native Metal
-  and D3D11 renderers use their existing code.
+  requests the dma-buf feature when available, and adds a texture view, a
+  source rectangle and corner radii to its surface primitive. The wgpu renderer
+  reuses its surface pipeline, clips, rounds the corners as it does for image
+  sprites, and draws in GPUI scene order. The native Metal and D3D11 renderers
+  use their existing code.
 - **Shared wgpu.** [cef-rs.patch](patches/cef-rs.patch) keeps the exact cef-rs
   revision from the Flecha fork. It changes cef-rs's wgpu dependency to Zed's
   `cddb2f5d80dc0009b2ef6767635140cacf90a007` and adapts the four native import
