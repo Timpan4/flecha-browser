@@ -82,8 +82,9 @@ impl PageWants {
 /// The window manager applies a request later or never: X11 sends `_NET_WM_STATE` with
 /// `Toggle`, and neither X11 nor Wayland reports a refusal to GPUI. Two toggles in flight cancel
 /// out, so as in patch 0077, Flecha sends none while its last one is unanswered and decides
-/// again once the window reports the change.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// again once the window reports the change. The `--verify` harness reads the state by these
+/// variant names.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
 pub(crate) enum NativeFullscreen {
     /// Flecha holds no native fullscreen. Native fullscreen the user chose stays theirs.
     #[default]
@@ -234,8 +235,6 @@ mod tests {
         assert!(pages.0.is_empty());
     }
 
-    /// Runs renders of (page wants fullscreen, window is fullscreen) and returns the window's
-    /// toggles and the final state.
     use PageWants::{Nothing, Screen, Window};
 
     /// Runs renders of (what the page wants, window is fullscreen) from `Idle` and returns the

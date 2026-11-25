@@ -282,7 +282,7 @@ impl Command {
                 let handle = *state.windows.get(window).context("no GPUI window")?;
                 return handle.update(cx, |shell, window, _| {
                     json!({
-                        "state": format!("{:?}", shell.native_fullscreen),
+                        "state": shell.native_fullscreen,
                         "window": window.is_fullscreen(),
                     })
                 });

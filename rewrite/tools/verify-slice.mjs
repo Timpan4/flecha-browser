@@ -1460,6 +1460,25 @@ async function pageFullscreen(app, main, other) {
   const sidebarShown = path => sidebars.some(color => histogram(path).includes(color));
 
   const native = () => app.command('native_fullscreen', { window: main });
+
+  // Every _NET_WM_STATE fullscreen request Flecha sends, as a window manager would receive it.
+  const listener = spawn(x11Driver, ['wm-requests'], { stdio: ['ignore', 'pipe', 'inherit'] });
+  const requests = [];
+
+  const listening = new Promise(resolve => {
+    createInterface({ input: listener.stdout }).on('line', line => {
+      if (line === 'ready') resolve();
+      else if (line.endsWith(' _NET_WM_STATE_FULLSCREEN')) requests.push(line);
+    });
+  });
+
+  await listening;
+
+  const requestsAre = async (label, count) => {
+    await poll(`${label}: ${count} native fullscreen requests`, () => requests.length >= count);
+    assert.equal(requests.length, count, `${label}: native fullscreen requests ${JSON.stringify(requests)}`);
+  };
+
   const asks = ({ state }) => state === 'Requested' || state === 'Held';
 
   const nativeIs = (label, state, window) => poll(label, async () => {
@@ -1537,18 +1556,21 @@ async function pageFullscreen(app, main, other) {
   };
 
   await enter('fullscreen');
+  await requestsAre('entering alone', 1);
   pass('a page entered HTML fullscreen through CEF and the window showed it without the sidebar');
 
   let after = app.events.length;
 
   execFileSync(x11Driver, ['key', 'Escape']);
   await ended('Esc', after);
+  await requestsAre('Esc', 1);
   pass('Esc asked the page to leave fullscreen and the sidebar came back');
 
   await enter('fullscreen-again');
   after = app.events.length;
   await app.command('select', { tab: other });
   await ended('a tab switch', after);
+  await requestsAre('entering again and a tab switch', 2);
   pass('switching tabs ended the page\'s fullscreen and the sidebar came back');
 
   // Patch 0075: with the sidebar kept, page fullscreen stays inside the window beside it.
@@ -1556,6 +1578,7 @@ async function pageFullscreen(app, main, other) {
   await app.command('select', { tab });
   const docked = await enter('fullscreen-beside-sidebar', true);
 
+  await requestsAre('entering beside the sidebar', 2);
   pass('with "Sidebar in page fullscreen" on, the page stayed in the docked page area beside the sidebar without native fullscreen');
 
   // tests/native-fullscreen.mjs (patch 0077): hiding the sidebar takes the screen, and showing
@@ -1572,6 +1595,7 @@ async function pageFullscreen(app, main, other) {
   await app.present(main);
   await layout('fullscreen-sidebar-shown-again', true, docked);
   await stillFullscreen('fullscreen-after-sidebar');
+  await requestsAre('hiding and showing the sidebar', 4);
   pass('hiding the sidebar took the screen, and showing it brought the window back with the page still in fullscreen');
 
   // Hide, show and hide before the window manager answers: one request stands, none stacked.
@@ -1587,7 +1611,8 @@ async function pageFullscreen(app, main, other) {
   await nativeIs('showing the sidebar again', 'Idle', true);
   windowManager(false);
   await nativeIs('the window to leave native fullscreen again', 'Idle', false);
-  pass('sidebar toggles before the window manager answered stacked no requests');
+  await requestsAre('toggles before an answer', 6);
+  pass('sidebar toggles before the window manager answered sent one request each way, none stacked');
 
   // The setting does the same as the sidebar.
   await app.command('sidebar_in_page_fullscreen', { enabled: false });
@@ -1601,11 +1626,14 @@ async function pageFullscreen(app, main, other) {
   await app.present(main);
   await layout('fullscreen-setting-on-again', true, docked);
   await stillFullscreen('fullscreen-after-setting');
+  await requestsAre('the setting off and on', 8);
   pass('turning the setting off and on moved the page to the screen and back');
   after = app.events.length;
   execFileSync(x11Driver, ['key', 'Escape']);
   await ended('Esc beside the sidebar', after);
+  await requestsAre('Esc beside the sidebar', 8);
   pass('Esc ended fullscreen beside the sidebar');
+  listener.kill();
   await app.quit();
 }
 
