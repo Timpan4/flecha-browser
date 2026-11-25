@@ -1,0 +1,134 @@
+{"check":"none/first-document","result":{}}
+{"check":"none/list","result":{"extensions":[]}}
+{"check":"none/revisit-content","result":{}}
+{"check":"none/workers","result":[]}
+{"check":"none/exit","result":{"code":0,"signal":null}}
+{"check":"none/prefs","result":[]}
+{"check":"legacy/first-document","result":{}}
+{"check":"legacy/load","result":{"code":-32600,"message":"Cannot install extension because it uses an unsupported manifest version."}}
+{"check":"legacy/list","result":{"extensions":[]}}
+{"check":"legacy/revisit-content","result":{}}
+{"check":"legacy/workers","result":[]}
+{"check":"legacy/exit","result":{"code":0,"signal":null}}
+{"check":"legacy/prefs","result":[]}
+{"check":"switch/first-document","result":{"flechaInjected":"loading","flechaReply":"{\"echoed\":\"/switch/first\",\"stored\":\"/switch/first\",\"tabId\":1586337383,\"incognito\":false}"}}
+{"check":"switch/list","result":{"extensions":[{"id":"hgjfafobhgcgdjpcdfiehbclahgdnkke","name":"Flecha OSR extension probe","version":"1.0","path":"/mnt/visual/extension","enabled":true}]}}
+{"check":"switch/revisit-content","result":{"flechaInjected":"loading","flechaReply":"{\"echoed\":\"/switch/revisit\",\"stored\":\"/switch/revisit\",\"tabId\":1586337383,\"incognito\":false}"}}
+{"check":"switch/workers","result":["chrome-extension://hgjfafobhgcgdjpcdfiehbclahgdnkke/background.js"]}
+{"check":"switch/popup","result":{"id":"hgjfafobhgcgdjpcdfiehbclahgdnkke","incognito":false,"storage":{"content":"/switch/revisit","installed":true},"reply":{"echoed":"popup","stored":"/switch/revisit","tabId":1586337384,"incognito":false},"active":[],"all":[],"icon":true}}
+{"check":"switch/paint","result":"popup-painted 2 640x480"}
+{"check":"switch/context-global","result":{"flechaInjected":"loading","flechaReply":"{\"echoed\":\"/switch/global\",\"stored\":\"/switch/global\",\"tabId\":1586337385,\"incognito\":false}"}}
+{"check":"switch/context-space","result":{"flechaInjected":"loading","flechaReply":"{\"echoed\":\"/switch/space\",\"stored\":\"/switch/space\",\"tabId\":1586337386,\"incognito\":false}"}}
+{"check":"switch/context-private","result":{}}
+{"check":"switch/global-storage-after-contexts","result":{"content":"/switch/global","installed":true}}
+{"check":"switch/exit","result":{"code":0,"signal":null}}
+{"check":"switch/prefs","result":[{"name":"Preferences","id":"hgjfafobhgcgdjpcdfiehbclahgdnkke","path":"/mnt/visual/extension","location":8,"icons":{"16":"icon.png"},"incognito":null}]}
+{"check":"switch/space-prefs","result":[{"name":"Preferences","id":"hgjfafobhgcgdjpcdfiehbclahgdnkke","path":"/mnt/visual/extension","location":8,"icons":{"16":"icon.png"},"incognito":null}]}
+{"check":"preseed-switch/seed-prefs","result":[{"name":"Preferences","id":"hgjfafobhgcgdjpcdfiehbclahgdnkke","path":"/mnt/visual/extension","location":8,"icons":{"16":"icon.png"},"incognito":null}]}
+{"check":"preseed-switch/first-document","result":{}}
+{"check":"preseed-switch/list","result":{"extensions":[]}}
+{"check":"preseed-switch/revisit-content","result":{}}
+{"check":"preseed-switch/workers","result":[]}
+{"check":"preseed-switch/exit","result":{"code":0,"signal":null}}
+{"check":"preseed-switch/prefs","result":[{"name":"Preferences","id":"hgjfafobhgcgdjpcdfiehbclahgdnkke","path":"/mnt/visual/extension","location":8,"icons":{"16":"icon.png"},"incognito":null}]}
+{"check":"port-plain/first-document","result":{}}
+{"check":"port-plain/load","result":{"id":"hgjfafobhgcgdjpcdfiehbclahgdnkke"}}
+{"check":"port-plain/list","result":{"extensions":[{"id":"hgjfafobhgcgdjpcdfiehbclahgdnkke","name":"Flecha OSR extension probe","version":"1.0","path":"/mnt/visual/extension","enabled":true}]}}
+{"check":"port-plain/revisit-content","result":{"flechaInjected":"loading","flechaReply":"{\"echoed\":\"/port-plain/revisit\",\"stored\":\"/port-plain/revisit\",\"tabId\":888761535,\"incognito\":false}"}}
+{"check":"port-plain/workers","result":["chrome-extension://hgjfafobhgcgdjpcdfiehbclahgdnkke/background.js"]}
+{"check":"port-plain/popup","result":{"id":"hgjfafobhgcgdjpcdfiehbclahgdnkke","incognito":false,"storage":{"content":"/port-plain/revisit","installed":true},"reply":{"echoed":"popup","stored":"/port-plain/revisit","tabId":888761536,"incognito":false},"active":[],"all":[],"icon":true}}
+{"check":"port-plain/paint","result":"popup-painted 2 640x480"}
+{"check":"port-plain/exit","result":{"code":0,"signal":null}}
+{"check":"port-plain/prefs","result":[{"name":"Preferences","id":"hgjfafobhgcgdjpcdfiehbclahgdnkke","path":"/mnt/visual/extension","location":4,"icons":{"16":"icon.png"},"incognito":null}]}
+{"check":"port/first-document","result":{}}
+{"check":"port/load","result":{"id":"hgjfafobhgcgdjpcdfiehbclahgdnkke"}}
+{"check":"port/cef-page-cdp","result":{"id":1,"error":{"code":-32000,"message":"Method not available."}}}
+{"check":"port/list","result":{"extensions":[{"id":"hgjfafobhgcgdjpcdfiehbclahgdnkke","name":"Flecha OSR extension probe","version":"1.0","path":"/mnt/visual/extension","enabled":true}]}}
+{"check":"port/revisit-content","result":{"flechaInjected":"loading","flechaReply":"{\"echoed\":\"/port/revisit\",\"stored\":\"/port/revisit\",\"tabId\":1735202185,\"incognito\":false}"}}
+{"check":"port/workers","result":["chrome-extension://hgjfafobhgcgdjpcdfiehbclahgdnkke/background.js"]}
+{"check":"port/popup","result":{"id":"hgjfafobhgcgdjpcdfiehbclahgdnkke","incognito":false,"storage":{"content":"/port/revisit","installed":true},"reply":{"echoed":"popup","stored":"/port/revisit","tabId":1735202186,"incognito":false},"active":[],"all":[],"icon":true}}
+{"check":"port/paint","result":"popup-painted 2 640x480"}
+{"check":"port/exit","result":{"code":0,"signal":null}}
+{"check":"port/prefs","result":[{"name":"Preferences","id":"hgjfafobhgcgdjpcdfiehbclahgdnkke","path":"/mnt/visual/extension","location":4,"icons":{"16":"icon.png"},"incognito":null}]}
+{"check":"pipe/first-document","result":{}}
+{"check":"pipe/load","result":{"id":"hgjfafobhgcgdjpcdfiehbclahgdnkke"}}
+{"check":"pipe/list","result":{"extensions":[{"id":"hgjfafobhgcgdjpcdfiehbclahgdnkke","name":"Flecha OSR extension probe","version":"1.0","path":"/mnt/visual/extension","enabled":true}]}}
+{"check":"pipe/revisit-content","result":{"flechaInjected":"loading","flechaReply":"{\"echoed\":\"/pipe/revisit\",\"stored\":\"/pipe/revisit\",\"tabId\":254284022,\"incognito\":false}"}}
+{"check":"pipe/workers","result":["chrome-extension://hgjfafobhgcgdjpcdfiehbclahgdnkke/background.js"]}
+{"check":"pipe/popup","result":{"id":"hgjfafobhgcgdjpcdfiehbclahgdnkke","incognito":false,"storage":{"content":"/pipe/revisit","installed":true},"reply":{"echoed":"popup","stored":"/pipe/revisit","tabId":254284023,"incognito":false},"active":[],"all":[],"icon":true}}
+{"check":"pipe/paint","result":"popup-painted 2 640x480"}
+{"check":"pipe/trigger-page","result":{"code":-32000,"message":"Action can only be triggered on a tab target."}}
+{"check":"pipe/tab-target","result":"tab"}
+{"check":"pipe/trigger-tab","result":{"code":-32000,"message":"Tab target is not attached to a browser window."}}
+{"check":"pipe/context-global","result":{"flechaInjected":"loading","flechaReply":"{\"echoed\":\"/pipe/global\",\"stored\":\"/pipe/global\",\"tabId\":254284024,\"incognito\":false}"}}
+{"check":"pipe/context-space","result":{}}
+{"check":"pipe/context-private","result":{}}
+{"check":"pipe/exit","result":{"code":0,"signal":null}}
+{"check":"pipe/prefs","result":[{"name":"Preferences","id":"hgjfafobhgcgdjpcdfiehbclahgdnkke","path":"/mnt/visual/extension","location":4,"icons":{"16":"icon.png"},"incognito":false}]}
+{"check":"pipe/space-prefs","result":[]}
+{"check":"pipe-incognito/first-document","result":{}}
+{"check":"pipe-incognito/load","result":{"id":"hgjfafobhgcgdjpcdfiehbclahgdnkke"}}
+{"check":"pipe-incognito/list","result":{"extensions":[{"id":"hgjfafobhgcgdjpcdfiehbclahgdnkke","name":"Flecha OSR extension probe","version":"1.0","path":"/mnt/visual/extension","enabled":true}]}}
+{"check":"pipe-incognito/revisit-content","result":{"flechaInjected":"loading","flechaReply":"{\"echoed\":\"/pipe-incognito/revisit\",\"stored\":\"/pipe-incognito/revisit\",\"tabId\":1883769150,\"incognito\":false}"}}
+{"check":"pipe-incognito/workers","result":["chrome-extension://hgjfafobhgcgdjpcdfiehbclahgdnkke/background.js"]}
+{"check":"pipe-incognito/popup","result":{"id":"hgjfafobhgcgdjpcdfiehbclahgdnkke","incognito":false,"storage":{"content":"/pipe-incognito/revisit","installed":true},"reply":{"echoed":"popup","stored":"/pipe-incognito/revisit","tabId":1883769151,"incognito":false},"active":[],"all":[],"icon":true}}
+{"check":"pipe-incognito/paint","result":"popup-painted 2 640x480"}
+{"check":"pipe-incognito/trigger-page","result":{"code":-32000,"message":"Action can only be triggered on a tab target."}}
+{"check":"pipe-incognito/tab-target","result":"tab"}
+{"check":"pipe-incognito/trigger-tab","result":{"code":-32000,"message":"Tab target is not attached to a browser window."}}
+{"check":"pipe-incognito/context-global","result":{"flechaInjected":"loading","flechaReply":"{\"echoed\":\"/pipe-incognito/global\",\"stored\":\"/pipe-incognito/global\",\"tabId\":1883769152,\"incognito\":false}"}}
+{"check":"pipe-incognito/context-space","result":{}}
+{"check":"pipe-incognito/context-private","result":{"flechaInjected":"loading","flechaReply":"{\"echoed\":\"/pipe-incognito/private\",\"stored\":\"/pipe-incognito/private\",\"tabId\":1883769154,\"incognito\":true}"}}
+{"check":"pipe-incognito/global-storage-after-contexts","result":{"content":"/pipe-incognito/private","installed":true}}
+{"check":"pipe-incognito/exit","result":{"code":0,"signal":null}}
+{"check":"pipe-incognito/prefs","result":[{"name":"Preferences","id":"hgjfafobhgcgdjpcdfiehbclahgdnkke","path":"/mnt/visual/extension","location":4,"icons":{"16":"icon.png"},"incognito":true}]}
+{"check":"pipe-incognito/space-prefs","result":[]}
+{"check":"seed-chrome/first-document","result":{}}
+{"check":"seed-chrome/load","result":{"id":"hgjfafobhgcgdjpcdfiehbclahgdnkke"}}
+{"check":"seed-chrome/list","result":{"extensions":[{"id":"hgjfafobhgcgdjpcdfiehbclahgdnkke","name":"Flecha OSR extension probe","version":"1.0","path":"/mnt/visual/extension","enabled":true}]}}
+{"check":"seed-chrome/revisit-content","result":{"flechaInjected":"loading","flechaReply":"{\"echoed\":\"/seed-chrome/revisit\",\"stored\":\"/seed-chrome/revisit\",\"tabId\":1039589075,\"incognito\":false}"}}
+{"check":"seed-chrome/workers","result":["chrome-extension://hgjfafobhgcgdjpcdfiehbclahgdnkke/background.js"]}
+{"check":"seed-chrome/popup","result":{"id":"hgjfafobhgcgdjpcdfiehbclahgdnkke","incognito":false,"storage":{"content":"/seed-chrome/revisit","installed":true},"reply":{"echoed":"popup","stored":"/seed-chrome/revisit","tabId":1039589077,"incognito":false},"active":[{"id":1039589077,"active":true,"url":"chrome-extension://hgjfafobhgcgdjpcdfiehbclahgdnkke/popup.html?report=http%3A%2F%2F127.0.0.1%3A34153%2Fpopup-report%2Fseed-chrome"}],"all":[{"id":1039589075,"active":true,"url":"http://127.0.0.1:34153/seed-chrome/revisit"},{"id":1039589077,"active":true,"url":"chrome-extension://hgjfafobhgcgdjpcdfiehbclahgdnkke/popup.html?report=http%3A%2F%2F127.0.0.1%3A34153%2Fpopup-report%2Fseed-chrome"}],"icon":true}}
+{"check":"seed-chrome/trigger-page","result":{"code":-32000,"message":"Action can only be triggered on a tab target."}}
+{"check":"seed-chrome/tab-target","result":"tab"}
+{"check":"seed-chrome/trigger-tab","result":{}}
+{"check":"seed-chrome/exit","result":{"code":0,"signal":null}}
+{"check":"seed-chrome/prefs","result":[{"name":"Preferences","id":"hgjfafobhgcgdjpcdfiehbclahgdnkke","path":"/mnt/visual/extension","location":4,"icons":{"16":"icon.png"},"incognito":null}]}
+{"check":"preseed/seed-prefs","result":[{"name":"Preferences","id":"hgjfafobhgcgdjpcdfiehbclahgdnkke","path":"/mnt/visual/extension","location":4,"icons":{"16":"icon.png"},"incognito":null}]}
+{"check":"preseed/first-document","result":{}}
+{"check":"preseed/list","result":{"extensions":[]}}
+{"check":"preseed/revisit-content","result":{}}
+{"check":"preseed/workers","result":[]}
+{"check":"preseed/exit","result":{"code":0,"signal":null}}
+{"check":"preseed/prefs","result":[]}
+{"check":"policy/first-document","result":{}}
+{"check":"policy/requests-at-first-document","result":["/update.xml"]}
+{"check":"policy/requests","result":["/update.xml","/probe.crx"]}
+{"check":"policy/list","result":{"extensions":[]}}
+{"check":"policy/revisit-content","result":{"flechaInjected":"loading","flechaReply":"{\"echoed\":\"/policy/revisit\",\"stored\":\"/policy/revisit\",\"tabId\":1156124766,\"incognito\":false}"}}
+{"check":"policy/workers","result":["chrome-extension://phafjadnhdoejccnddiajpagabfffbkb/background.js"]}
+{"check":"policy/popup","result":{"id":"phafjadnhdoejccnddiajpagabfffbkb","incognito":false,"storage":{"content":"/policy/revisit","installed":true},"reply":{"echoed":"popup","stored":"/policy/revisit","tabId":1156124767,"incognito":false},"active":[],"all":[],"icon":true}}
+{"check":"policy/paint","result":"popup-painted 2 640x480"}
+{"check":"policy/context-global","result":{"flechaInjected":"loading","flechaReply":"{\"echoed\":\"/policy/global\",\"stored\":\"/policy/global\",\"tabId\":1156124768,\"incognito\":false}"}}
+{"check":"policy/context-space","result":{}}
+{"check":"policy/context-space-after-install","result":{"flechaInjected":"loading","flechaReply":"{\"echoed\":\"/policy/space/revisit\",\"stored\":\"/policy/space/revisit\",\"tabId\":1156124769,\"incognito\":false}"}}
+{"check":"policy/context-private","result":{}}
+{"check":"policy/global-storage-after-contexts","result":{"content":"/policy/global","installed":true}}
+{"check":"policy/exit","result":{"code":0,"signal":null}}
+{"check":"policy/prefs","result":[{"name":"Preferences","id":"phafjadnhdoejccnddiajpagabfffbkb","path":"phafjadnhdoejccnddiajpagabfffbkb/1.0_0","location":7,"icons":{"16":"icon.png"},"incognito":null}]}
+{"check":"policy/space-prefs","result":[{"name":"Preferences","id":"phafjadnhdoejccnddiajpagabfffbkb","path":"phafjadnhdoejccnddiajpagabfffbkb/1.0_0","location":7,"icons":{"16":"icon.png"},"incognito":null}]}
+{"check":"preseed-policy/seed-prefs","result":[{"name":"Preferences","id":"phafjadnhdoejccnddiajpagabfffbkb","path":"phafjadnhdoejccnddiajpagabfffbkb/1.0_0","location":7,"icons":{"16":"icon.png"},"incognito":null}]}
+{"check":"preseed-policy/first-document","result":{"flechaInjected":"loading","flechaReply":"{\"echoed\":\"/preseed-policy/first\",\"stored\":\"/preseed-policy/first\",\"tabId\":1156124822,\"incognito\":false}"}}
+{"check":"preseed-policy/requests-at-first-document","result":[]}
+{"check":"preseed-policy/list","result":{"extensions":[]}}
+{"check":"preseed-policy/revisit-content","result":{"flechaInjected":"loading","flechaReply":"{\"echoed\":\"/preseed-policy/revisit\",\"stored\":\"/preseed-policy/revisit\",\"tabId\":1156124822,\"incognito\":false}"}}
+{"check":"preseed-policy/workers","result":["chrome-extension://phafjadnhdoejccnddiajpagabfffbkb/background.js"]}
+{"check":"preseed-policy/popup","result":{"id":"phafjadnhdoejccnddiajpagabfffbkb","incognito":false,"storage":{"content":"/preseed-policy/revisit","installed":true},"reply":{"echoed":"popup","stored":"/preseed-policy/revisit","tabId":1156124823,"incognito":false},"active":[],"all":[],"icon":true}}
+{"check":"preseed-policy/paint","result":"popup-painted 2 640x480"}
+{"check":"preseed-policy/context-global","result":{"flechaInjected":"loading","flechaReply":"{\"echoed\":\"/preseed-policy/global\",\"stored\":\"/preseed-policy/global\",\"tabId\":1156124824,\"incognito\":false}"}}
+{"check":"preseed-policy/context-space","result":{"flechaInjected":"loading","flechaReply":"{\"echoed\":\"/preseed-policy/space\",\"stored\":\"/preseed-policy/space\",\"tabId\":1156124825,\"incognito\":false}"}}
+{"check":"preseed-policy/context-private","result":{}}
+{"check":"preseed-policy/global-storage-after-contexts","result":{"content":"/preseed-policy/global","installed":true}}
+{"check":"preseed-policy/exit","result":{"code":0,"signal":null}}
+{"check":"preseed-policy/prefs","result":[{"name":"Preferences","id":"phafjadnhdoejccnddiajpagabfffbkb","path":"phafjadnhdoejccnddiajpagabfffbkb/1.0_0","location":7,"icons":{"16":"icon.png"},"incognito":null}]}
+{"check":"preseed-policy/space-prefs","result":[{"name":"Preferences","id":"phafjadnhdoejccnddiajpagabfffbkb","path":"phafjadnhdoejccnddiajpagabfffbkb/1.0_0","location":7,"icons":{"16":"icon.png"},"incognito":null}]}
