@@ -1459,7 +1459,8 @@ async function pageFullscreen(app, main, other) {
   const histogram = path => execFileSync('magick', [path, '-format', '%c', 'histogram:info:'], { encoding: 'utf8' });
   const sidebarShown = path => sidebars.some(color => histogram(path).includes(color));
 
-  const enter = async label => {
+  const screenFullscreen = () => app.command('native_fullscreen', { window: main });
+  const enter = async (label, keepSidebar = false) => {
     const after = app.events.length;
 
     await clickElement(app, tab, '#full', page, label, main);
@@ -1467,10 +1468,15 @@ async function pageFullscreen(app, main, other) {
       event.type === 'fullscreen' && event.tab === tab && event.fullscreen, after);
     await app.present(main);
     await captureUntil(`${label}-shown`, 'root', path => {
-      if (sidebarShown(path)) return 'the sidebar stayed beside the fullscreen page';
+      if (sidebarShown(path) !== keepSidebar) {
+        return keepSidebar ? 'the sidebar left the fullscreen page' : 'the sidebar stayed beside the fullscreen page';
+      }
 
       return page.every(color => histogram(path).includes(color)) ? undefined : 'the fullscreen page is not on screen';
     });
+    assert.equal(await screenFullscreen(), !keepSidebar, keepSidebar
+      ? 'the window asked for native fullscreen with the sidebar beside the page'
+      : 'the window did not ask for native fullscreen for the page');
   };
 
   const ended = async (step, after) => {
@@ -1495,6 +1501,17 @@ async function pageFullscreen(app, main, other) {
   await app.command('select', { tab: other });
   await ended('a tab switch', after);
   pass('switching tabs ended the page\'s fullscreen and the sidebar came back');
+
+  // Patch 0075: with the sidebar kept, page fullscreen stays inside the window beside it.
+  await app.command('sidebar_in_page_fullscreen', { enabled: true });
+  await app.command('select', { tab });
+  await enter('fullscreen-beside-sidebar', true);
+  pass('with "Sidebar in page fullscreen" on, the page filled the window beside the sidebar without native fullscreen');
+  after = app.events.length;
+  execFileSync(x11Driver, ['key', 'Escape']);
+  await ended('Esc beside the sidebar', after);
+  assert.equal(await screenFullscreen(), false, 'the window still asks for native fullscreen');
+  pass('Esc ended fullscreen beside the sidebar');
   await app.quit();
 }
 

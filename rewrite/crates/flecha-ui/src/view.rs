@@ -119,7 +119,7 @@ pub(crate) struct Shell {
     /// draws from the window's sprite atlas.
     favicons_drawn: RefCell<Vec<Arc<RenderImage>>>,
     title: String,
-    native_fullscreen: crate::fullscreen::NativeFullscreen,
+    pub(crate) native_fullscreen: crate::fullscreen::NativeFullscreen,
     _activation: Subscription,
     _appearance: Subscription,
     _display: Subscription,
@@ -419,8 +419,8 @@ impl Shell {
         .size_0()
     }
 
-    /// Puts the window in native fullscreen while its page is in HTML fullscreen, and takes it
-    /// out afterwards unless the user had made it fullscreen first. GPUI redraws a window whose
+    /// Puts the window in native fullscreen while its page takes the screen, and takes it out
+    /// afterwards unless the user had made it fullscreen first. GPUI redraws a window whose
     /// bounds change, as a native fullscreen change does, so a late entry is undone here too.
     fn sync_native_fullscreen(&mut self, page_fullscreen: bool, window: &mut Window) {
         let (next, toggle) = self
@@ -756,20 +756,25 @@ impl Render for Shell {
             .child(div().absolute().size_0().track_focus(&self.focus));
         let mut images = BTreeMap::new();
         let favicons_before = self.favicons_drawn.take();
-        let fullscreen = self.state.borrow().fullscreen_pane(&self.id);
-        self.sync_native_fullscreen(fullscreen.is_some(), window);
+        let (fullscreen, takes_screen) = {
+            let state = self.state.borrow();
+            (
+                state.fullscreen_pane(&self.id),
+                state.page_takes_screen(&self.id),
+            )
+        };
+        self.sync_native_fullscreen(takes_screen, window);
         let title_bar = TitleBar::of(window);
         let state = self.state.borrow();
         if let Some((owner, tab)) = fullscreen.clone() {
             let mut body = div().flex_1().min_h_0().relative().flex();
-            if let Some(core) = state.model.state(&self.id)
-                && let Some(current) = core.window(&self.id)
-                && crate::fullscreen::keeps_sidebar(
-                    &state.model.core.settings,
-                    core.sidebar_visible(&self.id),
-                )
+            if !takes_screen
+                && let Some(current) = state
+                    .model
+                    .state(&self.id)
+                    .and_then(|core| core.window(&self.id))
             {
-                body = body.child(self.sidebar(&state, current, TitleBar::Platform, window, cx));
+                body = body.child(self.sidebar(&state, current, title_bar, window, cx));
             } else {
                 self.hovered_tab_row = None;
             }

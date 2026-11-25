@@ -1,10 +1,11 @@
 //! HTML page fullscreen (the Fullscreen API: video players, slides, games).
 //!
 //! Alloy-style CEF leaves the transition to the client (`cef_display_handler_capi.h`): while
-//! a window's keyboard pane is in fullscreen, the window goes native fullscreen and shows that
-//! page alone, beside the sidebar only while "Sidebar in page fullscreen" is on. Esc and
-//! leaving the page (switching tabs, closing a Peek) end it through
-//! [`flecha_cef::Engine::exit_fullscreen`].
+//! a window's keyboard pane is in fullscreen, the window shows that page alone. With "Sidebar
+//! in page fullscreen" on and the sidebar docked, the page fills the window beside the sidebar
+//! and the window keeps its size, leaving the desktop's panels visible (patch 0075). Otherwise
+//! the window goes native fullscreen. Esc and leaving the page (switching tabs, closing a Peek)
+//! end it through [`flecha_cef::Engine::exit_fullscreen`].
 
 use std::collections::BTreeMap;
 
@@ -77,6 +78,11 @@ pub(crate) enum NativeFullscreen {
 }
 
 impl NativeFullscreen {
+    /// Whether Flecha has asked for the window's native fullscreen and not taken it back.
+    pub(crate) fn asks(self) -> bool {
+        matches!(self, Self::Requested | Self::Held)
+    }
+
     /// The next state, from whether the page wants fullscreen and whether the window is in it,
     /// and whether to toggle the window's native fullscreen now.
     pub(crate) fn next(self, wanted: bool, window_fullscreen: bool) -> (Self, bool) {
@@ -106,6 +112,20 @@ impl Controller {
     pub(crate) fn fullscreen_pane(&self, window: &WindowId) -> Option<(Owner, TabId)> {
         let (owner, tab) = self.model.keyboard_pane(window)?;
         self.fullscreen.contains(tab).then(|| (owner, tab.clone()))
+    }
+
+    /// Whether the window's fullscreen page stays beside its sidebar, inside the window. Only
+    /// a main or incognito window has a sidebar; a popup or Flechinha page takes the screen.
+    pub(crate) fn keeps_sidebar_in_fullscreen(&self, window: &WindowId) -> bool {
+        self.model.state(window).is_some_and(|core| {
+            core.window(window).is_some()
+                && keeps_sidebar(&self.model.core.settings, core.sidebar_visible(window))
+        })
+    }
+
+    /// Whether the window should be in native fullscreen for its page.
+    pub(crate) fn page_takes_screen(&self, window: &WindowId) -> bool {
+        self.fullscreen_pane(window).is_some() && !self.keeps_sidebar_in_fullscreen(window)
     }
 
     pub(crate) fn page_fullscreen(&mut self, key: &BrowserKey, fullscreen: bool) {

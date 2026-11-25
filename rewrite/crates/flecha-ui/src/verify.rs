@@ -109,6 +109,13 @@ enum Command {
     Theme {
         theme: flecha_core::Theme,
     },
+    /// Saves "Sidebar in page fullscreen", as its toggle in Settings does.
+    SidebarInPageFullscreen {
+        enabled: bool,
+    },
+    /// Whether the window holds a native fullscreen request for its page. Xvfb runs no
+    /// window manager to apply one, so the harness reads the request.
+    NativeFullscreen,
     /// The sidebar's "+ Folder" with this name typed in.
     NewFolder {
         name: String,
@@ -261,6 +268,18 @@ impl Command {
                 })?;
                 cx.refresh_windows();
                 return Ok(Value::Null);
+            }
+            Self::SidebarInPageFullscreen { enabled } => {
+                state.edit_settings(|settings| {
+                    settings.sidebar_in_page_fullscreen = Some(enabled);
+                    Ok(())
+                })?;
+                cx.refresh_windows();
+                return Ok(Value::Null);
+            }
+            Self::NativeFullscreen => {
+                let handle = *state.windows.get(window).context("no GPUI window")?;
+                return Ok(Value::Bool(handle.read(cx)?.native_fullscreen.asks()));
             }
             Self::RejectNextSharedTexture => {
                 state.engine.reject_next_shared_texture();
