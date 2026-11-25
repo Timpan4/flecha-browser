@@ -464,7 +464,7 @@ impl Shell {
         id: TabId,
         images: &mut BTreeMap<TabId, Vec<Arc<RenderImage>>>,
         cx: &Context<Self>,
-    ) -> Div {
+    ) -> Pane {
         let (frames, prompt, writable, (cursor, status)) = {
             let state = self.state.borrow();
             (
@@ -494,61 +494,62 @@ impl Shell {
             .size_full()
             .overflow_hidden()
             .bg(palette().page)
-            .cursor(cursor)
-            .child(surface(frames.view, frames.popup))
-            .child(
-                canvas(|_, _, _| (), {
-                    let origin = origin.clone();
-                    let owner = owner.clone();
-                    let id = id.clone();
-                    let page_input = self
-                        .focused_browser
-                        .as_ref()
-                        .filter(|browser| browser.tab == id)
-                        .map(|browser| (browser.clone(), self.page_focus.clone(), self.id.clone()));
-                    move |pane, (), window, cx| {
-                        origin.set(pane.origin);
-                        if let Some((browser, focus, window_id)) = &page_input {
-                            window.handle_input(
-                                focus,
-                                crate::page_input::PageInput {
-                                    state: state.clone(),
-                                    window: window_id.clone(),
-                                    browser: browser.clone(),
-                                    focus: focus.clone(),
-                                    bounds: pane,
-                                },
-                                cx,
-                            );
-                        }
-                        #[cfg(target_os = "linux")]
-                        state.borrow().engine.follow_window_device(
-                            flecha_surface::SurfaceTarget::for_window(window),
+            .cursor(cursor);
+        let mut overlays = vec![
+            canvas(|_, _, _| (), {
+                let origin = origin.clone();
+                let owner = owner.clone();
+                let id = id.clone();
+                let page_input = self
+                    .focused_browser
+                    .as_ref()
+                    .filter(|browser| browser.tab == id)
+                    .map(|browser| (browser.clone(), self.page_focus.clone(), self.id.clone()));
+                move |pane, (), window, cx| {
+                    origin.set(pane.origin);
+                    if let Some((browser, focus, window_id)) = &page_input {
+                        window.handle_input(
+                            focus,
+                            crate::page_input::PageInput {
+                                state: state.clone(),
+                                window: window_id.clone(),
+                                browser: browser.clone(),
+                                focus: focus.clone(),
+                                bounds: pane,
+                            },
+                            cx,
                         );
-                        let screen = window
-                            .display(cx)
-                            .map_or(window.bounds(), |display| display.bounds());
-                        let viewport = Viewport::new(
-                            pane,
-                            window.bounds(),
-                            screen,
-                            window.scale_factor(),
-                            window.refresh_interval(cx),
-                        );
-                        let (state, owner, id) = (state.clone(), owner.clone(), id.clone());
-                        cx.defer(move |cx| {
-                            let mut state = state.borrow_mut();
-                            if let Err(error) = state.pane(owner, id, viewport) {
-                                state.fail(error, cx);
-                            }
-                        });
                     }
-                })
-                .absolute()
-                .top_0()
-                .left_0()
-                .size_full(),
-            );
+                    #[cfg(target_os = "linux")]
+                    state
+                        .borrow()
+                        .engine
+                        .follow_window_device(flecha_surface::SurfaceTarget::for_window(window));
+                    let screen = window
+                        .display(cx)
+                        .map_or(window.bounds(), |display| display.bounds());
+                    let viewport = Viewport::new(
+                        pane,
+                        window.bounds(),
+                        screen,
+                        window.scale_factor(),
+                        window.refresh_interval(cx),
+                    );
+                    let (state, owner, id) = (state.clone(), owner.clone(), id.clone());
+                    cx.defer(move |cx| {
+                        let mut state = state.borrow_mut();
+                        if let Err(error) = state.pane(owner, id, viewport) {
+                            state.fail(error, cx);
+                        }
+                    });
+                }
+            })
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .into_any_element(),
+        ];
         macro_rules! pointer {
             ($event:ty, $handler:ident $(, $state:ident)?) => {{
                 let (id, origin) = (id.clone(), origin.clone());
@@ -638,35 +639,85 @@ impl Shell {
         if let Some(find) = &self.find
             && find.browser.tab == id
         {
-            element = element.child(self.find_panel(find, cx));
+            overlays.push(self.find_panel(find, cx).into_any_element());
         }
-        if let Some(status) = status {
-            element = element.child(
-                div()
-                    .absolute()
-                    .bottom_0()
-                    .left_0()
-                    .max_w_full()
-                    .invisible()
-                    .group_hover(group, |style| style.visible())
-                    .rounded_tr(px(tokens::RADIUS_SM))
-                    .px(px(tokens::SPACE_2))
-                    .py(px(tokens::SPACE_1))
-                    .bg(palette().surface)
-                    .text_color(palette().text_2)
-                    .text_size(px(tokens::TEXT_XS))
-                    .truncate()
-                    .child(status),
-            );
+        let status = status.map(|status| {
+            div()
+                .absolute()
+                .bottom_0()
+                .left_0()
+                .max_w_full()
+                .invisible()
+                .group_hover(group, |style| style.visible())
+                .rounded_tr(px(tokens::RADIUS_SM))
+                .px(px(tokens::SPACE_2))
+                .py(px(tokens::SPACE_1))
+                .bg(palette().surface)
+                .text_color(palette().text_2)
+                .text_size(px(tokens::TEXT_XS))
+                .truncate()
+                .child(status)
+        });
+        Pane {
+            banner: prompt.map(|prompt| self.permission_banner(prompt, writable, cx)),
+            viewport: element,
+            view: frames.view,
+            popup: frames.popup,
+            overlays,
+            status,
+            corner_radius: Pixels::ZERO,
         }
+    }
+}
+
+/// A page with its permission banner, square until `page_card` gives it the card's radius.
+///
+/// GPUI clips children to rectangles only, so the card's rounding does not reach the page: the
+/// page frame and every background drawn into a card corner carry the radius themselves.
+pub(crate) struct Pane {
+    banner: Option<Div>,
+    viewport: gpui::Stateful<Div>,
+    view: Option<Frame>,
+    popup: Option<(gpui::Bounds<Pixels>, Frame)>,
+    /// Drawn over the page frame, in order.
+    overlays: Vec<AnyElement>,
+    /// The link status bubble, in the bottom-left corner.
+    status: Option<Div>,
+    corner_radius: Pixels,
+}
+
+impl IntoElement for Pane {
+    type Element = Div;
+
+    fn into_element(self) -> Div {
+        let radius = self.corner_radius;
+        // A permission banner takes the card's top corners from the page.
+        let top = if self.banner.is_some() {
+            Pixels::ZERO
+        } else {
+            radius
+        };
+        let corners = Corners {
+            top_left: top,
+            top_right: top,
+            bottom_right: radius,
+            bottom_left: radius,
+        };
+        let viewport = self
+            .viewport
+            .rounded_tl(top)
+            .rounded_tr(top)
+            .rounded_br(radius)
+            .rounded_bl(radius)
+            .child(surface(self.view, self.popup, corners))
+            .children(self.overlays)
+            .children(self.status.map(|status| status.rounded_bl(radius)));
         div()
             .flex()
             .flex_col()
             .size_full()
-            .when_some(prompt, |pane, prompt| {
-                pane.child(self.permission_banner(prompt, writable, cx))
-            })
-            .child(div().flex_1().min_h_0().child(element))
+            .children(self.banner.map(|banner| banner.rounded_t(radius)))
+            .child(div().flex_1().min_h_0().child(viewport))
     }
 }
 
@@ -1408,7 +1459,8 @@ pub(crate) fn primary_button(
 
 /// A page in the page area: rounded to `--page-radius`, with the frame's drop shadow, on the
 /// empty state's colour until its first frame.
-pub(crate) fn page_card(page: Div) -> Div {
+pub(crate) fn page_card(mut page: Pane) -> Div {
+    page.corner_radius = px(tokens::PAGE_RADIUS);
     div()
         .size_full()
         .rounded(px(tokens::PAGE_RADIUS))

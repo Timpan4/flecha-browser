@@ -33,7 +33,7 @@ diff --git a/crates/gpui/src/scene.rs b/crates/gpui/src/scene.rs
 index cccc924..48fda71 100644
 --- a/crates/gpui/src/scene.rs
 +++ b/crates/gpui/src/scene.rs
-@@ -1172,6 +1172,22 @@ pub struct PaintSurface {
+@@ -1172,6 +1172,24 @@ pub struct PaintSurface {
      pub content_mask: ContentMask<ScaledPixels>,
      #[cfg(any(target_os = "macos", target_os = "ios"))]
      pub image_buffer: objc2_core_foundation::CFRetained<objc2_core_video::CVPixelBuffer>,
@@ -41,6 +41,8 @@ index cccc924..48fda71 100644
 +    pub texture: wgpu::TextureView,
 +    #[cfg(target_os = "linux")]
 +    pub source_uv: [f32; 4],
++    #[cfg(target_os = "linux")]
++    pub corner_radii: Corners<ScaledPixels>,
 +}
 +
 +/// The renderer's GPU. A surface texture must be created on this device.
@@ -60,7 +62,7 @@ diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
 index 775021f..b498928 100644
 --- a/crates/gpui/src/window.rs
 +++ b/crates/gpui/src/window.rs
-@@ -5665,6 +5665,31 @@ impl Window {
+@@ -5665,6 +5665,36 @@ impl Window {
          });
      }
 
@@ -76,16 +78,21 @@ index 775021f..b498928 100644
 +    pub fn paint_texture_surface(
 +        &mut self,
 +        bounds: Bounds<Pixels>,
++        corner_radii: Corners<Pixels>,
 +        texture: wgpu::TextureView,
 +        source_uv: [f32; 4],
 +    ) {
 +        self.invalidator.debug_assert_paint();
++        let corner_radii = corner_radii
++            .clamp_radii_for_quad_size(bounds.size)
++            .scale(self.scale_factor());
 +        self.next_frame.scene.insert_primitive(crate::PaintSurface {
 +            order: 0,
 +            bounds: self.snap_bounds(bounds),
 +            content_mask: self.snapped_content_mask(),
 +            texture,
 +            source_uv,
++            corner_radii,
 +        });
 +    }
 +
@@ -128,11 +135,12 @@ diff --git a/crates/gpui_wgpu/src/shaders.wgsl b/crates/gpui_wgpu/src/shaders.wg
 index 8dd2d02..9e5ffab 100644
 --- a/crates/gpui_wgpu/src/shaders.wgsl
 +++ b/crates/gpui_wgpu/src/shaders.wgsl
-@@ -1465,19 +1465,12 @@ fn fs_poly_sprite(input: PolySpriteVarying) -> @location(0) vec4<f32> {
+@@ -1465,19 +1465,13 @@ fn fs_poly_sprite(input: PolySpriteVarying) -> @location(0) vec4<f32> {
  struct SurfaceParams {
      bounds: Bounds,
      content_mask: Bounds,
 +    source_uv: vec4<f32>,
++    corner_radii: Corners,
  }
 
  @group(1) @binding(0) var<uniform> surface_locals: SurfaceParams;
@@ -151,7 +159,7 @@ index 8dd2d02..9e5ffab 100644
 
  struct SurfaceVarying {
      @builtin(position) position: vec4<f32>,
-@@ -1491,17 +1484,20 @@ fn vs_surface(@builtin(vertex_index) vertex_id: u32) -> SurfaceVarying {
+@@ -1491,17 +1485,22 @@ fn vs_surface(@builtin(vertex_index) vertex_id: u32) -> SurfaceVarying {
      var out = SurfaceVarying();
      let clipped = clip_to_mask(unit_vertex, surface_locals.bounds, surface_locals.content_mask);
      out.position = to_device_position_impl(clipped.position);
@@ -174,11 +182,13 @@ index 8dd2d02..9e5ffab 100644
 -
 -    return ycbcr_to_RGB * y_cb_cr;
 +    let color = textureSampleLevel(t_surface, s_surface, input.texture_position, 0.0);
++    let distance = quad_sdf(input.position.xy, surface_locals.bounds, surface_locals.corner_radii);
++    let coverage = saturate(0.5 - distance);
 +    // The surface input is premultiplied, as are GPUI image sprites.
 +    if globals.premultiplied_alpha == 0u && color.a > 0.0 {
-+        return vec4<f32>(color.rgb / color.a, color.a);
++        return vec4<f32>(color.rgb / color.a, color.a * coverage);
 +    }
-+    return color;
++    return color * coverage;
  }
 diff --git a/crates/gpui_wgpu/src/wgpu_context.rs b/crates/gpui_wgpu/src/wgpu_context.rs
 index 37e9a0a..31f105e 100644
@@ -202,15 +212,17 @@ diff --git a/crates/gpui_wgpu/src/wgpu_renderer.rs b/crates/gpui_wgpu/src/wgpu_r
 index cd9d870..c23ff49 100644
 --- a/crates/gpui_wgpu/src/wgpu_renderer.rs
 +++ b/crates/gpui_wgpu/src/wgpu_renderer.rs
-@@ -95,6 +95,7 @@ impl From<Bounds<ScaledPixels>> for PodBounds {
+@@ -95,6 +95,9 @@ impl From<Bounds<ScaledPixels>> for PodBounds {
  struct SurfaceParams {
      bounds: PodBounds,
      content_mask: PodBounds,
 +    source_uv: [f32; 4],
++    /// Top left, top right, bottom right and bottom left, as WGSL's `Corners`.
++    corner_radii: [f32; 4],
  }
 
  #[repr(C)]
-@@ -657,16 +658,6 @@ impl WgpuRendererCore {
+@@ -657,16 +660,6 @@ impl WgpuRendererCore {
                  wgpu::BindGroupLayoutEntry {
                      binding: 2,
                      visibility: wgpu::ShaderStages::FRAGMENT,
@@ -227,7 +239,7 @@ index cd9d870..c23ff49 100644
                      ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                      count: None,
                  },
-@@ -1068,6 +1059,21 @@ impl WgpuRenderer {
+@@ -1068,6 +1061,21 @@ impl WgpuRenderer {
          self.core().is_some_and(|core| core.dual_source_blending)
      }
 
@@ -249,7 +261,7 @@ index cd9d870..c23ff49 100644
      /// Returns `None` once GPU resources have been released by `destroy` or a pending
      /// device recovery.
      pub fn gpu_specs(&self) -> Option<GpuSpecs> {
-@@ -1324,6 +1330,48 @@ impl WgpuRendererCore {
+@@ -1324,6 +1332,54 @@ impl WgpuRendererCore {
          &mut self.resources
      }
 
@@ -262,6 +274,12 @@ index cd9d870..c23ff49 100644
 +            bounds: surface.bounds.into(),
 +            content_mask: surface.content_mask.bounds.into(),
 +            source_uv: surface.source_uv,
++            corner_radii: [
++                surface.corner_radii.top_left.0,
++                surface.corner_radii.top_right.0,
++                surface.corner_radii.bottom_right.0,
++                surface.corner_radii.bottom_left.0,
++            ],
 +        };
 +        let uniform = resources
 +            .device
@@ -298,7 +316,7 @@ index cd9d870..c23ff49 100644
      fn render_frame(
          &mut self,
          scene: &Scene,
-@@ -1540,9 +1588,12 @@ impl WgpuRendererCore {
+@@ -1540,9 +1596,12 @@ impl WgpuRendererCore {
                              &mut pass,
                          )?;
                      }
@@ -660,7 +678,7 @@ diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
 index b498928..31f6dd5 100644
 --- a/crates/gpui/src/window.rs
 +++ b/crates/gpui/src/window.rs
-@@ -5923,6 +5923,11 @@ impl Window {
+@@ -5928,6 +5928,11 @@ impl Window {
          }
      }
 

@@ -11,6 +11,7 @@ import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import { fixture, popupColors, selectColors, selectOptionColor } from './fixture.mjs';
+import { roundedCorner, squareCorner } from './page-corner.mjs';
 
 const out = join(process.env.HOME, '..');
 const mode = process.argv[2] ?? 'frames';
@@ -110,6 +111,9 @@ function histogram(path) {
 
 let step = 0;
 
+// The path of the latest capture called `name`.
+const shot = name => join(out, `${String(step).padStart(2, '0')}-${name}.png`);
+
 // Retries until `mismatch` accepts a capture. The launcher watchdog bounds the attempts.
 async function capture(app, name, mismatch) {
   step += 1;
@@ -118,9 +122,9 @@ async function capture(app, name, mismatch) {
   for (;;) {
     await app.present();
     execFileSync('weston-screenshooter', { cwd: out, stdio: 'ignore' });
-    const shot = readdirSync(out).find(file => file.startsWith('wayland-screenshot-'));
-    const path = join(out, `${String(step).padStart(2, '0')}-${name}.png`);
-    renameSync(join(out, shot), path);
+    const screenshot = readdirSync(out).find(file => file.startsWith('wayland-screenshot-'));
+    const path = shot(name);
+    renameSync(join(out, screenshot), path);
     const counts = histogram(path);
     const reason = mismatch(counts);
 
@@ -274,6 +278,10 @@ await capture(app, 'open', exactly(markers.open));
 
 pass('a page rendered at its own size');
 
+assert.equal(squareCorner(shot('open'), backgrounds[0]), undefined);
+
+pass('the shared-texture page in its card has rounded corners');
+
 const split = await app.command('split', { url: base + '/split' });
 const [, right] = active(split).split;
 
@@ -326,7 +334,9 @@ const popup = await browserOf(popupLoad.tab);
 
 await logged(new RegExp(`^page frames: browser ${popup.browser} receives shared textures$`));
 
-pass('a scripted popup window rendered its page from shared textures');
+assert.equal(roundedCorner(shot('popup-window'), popupColors[0]), undefined);
+
+pass('a scripted popup window rendered its page square from shared textures');
 
 // Chromium's process singleton marks the profile as held by `<hostname>-<pid>`.
 assert.match(readlinkSync(join(process.env.FLECHA_PROFILE, 'cef', 'SingletonLock')), /-\d+$/);
