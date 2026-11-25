@@ -8,7 +8,7 @@ import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
 import { crc32, deflateSync } from 'node:zlib';
 
-import { blankRestartColor, downloadBody, fixture, openerColors } from './fixture.mjs';
+import { blankRestartColor, defaultPageColors, downloadBody, fixture, openerColors } from './fixture.mjs';
 import { checkProcessEnvironment } from './verify-process-env.mjs';
 
 const out = join(process.env.HOME, '..');
@@ -800,7 +800,7 @@ async function sidebarResizeAndReveal(app, tab) {
       .split('\n')
       .filter(Boolean);
 
-    return colors.length === 1 && colors[0].includes('#147A70');
+    return colors.length === 1 && colors[0].includes(defaultPageColors[0]);
   };
 
   const collapsedClean = (path, dockedMessage, chromeMessage) => {

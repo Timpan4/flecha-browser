@@ -71,7 +71,13 @@ impl Controller {
         match action {
             SidebarAction::Toggle => {
                 core.set_sidebar_visible(window, !core.sidebar_visible(window));
-                self.sidebar_peeks.remove(window);
+                self.sidebar_peeks.retain(|id, _| {
+                    id != window
+                        && self
+                            .model
+                            .state(id)
+                            .is_some_and(|core| !core.sidebar_visible(id))
+                });
             }
             SidebarAction::FolderName(Some(id), name) => {
                 core.edit_folder(&id, Some(&name), None);
@@ -2215,21 +2221,27 @@ mod tests {
             "https://example.test/"
         );
         assert!(controller.model.core.archive().is_empty());
-        let visible = controller.model.core.sidebar_visible(&window);
-        sidebar(&mut controller, SidebarAction::Toggle);
-        assert_ne!(controller.model.core.sidebar_visible(&window), visible);
-        controller.sidebar_peeks.insert(
-            window.clone(),
-            SidebarPeek {
-                leaving: true,
-                hide_at: Some(Instant::now()),
-            },
-        );
-        sidebar(&mut controller, SidebarAction::Toggle);
-        assert!(controller.model.core.sidebar_visible(&window));
-        assert!(!controller.sidebar_peeks.contains_key(&window));
+        let peek = || SidebarPeek {
+            leaving: true,
+            hide_at: Some(Instant::now()),
+        };
+        controller.model.core.set_sidebar_visible(&window, true);
+        controller.sidebar_peeks.insert(window.clone(), peek());
         sidebar(&mut controller, SidebarAction::Toggle);
         assert!(!controller.model.core.sidebar_visible(&window));
         assert!(!controller.sidebar_peeks.contains_key(&window));
+
+        // A second window with no per-window override follows the core fallback when the first
+        // window toggles back to docked, so its peek must clear synchronously too.
+        let other = WindowId::new("window-2");
+        assert!(controller.model.core.open_window(other.clone(), None));
+        assert!(!controller.model.core.sidebar_visible(&other));
+        controller.sidebar_peeks.insert(window.clone(), peek());
+        controller.sidebar_peeks.insert(other.clone(), peek());
+        sidebar(&mut controller, SidebarAction::Toggle);
+        assert!(controller.model.core.sidebar_visible(&window));
+        assert!(controller.model.core.sidebar_visible(&other));
+        assert!(!controller.sidebar_peeks.contains_key(&window));
+        assert!(!controller.sidebar_peeks.contains_key(&other));
     }
 }
