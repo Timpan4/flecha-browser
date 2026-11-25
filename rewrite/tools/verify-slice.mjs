@@ -1459,16 +1459,54 @@ async function pageFullscreen(app, main, other) {
   const histogram = path => execFileSync('magick', [path, '-format', '%c', 'histogram:info:'], { encoding: 'utf8' });
   const sidebarShown = path => sidebars.some(color => histogram(path).includes(color));
 
-  const screenFullscreen = () => app.command('native_fullscreen', { window: main });
+  const native = () => app.command('native_fullscreen', { window: main });
+  const asks = ({ state }) => state === 'Requested' || state === 'Held';
 
-  // The top of the page colour's bounding box in a root capture. Without a window manager the
-  // window sits at the screen's origin, so a page alone starts at 0 and the docked layout
-  // kFlechaGap below it. A black border keeps -trim from taking a page that reaches the
-  // capture's edge as border.
-  const pageTop = path => Number(execFileSync('magick', [
-    path, '-alpha', 'off', '-fill', 'black', '+opaque', page[0], '-bordercolor', 'black', '-border', '1',
-    '-trim', '-format', '%Y', 'info:',
-  ], { encoding: 'utf8' })) - 1;
+  const nativeIs = (label, state, window) => poll(label, async () => {
+    const now = await native();
+
+    return now.state === state && now.window === window;
+  });
+
+  // Xvfb runs no window manager, so the harness answers Flecha's requests as one would.
+  const windowManager = fullscreen => execFileSync(x11Driver, ['fullscreen', 'Flecha', fullscreen ? 'on' : 'off']);
+
+  const toggleSidebar = async () => {
+    execFileSync(x11Driver, ['chord', 'Control_L', 's']);
+    await app.present(main);
+  };
+
+  // The top of the page colour's bounding box, from the window's top: kFlechaGap down in the
+  // docked layout, 0 for a page alone. A black border keeps -trim from taking a page that
+  // reaches the capture's edge as border.
+  const pageTop = path => {
+    const windowY = Number(execFileSync(x11Driver, ['geometry', 'Flecha'], { encoding: 'utf8' }).trim().split(' ')[1]);
+
+    return Number(execFileSync('magick', [
+      path, '-alpha', 'off', '-fill', 'black', '+opaque', page[0], '-bordercolor', 'black', '-border', '1',
+      '-trim', '-format', '%Y', 'info:',
+    ], { encoding: 'utf8' })) - 1 - windowY;
+  };
+
+  const layout = (label, keepSidebar, docked) => captureUntil(label, 'root', path => {
+    if (sidebarShown(path) !== keepSidebar) {
+      return keepSidebar ? 'the sidebar is not beside the fullscreen page' : 'the sidebar stayed beside the fullscreen page';
+    }
+
+    if (!page.every(color => histogram(path).includes(color))) return 'the fullscreen page is not on screen';
+
+    const top = pageTop(path);
+    const expected = keepSidebar ? docked : 0;
+
+    return top === expected ? undefined : `the fullscreen page starts at ${top}, not ${expected}`;
+  });
+
+  const stillFullscreen = async label => {
+    const value = site.probe(label);
+
+    await app.command('script', { tab, source: `fetch('/probe/${label}?value=' + !!document.fullscreenElement)` });
+    assert.equal(await value, 'true', `the page left fullscreen: ${label}`);
+  };
 
   const enter = async (label, keepSidebar = false) => {
     const after = app.events.length;
@@ -1481,21 +1519,12 @@ async function pageFullscreen(app, main, other) {
     await app.wait(`${label}: the page to enter fullscreen`, event =>
       event.type === 'fullscreen' && event.tab === tab && event.fullscreen, after);
     await app.present(main);
-    await captureUntil(`${label}-shown`, 'root', path => {
-      if (sidebarShown(path) !== keepSidebar) {
-        return keepSidebar ? 'the sidebar left the fullscreen page' : 'the sidebar stayed beside the fullscreen page';
-      }
-
-      if (!page.every(color => histogram(path).includes(color))) return 'the fullscreen page is not on screen';
-
-      const top = pageTop(path);
-      const expected = keepSidebar ? docked : 0;
-
-      return top === expected ? undefined : `the fullscreen page starts at ${top}, not ${expected}`;
-    });
-    assert.equal(await screenFullscreen(), !keepSidebar, keepSidebar
+    await layout(`${label}-shown`, keepSidebar, docked);
+    assert.equal(asks(await native()), !keepSidebar, keepSidebar
       ? 'the window asked for native fullscreen with the sidebar beside the page'
       : 'the window did not ask for native fullscreen for the page');
+
+    return docked;
   };
 
   const ended = async (step, after) => {
@@ -1504,7 +1533,7 @@ async function pageFullscreen(app, main, other) {
     await app.present(main);
     await captureUntil(`fullscreen-${step.replaceAll(/\W/g, '-')}`, 'root', path =>
       sidebarShown(path) ? undefined : 'the sidebar did not come back');
-    assert.equal(await screenFullscreen(), false, `the window still asks for native fullscreen after ${step}`);
+    assert.equal(asks(await native()), false, `the window still asks for native fullscreen after ${step}`);
   };
 
   await enter('fullscreen');
@@ -1525,8 +1554,54 @@ async function pageFullscreen(app, main, other) {
   // Patch 0075: with the sidebar kept, page fullscreen stays inside the window beside it.
   await app.command('sidebar_in_page_fullscreen', { enabled: true });
   await app.command('select', { tab });
-  await enter('fullscreen-beside-sidebar', true);
+  const docked = await enter('fullscreen-beside-sidebar', true);
+
   pass('with "Sidebar in page fullscreen" on, the page stayed in the docked page area beside the sidebar without native fullscreen');
+
+  // tests/native-fullscreen.mjs (patch 0077): hiding the sidebar takes the screen, and showing
+  // it brings the window back while the page stays in fullscreen.
+  await toggleSidebar();
+  await nativeIs('hiding the sidebar to ask for native fullscreen', 'Requested', false);
+  await layout('fullscreen-sidebar-hidden', false, docked);
+  windowManager(true);
+  await nativeIs('the window to enter native fullscreen', 'Held', true);
+  await toggleSidebar();
+  await nativeIs('showing the sidebar to leave native fullscreen', 'Idle', true);
+  windowManager(false);
+  await nativeIs('the window to leave native fullscreen', 'Idle', false);
+  await app.present(main);
+  await layout('fullscreen-sidebar-shown-again', true, docked);
+  await stillFullscreen('fullscreen-after-sidebar');
+  pass('hiding the sidebar took the screen, and showing it brought the window back with the page still in fullscreen');
+
+  // Hide, show and hide before the window manager answers: one request stands, none stacked.
+  await toggleSidebar();
+  await nativeIs('hiding the sidebar to ask again', 'Requested', false);
+  await toggleSidebar();
+  await nativeIs('showing the sidebar to park the request', 'Parked', false);
+  await toggleSidebar();
+  await nativeIs('hiding the sidebar to take the parked request back', 'Requested', false);
+  windowManager(true);
+  await nativeIs('the single request to land', 'Held', true);
+  await toggleSidebar();
+  await nativeIs('showing the sidebar again', 'Idle', true);
+  windowManager(false);
+  await nativeIs('the window to leave native fullscreen again', 'Idle', false);
+  pass('sidebar toggles before the window manager answered stacked no requests');
+
+  // The setting does the same as the sidebar.
+  await app.command('sidebar_in_page_fullscreen', { enabled: false });
+  await nativeIs('turning the setting off to ask for native fullscreen', 'Requested', false);
+  windowManager(true);
+  await nativeIs('the window to enter native fullscreen for the setting', 'Held', true);
+  await app.command('sidebar_in_page_fullscreen', { enabled: true });
+  await nativeIs('turning the setting on to leave native fullscreen', 'Idle', true);
+  windowManager(false);
+  await nativeIs('the window to leave native fullscreen for the setting', 'Idle', false);
+  await app.present(main);
+  await layout('fullscreen-setting-on-again', true, docked);
+  await stillFullscreen('fullscreen-after-setting');
+  pass('turning the setting off and on moved the page to the screen and back');
   after = app.events.length;
   execFileSync(x11Driver, ['key', 'Escape']);
   await ended('Esc beside the sidebar', after);

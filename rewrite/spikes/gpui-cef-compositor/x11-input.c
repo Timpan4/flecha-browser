@@ -1,4 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
+#include <X11/Xatom.h>
 #include <X11/Xlib.h>
 #include <X11/extensions/XTest.h>
 #ifdef FLECHA_VERIFY_CURSOR
@@ -225,6 +226,19 @@ int main(int argc, char **argv)
         Window window = named(display, argv[2]);
         ok = window != None && XRaiseWindow(display, window) &&
              XSetInputFocus(display, window, RevertToParent, CurrentTime);
+    } else if (argc == 4 && strcmp(argv[1], "fullscreen") == 0 &&
+               (strcmp(argv[3], "on") == 0 || strcmp(argv[3], "off") == 0)) {
+        // What a window manager does when it applies a _NET_WM_STATE fullscreen request: Xvfb
+        // has none. The window stays focused either way.
+        Window window = named(display, argv[2]);
+        Atom state[] = {
+            XInternAtom(display, "_NET_WM_STATE_FOCUSED", False),
+            XInternAtom(display, "_NET_WM_STATE_FULLSCREEN", False),
+        };
+        int count = strcmp(argv[3], "on") == 0 ? 2 : 1;
+        ok = window != None &&
+             XChangeProperty(display, window, XInternAtom(display, "_NET_WM_STATE", False),
+                             XA_ATOM, 32, PropModeReplace, (unsigned char *)state, count);
     } else if (argc == 2 && strcmp(argv[1], "copy") == 0) {
         ok = press(display, XK_Control_L, True) && tap(display, XK_a) &&
              tap(display, XK_c) && press(display, XK_Control_L, False);
