@@ -1460,6 +1460,7 @@ async function pageFullscreen(app, main, other) {
   const sidebarShown = path => sidebars.some(color => histogram(path).includes(color));
 
   const screenFullscreen = () => app.command('native_fullscreen', { window: main });
+
   const enter = async (label, keepSidebar = false) => {
     const after = app.events.length;
 
