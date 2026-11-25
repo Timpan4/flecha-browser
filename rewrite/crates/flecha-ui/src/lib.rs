@@ -875,7 +875,7 @@ impl Controller {
                 .iter()
                 .find(|space| !space.isolated),
             Partition::Isolated(id) => self.model.core.space(id).filter(|space| space.isolated),
-            Partition::Incognito(_) | Partition::Agent(_) => None,
+            Partition::Incognito(_) => None,
         }
         .context("No Space uses this page's request context")?
         .id

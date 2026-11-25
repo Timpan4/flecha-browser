@@ -3304,15 +3304,31 @@ async function verifyExtensions() {
   pass('clicking its icon opened a separate OSR browser and painted the extension popup');
   execFileSync(x11Driver, ['key', 'Escape']);
 
+  const cookie = async (tab, label, source = '') => {
+    const result = site.probe(label);
+    await app.command('script', { tab, source: `${source}
+      fetch('/probe/${label}?value=' + encodeURIComponent(document.cookie))` });
+
+    return result;
+  };
+
+  assert.equal(await cookie(tab, 'user-cookie', "document.cookie = 'flecha-session=user; path=/';"),
+    'flecha-session=user');
   since = app.events.length;
   const agent = await app.command('open_agent_fixture', { url: base + '/split' });
   await app.command('select', { tab: agent.tab });
   await app.loaded(agent.tab, '/split', since);
-  assert.equal(await marker(app, agent.tab, 'extension-agent'), 'absent');
+
+  const partitions = Object.fromEntries((await app.command('snapshot')).browsers
+    .map(page => [page.tab, JSON.stringify(page.partition)]));
+
+  assert.equal(partitions[agent.tab], partitions[tab], 'agent tab request context');
+  assert.equal(await cookie(agent.tab, 'agent-cookie'), 'flecha-session=user');
+  assert.equal(await marker(app, agent.tab, 'extension-agent'), 'policy');
   since = app.events.length;
   await app.present();
-  assert(!app.events.slice(since).some(event => event.type === 'extension_control' && event.id === 'menu'));
-  pass('agent tabs had no extension content script or sidebar action');
+  assert(app.events.slice(since).some(event => event.type === 'extension_control' && event.id === 'menu'));
+  pass("agent tabs kept the user's cookie, content script and sidebar action");
 
   since = app.events.length;
   const { window } = await openIncognito(app);

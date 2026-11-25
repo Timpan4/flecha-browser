@@ -475,7 +475,6 @@ fn partition(partition: &Partition) -> Value {
         Partition::Shared => json!("shared"),
         Partition::Isolated(space) => json!(space),
         Partition::Incognito(session) => json!(format!("incognito-{}", session.number())),
-        Partition::Agent(space) => json!({"agent": space.as_ref().map(|space| space.as_str())}),
     }
 }
 

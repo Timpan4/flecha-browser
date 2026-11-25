@@ -11,7 +11,8 @@ The sidebar's puzzle button opens the extensions menu. Pin actions there to show
 - Stock CEF exposes neither the toolbar action runner nor the active browser window model that extension tab queries depend on. Popups use their manifest's default page. Per-tab icons, badges, dynamic popups, per-site access controls, `activeTab` grants, and native `onClicked` actions need the Chromium toolbar bridge. The context menu in Flecha opens its own extension list with pinning and a Settings link.
 - The GPUI popover fits within the window and uses Chromium's popup size ceiling. It uses a regular Alloy page for the popup, so Chrome toolbar popup lifecycle and native preferred sizing differ.
 - All persistent Spaces receive the managed and unpacked lists. Shared Spaces use the same extension storage. A Space with separate cookies gets its own install and extension storage. A new persistent Space begins policy installation when its CEF context initializes.
-- Private and agent tabs use off-the-record contexts. Flecha never enables extensions in those contexts. Agent tabs keep their own ephemeral cookies and storage per persistent Space partition. The Chromium build could retain the user's session and filter extension injection per tab through patch 0080.
+- Private windows use off-the-record contexts, and Flecha never enables extensions there.
+- Agent tabs share their Space's context, so they keep the user's sign-ins, and that Space's extensions run in them. The Chromium build kept the session too, but patch 0080 also skipped other extensions' content scripts and `executeScript()` in agent tabs. Stock CEF has no per-tab injection filter, so that part waits for the CEF fork.
 
 ## Verification
 
@@ -22,7 +23,7 @@ tools/verify-slice.sh extensions
 tools/verify-slice.sh store-extensions
 ```
 
-`extensions` uses Xvfb, a private session bus, and a loopback-only network namespace. It creates a signed test CRX, checks a no-extension control, opens the sidebar action and its popup through X11 input, and checks the separate private and agent contexts, managed removal, and unpacked startup loading.
+`extensions` uses Xvfb, a private session bus, and a loopback-only network namespace. It creates a signed test CRX, checks a no-extension control, opens the sidebar action and its popup through X11 input, and checks that agent tabs share the user's cookies and extension, that private windows get neither, managed removal, and unpacked startup loading.
 
 `store-extensions` uses the same isolation with outbound networking provided by `pasta`. It disables port forwarding and host loopback mapping. The launcher checks that it has a different network namespace and no host runtime socket mounts before starting Xvfb and the private bus. The test uses scratch profiles and stops at Bitwarden's signed-out screen.
 

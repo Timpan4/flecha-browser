@@ -321,10 +321,6 @@ pub(crate) fn partition(partition: &crate::Partition) -> Partition {
         crate::Partition::Incognito(session) => {
             Partition::Ephemeral(format!("incognito-{}", session.number()))
         }
-        crate::Partition::Agent(space) => Partition::Ephemeral(match space {
-            Some(space) => format!("agent-space-{}", space.as_str()),
-            None => "agent-shared".into(),
-        }),
     }
 }
 
