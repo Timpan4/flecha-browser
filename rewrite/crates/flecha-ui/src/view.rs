@@ -756,30 +756,39 @@ impl Render for Shell {
             .child(div().absolute().size_0().track_focus(&self.focus));
         let mut images = BTreeMap::new();
         let favicons_before = self.favicons_drawn.take();
-        let (fullscreen, takes_screen) = {
+        let (fullscreen, keeps_sidebar) = {
             let state = self.state.borrow();
             (
                 state.fullscreen_pane(&self.id),
-                state.page_takes_screen(&self.id),
+                state.keeps_sidebar_in_fullscreen(&self.id),
             )
         };
-        self.sync_native_fullscreen(takes_screen, window);
+        let wanted = self
+            .native_fullscreen
+            .wanted(fullscreen.is_some(), keeps_sidebar);
+        self.sync_native_fullscreen(wanted, window);
         let title_bar = TitleBar::of(window);
         let state = self.state.borrow();
         if let Some((owner, tab)) = fullscreen.clone() {
-            let mut body = div().flex_1().min_h_0().relative().flex();
-            if !takes_screen
-                && let Some(current) = state
-                    .model
-                    .state(&self.id)
-                    .and_then(|core| core.window(&self.id))
-            {
-                body = body.child(self.sidebar(&state, current, title_bar, window, cx));
-            } else {
-                self.hovered_tab_row = None;
-            }
+            let body = div().flex_1().min_h_0().relative().flex();
             let page = self.pane(owner, tab, &mut images, cx);
-            main = main.child(body.child(div().flex_1().min_w_0().min_h_0().child(page)));
+            // Beside the kept sidebar the page keeps the docked layout's inset card, in the
+            // window or after promotion to the screen (patch 0075 leaves PageInsets alone); a
+            // page alone fills the screen edge to edge (patch 0072).
+            main = main.child(
+                if keeps_sidebar
+                    && let Some(current) = state
+                        .model
+                        .state(&self.id)
+                        .and_then(|core| core.window(&self.id))
+                {
+                    body.child(self.sidebar(&state, current, title_bar, window, cx))
+                        .child(page_area(true, page_card(page)))
+                } else {
+                    self.hovered_tab_row = None;
+                    body.child(div().flex_1().min_w_0().min_h_0().child(page))
+                },
+            );
         } else if let Some(popup) = state.model.popups.get(&self.id) {
             main = main
                 .child(
@@ -827,9 +836,8 @@ impl Render for Shell {
         {
             let active_space = &current.active_space_id;
             let view = current.visible_tabs();
-            // The page area, kFlechaGap in from the window's edges and flush with a docked
-            // sidebar (FlechaFrameState::PageInsets, patch 0010). Split panes keep
-            // kFlechaSplitGap between them (patch 0019), so each takes its share of the rest.
+            // Split panes keep kFlechaSplitGap between them (patch 0019), so each takes its
+            // share of the page area.
             let mut pages = div()
                 .relative()
                 .flex()
@@ -966,15 +974,7 @@ impl Render for Shell {
             if !docked {
                 self.hovered_tab_row = None;
             }
-            let page_area = div()
-                .flex_1()
-                .min_h_0()
-                .min_w_0()
-                .pt(px(tokens::PAGE_GAP))
-                .pr(px(tokens::PAGE_GAP))
-                .pb(px(tokens::PAGE_GAP))
-                .when(!docked, |area| area.pl(px(tokens::PAGE_GAP)))
-                .child(pages);
+            let page_area = page_area(docked, pages);
             let mut body = div().flex_1().min_h_0().relative().flex();
             if docked {
                 body = body
@@ -1413,6 +1413,20 @@ pub(crate) fn primary_button(
 
 /// A page in the page area: rounded to `--page-radius`, with the frame's drop shadow, on the
 /// empty state's colour until its first frame.
+/// The page area, kFlechaGap in from the window's edges and flush with a docked sidebar
+/// (FlechaFrameState::PageInsets, patch 0010).
+fn page_area(docked: bool, pages: Div) -> Div {
+    div()
+        .flex_1()
+        .min_h_0()
+        .min_w_0()
+        .pt(px(tokens::PAGE_GAP))
+        .pr(px(tokens::PAGE_GAP))
+        .pb(px(tokens::PAGE_GAP))
+        .when(!docked, |area| area.pl(px(tokens::PAGE_GAP)))
+        .child(pages)
+}
+
 pub(crate) fn page_card(page: Div) -> Div {
     div()
         .size_full()

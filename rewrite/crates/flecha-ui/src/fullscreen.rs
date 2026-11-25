@@ -83,6 +83,14 @@ impl NativeFullscreen {
         matches!(self, Self::Requested | Self::Held)
     }
 
+    /// Whether the window should be in native fullscreen: its page is in fullscreen without the
+    /// sidebar beside it. A request stands until the page leaves, whatever the sidebar does
+    /// meanwhile, as patch 0075 only ever promotes a page to the screen. Withdrawing it would
+    /// toggle again before the window manager answered, and two X11 toggles cancel out.
+    pub(crate) fn wanted(self, page_fullscreen: bool, keeps_sidebar: bool) -> bool {
+        page_fullscreen && (!keeps_sidebar || self.asks())
+    }
+
     /// The next state, from whether the page wants fullscreen and whether the window is in it,
     /// and whether to toggle the window's native fullscreen now.
     pub(crate) fn next(self, wanted: bool, window_fullscreen: bool) -> (Self, bool) {
@@ -121,11 +129,6 @@ impl Controller {
             core.window(window).is_some()
                 && keeps_sidebar(&self.model.core.settings, core.sidebar_visible(window))
         })
-    }
-
-    /// Whether the window should be in native fullscreen for its page.
-    pub(crate) fn page_takes_screen(&self, window: &WindowId) -> bool {
-        self.fullscreen_pane(window).is_some() && !self.keeps_sidebar_in_fullscreen(window)
     }
 
     pub(crate) fn page_fullscreen(&mut self, key: &BrowserKey, fullscreen: bool) {
@@ -216,6 +219,33 @@ mod tests {
             })
             .collect();
         (toggles, state)
+    }
+
+    #[test]
+    fn sidebar_toggles_during_page_fullscreen_send_one_request() {
+        // "Sidebar in page fullscreen" on: hide, show and hide the sidebar before the window
+        // manager answers, then the entry lands and the sidebar is shown inside it.
+        let mut state = NativeFullscreen::Idle;
+        let mut toggles = Vec::new();
+        for (keeps_sidebar, window) in [
+            (true, false),
+            (false, false),
+            (true, false),
+            (false, false),
+            (false, true),
+            (true, true),
+        ] {
+            let (next, toggle) = state.next(state.wanted(true, keeps_sidebar), window);
+            state = next;
+            toggles.push(toggle);
+        }
+        assert_eq!(toggles, [false, true, false, false, false, false]);
+        assert_eq!(state, NativeFullscreen::Held);
+        // Only the page leaving takes the window out.
+        assert_eq!(
+            state.next(state.wanted(false, true), true),
+            (NativeFullscreen::Idle, true)
+        );
     }
 
     #[test]

@@ -1461,6 +1461,14 @@ async function pageFullscreen(app, main, other) {
 
   const screenFullscreen = () => app.command('native_fullscreen', { window: main });
 
+  // The top of the page colour's bounding box: kFlechaGap down in the docked layout, at the
+  // window's top for a page alone. A black border keeps -trim from taking a page that reaches
+  // the capture's edge as border.
+  const pageTop = path => Number(execFileSync('magick', [
+    path, '-alpha', 'off', '-fill', 'black', '+opaque', page[0], '-bordercolor', 'black', '-border', '1',
+    '-trim', '-format', '%Y', 'info:',
+  ], { encoding: 'utf8' })) - 1;
+
   const enter = async (label, keepSidebar = false) => {
     const after = app.events.length;
 
@@ -1473,7 +1481,11 @@ async function pageFullscreen(app, main, other) {
         return keepSidebar ? 'the sidebar left the fullscreen page' : 'the sidebar stayed beside the fullscreen page';
       }
 
-      return page.every(color => histogram(path).includes(color)) ? undefined : 'the fullscreen page is not on screen';
+      if (!page.every(color => histogram(path).includes(color))) return 'the fullscreen page is not on screen';
+
+      if ((pageTop(path) > 0) !== keepSidebar) {
+        return keepSidebar ? 'the page beside the sidebar lost the docked inset' : 'the page alone kept an inset';
+      }
     });
     assert.equal(await screenFullscreen(), !keepSidebar, keepSidebar
       ? 'the window asked for native fullscreen with the sidebar beside the page'
@@ -1486,6 +1498,7 @@ async function pageFullscreen(app, main, other) {
     await app.present(main);
     await captureUntil(`fullscreen-${step.replaceAll(/\W/g, '-')}`, 'root', path =>
       sidebarShown(path) ? undefined : 'the sidebar did not come back');
+    assert.equal(await screenFullscreen(), false, `the window still asks for native fullscreen after ${step}`);
   };
 
   await enter('fullscreen');
@@ -1507,11 +1520,10 @@ async function pageFullscreen(app, main, other) {
   await app.command('sidebar_in_page_fullscreen', { enabled: true });
   await app.command('select', { tab });
   await enter('fullscreen-beside-sidebar', true);
-  pass('with "Sidebar in page fullscreen" on, the page filled the window beside the sidebar without native fullscreen');
+  pass('with "Sidebar in page fullscreen" on, the page stayed in the docked page area beside the sidebar without native fullscreen');
   after = app.events.length;
   execFileSync(x11Driver, ['key', 'Escape']);
   await ended('Esc beside the sidebar', after);
-  assert.equal(await screenFullscreen(), false, 'the window still asks for native fullscreen');
   pass('Esc ended fullscreen beside the sidebar');
   await app.quit();
 }
