@@ -126,7 +126,7 @@ async function capture(app, name, mismatch) {
     const path = shot(name);
     renameSync(join(out, screenshot), path);
     const counts = histogram(path);
-    const reason = mismatch(counts);
+    const reason = mismatch(counts, path);
 
     if (!reason) return counts;
 
@@ -274,13 +274,11 @@ const left = active(page).activeTabId;
 
 await app.loaded(left, '/open');
 
-await capture(app, 'open', exactly(markers.open));
+await capture(app, 'open', (counts, path) => exactly(markers.open)(counts) ?? cornerNotRounded(path, backgrounds[0]));
 
 pass('a page rendered at its own size');
 
-assert.equal(cornerNotRounded(shot('open'), backgrounds[0]), undefined);
-
-pass('the shared-texture page in its card has rounded corners');
+pass('the shared-texture page in its card has all four corners rounded to the page radius');
 
 const split = await app.command('split', { url: base + '/split' });
 const [, right] = active(split).split;
@@ -328,13 +326,11 @@ await app.command('click', { tab: opener, x: 520, y: 56 });
 
 const popupLoad = await app.wait('the popup load', event => event.type === 'loaded' && event.url === base + '/popup', clicked);
 
-await capture(app, 'popup-window', exactly(markers.popup));
+await capture(app, 'popup-window', (counts, path) => exactly(markers.popup)(counts) ?? cornerNotSquare(path, popupColors[0]));
 
 const popup = await browserOf(popupLoad.tab);
 
 await logged(new RegExp(`^page frames: browser ${popup.browser} receives shared textures$`));
-
-assert.equal(cornerNotSquare(shot('popup-window'), popupColors[0]), undefined);
 
 pass('a scripted popup window rendered its page square from shared textures');
 

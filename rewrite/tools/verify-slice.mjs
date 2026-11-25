@@ -3149,8 +3149,8 @@ async function verifySlice() {
   pass(`checked /proc environ for the app and its CEF descendants (${checked} processes, including a renderer or zygote child)`);
   await capture('open', ['#147A70', '#FFCC49']);
   pass('opened a durable tab, received CEF load and paint, and captured the GPUI fixture frame');
-  assert.equal(cornerNotRounded(join(out, 'open.png'), '#147A70'), undefined);
-  pass('the page in its card has rounded corners');
+  await captureUntil('open-corners', 'root', path => cornerNotRounded(path, '#147A70'));
+  pass('the page in its card has all four corners rounded to the page radius');
   // Under Xvfb GPUI's adapter cannot import Vulkan dma-bufs, so these checks cover the CPU
   // copy path, not shared textures.
   const frames = /^page frames: .*$/m.exec(readFileSync(join(out, 'first.log'), 'utf8'))?.[0] ?? '';
