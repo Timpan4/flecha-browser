@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { once } from 'node:events';
 
 export const blankRestartColor = '#E64DA3';
+export const defaultPageColors = ['#147A70', '#FFCC49'];
 
 // Popup fixture colours, unique on screen so a capture can find each page's marker.
 export const openerColors = ['#2B2D6E', '#F2E94E'];
@@ -113,7 +114,7 @@ export async function fixture(handle = () => false) {
     '/opener': openerColors,
     '/popup': popupColors,
     '/select': selectColors,
-  }[path] ?? ['#147a70', '#ffcc49'];
+  }[path] ?? defaultPageColors;
 
   // Asks before leaving. Chromium shows the prompt only after a user gesture.
   const beforeUnload = `

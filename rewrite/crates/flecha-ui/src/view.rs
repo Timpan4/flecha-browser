@@ -978,7 +978,7 @@ impl Render for Shell {
             } else {
                 body = body
                     .child(page_area)
-                    .child(self.floating_sidebar(&state, current, title_bar, window, cx));
+                    .children(self.floating_sidebar(&state, current, title_bar, window, cx));
             }
             main = main.child(body);
         }

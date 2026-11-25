@@ -67,7 +67,7 @@ use history_view::{ClearRange, History};
 use model::{Model, now};
 use permissions_view::PermissionStore;
 use shortcuts::{Navigation, Toolbar};
-use sidebar::SidebarAction;
+use sidebar::{SidebarAction, SidebarPeek};
 use site_controls::{Site, SiteChange};
 use tab_sleep::TabSleep;
 use view::Shell;
@@ -302,7 +302,7 @@ struct Controller {
     session_dir: PathBuf,
     snapshots: LoadedState,
     windows: BTreeMap<WindowId, WindowHandle<Shell>>,
-    sidebar_deadlines: BTreeMap<WindowId, Instant>,
+    sidebar_peeks: BTreeMap<WindowId, SidebarPeek>,
     /// Where each window shows its pages, even while it shows none.
     page_areas: BTreeMap<WindowId, Viewport>,
     /// The window opened before CEF started, until a main window takes it over.
@@ -414,7 +414,7 @@ impl Controller {
             store,
             snapshots,
             windows: BTreeMap::new(),
-            sidebar_deadlines: BTreeMap::new(),
+            sidebar_peeks: BTreeMap::new(),
             page_areas: BTreeMap::new(),
             first_window: None,
             front: None,
@@ -1239,7 +1239,7 @@ fn sync_windows(controller: &Shared, cx: &mut App) -> Result<()> {
             {
                 let mut state = controller.borrow_mut();
                 state.windows.remove(id);
-                state.sidebar_deadlines.remove(id);
+                state.sidebar_peeks.remove(id);
                 state.forget_download_window(id);
                 state.page_areas.remove(id);
                 state.sleep.window_activation(id, false);

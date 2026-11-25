@@ -8,7 +8,7 @@ import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
 import { crc32, deflateSync } from 'node:zlib';
 
-import { blankRestartColor, downloadBody, fixture, openerColors } from './fixture.mjs';
+import { blankRestartColor, defaultPageColors, downloadBody, fixture, openerColors } from './fixture.mjs';
 import { checkProcessEnvironment } from './verify-process-env.mjs';
 
 const out = join(process.env.HOME, '..');
@@ -790,6 +790,25 @@ async function sidebarResizeAndReveal(app, tab) {
     return ['CDD9F7', '2F3746'].includes(pixel.trim().slice(0, 6).toUpperCase());
   };
 
+  const topCornerClean = path => {
+    const colors = execFileSync(
+      'magick',
+      [path, '-crop', `100x26+${x + 20}+${y + 12}`, '+repage', '-format', '%c', 'histogram:info:'],
+      { encoding: 'utf8' },
+    )
+      .trim()
+      .split('\n')
+      .filter(Boolean);
+
+    return colors.length === 1 && colors[0].includes(defaultPageColors[0]);
+  };
+
+  const collapsedClean = (path, dockedMessage, chromeMessage) => {
+    if (sidebar(path)) return dockedMessage;
+
+    if (!topCornerClean(path)) return chromeMessage;
+  };
+
   const pageWidth = async label => {
     const reply = site.probe(label, stepTimeoutMs);
     reply.catch(() => {});
@@ -817,16 +836,18 @@ async function sidebarResizeAndReveal(app, tab) {
 
   execFileSync(x11Driver, ['chord', 'Control_L', 's']);
   await app.present();
-  await captureUntil('sidebar-collapsed', 'root', path => sidebar(path) ? 'sidebar stayed docked' : undefined);
+  await captureUntil('sidebar-collapsed', 'root', path =>
+    collapsedClean(path, 'sidebar stayed docked', 'floating controls stayed over the collapsed page'));
   const unoccluded = await pageWidth('collapsed-sidebar-width');
   move(2);
   await app.present();
   await captureUntil('sidebar-hover-reveal', 'root', path => sidebar(path) ? undefined : 'floating sidebar missing');
   assert.equal(await pageWidth('floating-sidebar-width'), unoccluded, 'the floating sidebar resized the page');
   move(width + 80);
-  await captureUntil('sidebar-hover-leave', 'root', path => sidebar(path) ? 'floating sidebar stayed open' : undefined);
+  await captureUntil('sidebar-hover-leave', 'root', path =>
+    collapsedClean(path, 'floating sidebar stayed open', 'floating controls stayed over the page after leave'));
   execFileSync(x11Driver, ['chord', 'Control_L', 's']);
-  pass('the collapsed sidebar revealed over the page at the left edge and hid when the pointer left');
+  pass('the collapsed sidebar hid cleanly with no floating pill, revealed at the left edge, and hid again when the pointer left');
 }
 
 async function quickWins(app) {
