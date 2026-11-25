@@ -28,7 +28,7 @@ export function pageCorner(path, color) {
  * tint shows, darkened by the card's shadow at most. The card's own background is lighter than
  * the tint, so a square background under a rounded page fails too.
  */
-export function squareCorner(path, color) {
+export function cornerNotRounded(path, color) {
   const corner = pageCorner(path, color);
   const channels = [1, 3, 5].map(start => Number.parseInt(corner.color.slice(start, start + 2), 16));
 
@@ -38,7 +38,7 @@ export function squareCorner(path, color) {
 }
 
 /** Why the page in `color` is not square, if it is not. */
-export function roundedCorner(path, color) {
+export function cornerNotSquare(path, color) {
   const corner = pageCorner(path, color);
 
   if (corner.color !== color.toUpperCase()) {

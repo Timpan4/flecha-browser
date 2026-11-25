@@ -11,7 +11,7 @@ import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import { fixture, popupColors, selectColors, selectOptionColor } from './fixture.mjs';
-import { roundedCorner, squareCorner } from './page-corner.mjs';
+import { cornerNotRounded, cornerNotSquare } from './page-corner.mjs';
 
 const out = join(process.env.HOME, '..');
 const mode = process.argv[2] ?? 'frames';
@@ -278,7 +278,7 @@ await capture(app, 'open', exactly(markers.open));
 
 pass('a page rendered at its own size');
 
-assert.equal(squareCorner(shot('open'), backgrounds[0]), undefined);
+assert.equal(cornerNotRounded(shot('open'), backgrounds[0]), undefined);
 
 pass('the shared-texture page in its card has rounded corners');
 
@@ -334,7 +334,7 @@ const popup = await browserOf(popupLoad.tab);
 
 await logged(new RegExp(`^page frames: browser ${popup.browser} receives shared textures$`));
 
-assert.equal(roundedCorner(shot('popup-window'), popupColors[0]), undefined);
+assert.equal(cornerNotSquare(shot('popup-window'), popupColors[0]), undefined);
 
 pass('a scripted popup window rendered its page square from shared textures');
 
